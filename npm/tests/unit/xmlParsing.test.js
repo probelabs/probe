@@ -53,10 +53,11 @@ describe('XML Tool Call Parsing', () => {
         });
       });
 
-      test('should handle all valid tools', () => {
-        const validTools = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'implement', 'attempt_completion'];
+      test('should handle all valid tools with structured parameters', () => {
+        // Test tools that use structured parameters (excluding attempt_completion which uses free-form content)
+        const structuredParamTools = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'implement'];
         
-        validTools.forEach(toolName => {
+        structuredParamTools.forEach(toolName => {
           const xmlString = `<${toolName}><param>value</param></${toolName}>`;
           const result = parseXmlToolCall(xmlString);
           

@@ -119,13 +119,44 @@ export function cleanSchemaResponse(response) {
 /**
  * Validate that the cleaned response is valid JSON if expected
  * @param {string} response - Cleaned response
+ * @param {Object} options - Options for validation
+ * @param {boolean} [options.debug=false] - Enable debug logging
  * @returns {Object} - {isValid: boolean, parsed?: Object, error?: string}
  */
-export function validateJsonResponse(response) {
+export function validateJsonResponse(response, options = {}) {
+  const { debug = false } = options;
+  
+  if (debug) {
+    console.log(`[DEBUG] JSON validation: Starting validation for response (${response.length} chars)`);
+    console.log(`[DEBUG] JSON validation: Preview: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`);
+  }
+  
   try {
+    const parseStart = Date.now();
     const parsed = JSON.parse(response);
+    const parseTime = Date.now() - parseStart;
+    
+    if (debug) {
+      console.log(`[DEBUG] JSON validation: Successfully parsed in ${parseTime}ms`);
+      console.log(`[DEBUG] JSON validation: Object type: ${typeof parsed}, keys: ${Object.keys(parsed || {}).length}`);
+    }
+    
     return { isValid: true, parsed };
   } catch (error) {
+    if (debug) {
+      console.log(`[DEBUG] JSON validation: Parse failed with error: ${error.message}`);
+      console.log(`[DEBUG] JSON validation: Error at position: ${error.message.match(/position (\d+)/) ? error.message.match(/position (\d+)/)[1] : 'unknown'}`);
+      
+      // Try to identify common JSON issues
+      if (error.message.includes('Unexpected token')) {
+        console.log(`[DEBUG] JSON validation: Likely syntax error - unexpected character`);
+      } else if (error.message.includes('Unexpected end')) {
+        console.log(`[DEBUG] JSON validation: Likely incomplete JSON - missing closing brackets`);
+      } else if (error.message.includes('property name')) {
+        console.log(`[DEBUG] JSON validation: Likely unquoted property names`);
+      }
+    }
+    
     return { isValid: false, error: error.message };
   }
 }
@@ -162,29 +193,57 @@ export function validateXmlResponse(response) {
 export function processSchemaResponse(response, schema, options = {}) {
   const { validateJson = false, validateXml = false, debug = false } = options;
 
+  if (debug) {
+    console.log(`[DEBUG] Schema processing: Starting with response length ${response.length}`);
+    console.log(`[DEBUG] Schema processing: Schema type detection...`);
+    
+    if (isJsonSchema(schema)) {
+      console.log(`[DEBUG] Schema processing: Detected JSON schema`);
+    } else {
+      console.log(`[DEBUG] Schema processing: Non-JSON schema detected`);
+    }
+  }
+
   // Clean the response
+  const cleanStart = Date.now();
   const cleaned = cleanSchemaResponse(response);
+  const cleanTime = Date.now() - cleanStart;
 
   const result = { cleaned };
 
   if (debug) {
+    console.log(`[DEBUG] Schema processing: Cleaning completed in ${cleanTime}ms`);
     result.debug = {
       originalLength: response.length,
       cleanedLength: cleaned.length,
       wasModified: response !== cleaned,
+      cleaningTimeMs: cleanTime,
       removedContent: response !== cleaned ? {
-        before: response.substring(0, 50) + (response.length > 50 ? '...' : ''),
-        after: cleaned.substring(0, 50) + (cleaned.length > 50 ? '...' : '')
+        before: response.substring(0, 100) + (response.length > 100 ? '...' : ''),
+        after: cleaned.substring(0, 100) + (cleaned.length > 100 ? '...' : '')
       } : null
     };
+    
+    if (response !== cleaned) {
+      console.log(`[DEBUG] Schema processing: Response was modified during cleaning`);
+      console.log(`[DEBUG] Schema processing: Original length: ${response.length}, cleaned length: ${cleaned.length}`);
+    } else {
+      console.log(`[DEBUG] Schema processing: Response unchanged during cleaning`);
+    }
   }
 
   // Optional validation
   if (validateJson) {
-    result.jsonValidation = validateJsonResponse(cleaned);
+    if (debug) {
+      console.log(`[DEBUG] Schema processing: Running JSON validation...`);
+    }
+    result.jsonValidation = validateJsonResponse(cleaned, { debug });
   }
 
   if (validateXml) {
+    if (debug) {
+      console.log(`[DEBUG] Schema processing: Running XML validation...`);
+    }
     result.xmlValidation = validateXmlResponse(cleaned);
   }
 
@@ -220,15 +279,26 @@ export function isJsonSchema(schema) {
 /**
  * Detect if a JSON response is actually a JSON schema definition instead of data
  * @param {string} jsonString - The JSON string to check
+ * @param {Object} options - Options
+ * @param {boolean} [options.debug=false] - Enable debug logging
  * @returns {boolean} - True if this appears to be a schema definition
  */
-export function isJsonSchemaDefinition(jsonString) {
+export function isJsonSchemaDefinition(jsonString, options = {}) {
+  const { debug = false } = options;
+  
   if (!jsonString || typeof jsonString !== 'string') {
+    if (debug) {
+      console.log(`[DEBUG] Schema definition check: Invalid input (${typeof jsonString})`);
+    }
     return false;
   }
 
   try {
     const parsed = JSON.parse(jsonString);
+    
+    if (debug) {
+      console.log(`[DEBUG] Schema definition check: JSON parsed successfully, checking indicators...`);
+    }
     
     // Check for common JSON schema properties
     const schemaIndicators = [
@@ -244,10 +314,23 @@ export function isJsonSchemaDefinition(jsonString) {
       parsed.anyOf || parsed.oneOf || parsed.allOf
     ];
 
-    // If multiple schema indicators are present, this is likely a schema definition
     const indicatorCount = schemaIndicators.filter(Boolean).length;
-    return indicatorCount >= 2;
+    const isSchemaDefinition = indicatorCount >= 2;
+    
+    if (debug) {
+      console.log(`[DEBUG] Schema definition check: Found ${indicatorCount} schema indicators`);
+      console.log(`[DEBUG] Schema definition check: Indicators found: ${schemaIndicators.map((indicator, i) => {
+        const names = ['$schema', '$id', 'title+description', 'object+properties', 'array+items', 'required', 'definitions', 'additionalProperties', 'patternProperties', 'anyOf/oneOf/allOf'];
+        return indicator ? names[i] : null;
+      }).filter(Boolean).join(', ')}`);
+      console.log(`[DEBUG] Schema definition check: Is schema definition: ${isSchemaDefinition}`);
+    }
+
+    return isSchemaDefinition;
   } catch (error) {
+    if (debug) {
+      console.log(`[DEBUG] Schema definition check: JSON parse failed: ${error.message}`);
+    }
     return false;
   }
 }
@@ -864,11 +947,55 @@ Provide only the corrected Mermaid diagram within a mermaid code block. Do not a
  */
 export async function validateAndFixMermaidResponse(response, options = {}) {
   const { schema, debug, path, provider, model, tracer } = options;
+  const startTime = Date.now();
+  
+  if (debug) {
+    console.log(`[DEBUG] Mermaid validation: Starting enhanced validation for response (${response.length} chars)`);
+    console.log(`[DEBUG] Mermaid validation: Options - path: ${path}, provider: ${provider}, model: ${model}`);
+  }
+  
+  // Record mermaid validation start in telemetry
+  if (tracer) {
+    tracer.recordMermaidValidationEvent('started', {
+      'mermaid_validation.response_length': response.length,
+      'mermaid_validation.provider': provider,
+      'mermaid_validation.model': model
+    });
+  }
   
   // First, run standard validation
+  const validationStart = Date.now();
   const validation = await validateMermaidResponse(response);
+  const validationTime = Date.now() - validationStart;
+  
+  if (debug) {
+    console.log(`[DEBUG] Mermaid validation: Initial validation completed in ${validationTime}ms`);
+    console.log(`[DEBUG] Mermaid validation: Found ${validation.diagrams?.length || 0} diagrams, valid: ${validation.isValid}`);
+    if (validation.diagrams) {
+      validation.diagrams.forEach((diag, i) => {
+        console.log(`[DEBUG] Mermaid validation: Diagram ${i + 1}: ${diag.isValid ? 'valid' : 'invalid'} (${diag.diagramType || 'unknown type'})`);
+        if (!diag.isValid) {
+          console.log(`[DEBUG] Mermaid validation: Error for diagram ${i + 1}: ${diag.error}`);
+        }
+      });
+    }
+  }
   
   if (validation.isValid) {
+    if (debug) {
+      console.log(`[DEBUG] Mermaid validation: All diagrams valid, no fixing needed`);
+    }
+    
+    // Record successful validation in telemetry
+    if (tracer) {
+      tracer.recordMermaidValidationEvent('completed', {
+        'mermaid_validation.success': true,
+        'mermaid_validation.diagrams_found': validation.diagrams?.length || 0,
+        'mermaid_validation.fixes_needed': false,
+        'mermaid_validation.duration_ms': Date.now() - startTime
+      });
+    }
+    
     // All diagrams are valid, no fixing needed
     return {
       ...validation,
@@ -880,6 +1007,9 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
 
   // If no diagrams found at all, return without attempting to fix
   if (!validation.diagrams || validation.diagrams.length === 0) {
+    if (debug) {
+      console.log(`[DEBUG] Mermaid validation: No mermaid diagrams found in response, skipping fixes`);
+    }
     return {
       ...validation,
       wasFixed: false,
@@ -889,8 +1019,9 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
   }
 
   // Some diagrams are invalid, first try HTML entity decoding auto-fix
+  const invalidCount = validation.diagrams.filter(d => !d.isValid).length;
   if (debug) {
-    console.error('[DEBUG] Invalid Mermaid diagrams detected, trying HTML entity auto-fix first...');
+    console.log(`[DEBUG] Mermaid validation: ${invalidCount} invalid diagrams detected, trying HTML entity auto-fix first...`);
   }
 
   try {
@@ -937,12 +1068,14 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             htmlEntityFixesApplied = true;
             
             if (debug) {
-              console.error(`[DEBUG] Fixed diagram ${invalidDiagram.originalIndex + 1} with HTML entity decoding: ${invalidDiagram.error}`);
+              console.log(`[DEBUG] Mermaid validation: Fixed diagram ${invalidDiagram.originalIndex + 1} with HTML entity decoding`);
+              console.log(`[DEBUG] Mermaid validation: Original error: ${invalidDiagram.error}`);
+              console.log(`[DEBUG] Mermaid validation: Decoded ${originalContent.length - decodedContent.length} HTML entities`);
             }
           }
         } catch (error) {
           if (debug) {
-            console.error(`[DEBUG] HTML entity decoding didn't fix diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+            console.log(`[DEBUG] Mermaid validation: HTML entity decoding didn't fix diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
           }
         }
       }
@@ -953,8 +1086,20 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       const revalidation = await validateMermaidResponse(fixedResponse);
       if (revalidation.isValid) {
         // All diagrams are now valid, return without AI fixing
+        const totalTime = Date.now() - startTime;
         if (debug) {
-          console.error('[DEBUG] All diagrams fixed with HTML entity decoding, no AI needed');
+          console.log(`[DEBUG] Mermaid validation: All diagrams fixed with HTML entity decoding in ${totalTime}ms, no AI needed`);
+          console.log(`[DEBUG] Mermaid validation: Applied ${fixingResults.length} HTML entity fixes`);
+        }
+        
+        // Record HTML entity fix success in telemetry
+        if (tracer) {
+          tracer.recordMermaidValidationEvent('html_fix_completed', {
+            'mermaid_validation.success': true,
+            'mermaid_validation.fix_method': 'html_entity_decoding',
+            'mermaid_validation.diagrams_fixed': fixingResults.length,
+            'mermaid_validation.duration_ms': totalTime
+          });
         }
         return {
           ...revalidation,
@@ -968,10 +1113,16 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     
     // Still have invalid diagrams after HTML entity decoding, proceed with AI fixing
     if (debug) {
-      console.error('[DEBUG] Some diagrams still invalid after HTML entity decoding, starting AI fixing...');
+      const stillInvalidAfterHtml = updatedValidation?.diagrams?.filter(d => !d.isValid)?.length || invalidCount;
+      console.log(`[DEBUG] Mermaid validation: ${stillInvalidAfterHtml} diagrams still invalid after HTML entity decoding, starting AI fixing...`);
+      console.log(`[DEBUG] Mermaid validation: HTML entity fixes applied: ${fixingResults.length}`);
     }
     
     // Create specialized fixing agent for remaining invalid diagrams
+    if (debug) {
+      console.log(`[DEBUG] Mermaid validation: Creating specialized AI fixing agent...`);
+    }
+    const aiFixingStart = Date.now();
     const mermaidFixer = new MermaidFixingAgent({
       path, provider, model, debug, tracer
     });
@@ -984,14 +1135,26 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       .map((result, index) => ({ ...result, originalIndex: index }))
       .filter(result => !result.isValid)
       .reverse();
+      
+    if (debug) {
+      console.log(`[DEBUG] Mermaid validation: Found ${stillInvalidDiagrams.length} diagrams requiring AI fixing`);
+    }
 
     for (const invalidDiagram of stillInvalidDiagrams) {
+      if (debug) {
+        console.log(`[DEBUG] Mermaid validation: Attempting AI fix for diagram ${invalidDiagram.originalIndex + 1}`);
+        console.log(`[DEBUG] Mermaid validation: Diagram type: ${invalidDiagram.diagramType || 'unknown'}`);
+        console.log(`[DEBUG] Mermaid validation: Error to fix: ${invalidDiagram.error}`);
+      }
+      
+      const diagramFixStart = Date.now();
       try {
         const fixedContent = await mermaidFixer.fixMermaidDiagram(
           invalidDiagram.content,
           [invalidDiagram.error],
           { diagramType: invalidDiagram.diagramType }
         );
+        const diagramFixTime = Date.now() - diagramFixStart;
 
         if (fixedContent && fixedContent !== invalidDiagram.content) {
           // Replace the diagram in the response
@@ -1008,11 +1171,14 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             wasFixed: true,
             originalContent: invalidDiagram.content,
             fixedContent: fixedContent,
-            originalError: invalidDiagram.error
+            originalError: invalidDiagram.error,
+            aiFixingTimeMs: diagramFixTime
           });
 
           if (debug) {
-            console.error(`[DEBUG] Fixed diagram ${invalidDiagram.originalIndex + 1}: ${invalidDiagram.error}`);
+            console.log(`[DEBUG] Mermaid validation: Successfully fixed diagram ${invalidDiagram.originalIndex + 1} in ${diagramFixTime}ms`);
+            console.log(`[DEBUG] Mermaid validation: Original error: ${invalidDiagram.error}`);
+            console.log(`[DEBUG] Mermaid validation: Content changes: ${invalidDiagram.content.length} -> ${fixedContent.length} chars`);
           }
         } else {
           fixingResults.push({
@@ -1020,29 +1186,68 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             wasFixed: false,
             originalContent: invalidDiagram.content,
             originalError: invalidDiagram.error,
-            fixingError: 'No valid fix generated'
+            fixingError: 'No valid fix generated',
+            aiFixingTimeMs: diagramFixTime
           });
+          
+          if (debug) {
+            console.log(`[DEBUG] Mermaid validation: AI fix failed for diagram ${invalidDiagram.originalIndex + 1} - no valid fix generated`);
+          }
         }
       } catch (error) {
+        const diagramFixTime = Date.now() - diagramFixStart;
         fixingResults.push({
           diagramIndex: invalidDiagram.originalIndex,
           wasFixed: false,
           originalContent: invalidDiagram.content,
           originalError: invalidDiagram.error,
-          fixingError: error.message
+          fixingError: error.message,
+          aiFixingTimeMs: diagramFixTime
         });
 
         if (debug) {
-          console.error(`[DEBUG] Failed to fix diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+          console.log(`[DEBUG] Mermaid validation: AI fix failed for diagram ${invalidDiagram.originalIndex + 1} after ${diagramFixTime}ms: ${error.message}`);
         }
       }
     }
 
     // Re-validate the fixed response
+    const finalValidationStart = Date.now();
     const finalValidation = await validateMermaidResponse(fixedResponse);
+    const finalValidationTime = Date.now() - finalValidationStart;
+    const totalTime = Date.now() - startTime;
+    const aiFixingTime = Date.now() - aiFixingStart;
 
     // Check if any diagrams were actually fixed
     const wasActuallyFixed = fixingResults.some(result => result.wasFixed);
+    const fixedCount = fixingResults.filter(result => result.wasFixed).length;
+    const totalAttempts = fixingResults.length;
+
+    if (debug) {
+      console.log(`[DEBUG] Mermaid validation: Final validation completed in ${finalValidationTime}ms`);
+      console.log(`[DEBUG] Mermaid validation: Total process time: ${totalTime}ms (AI fixing: ${aiFixingTime}ms)`);
+      console.log(`[DEBUG] Mermaid validation: Fixed ${fixedCount}/${totalAttempts} diagrams with AI`);
+      console.log(`[DEBUG] Mermaid validation: Final result - all valid: ${finalValidation.isValid}`);
+      
+      if (mermaidFixer.getTokenUsage) {
+        const tokenUsage = mermaidFixer.getTokenUsage();
+        console.log(`[DEBUG] Mermaid validation: AI token usage - prompt: ${tokenUsage?.promptTokens || 0}, completion: ${tokenUsage?.completionTokens || 0}`);
+      }
+    }
+    
+    // Record final completion in telemetry
+    if (tracer) {
+      tracer.recordMermaidValidationEvent('completed', {
+        'mermaid_validation.success': finalValidation.isValid,
+        'mermaid_validation.was_fixed': wasActuallyFixed,
+        'mermaid_validation.diagrams_processed': totalAttempts,
+        'mermaid_validation.diagrams_fixed': fixedCount,
+        'mermaid_validation.total_duration_ms': totalTime,
+        'mermaid_validation.ai_fixing_duration_ms': aiFixingTime,
+        'mermaid_validation.final_validation_duration_ms': finalValidationTime,
+        'mermaid_validation.token_usage': mermaidFixer.getTokenUsage ? mermaidFixer.getTokenUsage() : null
+      });
+    }
 
     return {
       ...finalValidation,
@@ -1050,6 +1255,13 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       originalResponse: response,
       fixedResponse: fixedResponse,
       fixingResults: fixingResults,
+      performanceMetrics: {
+        totalTimeMs: totalTime,
+        aiFixingTimeMs: aiFixingTime,
+        finalValidationTimeMs: finalValidationTime,
+        diagramsProcessed: totalAttempts,
+        diagramsFixed: fixedCount
+      },
       tokenUsage: mermaidFixer.getTokenUsage()
     };
 
