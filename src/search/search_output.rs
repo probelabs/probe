@@ -1095,7 +1095,55 @@ fn collect_parent_context_for_line(
             let start_line = target_node.start_position().row + 1;
             let end_line = target_node.end_position().row + 1;
             let source_lines: Vec<&str> = source.lines().collect();
-            let context_line = if start_line > 0 && start_line <= source_lines.len() {
+
+            // For functions, try to find the actual function declaration line
+            let context_line = if matches!(
+                target_node.kind(),
+                "function_item" | "function_definition" | "method_definition" | "function"
+            ) {
+                // Look for function declaration both backward and forward from the reported start position
+                let mut found_line = None;
+                let start_row = target_node.start_position().row;
+
+                // First search backward (in case tree-sitter reports a line in the middle of the signature)
+                for i in 0..5 {
+                    if start_row >= i {
+                        if let Some(line) = source_lines.get(start_row - i) {
+                            if line.contains("fn ")
+                                || line.contains("def ")
+                                || line.contains("function ")
+                            {
+                                found_line = Some(line.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // If not found backward, search forward
+                if found_line.is_none() {
+                    for i in 0..5 {
+                        if let Some(line) = source_lines.get(start_row + i) {
+                            if line.contains("fn ")
+                                || line.contains("def ")
+                                || line.contains("function ")
+                            {
+                                found_line = Some(line.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Fallback to the original behavior if we can't find a function declaration
+                found_line.unwrap_or_else(|| {
+                    if start_line > 0 && start_line <= source_lines.len() {
+                        source_lines[start_line - 1].to_string()
+                    } else {
+                        String::new()
+                    }
+                })
+            } else if start_line > 0 && start_line <= source_lines.len() {
                 source_lines[start_line - 1].to_string()
             } else {
                 String::new()
@@ -1205,8 +1253,61 @@ fn collect_parent_context_for_line(
                         }
                     }
                 } else {
-                    // Get the first line of the parent block for context
-                    if let Some(context_line) = source.lines().nth(parent.start_position().row) {
+                    // For functions, try to find the actual function declaration line
+                    let context_line = if matches!(
+                        parent.kind(),
+                        "function_item" | "function_definition" | "method_definition" | "function"
+                    ) {
+                        // Look for function declaration both backward and forward from the reported start position
+                        let source_lines: Vec<&str> = source.lines().collect();
+                        let mut found_line = None;
+                        let start_row = parent.start_position().row;
+
+                        // First search backward (in case tree-sitter reports a line in the middle of the signature)
+                        for i in 0..5 {
+                            if start_row >= i {
+                                if let Some(line) = source_lines.get(start_row - i) {
+                                    if line.contains("fn ")
+                                        || line.contains("def ")
+                                        || line.contains("function ")
+                                    {
+                                        found_line = Some(line.to_string());
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // If not found backward, search forward
+                        if found_line.is_none() {
+                            for i in 0..5 {
+                                if let Some(line) = source_lines.get(start_row + i) {
+                                    if line.contains("fn ")
+                                        || line.contains("def ")
+                                        || line.contains("function ")
+                                    {
+                                        found_line = Some(line.to_string());
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Fallback to the original behavior if we can't find a function declaration
+                        found_line.or_else(|| {
+                            source
+                                .lines()
+                                .nth(parent.start_position().row)
+                                .map(|s| s.to_string())
+                        })
+                    } else {
+                        source
+                            .lines()
+                            .nth(parent.start_position().row)
+                            .map(|s| s.to_string())
+                    };
+
+                    if let Some(context_line) = context_line {
                         // Check if we already have a context at this line number
                         let already_exists = contexts
                             .iter()

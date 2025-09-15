@@ -16,6 +16,7 @@ pub mod c;
 pub mod cpp;
 pub mod csharp;
 pub mod go;
+pub mod html;
 pub mod java;
 pub mod javascript;
 pub mod markdown;
