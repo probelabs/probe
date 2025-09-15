@@ -16,6 +16,10 @@
       "types": "./src/agent/ProbeAgent.d.ts",
       "import": "./src/agent/ProbeAgent.js",
       "require": "./cjs/agent/ProbeAgent.cjs"
+    },
+    "./telemetry": {
+      "import": "./src/agent/simpleTelemetry.js",
+      "require": "./cjs/agent/simpleTelemetry.cjs"
     }
   },
   "bin": {
