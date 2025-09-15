@@ -246,9 +246,12 @@ export class AppTracer {
     if (!this.isEnabled()) return;
 
     // Try to add to the current span in context
-    const activeSpan = this.telemetryConfig?.tracer?.getActiveSpan?.();
+    const activeSpan = trace.getActiveSpan();
     if (activeSpan) {
-      activeSpan.addEvent(name, attributes);
+      activeSpan.addEvent(name, {
+        'session.id': this.sessionId,
+        ...attributes,
+      });
     } else {
       // Fallback: log as structured data if no active span
       if (this.telemetryConfig?.enableConsole) {
@@ -263,9 +266,12 @@ export class AppTracer {
   setAttributes(attributes) {
     if (!this.isEnabled()) return;
 
-    const activeSpan = this.telemetryConfig?.tracer?.getActiveSpan?.();
+    const activeSpan = trace.getActiveSpan();
     if (activeSpan) {
-      activeSpan.setAttributes(attributes);
+      activeSpan.setAttributes({
+        'session.id': this.sessionId,
+        ...attributes,
+      });
     }
   }
 
@@ -333,35 +339,6 @@ export class AppTracer {
     }
   }
 
-  /**
-   * Add event to current active span
-   */
-  addEvent(name, attributes = {}) {
-    if (!this.isEnabled()) return;
-
-    const activeSpan = trace.getActiveSpan();
-    if (activeSpan) {
-      activeSpan.addEvent(name, {
-        'session.id': this.sessionId,
-        ...attributes,
-      });
-    }
-  }
-
-  /**
-   * Set attributes on current active span
-   */
-  setAttributes(attributes) {
-    if (!this.isEnabled()) return;
-
-    const activeSpan = trace.getActiveSpan();
-    if (activeSpan) {
-      activeSpan.setAttributes({
-        'session.id': this.sessionId,
-        ...attributes,
-      });
-    }
-  }
 
   /**
    * Force flush all pending spans
