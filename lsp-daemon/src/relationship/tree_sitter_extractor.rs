@@ -786,8 +786,9 @@ mod tests {
         let context = AnalysisContext::new(
             1,
             2,
-            3,
             "rust".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("test.rs"),
             Arc::new(SymbolUIDGenerator::new()),
         );
 
@@ -820,9 +821,24 @@ mod tests {
     fn test_parser_pool_operations() {
         let mut pool = RelationshipParserPool::new();
 
-        // Try to borrow a parser (should return None in test environment without features)
-        let parser = pool.borrow_parser("rust");
-        assert!(parser.is_none());
+        // Test with feature-enabled language
+        #[cfg(feature = "tree-sitter-rust")]
+        {
+            let parser = pool.borrow_parser("rust");
+            assert!(
+                parser.is_some(),
+                "Should get a parser for rust when feature is enabled"
+            );
+        }
+
+        #[cfg(not(feature = "tree-sitter-rust"))]
+        {
+            let parser = pool.borrow_parser("rust");
+            assert!(
+                parser.is_none(),
+                "Should not get a parser for rust when feature is disabled"
+            );
+        }
 
         // Pool should handle unknown languages gracefully
         let parser = pool.borrow_parser("unknown_language");

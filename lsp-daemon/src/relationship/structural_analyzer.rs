@@ -548,7 +548,7 @@ pub struct QueryMatch {
 mod tests {
     use super::*;
     use crate::relationship::PatternRegistry;
-    use crate::symbol::{SymbolKind, SymbolUIDGenerator};
+    use crate::symbol::{SymbolKind, SymbolLocation};
     use std::path::PathBuf;
 
     fn create_test_symbols() -> Vec<ExtractedSymbol> {

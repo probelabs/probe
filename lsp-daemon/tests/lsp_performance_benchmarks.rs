@@ -425,7 +425,13 @@ impl LspBenchmarkSuite {
         for (&language, workspace) in workspaces {
             let mock_symbols = self.create_mock_symbols(&workspace.main_file, 10);
             let empty_relationships = Vec::new();
-            let analysis_context = AnalysisContext::new(1, 1, 1, self.uid_generator.clone());
+            let analysis_context = AnalysisContext::new(
+                1,
+                1,
+                1,
+                format!("{:?}", language).to_lowercase(),
+                self.uid_generator.clone(),
+            );
 
             let measurements = self
                 .benchmark_operation(
@@ -523,16 +529,20 @@ impl LspBenchmarkSuite {
         let mut results = Vec::new();
 
         for (&language, workspace) in workspaces {
+            let lsp_client = self.lsp_client_wrapper.clone();
+            let timeout_ms = self.config.timeout_ms;
+            let main_file = workspace.main_file.clone();
             let concurrent_measurements = self
                 .benchmark_concurrent_operation(
                     format!("concurrent_references_{:?}", language),
                     self.config.max_concurrent_ops,
                     self.config.iterations,
-                    || {
-                        let file = workspace.main_file.clone();
+                    move || {
+                        let file = main_file.clone();
+                        let lsp_client = lsp_client.clone();
                         async move {
-                            self.lsp_client_wrapper
-                                .get_references(&file, 10, 5, false, self.config.timeout_ms)
+                            lsp_client
+                                .get_references(&file, 10, 5, false, timeout_ms)
                                 .await
                                 .is_ok()
                         }
@@ -784,7 +794,7 @@ impl TestWorkspace {
 
     fn create_rust_workspace(root: &Path) -> Result<(PathBuf, Vec<(PathBuf, String)>)> {
         let main_file = root.join("src/main.rs");
-        let mut files = vec![
+        let files = vec![
             (
                 root.join("Cargo.toml"),
                 r#"
@@ -965,7 +975,7 @@ if __name__ == "__main__":
     main()
 "#,
             (0..function_count)
-                .map(|i| format!("    results[{}] = function_{}({})}", i, i, i * 2))
+                .map(|i| format!("    results[{}] = function_{}({})", i, i, i * 2))
                 .collect::<Vec<_>>()
                 .join("\n")
         ));

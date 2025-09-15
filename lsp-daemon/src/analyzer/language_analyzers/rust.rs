@@ -146,33 +146,224 @@ impl RustAnalyzer {
         symbols
     }
 
-    /// Extract Rust-specific relationships
+    /// Extract Rust-specific relationships with enhanced detection
     fn extract_rust_relationships(
         &self,
         symbols: &[ExtractedSymbol],
+        content: &str,
     ) -> Vec<ExtractedRelationship> {
         let mut relationships = Vec::new();
 
-        // Build symbol lookup for efficient relationship creation
-        let _symbol_lookup: HashMap<String, &ExtractedSymbol> =
+        // Build comprehensive symbol lookup maps
+        let symbol_lookup: HashMap<String, &ExtractedSymbol> =
             symbols.iter().map(|s| (s.name.clone(), s)).collect();
+        let fqn_lookup: HashMap<String, &ExtractedSymbol> = symbols
+            .iter()
+            .filter_map(|s| s.qualified_name.as_ref().map(|fqn| (fqn.clone(), s)))
+            .collect();
+        let _uid_lookup: HashMap<String, &ExtractedSymbol> =
+            symbols.iter().map(|s| (s.uid.clone(), s)).collect();
 
-        for symbol in symbols {
-            // Extract trait implementations
-            if symbol.kind == SymbolKind::Struct || symbol.kind == SymbolKind::Enum {
-                if let Some(sig) = &symbol.signature {
-                    // Look for "impl TraitName for StructName" patterns
-                    // This would require more sophisticated parsing in a real implementation
-                    if sig.contains("impl") {
-                        // Create implementation relationship
-                        // For now, this is a simplified example
+        // Extract trait implementations from impl blocks
+        relationships.extend(self.extract_trait_implementations(symbols, content, &symbol_lookup));
+
+        // Extract function call relationships
+        relationships.extend(self.extract_function_calls(symbols, content, &symbol_lookup));
+
+        // Extract struct field relationships
+        relationships.extend(self.extract_struct_fields(symbols, &symbol_lookup));
+
+        // Extract enum variant relationships
+        relationships.extend(self.extract_enum_relationships(symbols, &symbol_lookup));
+
+        // Extract module containment relationships
+        relationships.extend(self.extract_module_relationships(symbols, &symbol_lookup));
+
+        // Extract use/import relationships
+        relationships.extend(self.extract_import_relationships(symbols, content, &fqn_lookup));
+
+        relationships
+    }
+
+    /// Extract trait implementation relationships (impl Trait for Type)
+    fn extract_trait_implementations(
+        &self,
+        symbols: &[ExtractedSymbol],
+        content: &str,
+        symbol_lookup: &HashMap<String, &ExtractedSymbol>,
+    ) -> Vec<ExtractedRelationship> {
+        let mut relationships = Vec::new();
+
+        // Look for impl blocks in content using pattern matching
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("impl ") {
+                // Parse "impl TraitName for TypeName" patterns
+                if let Some(for_pos) = trimmed.find(" for ") {
+                    let trait_part = &trimmed[5..for_pos].trim(); // Skip "impl "
+                    let type_part = trimmed[for_pos + 5..].trim().trim_end_matches(" {");
+
+                    if let (Some(trait_symbol), Some(type_symbol)) =
+                        (symbol_lookup.get(*trait_part), symbol_lookup.get(type_part))
+                    {
+                        let relationship = ExtractedRelationship::new(
+                            type_symbol.uid.clone(),
+                            trait_symbol.uid.clone(),
+                            RelationType::Implements,
+                        )
+                        .with_confidence(0.9)
+                        .with_context(format!("impl {} for {}", trait_part, type_part));
+
+                        relationships.push(relationship);
+                    }
+                } else {
+                    // Handle inherent impl blocks (impl TypeName)
+                    let type_part = trimmed[5..].trim().trim_end_matches(" {");
+                    if let Some(type_symbol) = symbol_lookup.get(type_part) {
+                        // Find methods in this impl block by looking at symbols with matching parent scope
+                        for symbol in symbols {
+                            if symbol.kind == SymbolKind::Method
+                                && symbol
+                                    .parent_scope
+                                    .as_ref()
+                                    .map_or(false, |scope| scope.contains(type_part))
+                            {
+                                let relationship = ExtractedRelationship::new(
+                                    type_symbol.uid.clone(),
+                                    symbol.uid.clone(),
+                                    RelationType::Contains,
+                                )
+                                .with_confidence(0.85);
+
+                                relationships.push(relationship);
+                            }
+                        }
                     }
                 }
             }
+        }
 
-            // Extract module relationships
+        relationships
+    }
+
+    /// Extract function call relationships
+    fn extract_function_calls(
+        &self,
+        symbols: &[ExtractedSymbol],
+        content: &str,
+        _symbol_lookup: &HashMap<String, &ExtractedSymbol>,
+    ) -> Vec<ExtractedRelationship> {
+        let mut relationships = Vec::new();
+
+        // Find function calls by looking for function names followed by parentheses
+        for symbol in symbols {
+            if symbol.kind == SymbolKind::Function || symbol.kind == SymbolKind::Method {
+                let function_name = &symbol.name;
+                let call_pattern = format!("{}(", function_name);
+
+                if content.contains(&call_pattern) {
+                    // Find potential callers by looking at function contexts
+                    for potential_caller in symbols {
+                        if (potential_caller.kind == SymbolKind::Function
+                            || potential_caller.kind == SymbolKind::Method)
+                            && potential_caller.uid != symbol.uid
+                        {
+                            // This is a simplified approach - in practice, we'd need more
+                            // sophisticated AST analysis to determine actual call relationships
+                            let relationship = ExtractedRelationship::new(
+                                potential_caller.uid.clone(),
+                                symbol.uid.clone(),
+                                RelationType::Calls,
+                            )
+                            .with_confidence(0.6) // Lower confidence for simple pattern matching
+                            .with_context(format!("Call to {}()", function_name));
+
+                            relationships.push(relationship);
+                        }
+                    }
+                }
+            }
+        }
+
+        relationships
+    }
+
+    /// Extract struct field relationships
+    fn extract_struct_fields(
+        &self,
+        symbols: &[ExtractedSymbol],
+        symbol_lookup: &HashMap<String, &ExtractedSymbol>,
+    ) -> Vec<ExtractedRelationship> {
+        let mut relationships = Vec::new();
+
+        // Group symbols by their parent scope to identify struct-field relationships
+        for symbol in symbols {
+            if symbol.kind == SymbolKind::Field {
+                // Find the parent struct
+                if let Some(parent_scope) = &symbol.parent_scope {
+                    if let Some(parent_symbol) = symbol_lookup.get(parent_scope) {
+                        if parent_symbol.kind == SymbolKind::Struct
+                            || parent_symbol.kind == SymbolKind::Enum
+                        {
+                            let relationship = ExtractedRelationship::new(
+                                parent_symbol.uid.clone(),
+                                symbol.uid.clone(),
+                                RelationType::Contains,
+                            )
+                            .with_confidence(1.0); // High confidence for direct field relationships
+
+                            relationships.push(relationship);
+                        }
+                    }
+                }
+            }
+        }
+
+        relationships
+    }
+
+    /// Extract enum variant relationships
+    fn extract_enum_relationships(
+        &self,
+        symbols: &[ExtractedSymbol],
+        symbol_lookup: &HashMap<String, &ExtractedSymbol>,
+    ) -> Vec<ExtractedRelationship> {
+        let mut relationships = Vec::new();
+
+        // Group enum variants with their parent enums
+        for symbol in symbols {
+            if symbol.kind == SymbolKind::EnumVariant {
+                if let Some(parent_scope) = &symbol.parent_scope {
+                    if let Some(parent_symbol) = symbol_lookup.get(parent_scope) {
+                        if parent_symbol.kind == SymbolKind::Enum {
+                            let relationship = ExtractedRelationship::new(
+                                parent_symbol.uid.clone(),
+                                symbol.uid.clone(),
+                                RelationType::Contains,
+                            )
+                            .with_confidence(1.0);
+
+                            relationships.push(relationship);
+                        }
+                    }
+                }
+            }
+        }
+
+        relationships
+    }
+
+    /// Extract module containment relationships
+    fn extract_module_relationships(
+        &self,
+        symbols: &[ExtractedSymbol],
+        _symbol_lookup: &HashMap<String, &ExtractedSymbol>,
+    ) -> Vec<ExtractedRelationship> {
+        let mut relationships = Vec::new();
+
+        for symbol in symbols {
             if symbol.kind == SymbolKind::Module {
-                // Modules contain other symbols
+                // Find all symbols contained in this module
                 for other_symbol in symbols {
                     if other_symbol.parent_scope.as_ref() == Some(&symbol.name) {
                         let relationship = ExtractedRelationship::new(
@@ -186,18 +377,54 @@ impl RustAnalyzer {
                     }
                 }
             }
+        }
 
-            // Extract use/import relationships
+        relationships
+    }
+
+    /// Extract import/use relationships
+    fn extract_import_relationships(
+        &self,
+        symbols: &[ExtractedSymbol],
+        content: &str,
+        fqn_lookup: &HashMap<String, &ExtractedSymbol>,
+    ) -> Vec<ExtractedRelationship> {
+        let mut relationships = Vec::new();
+
+        for symbol in symbols {
             if symbol.kind == SymbolKind::Import {
-                // In Rust, 'use' statements create import relationships
                 if let Some(qualified_name) = &symbol.qualified_name {
-                    // Create import relationship
+                    // Create import relationship from file to imported symbol
+                    let file_uid = format!("file::{}", symbol.location.file_path.display());
+
                     let relationship = ExtractedRelationship::new(
-                        format!("file::{}", symbol.location.file_path.display()),
+                        file_uid,
                         qualified_name.clone(),
                         RelationType::Imports,
                     )
-                    .with_confidence(0.9);
+                    .with_confidence(0.9)
+                    .with_context(format!("use {}", qualified_name));
+
+                    relationships.push(relationship);
+                }
+            }
+        }
+
+        // Also look for use statements in content
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("use ") && trimmed.ends_with(';') {
+                let import_path = &trimmed[4..trimmed.len() - 1]; // Remove "use " and ";"
+
+                if let Some(imported_symbol) = fqn_lookup.get(import_path) {
+                    let file_uid = format!("file::current"); // Simplified file reference
+
+                    let relationship = ExtractedRelationship::new(
+                        file_uid,
+                        imported_symbol.uid.clone(),
+                        RelationType::Imports,
+                    )
+                    .with_confidence(0.8);
 
                     relationships.push(relationship);
                 }
@@ -309,7 +536,7 @@ impl CodeAnalyzer for RustAnalyzer {
         result.symbols = self.enhance_rust_symbols(result.symbols);
 
         // Add Rust-specific relationships
-        let rust_relationships = self.extract_rust_relationships(&result.symbols);
+        let rust_relationships = self.extract_rust_relationships(&result.symbols, content);
         result.relationships.extend(rust_relationships);
 
         // Update metadata to reflect Rust-specific analysis
@@ -428,7 +655,14 @@ mod tests {
 
     fn create_test_context() -> AnalysisContext {
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        AnalysisContext::new(1, 2, 3, "rust".to_string(), uid_generator)
+        AnalysisContext::new(
+            1,
+            2,
+            "rust".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("test.rs"),
+            uid_generator,
+        )
     }
 
     fn create_test_symbol(name: &str, kind: SymbolKind) -> ExtractedSymbol {

@@ -151,7 +151,6 @@ impl LspErrorHandlingTestSuite {
             Some(server_manager.clone()),
             language_detector,
             workspace_resolver,
-            cache_layer,
             uid_generator,
             lsp_config,
         ));

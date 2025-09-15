@@ -243,6 +243,17 @@ pub enum DaemonRequest {
         sort_order: String,
         detailed: bool,
     },
+
+    // Graph export request
+    ExportGraph {
+        request_id: Uuid,
+        workspace_path: Option<PathBuf>,
+        format: String, // "json", "graphml", "dot"
+        max_depth: Option<u32>,
+        symbol_types_filter: Option<Vec<String>>,
+        edge_types_filter: Option<Vec<String>>,
+        connected_only: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -273,38 +284,56 @@ pub enum DaemonResponse {
     CallHierarchy {
         request_id: Uuid,
         result: CallHierarchyResult,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     Definition {
         request_id: Uuid,
         locations: Vec<Location>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     References {
         request_id: Uuid,
         locations: Vec<Location>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     Hover {
         request_id: Uuid,
         content: Option<HoverContent>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     Completion {
         request_id: Uuid,
         items: Vec<CompletionItem>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     DocumentSymbols {
         request_id: Uuid,
         symbols: Vec<DocumentSymbol>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     WorkspaceSymbols {
         request_id: Uuid,
         symbols: Vec<SymbolInformation>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     Implementations {
         request_id: Uuid,
         locations: Vec<Location>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     TypeDefinition {
         request_id: Uuid,
         locations: Vec<Location>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        warnings: Option<Vec<String>>,
     },
     // System responses
     Status {
@@ -434,6 +463,16 @@ pub enum DaemonResponse {
         offset: usize,
         limit: usize,
         has_more: bool,
+    },
+
+    // Graph export response
+    GraphExported {
+        request_id: Uuid,
+        format: String,
+        workspace_path: PathBuf,
+        nodes_count: usize,
+        edges_count: usize,
+        graph_data: String, // The serialized graph data (JSON, GraphML, or DOT)
     },
 
     Error {
@@ -712,6 +751,9 @@ pub struct DaemonStatus {
     /// Universal cache statistics (if enabled)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub universal_cache_stats: Option<UniversalCacheStats>,
+    /// Database health information (Priority 4)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_health: Option<String>,
 }
 
 /// Universal cache statistics for monitoring and observability

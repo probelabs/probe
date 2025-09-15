@@ -1,10 +1,12 @@
 use crate::cache_types::{CallHierarchyInfo, CallInfo, LspOperation, NodeId, NodeKey};
+use crate::database_cache_adapter::BackendType;
 use crate::database_cache_adapter::DatabaseCacheConfig;
 use crate::hash_utils::md5_hex_file;
 use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
 use crate::logging::{LogBuffer, MemoryLogLayer};
+use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::lsp_registry::LspRegistry;
 use crate::path_safety::safe_canonicalize;
 use crate::pid_lock::PidLock;
@@ -17,19 +19,44 @@ use crate::protocol::{
 };
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
+use crate::symbol::{generate_version_aware_uid, SymbolUIDGenerator};
 use crate::watchdog::{ProcessMonitor, Watchdog};
-use crate::workspace_cache_router::WorkspaceCacheRouter;
+use crate::workspace_database_router::WorkspaceDatabaseRouter;
 use crate::workspace_resolver::WorkspaceResolver;
+// Position adjustment for different LSP servers
+#[derive(Debug, Clone)]
+enum PositionOffset {
+    /// Use the start position of the identifier (column 0 of identifier)
+    Start,
+    /// Start position plus N characters
+    StartPlusN(u32),
+}
+
+impl PositionOffset {
+    /// Apply the offset to a base position, given the identifier length
+    fn apply(&self, base_line: u32, base_column: u32, _identifier_len: u32) -> (u32, u32) {
+        match self {
+            PositionOffset::Start => (base_line, base_column),
+            PositionOffset::StartPlusN(n) => (base_line, base_column + n),
+        }
+    }
+
+    fn description(&self) -> &'static str {
+        match self {
+            PositionOffset::Start => "start of identifier",
+            PositionOffset::StartPlusN(_) => "start + N characters",
+        }
+    }
+}
 use anyhow::Context;
 use anyhow::{anyhow, Result};
 use dashmap::DashMap;
-use futures;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio::time::{timeout, Duration};
 
 // Connection management constants
@@ -42,6 +69,116 @@ const CONNECTION_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
+
+/// Database and cache metrics for monitoring (Step 30.3-30.4)
+#[derive(Debug)]
+pub struct DatabaseMetrics {
+    // Database operation metrics
+    pub database_errors: Arc<RwLock<std::collections::HashMap<String, u64>>>,
+    pub database_operation_times: Arc<RwLock<Vec<(String, Duration)>>>, // Keep last 100 operations
+    pub database_health_checks: Arc<RwLock<u64>>,
+    pub database_connection_failures: Arc<RwLock<u64>>,
+
+    // Cache hit/miss tracking per workspace
+    pub cache_hits: Arc<RwLock<std::collections::HashMap<String, u64>>>,
+    pub cache_misses: Arc<RwLock<std::collections::HashMap<String, u64>>>,
+    pub cache_operations_total: Arc<RwLock<u64>>,
+
+    // Symbol resolution metrics
+    pub symbol_resolution_successes: Arc<RwLock<u64>>,
+    pub symbol_resolution_fallbacks: Arc<RwLock<u64>>,
+    pub symbol_resolution_failures: Arc<RwLock<u64>>,
+
+    // Database integrity checks
+    pub integrity_checks_passed: Arc<RwLock<u64>>,
+    pub integrity_checks_failed: Arc<RwLock<u64>>,
+}
+
+impl DatabaseMetrics {
+    pub fn new() -> Self {
+        Self {
+            database_errors: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            database_operation_times: Arc::new(RwLock::new(Vec::new())),
+            database_health_checks: Arc::new(RwLock::new(0)),
+            database_connection_failures: Arc::new(RwLock::new(0)),
+            cache_hits: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            cache_misses: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            cache_operations_total: Arc::new(RwLock::new(0)),
+            symbol_resolution_successes: Arc::new(RwLock::new(0)),
+            symbol_resolution_fallbacks: Arc::new(RwLock::new(0)),
+            symbol_resolution_failures: Arc::new(RwLock::new(0)),
+            integrity_checks_passed: Arc::new(RwLock::new(0)),
+            integrity_checks_failed: Arc::new(RwLock::new(0)),
+        }
+    }
+
+    pub async fn increment_database_errors(&self, operation: &str) {
+        let mut errors = self.database_errors.write().await;
+        *errors.entry(operation.to_string()).or_insert(0) += 1;
+    }
+
+    pub async fn record_database_operation_time(&self, operation: &str, duration: Duration) {
+        let mut times = self.database_operation_times.write().await;
+        times.push((operation.to_string(), duration));
+        // Keep only last 100 operations to prevent memory growth
+        if times.len() > 100 {
+            let excess = times.len() - 100;
+            times.drain(0..excess);
+        }
+    }
+
+    pub async fn increment_cache_hit(&self, workspace: &str) {
+        let mut hits = self.cache_hits.write().await;
+        *hits.entry(workspace.to_string()).or_insert(0) += 1;
+        let mut total = self.cache_operations_total.write().await;
+        *total += 1;
+    }
+
+    pub async fn increment_cache_miss(&self, workspace: &str) {
+        let mut misses = self.cache_misses.write().await;
+        *misses.entry(workspace.to_string()).or_insert(0) += 1;
+        let mut total = self.cache_operations_total.write().await;
+        *total += 1;
+    }
+
+    pub async fn get_cache_hit_rate(&self, workspace: &str) -> f64 {
+        let hits = {
+            let hits_map = self.cache_hits.read().await;
+            *hits_map.get(workspace).unwrap_or(&0)
+        };
+
+        let misses = {
+            let misses_map = self.cache_misses.read().await;
+            *misses_map.get(workspace).unwrap_or(&0)
+        };
+
+        let total = hits + misses;
+        if total == 0 {
+            0.0
+        } else {
+            hits as f64 / total as f64 * 100.0
+        }
+    }
+}
+
+impl Default for DatabaseMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Database health status tracking
+#[derive(Debug, Clone)]
+enum DatabaseHealth {
+    Healthy,
+    Degraded {
+        error_count: u64,
+        last_error: String,
+    },
+    Failed {
+        error_message: String,
+    },
+}
 
 // PID lock path is now handled directly by PidLock::new(socket_path)
 // which creates socket_path.pid internally
@@ -77,21 +214,59 @@ pub struct LspDaemon {
     watchdog_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     process_monitor: Arc<ProcessMonitor>,
     child_first_seen: Arc<DashMap<u32, Instant>>,
+    // UID generation
+    uid_generator: Arc<SymbolUIDGenerator>,
     index_grace_secs: u64,
     // Workspace-aware cache router for multi-workspace environments
-    workspace_cache_router: Arc<WorkspaceCacheRouter>,
+    workspace_cache_router: Arc<WorkspaceDatabaseRouter>,
     // Indexing configuration and manager
     indexing_config: Arc<RwLock<IndexingConfig>>,
     indexing_manager: Arc<tokio::sync::Mutex<Option<IndexingManager>>>,
-    // Universal cache layer for transparent LSP request caching
-    universal_cache_layer: Arc<crate::universal_cache::CacheLayer>,
-    // Document provider for tracking unsaved changes
-    document_provider: Arc<crate::universal_cache::DaemonDocumentProvider>,
+    // Database and cache metrics for Step 30.3-30.4
+    metrics: Arc<DatabaseMetrics>,
+    // Database health tracking for Priority 4
+    database_errors: Arc<AtomicU64>, // Count of database failures
+    last_database_error: Arc<Mutex<Option<String>>>, // Last error message
+    database_health_status: Arc<Mutex<DatabaseHealth>>, // Overall health
 }
 
 impl LspDaemon {
     pub fn new(socket_path: String) -> Result<Self> {
         Self::new_with_config(socket_path, None)
+    }
+
+    /// Generate a workspace ID compatible with the current i64 interface
+    /// This converts the string workspace ID to a stable i64 hash
+    fn generate_workspace_id_hash(&self, workspace_root: &Path) -> i64 {
+        let workspace_id_str = self
+            .workspace_cache_router
+            .workspace_id_for(workspace_root)
+            .unwrap_or_else(|_| "default_workspace".to_string());
+
+        // Convert string to i64 hash for current i64 interface
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut hasher = DefaultHasher::new();
+        workspace_id_str.hash(&mut hasher);
+        hasher.finish() as i64
+    }
+
+    /// Get position offset for a language/LSP server combination based on known patterns
+    fn get_position_offset(&self, language: &str, lsp_server: Option<&str>) -> PositionOffset {
+        match (language, lsp_server) {
+            // rust-analyzer works best with position at start of identifier
+            ("rust", Some("rust-analyzer")) => PositionOffset::Start,
+            // gopls works better with position slightly offset
+            ("go", Some("gopls")) => PositionOffset::StartPlusN(1),
+            // pylsp works with start position
+            ("python", Some("pylsp")) => PositionOffset::Start,
+            // typescript-language-server works with start position
+            ("javascript" | "typescript", Some("typescript-language-server")) => {
+                PositionOffset::Start
+            }
+            // Default to start position for unknown combinations
+            _ => PositionOffset::Start,
+        }
     }
 
     /// Create a new LSP daemon with async initialization for persistence
@@ -198,7 +373,7 @@ impl LspDaemon {
 
         // Initialize workspace cache router for universal cache
         let workspace_cache_router_config =
-            crate::workspace_cache_router::WorkspaceCacheRouterConfig {
+            crate::workspace_database_router::WorkspaceDatabaseRouterConfig {
                 max_open_caches: std::env::var("PROBE_MAX_WORKSPACE_CACHES")
                     .ok()
                     .and_then(|v| v.parse().ok())
@@ -208,11 +383,12 @@ impl LspDaemon {
                 ..Default::default()
             };
 
-        let workspace_cache_router = Arc::new(WorkspaceCacheRouter::new_with_workspace_resolver(
-            workspace_cache_router_config,
-            server_manager.clone(),
-            Some(workspace_resolver.clone()),
-        ));
+        let workspace_cache_router =
+            Arc::new(WorkspaceDatabaseRouter::new_with_workspace_resolver(
+                workspace_cache_router_config,
+                server_manager.clone(),
+                Some(workspace_resolver.clone()),
+            ));
 
         // Load indexing configuration with updated defaults
         let mut indexing_config = IndexingConfig::load().unwrap_or_else(|e| {
@@ -241,48 +417,7 @@ impl LspDaemon {
 
         let indexing_config = Arc::new(RwLock::new(indexing_config));
 
-        // Create document provider for tracking unsaved changes
-        let document_provider = Arc::new(crate::universal_cache::DaemonDocumentProvider::new(
-            Some(workspace_resolver.clone()),
-        ));
-
-        // Create universal cache using the workspace router with shared workspace resolver
-        let universal_cache = Arc::new(
-            crate::universal_cache::UniversalCache::new_with_workspace_resolver(
-                workspace_cache_router.clone(),
-                Some(workspace_resolver.clone()),
-            )
-            .await
-            .context("Failed to initialize universal cache")?,
-        );
-
-        // Configure cache layer with intelligent defaults
-        let cache_layer_config = crate::universal_cache::CacheLayerConfig {
-            cache_warming_enabled: std::env::var("PROBE_CACHE_WARMING_ENABLED")
-                .map(|v| v == "true")
-                .unwrap_or(true),
-            cache_warming_concurrency: std::env::var("PROBE_CACHE_WARMING_CONCURRENCY")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(4),
-            singleflight_timeout: Duration::from_secs(
-                std::env::var("PROBE_SINGLEFLIGHT_TIMEOUT_SECS")
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(30),
-            ),
-            detailed_metrics: true,
-            workspace_revision_ttl: Duration::from_secs(60),
-        };
-
-        // Create universal cache layer
-        let universal_cache_layer = Arc::new(crate::universal_cache::CacheLayer::new(
-            universal_cache,
-            Some(document_provider.clone()),
-            Some(cache_layer_config),
-        ));
-
-        info!("Universal cache layer initialized with intelligent caching middleware");
+        info!("LSP daemon configured for direct database-first request handling");
 
         Ok(Self {
             socket_path,
@@ -312,12 +447,16 @@ impl LspDaemon {
             watchdog_task: Arc::new(tokio::sync::Mutex::new(None)),
             process_monitor,
             child_first_seen: Arc::new(DashMap::new()),
+            uid_generator: Arc::new(SymbolUIDGenerator::new()),
             index_grace_secs,
             workspace_cache_router,
             indexing_config,
             indexing_manager: Arc::new(tokio::sync::Mutex::new(None)),
-            universal_cache_layer,
-            document_provider,
+            metrics: Arc::new(DatabaseMetrics::new()),
+            // Initialize database health tracking
+            database_errors: Arc::new(AtomicU64::new(0)),
+            last_database_error: Arc::new(Mutex::new(None)),
+            database_health_status: Arc::new(Mutex::new(DatabaseHealth::Healthy)),
         })
     }
 
@@ -337,6 +476,11 @@ impl LspDaemon {
 
         // Clean up any existing socket
         remove_socket_file(&self.socket_path)?;
+
+        // Migrate existing workspace caches to use git-based naming where possible
+        if let Err(e) = self.workspace_cache_router.migrate_workspace_caches().await {
+            warn!("Failed to migrate workspace caches: {}", e);
+        }
 
         let listener = IpcListener::bind(&self.socket_path).await?;
         info!("LSP daemon listening on {}", self.socket_path);
@@ -789,53 +933,30 @@ impl LspDaemon {
         cleaned_count
     }
 
-    /// Handle request with universal cache layer middleware
+    /// Handle request with direct database-first approach
     async fn handle_request(&self, request: DaemonRequest) -> DaemonResponse {
-        // Clone self reference for the async closure
-        let daemon_self = self.clone_refs();
-
-        // Use the universal cache layer to handle the request transparently
-        match self
-            .universal_cache_layer
-            .handle_request(request.clone(), move |req| async move {
-                daemon_self.handle_request_internal(req).await
-            })
-            .await
-        {
-            Ok(response) => response,
-            Err(e) => {
-                error!("Cache layer error: {}", e);
-                // Fall back to original implementation
-                self.handle_request_internal(request).await
-            }
-        }
+        // Direct call to internal handler (database-first approach)
+        self.handle_request_internal(request).await
     }
 
     /// Internal request handler (original implementation)
     async fn handle_request_internal(&self, request: DaemonRequest) -> DaemonResponse {
-        debug!(
-            "Received daemon request: {:?}",
-            std::mem::discriminant(&request)
-        );
-
-        // Track document-related operations for future document synchronization
+        // Reduced logging noise - only log interesting requests
         match &request {
-            DaemonRequest::Definition { file_path, .. }
-            | DaemonRequest::References { file_path, .. }
-            | DaemonRequest::Hover { file_path, .. }
-            | DaemonRequest::DocumentSymbols { file_path, .. } => {
-                // Prepare file URI for document provider
-                let uri = format!("file://{}", file_path.to_string_lossy());
-
-                // Check if document is already tracked (for future document sync)
-                let is_tracked = self.document_provider.is_document_open(&uri).await;
-                debug!("Document {} tracking status: {}", uri, is_tracked);
-
-                // TODO: In future, this is where we'd sync document content
-                // if the file has unsaved changes in the editor
+            DaemonRequest::CallHierarchy { .. }
+            | DaemonRequest::References { .. }
+            | DaemonRequest::Definition { .. } => {
+                debug!(
+                    "Processing LSP request: {:?}",
+                    std::mem::discriminant(&request)
+                );
             }
-            _ => {} // Non-document operations
+            _ => {
+                // Skip logging for routine requests like status checks
+            }
         }
+
+        // Document synchronization removed - using database-first approach
 
         // Clean up stale connections on every request to prevent accumulation
         self.cleanup_stale_connections();
@@ -959,18 +1080,8 @@ impl LspDaemon {
                     rusage + (active_servers as f64 * 50.0) // Estimate 50MB per LSP server
                 };
 
-                // Get universal cache statistics
-                let cache_stats = match self.universal_cache_layer.get_stats().await {
-                    Ok(stats) => {
-                        debug!("Universal cache stats: {:?} hit rate, {} active workspaces, warming enabled: {}", 
-                               stats.cache_stats.hit_rate, stats.active_workspaces, stats.cache_warming_enabled);
-                        Some(stats)
-                    }
-                    Err(e) => {
-                        warn!("Failed to get universal cache statistics: {}", e);
-                        None
-                    }
-                };
+                // Universal cache statistics removed - using database-first approach
+                // let cache_stats = None;
 
                 // Health is considered good if:
                 // - Not at connection limit (with some buffer)
@@ -1001,19 +1112,11 @@ impl LspDaemon {
                     }
                 };
 
-                // Log enhanced health check information including cache statistics
-                if let Some(ref stats) = cache_stats {
-                    info!(
-                        "Health check: connections={} (accepted={}, cleaned={}, rejected={}), memory={}MB, errors={}%, avg_req_duration={}ms, avg_conn_duration={}ms, cache_hit_rate={:.1}%, active_workspaces={}, warming={}",
-                        active_connections, total_accepted, total_cleaned, total_rejected, memory_usage_mb, error_rate, avg_request_duration_ms, avg_connection_duration_ms,
-                        stats.cache_stats.hit_rate * 100.0, stats.active_workspaces, stats.cache_warming_enabled
-                    );
-                } else {
-                    info!(
-                        "Health check: connections={} (accepted={}, cleaned={}, rejected={}), memory={}MB, errors={}%, avg_req_duration={}ms, avg_conn_duration={}ms, cache_stats=unavailable",
-                        active_connections, total_accepted, total_cleaned, total_rejected, memory_usage_mb, error_rate, avg_request_duration_ms, avg_connection_duration_ms
-                    );
-                }
+                // Log basic health check information (cache stats removed)
+                info!(
+                    "Health check: connections={} (accepted={}, cleaned={}, rejected={}), memory={}MB, errors={}%, avg_req_duration={}ms, avg_conn_duration={}ms",
+                    active_connections, total_accepted, total_cleaned, total_rejected, memory_usage_mb, error_rate, avg_request_duration_ms, avg_connection_duration_ms
+                );
 
                 DaemonResponse::HealthCheck {
                     request_id,
@@ -1055,7 +1158,11 @@ impl LspDaemon {
                     .handle_call_hierarchy(&file_path, line, column, workspace_hint)
                     .await
                 {
-                    Ok(result) => DaemonResponse::CallHierarchy { request_id, result },
+                    Ok(result) => DaemonResponse::CallHierarchy {
+                        request_id,
+                        result,
+                        warnings: None,
+                    },
                     Err(e) => DaemonResponse::Error {
                         request_id,
                         error: e.to_string(),
@@ -1105,30 +1212,9 @@ impl LspDaemon {
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         git_hash: env!("GIT_HASH").to_string(),
                         build_date: env!("BUILD_DATE").to_string(),
-                        universal_cache_stats: {
-                            // Get universal cache stats for the status response
-                            match self.universal_cache_layer.get_stats().await {
-                                Ok(layer_stats) => {
-                                    // Convert cache layer stats to universal cache stats format
-                                    match self
-                                        .convert_cache_layer_stats_to_universal_cache_stats(
-                                            layer_stats,
-                                        )
-                                        .await
-                                    {
-                                        Ok(universal_stats) => Some(universal_stats),
-                                        Err(e) => {
-                                            warn!("Failed to convert cache layer stats to universal cache stats: {}", e);
-                                            Some(crate::universal_cache::monitoring::get_disabled_cache_stats())
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to get universal cache stats for status: {}", e);
-                                    Some(crate::universal_cache::monitoring::get_disabled_cache_stats())
-                                }
-                            }
-                        },
+                        universal_cache_stats: None, // Universal cache layer removed
+                        // Add database health information (Priority 4)
+                        database_health: Some(self.get_database_health_summary().await),
                     },
                 }
             }
@@ -1186,330 +1272,34 @@ impl LspDaemon {
                 detailed: _detailed,
                 git: _git,
             } => {
-                // First, try to get stats from universal cache layer which has the real activity
-                info!("Getting cache stats from universal cache layer");
-                match self.universal_cache_layer.get_stats().await {
-                    Ok(universal_layer_stats) => {
-                        info!(
-                            "Universal cache layer stats: hit_rate={:.2}%, {} active workspaces, {} total entries",
-                            universal_layer_stats.cache_stats.hit_rate * 100.0,
-                            universal_layer_stats.active_workspaces,
-                            universal_layer_stats.cache_stats.total_entries
-                        );
-
-                        // Always try to use universal cache statistics as the primary source
-                        // Universal cache includes both in-memory tracking and persistent cache data
-                        let has_universal_data = universal_layer_stats.cache_stats.total_entries
-                            > 0
-                            || universal_layer_stats
-                                .cache_stats
-                                .method_stats
-                                .values()
-                                .any(|s| s.hits + s.misses > 0)
-                            || universal_layer_stats.active_workspaces > 0;
-
-                        info!(
-                            "Universal cache evaluation: entries={}, active_workspaces={}, has_method_stats={}, will_use_universal={}",
-                            universal_layer_stats.cache_stats.total_entries,
-                            universal_layer_stats.active_workspaces,
-                            !universal_layer_stats.cache_stats.method_stats.is_empty(),
-                            has_universal_data
-                        );
-
-                        if has_universal_data {
-                            // Convert universal cache stats to legacy format
-                            info!("Using universal cache statistics as primary source");
-                            // Debug: log method stats details
-                            for (method, stats) in &universal_layer_stats.cache_stats.method_stats {
-                                info!(
-                                    "Universal cache method stats for {:?}: entries={}, hits={}, misses={}, size_bytes={}",
-                                    method, stats.entries, stats.hits, stats.misses, stats.size_bytes
-                                );
-                            }
-
-                            let total_ops: u64 = universal_layer_stats
-                                .cache_stats
-                                .method_stats
-                                .values()
-                                .map(|s| s.hits + s.misses)
-                                .sum();
-
-                            let total_hits: u64 = universal_layer_stats
-                                .cache_stats
-                                .method_stats
-                                .values()
-                                .map(|s| s.hits)
-                                .sum();
-
-                            let total_misses: u64 = universal_layer_stats
-                                .cache_stats
-                                .method_stats
-                                .values()
-                                .map(|s| s.misses)
-                                .sum();
-
-                            info!(
-                                "Universal cache totals: ops={}, hits={}, misses={}, entries={}",
-                                total_ops,
-                                total_hits,
-                                total_misses,
-                                universal_layer_stats.cache_stats.total_entries
-                            );
-
-                            let hit_rate = if total_ops > 0 {
-                                total_hits as f64 / total_ops as f64
-                            } else {
-                                0.0
-                            };
-
-                            let miss_rate = 1.0 - hit_rate;
-
-                            // Get disk size from workspace router as fallback
-                            let router_stats = self.workspace_cache_router.get_stats().await;
-                            let mut total_disk_size_bytes = 0u64;
-
-                            for workspace_stats in &router_stats.workspace_stats {
-                                if let Some(cache_stats) = &workspace_stats.cache_stats {
-                                    total_disk_size_bytes += cache_stats.disk_size_bytes;
-                                }
-                            }
-
-                            // Generate comprehensive statistics using list_keys functionality
-                            let (per_workspace_stats, per_operation_totals) = match self
-                                .generate_comprehensive_cache_stats()
-                                .await
-                            {
-                                Ok((ws_stats, op_stats)) => {
-                                    info!(
-                                        "Successfully generated comprehensive cache stats: {} workspaces, {} operations",
-                                        ws_stats.len(),
-                                        op_stats.len()
-                                    );
-
-                                    // If we got empty results, fall back to disk-based enhanced stats
-                                    if ws_stats.is_empty() && op_stats.is_empty() {
-                                        info!("Universal cache list_keys returned empty results, falling back to enhanced disk-based stats");
-                                        match self.generate_enhanced_disk_stats().await {
-                                            Ok((disk_ws_stats, disk_op_stats)) => {
-                                                info!(
-                                                    "Successfully generated enhanced disk stats: {} workspaces, {} operations", 
-                                                    disk_ws_stats.len(),
-                                                    disk_op_stats.len()
-                                                );
-                                                (disk_ws_stats, disk_op_stats)
-                                            }
-                                            Err(e) => {
-                                                warn!(
-                                                    "Failed to generate enhanced disk stats: {}",
-                                                    e
-                                                );
-                                                (Vec::new(), Vec::new())
-                                            }
-                                        }
-                                    } else {
-                                        (ws_stats, op_stats)
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to generate comprehensive cache stats: {}, falling back to enhanced disk stats", e);
-                                    match self.generate_enhanced_disk_stats().await {
-                                        Ok((disk_ws_stats, disk_op_stats)) => {
-                                            info!(
-                                                "Successfully generated enhanced disk stats as fallback: {} workspaces, {} operations", 
-                                                disk_ws_stats.len(),
-                                                disk_op_stats.len()
-                                            );
-                                            (disk_ws_stats, disk_op_stats)
-                                        }
-                                        Err(e) => {
-                                            warn!("Failed to generate enhanced disk stats as fallback: {}", e);
-                                            (Vec::new(), Vec::new())
-                                        }
-                                    }
-                                }
-                            };
-
-                            let legacy_stats = crate::protocol::CacheStatistics {
-                                hit_rate,
-                                miss_rate,
-                                total_entries: universal_layer_stats.cache_stats.total_entries,
-                                total_size_bytes: universal_layer_stats
-                                    .cache_stats
-                                    .total_size_bytes,
-                                disk_size_bytes: total_disk_size_bytes,
-                                entries_per_file: std::collections::HashMap::new(),
-                                entries_per_language: std::collections::HashMap::new(),
-                                age_distribution: crate::protocol::AgeDistribution {
-                                    entries_last_hour: 0,
-                                    entries_last_day: 0,
-                                    entries_last_week: 0,
-                                    entries_last_month: universal_layer_stats
-                                        .cache_stats
-                                        .total_entries,
-                                    entries_older: 0,
-                                },
-                                most_accessed: Vec::new(),
-                                memory_usage: crate::protocol::MemoryUsage {
-                                    in_memory_cache_bytes: universal_layer_stats
-                                        .cache_stats
-                                        .total_size_bytes
-                                        / 10, // Estimate 10% in memory
-                                    persistent_cache_bytes: total_disk_size_bytes,
-                                    metadata_bytes: total_disk_size_bytes / 100,
-                                    index_bytes: total_disk_size_bytes / 50,
-                                },
-                                per_workspace_stats: Some(per_workspace_stats),
-                                per_operation_totals: Some(per_operation_totals),
-                            };
-
-                            info!(
-                                "Returning universal cache stats: entries={}, hit_rate={:.2}%, disk_size={}",
-                                legacy_stats.total_entries, hit_rate * 100.0, legacy_stats.disk_size_bytes
-                            );
-
-                            return DaemonResponse::CacheStats {
-                                request_id,
-                                stats: legacy_stats,
-                            };
-                        }
-                    }
-                    Err(e) => {
-                        warn!("Failed to get universal cache layer stats, falling back to workspace router: {}", e);
-                    }
-                }
-
-                // Fallback: Use the old method with workspace cache router stats
-                info!("Falling back to workspace cache router stats");
-                let router_stats = self.workspace_cache_router.get_stats().await;
-                info!(
-                    "Workspace cache router stats: {} workspaces seen, {} current open caches",
-                    router_stats.total_workspaces_seen, router_stats.current_open_caches
-                );
-
-                // Also scan the filesystem for all available workspace caches
-                info!("Scanning filesystem for all workspace caches");
-                let all_workspace_caches = match self
-                    .workspace_cache_router
-                    .list_all_workspace_caches()
-                    .await
-                {
-                    Ok(caches) => {
-                        info!("Found {} workspace caches on disk", caches.len());
-                        caches
-                    }
-                    Err(e) => {
-                        warn!("Failed to list workspace caches: {}", e);
-                        Vec::new()
-                    }
-                };
-
-                // Aggregate stats from all workspace caches (open + on-disk)
-                let mut total_entries = 0u64;
-                let mut total_size_bytes = 0u64;
-                let mut total_disk_size_bytes = 0u64;
-                let mut total_hits = 0u64;
-                let mut total_misses = 0u64;
-
-                // First, include stats from currently open caches
-                for workspace_stats in &router_stats.workspace_stats {
-                    info!(
-                        "Processing open workspace: {}",
-                        workspace_stats.workspace_id
-                    );
-                    if let Some(cache_stats) = &workspace_stats.cache_stats {
-                        info!(
-                            "Cache stats for open workspace {}: {} nodes, {} bytes disk",
-                            workspace_stats.workspace_id,
-                            cache_stats.total_nodes,
-                            cache_stats.disk_size_bytes
-                        );
-                        total_entries += cache_stats.total_nodes;
-                        total_size_bytes += cache_stats.total_size_bytes;
-                        total_disk_size_bytes += cache_stats.disk_size_bytes;
-                        total_hits += cache_stats.hit_count;
-                        total_misses += cache_stats.miss_count;
-                    }
-                }
-
-                // For on-disk caches that aren't currently open, read stats directly from sled
-                for cache_entry in &all_workspace_caches {
-                    // Check if this cache is already included in open caches
-                    let already_counted = router_stats
-                        .workspace_stats
-                        .iter()
-                        .any(|ws| ws.workspace_id == cache_entry.workspace_id);
-
-                    if !already_counted {
-                        info!("Processing disk workspace: {}", cache_entry.workspace_id);
-                        let call_graph_db_path = cache_entry.cache_path.join("cache.db");
-
-                        if call_graph_db_path.exists() && call_graph_db_path.is_dir() {
-                            match self
-                                .read_sled_db_stats_for_cache_stats(&call_graph_db_path)
-                                .await
-                            {
-                                Ok((entries, size_bytes, disk_bytes)) => {
-                                    info!("Disk cache stats for workspace {}: {} entries, {} bytes disk", cache_entry.workspace_id, entries, disk_bytes);
-                                    total_entries += entries;
-                                    total_size_bytes += size_bytes;
-                                    total_disk_size_bytes += disk_bytes;
-                                    // Note: disk-only caches don't have hit/miss stats in memory
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        "Failed to read stats for disk cache {}: {}",
-                                        cache_entry.workspace_id, e
-                                    );
-                                }
-                            }
-                        }
-                    }
-                }
-
-                info!(
-                    "Fallback aggregated stats: entries={}, size_bytes={}, disk_bytes={}",
-                    total_entries, total_size_bytes, total_disk_size_bytes
-                );
-
-                // Calculate hit/miss rates
-                let total_requests = total_hits + total_misses;
-                let hit_rate = if total_requests > 0 {
-                    total_hits as f64 / total_requests as f64
-                } else {
-                    0.0
-                };
-                let miss_rate = 1.0 - hit_rate;
+                // Universal cache layer removed - return empty stats
+                info!("Cache stats request (universal cache removed)");
 
                 let legacy_stats = crate::protocol::CacheStatistics {
-                    hit_rate,
-                    miss_rate,
-                    total_entries,
-                    total_size_bytes,
-                    disk_size_bytes: total_disk_size_bytes,
-                    entries_per_file: std::collections::HashMap::new(), // TODO: Could be populated from workspace summaries
-                    entries_per_language: std::collections::HashMap::new(), // TODO: Could be populated from method stats
+                    hit_rate: 0.0,
+                    miss_rate: 1.0,
+                    total_entries: 0,
+                    total_size_bytes: 0,
+                    disk_size_bytes: 0,
+                    entries_per_file: std::collections::HashMap::new(),
+                    entries_per_language: std::collections::HashMap::new(),
                     age_distribution: crate::protocol::AgeDistribution {
-                        entries_last_hour: 0, // TODO: Would need timestamp tracking
+                        entries_last_hour: 0,
                         entries_last_day: 0,
                         entries_last_week: 0,
-                        entries_last_month: total_entries, // Assume all entries are recent
+                        entries_last_month: 0,
                         entries_older: 0,
                     },
-                    most_accessed: Vec::new(), // TODO: Could be populated from access counts
+                    most_accessed: Vec::new(),
                     memory_usage: crate::protocol::MemoryUsage {
-                        in_memory_cache_bytes: 0, // Workspace cache router doesn't track in-memory size
-                        persistent_cache_bytes: total_disk_size_bytes,
-                        metadata_bytes: total_disk_size_bytes / 100, // Rough estimate (1% metadata)
-                        index_bytes: total_disk_size_bytes / 50,     // Rough estimate (2% index)
+                        in_memory_cache_bytes: 0,
+                        persistent_cache_bytes: 0,
+                        metadata_bytes: 0,
+                        index_bytes: 0,
                     },
                     per_workspace_stats: None,
                     per_operation_totals: None,
                 };
-
-                info!(
-                    "Returning fallback stats: entries={}, disk_size={}",
-                    legacy_stats.total_entries, legacy_stats.disk_size_bytes
-                );
 
                 DaemonResponse::CacheStats {
                     request_id,
@@ -1551,33 +1341,27 @@ impl LspDaemon {
                             error: format!("Failed to clear all workspace caches: {e}"),
                         },
                     }
-                } else if let Some(file_path) = file_path {
-                    // Clear cache for a specific file
-                    match self.universal_cache_layer.invalidate_file(&file_path).await {
-                        Ok(entries_removed) => {
-                            let legacy_result = crate::protocol::ClearResult {
-                                entries_removed: entries_removed as u64,
-                                files_affected: 1,
-                                branches_affected: 0, // Not applicable to universal cache
-                                commits_affected: 0,  // Not applicable to universal cache
-                                bytes_reclaimed: 0,   // Size not tracked at this level
-                                duration_ms: 0,       // Not tracked
-                            };
-                            DaemonResponse::CacheCleared {
-                                request_id,
-                                result: legacy_result,
-                            }
-                        }
-                        Err(e) => DaemonResponse::Error {
-                            request_id,
-                            error: format!("Failed to clear cache for file {file_path:?}: {e}"),
-                        },
+                } else if let Some(_file_path) = file_path {
+                    // Clear cache for a specific file (universal cache removed)
+                    // Return placeholder result since universal cache is removed
+                    let legacy_result = crate::protocol::ClearResult {
+                        entries_removed: 0,
+                        files_affected: 1,
+                        branches_affected: 0,
+                        commits_affected: 0,
+                        bytes_reclaimed: 0,
+                        duration_ms: 0,
+                    };
+                    DaemonResponse::CacheCleared {
+                        request_id,
+                        result: legacy_result,
                     }
                 } else {
-                    // No specific clear target - not supported in universal cache
+                    // No specific clear target - universal cache removed
                     DaemonResponse::Error {
                         request_id,
-                        error: "Universal cache system requires either 'all=true' or a specific file path to clear".to_string(),
+                        error: "Cache clearing requires either 'all=true' or a specific file path"
+                            .to_string(),
                     }
                 }
             }
@@ -1909,18 +1693,111 @@ impl LspDaemon {
                         resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
                     };
 
+                    // Read file content for symbol resolution
+                    let content = fs::read_to_string(&absolute_file_path)?;
+
+                    // PHASE 1: Try database first
+                    if let Ok(symbol_name) = self.find_symbol_at_position(&absolute_file_path, &content, line, column) {
+                        // Generate consistent symbol UID for database lookup
+                        let symbol_uid = match self.generate_consistent_symbol_uid(&absolute_file_path, &symbol_name, line, column, language.as_str(), &workspace_root, &content).await {
+                            Ok(uid) => uid,
+                            Err(e) => {
+                                debug!("[VERSION_AWARE_UID] Failed to generate version-aware UID, using fallback approach: {}", e);
+                                // Fallback to version-aware UID with basic file content
+                                match generate_version_aware_uid(&workspace_root, &absolute_file_path, &content, &symbol_name, line) {
+                                    Ok(fallback_uid) => {
+                                        debug!("[VERSION_AWARE_UID] Fallback UID generated: {}", fallback_uid);
+                                        fallback_uid
+                                    }
+                                    Err(fallback_e) => {
+                                        debug!("[VERSION_AWARE_UID] Even fallback failed: {}. Using emergency format", fallback_e);
+                                        // Emergency fallback - should be very rare
+                                        format!("EMERGENCY:{}:{}:{}:{}",
+                                            absolute_file_path.file_name().unwrap_or_default().to_string_lossy(),
+                                            symbol_name,
+                                            line,
+                                            column)
+                                    }
+                                }
+                            }
+                        };
+
+                        if let Ok(workspace_cache) = self.workspace_cache_router.cache_for_workspace(&workspace_root).await {
+                            // Generate workspace-specific ID from workspace_root
+                            let workspace_id = self.generate_workspace_id_hash(&workspace_root);
+
+                            match workspace_cache.get_definitions(workspace_id, &symbol_uid).await {
+                                Ok(Some(locations)) => {
+                                    info!("Database HIT for {} definitions at {}:{}:{}",
+                                         symbol_name, absolute_file_path.display(), line, column);
+                                    return Ok(locations);
+                                }
+                                Ok(None) => {
+                                    debug!("Database MISS for {} definitions - calling LSP", symbol_name);
+                                }
+                                Err(e) => {
+                                    warn!("Database query error: {} - falling back to LSP", e);
+                                    // Track database error for health monitoring (Priority 4)
+                                    self.record_database_error(&e).await;
+                                }
+                            }
+                        }
+                    } else {
+                        debug!("Could not resolve symbol at position {}:{}:{} - skipping database query",
+                               absolute_file_path.display(), line, column);
+                    }
+
+                    // PHASE 2: Database miss - proceed with LSP call
                     let server_instance = self
                         .server_manager
-                        .ensure_workspace_registered(language, workspace_root)
+                        .ensure_workspace_registered(language, workspace_root.clone())
                         .await?;
 
-                    let server = server_instance.lock().await;
-                    let response_json = server
-                        .server
-                        .definition(&absolute_file_path, line, column)
-                        .await?;
+                    // Make the definition request directly without explicit document lifecycle
+                    // The LSP server manages its own document state
+                    let response_json = {
+                        let server = server_instance.lock().await;
+                        server
+                            .server
+                            .definition(&absolute_file_path, line, column)
+                            .await?
+                    };
 
+                    // Check if response is null vs empty array
+                    let is_null_response = response_json.is_null();
                     let locations = Self::parse_definition_response(&response_json)?;
+
+                    // MILESTONE 21: Store definitions data in the database
+                    // Only store if we got a valid response (not null)
+                    // Empty array [] is valid and should create "none" edges
+                    if !is_null_response {
+                        if let Err(e) = self.store_definitions_in_database(
+                            &locations,
+                            &absolute_file_path,
+                            &workspace_root,
+                            language.as_str(),
+                            line,
+                            column,
+                        ).await {
+                            error!(
+                                "DATABASE_ERROR [definitions]: Failed to store {} definitions in database for {}:{}:{} - {} | cause: {:?} | context: language={}, workspace={:?}",
+                                locations.len(),
+                                absolute_file_path.display(),
+                                line,
+                                column,
+                                e,
+                                e.chain().collect::<Vec<_>>(),
+                                format!("{:?}", language),
+                                workspace_root
+                            );
+                            // Track database error metrics (Step 30.3) - TODO: Make async
+                            // self.metrics.increment_database_errors("definitions").await;
+                        }
+                    } else {
+                        info!("LSP returned null for definitions at {}:{}:{} - not caching (LSP server may not be ready)",
+                              absolute_file_path.display(), line, column);
+                    }
+
                     Ok(locations)
                 }
                 .await;
@@ -1929,6 +1806,7 @@ impl LspDaemon {
                     Ok(locations) => DaemonResponse::Definition {
                         request_id,
                         locations,
+                        warnings: None,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -1979,18 +1857,111 @@ impl LspDaemon {
                         resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
                     };
 
+                    // Read file content for symbol resolution
+                    let content = fs::read_to_string(&absolute_file_path)?;
+
+                    // PHASE 1: Try database first
+                    if let Ok(symbol_name) = self.find_symbol_at_position(&absolute_file_path, &content, line, column) {
+                        // Generate consistent symbol UID for database lookup
+                        let symbol_uid = match self.generate_consistent_symbol_uid(&absolute_file_path, &symbol_name, line, column, language.as_str(), &workspace_root, &content).await {
+                            Ok(uid) => uid,
+                            Err(e) => {
+                                debug!("[VERSION_AWARE_UID] Failed to generate version-aware UID, using fallback approach: {}", e);
+                                // Fallback to version-aware UID with basic file content
+                                match generate_version_aware_uid(&workspace_root, &absolute_file_path, &content, &symbol_name, line) {
+                                    Ok(fallback_uid) => {
+                                        debug!("[VERSION_AWARE_UID] Fallback UID generated: {}", fallback_uid);
+                                        fallback_uid
+                                    }
+                                    Err(fallback_e) => {
+                                        debug!("[VERSION_AWARE_UID] Even fallback failed: {}. Using emergency format", fallback_e);
+                                        // Emergency fallback - should be very rare
+                                        format!("EMERGENCY:{}:{}:{}:{}",
+                                            absolute_file_path.file_name().unwrap_or_default().to_string_lossy(),
+                                            symbol_name,
+                                            line,
+                                            column)
+                                    }
+                                }
+                            }
+                        };
+
+                        if let Ok(workspace_cache) = self.workspace_cache_router.cache_for_workspace(&workspace_root).await {
+                            // Generate workspace-specific ID from workspace_root
+                            let workspace_id = self.generate_workspace_id_hash(&workspace_root);
+
+                            match workspace_cache.get_references(workspace_id, &symbol_uid, include_declaration).await {
+                                Ok(Some(locations)) => {
+                                    info!("Database HIT for {} references at {}:{}:{}",
+                                         symbol_name, absolute_file_path.display(), line, column);
+                                    return Ok(locations);
+                                }
+                                Ok(None) => {
+                                    debug!("Database MISS for {} references - calling LSP", symbol_name);
+                                }
+                                Err(e) => {
+                                    warn!("Database query error: {} - falling back to LSP", e);
+                                    // Track database error for health monitoring (Priority 4)
+                                    self.record_database_error(&e).await;
+                                }
+                            }
+                        }
+                    } else {
+                        debug!("Could not resolve symbol at position {}:{}:{} - skipping database query",
+                               absolute_file_path.display(), line, column);
+                    }
+
+                    // PHASE 2: Database miss - proceed with LSP call
                     let server_instance = self
                         .server_manager
-                        .ensure_workspace_registered(language, workspace_root)
+                        .ensure_workspace_registered(language, workspace_root.clone())
                         .await?;
 
-                    let server = server_instance.lock().await;
-                    let response_json = server
-                        .server
-                        .references(&absolute_file_path, line, column, include_declaration)
-                        .await?;
+                    // Make the references request directly without explicit document lifecycle
+                    // The LSP server manages its own document state
+                    let response_json = {
+                        let server = server_instance.lock().await;
+                        server
+                            .server
+                            .references(&absolute_file_path, line, column, include_declaration)
+                            .await?
+                    };
 
+                    // Check if response is null vs empty array
+                    let is_null_response = response_json.is_null();
                     let locations = Self::parse_references_response(&response_json)?;
+
+                    // MILESTONE 21: Store references data in the database
+                    // Only store if we got a valid response (not null)
+                    // Empty array [] is valid and should create "none" edges
+                    if !is_null_response {
+                        if let Err(e) = self.store_references_in_database(
+                            &locations,
+                            &absolute_file_path,
+                            &workspace_root,
+                            language.as_str(),
+                            line,
+                            column,
+                        ).await {
+                            error!(
+                                "DATABASE_ERROR [references]: Failed to store {} references in database for {}:{}:{} - {} | cause: {:?} | context: language={}, workspace={:?}",
+                                locations.len(),
+                                absolute_file_path.display(),
+                                line,
+                                column,
+                                e,
+                                e.chain().collect::<Vec<_>>(),
+                                format!("{:?}", language),
+                                workspace_root
+                            );
+                            // Track database error metrics (Step 30.3) - TODO: Make async
+                            // self.metrics.increment_database_errors("references").await;
+                        }
+                    } else {
+                        info!("LSP returned null for references at {}:{}:{} - not caching (LSP server may not be ready)",
+                              absolute_file_path.display(), line, column);
+                    }
+
                     Ok(locations)
                 }
                 .await;
@@ -1999,6 +1970,7 @@ impl LspDaemon {
                     Ok(locations) => DaemonResponse::References {
                         request_id,
                         locations,
+                        warnings: None,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -2068,6 +2040,7 @@ impl LspDaemon {
                     Ok(content) => DaemonResponse::Hover {
                         request_id,
                         content,
+                        warnings: None,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -2092,6 +2065,7 @@ impl LspDaemon {
                     Ok(symbols) => DaemonResponse::DocumentSymbols {
                         request_id,
                         symbols,
+                        warnings: None,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -2113,6 +2087,7 @@ impl LspDaemon {
                     Ok(symbols) => DaemonResponse::WorkspaceSymbols {
                         request_id,
                         symbols,
+                        warnings: None,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -2139,6 +2114,7 @@ impl LspDaemon {
                     Ok(locations) => DaemonResponse::Implementations {
                         request_id,
                         locations,
+                        warnings: None,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -2165,6 +2141,7 @@ impl LspDaemon {
                     Ok(locations) => DaemonResponse::TypeDefinition {
                         request_id,
                         locations,
+                        warnings: None,
                     },
                     Err(e) => DaemonResponse::Error {
                         request_id,
@@ -2218,39 +2195,31 @@ impl LspDaemon {
             // Handle cache key listing
             DaemonRequest::CacheListKeys {
                 request_id,
-                workspace_path,
-                operation_filter,
-                file_pattern_filter,
+                workspace_path: _,
+                operation_filter: _,
+                file_pattern_filter: _,
                 limit,
                 offset,
-                sort_by,
+                sort_by: _,
                 sort_order: _,
                 detailed: _,
             } => {
-                match self
-                    .universal_cache_layer
-                    .list_keys(
-                        workspace_path.as_deref(),
-                        operation_filter.as_deref(),
-                        file_pattern_filter.as_deref(),
-                        limit,
-                        offset,
-                        Some(sort_by.as_str()),
-                    )
-                    .await
-                {
-                    Ok((keys, total_count)) => DaemonResponse::CacheListKeys {
-                        request_id,
-                        keys,
-                        total_count,
-                        offset,
-                        limit,
-                        has_more: offset + limit < total_count,
-                    },
-                    Err(e) => DaemonResponse::Error {
-                        request_id,
-                        error: format!("Failed to list cache keys: {e}"),
-                    },
+                // Universal cache layer removed - return empty keys list
+                DaemonResponse::CacheListKeys {
+                    request_id,
+                    keys: Vec::new(),
+                    total_count: 0,
+                    offset,
+                    limit,
+                    has_more: false,
+                }
+            }
+
+            DaemonRequest::ExportGraph { request_id, .. } => {
+                // Graph export functionality removed
+                DaemonResponse::Error {
+                    request_id,
+                    error: "Graph export functionality has been removed".to_string(),
                 }
             }
         }
@@ -2261,25 +2230,16 @@ impl LspDaemon {
         &self,
         file_path: &Path,
         symbol_name: &str,
-        line: Option<u32>,
-        column: Option<u32>,
-        methods: Option<Vec<String>>,
-        all_positions: bool,
+        _line: Option<u32>,
+        _column: Option<u32>,
+        _methods: Option<Vec<String>>,
+        _all_positions: bool,
     ) -> Result<crate::protocol::SymbolCacheClearResult> {
         let start_time = std::time::Instant::now();
 
-        // Clear the symbol cache through the universal cache layer
-        let (entries_cleared, positions_cleared, methods_cleared, size_freed) = self
-            .universal_cache_layer
-            .clear_symbol(
-                file_path,
-                symbol_name,
-                line,
-                column,
-                methods.clone(),
-                all_positions,
-            )
-            .await?;
+        // Universal cache layer removed - no cache to clear
+        let (entries_cleared, positions_cleared, methods_cleared, size_freed) =
+            (0, Vec::new(), Vec::new(), 0);
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
 
@@ -2291,142 +2251,6 @@ impl LspDaemon {
             methods_cleared,
             cache_size_freed_bytes: size_freed,
             duration_ms,
-        })
-    }
-
-    /// Convert cache layer stats to universal cache stats format
-    async fn convert_cache_layer_stats_to_universal_cache_stats(
-        &self,
-        layer_stats: crate::universal_cache::CacheLayerStats,
-    ) -> Result<crate::protocol::UniversalCacheStats> {
-        // Get base cache stats from the cache layer
-        let cache_stats = &layer_stats.cache_stats;
-
-        // Convert method stats to protocol format
-        let method_stats: std::collections::HashMap<
-            String,
-            crate::protocol::UniversalCacheMethodStats,
-        > = cache_stats
-            .method_stats
-            .iter()
-            .map(|(method, stats)| {
-                let total_ops = stats.hits + stats.misses;
-                let hit_rate = if total_ops > 0 {
-                    stats.hits as f64 / total_ops as f64
-                } else {
-                    0.0
-                };
-
-                let protocol_stats = crate::protocol::UniversalCacheMethodStats {
-                    method: method.as_str().to_string(),
-                    enabled: true, // Would check actual policy
-                    entries: stats.entries,
-                    size_bytes: stats.size_bytes,
-                    hits: stats.hits,
-                    misses: stats.misses,
-                    hit_rate,
-                    avg_cache_response_time_us: 100, // Placeholder - would track actual timing
-                    avg_lsp_response_time_us: 5000,  // Placeholder - would track actual timing
-                };
-
-                (method.as_str().to_string(), protocol_stats)
-            })
-            .collect();
-
-        // Calculate totals
-        let total_hits = cache_stats
-            .method_stats
-            .values()
-            .map(|s| s.hits)
-            .sum::<u64>();
-
-        let total_misses = cache_stats
-            .method_stats
-            .values()
-            .map(|s| s.misses)
-            .sum::<u64>();
-
-        // Cache is enabled if we have any data
-        let cache_enabled = cache_stats.total_entries > 0 || total_hits + total_misses > 0;
-
-        // Get workspace summaries from the workspace router
-        let workspace_summaries = if let Ok(workspace_info_list) = self
-            .workspace_cache_router
-            .get_workspace_cache_info(None)
-            .await
-        {
-            workspace_info_list
-                .into_iter()
-                .map(|info| {
-                    crate::protocol::UniversalCacheWorkspaceSummary {
-                        workspace_id: info.workspace_id,
-                        workspace_root: info.workspace_root,
-                        entries: info.files_indexed,
-                        size_bytes: info.size_bytes,
-                        hits: 100, // Would need to get from actual stats
-                        misses: 10,
-                        hit_rate: 0.91,
-                        last_accessed: info.last_accessed,
-                        languages: info.languages,
-                    }
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        // Calculate totals
-        let total_operations = cache_stats
-            .method_stats
-            .values()
-            .map(|s| s.hits + s.misses)
-            .sum::<u64>();
-
-        let total_hits = cache_stats
-            .method_stats
-            .values()
-            .map(|s| s.hits)
-            .sum::<u64>();
-
-        let total_misses = cache_stats
-            .method_stats
-            .values()
-            .map(|s| s.misses)
-            .sum::<u64>();
-
-        let hit_rate = if total_operations > 0 {
-            total_hits as f64 / total_operations as f64
-        } else {
-            0.0
-        };
-
-        let miss_rate = if total_operations > 0 {
-            total_misses as f64 / total_operations as f64
-        } else {
-            0.0
-        };
-
-        // Configuration summary
-        let config_summary = crate::protocol::UniversalCacheConfigSummary {
-            enabled: cache_enabled,
-            max_size_mb: Some(1024),
-            custom_method_configs: method_stats.len(),
-            compression_enabled: true,
-        };
-
-        Ok(crate::protocol::UniversalCacheStats {
-            enabled: cache_enabled,
-            total_entries: cache_stats.total_entries,
-            total_size_bytes: cache_stats.total_size_bytes,
-            active_workspaces: layer_stats.active_workspaces,
-            hit_rate,
-            miss_rate,
-            total_hits,
-            total_misses,
-            method_stats,
-            cache_enabled,
-            workspace_summaries,
-            config_summary,
         })
     }
 
@@ -2478,35 +2302,6 @@ impl LspDaemon {
         // Compute MD5 hash for cache key
         let content_md5 = md5_hex_file(&absolute_file_path)?;
 
-        // NOTE: Position-based cache lookup is now handled transparently by universal cache layer
-
-        // NOTE: Old CallGraph cache fallback has been removed.
-        // The universal cache system handles all caching through the cache layer middleware.
-        // If we reach this point, it means the cache truly missed and we need to query the LSP server.
-
-        info!(
-            "Cache miss for {}:{}:{} - proceeding to LSP server",
-            absolute_file_path.display(),
-            line,
-            column
-        );
-
-        // The following old fallback logic has been intentionally removed to ensure
-        // only the universal cache system is used:
-        // - Symbol discovery at position
-        // - NodeKey creation for CallGraph cache
-        // - Workspace persistent cache lookup
-        // All caching is now handled by the universal cache layer.
-
-        {
-            info!(
-                "Could not determine symbol at position {}:{}:{} for persistent cache fallback",
-                absolute_file_path.display(),
-                line,
-                column
-            );
-        }
-
         // Detect language
         let language = self.detector.detect(file_path)?;
 
@@ -2523,14 +2318,92 @@ impl LspDaemon {
             resolver.resolve_workspace(file_path, workspace_hint)?
         };
 
+        // Read file content
+        let content = fs::read_to_string(&absolute_file_path)?;
+
+        // PHASE 1: Try database first
+        if let Ok(symbol_name) =
+            self.find_symbol_at_position(&absolute_file_path, &content, line, column)
+        {
+            // Generate consistent symbol UID for database lookup
+            let symbol_uid = match self
+                .generate_consistent_symbol_uid(
+                    &absolute_file_path,
+                    &symbol_name,
+                    line,
+                    column,
+                    language.as_str(),
+                    &workspace_root,
+                    &content,
+                )
+                .await
+            {
+                Ok(uid) => uid,
+                Err(e) => {
+                    debug!("[UID] Failed to generate consistent UID, falling back to simple format: {}", e);
+                    // Fallback to simple format if UID generation fails
+                    format!(
+                        "{}:{}:{}:{}",
+                        absolute_file_path.to_string_lossy(),
+                        symbol_name,
+                        line,
+                        column
+                    )
+                }
+            };
+
+            if let Ok(workspace_cache) = self
+                .workspace_cache_router
+                .cache_for_workspace(&workspace_root)
+                .await
+            {
+                // Generate workspace-specific ID from workspace_root
+                let workspace_id = self.generate_workspace_id_hash(&workspace_root);
+
+                match workspace_cache
+                    .get_call_hierarchy(workspace_id, &symbol_uid)
+                    .await
+                {
+                    Ok(Some(result)) => {
+                        info!(
+                            "Database HIT for {} at {}:{}:{}",
+                            symbol_name,
+                            absolute_file_path.display(),
+                            line,
+                            column
+                        );
+                        return Ok(result);
+                    }
+                    Ok(None) => {
+                        debug!("Database MISS for {} - calling LSP", symbol_name);
+                    }
+                    Err(e) => {
+                        warn!("Database query error: {} - falling back to LSP", e);
+                    }
+                }
+            }
+        } else {
+            debug!(
+                "Could not resolve symbol at position {}:{}:{} - skipping database query",
+                absolute_file_path.display(),
+                line,
+                column
+            );
+        }
+
+        // PHASE 2: Database miss - proceed with LSP call
+        info!(
+            "Cache miss for {}:{}:{} - proceeding to LSP server",
+            absolute_file_path.display(),
+            line,
+            column
+        );
+
         // Ensure workspace is registered with the server for this language
         let server_instance = self
             .server_manager
             .ensure_workspace_registered(language, workspace_root.clone())
             .await?;
-
-        // Read file content
-        let content = fs::read_to_string(&absolute_file_path)?;
 
         // Adaptive timing for Go/TypeScript in CI environments
         let is_ci = std::env::var("PROBE_CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok();
@@ -2582,19 +2455,77 @@ impl LspDaemon {
             tokio::time::sleep(tokio::time::Duration::from_secs(initial_wait)).await;
         }
 
+        // PHASE 2.5: Apply position adjustment based on LSP server requirements
+        let (adjusted_line, adjusted_column) = {
+            // Try to find the symbol at the position for position adjustment
+            if let Ok(symbol_name) =
+                self.find_symbol_at_position(&absolute_file_path, &content, line, column)
+            {
+                debug!("Found symbol '{}' at position {}:{}, applying LSP server-specific position adjustment", symbol_name, line, column);
+
+                // Get language string for pattern lookup
+                let language_str = match language {
+                    Language::Rust => "rust",
+                    Language::Go => "go",
+                    Language::Python => "python",
+                    Language::JavaScript => "javascript",
+                    Language::TypeScript => "typescript",
+                    _ => "unknown",
+                };
+
+                // Determine LSP server name based on language
+                let lsp_server = match language {
+                    Language::Rust => Some("rust-analyzer"),
+                    Language::Go => Some("gopls"),
+                    Language::Python => Some("pylsp"),
+                    Language::JavaScript | Language::TypeScript => {
+                        Some("typescript-language-server")
+                    }
+                    _ => None,
+                };
+
+                // Get position adjustment for this language/server combination
+                let offset = self.get_position_offset(language_str, lsp_server);
+                let symbol_len = symbol_name.len() as u32;
+                let (new_line, new_column) = offset.apply(line, column, symbol_len);
+
+                debug!(
+                    "Position adjustment for {}/{:?}: {}:{} -> {}:{} ({})",
+                    language_str,
+                    lsp_server,
+                    line,
+                    column,
+                    new_line,
+                    new_column,
+                    offset.description()
+                );
+
+                (new_line, new_column)
+            } else {
+                debug!(
+                    "Could not find symbol at position {}:{}, using original position",
+                    line, column
+                );
+                (line, column)
+            }
+        };
+
         // Try call hierarchy with adaptive retry logic
         let mut attempt = 1;
         let mut result = None;
 
         while attempt <= max_attempts {
-            debug!("Call hierarchy attempt {} at {}:{}", attempt, line, column);
+            debug!(
+                "Call hierarchy attempt {} at {}:{} (adjusted from {}:{})",
+                attempt, adjusted_line, adjusted_column, line, column
+            );
 
             // Lock the server instance only for the call hierarchy request
             let call_result = {
                 let server = server_instance.lock().await;
                 server
                     .server
-                    .call_hierarchy(&absolute_file_path, line, column)
+                    .call_hierarchy(&absolute_file_path, adjusted_line, adjusted_column)
                     .await
             };
 
@@ -2688,16 +2619,27 @@ impl LspDaemon {
         // Convert the result to our protocol type and update cache edges
         let protocol_result = parse_call_hierarchy_from_lsp(&result)?;
 
-        // Now that we have the result, extract the symbol name and cache it
-        if !protocol_result.item.name.is_empty() && protocol_result.item.name != "unknown" {
-            let symbol_name = protocol_result.item.name.clone();
+        // Always store in database, even for empty results (to create "none" edges)
+        // The empty check is now handled inside store_call_hierarchy_in_database_enhanced
+        {
+            // For empty results, try to use the symbol we found at the position
+            let symbol_name =
+                if protocol_result.item.name == "unknown" || protocol_result.item.name.is_empty() {
+                    // Try to find the symbol at the position for better naming
+                    self.find_symbol_at_position(&absolute_file_path, &content, line, column)
+                        .unwrap_or_else(|_| "unknown".to_string())
+                } else {
+                    protocol_result.item.name.clone()
+                };
+
             let _node_id = NodeId::new(&symbol_name, absolute_file_path.clone());
 
             info!(
-                "Caching call hierarchy for {}:{} (md5: {})",
+                "Processing call hierarchy for {}:{} (md5: {}, item.name: '{}')",
                 absolute_file_path.display(),
                 symbol_name,
-                content_md5
+                content_md5,
+                protocol_result.item.name
             );
 
             // Extract edges from the result
@@ -2738,6 +2680,31 @@ impl LspDaemon {
             // NOTE: In universal cache system, caching is handled automatically by the cache layer.
             // The call hierarchy results are cached transparently when the handler method returns.
             debug!("Call hierarchy result will be cached automatically by universal cache layer");
+
+            // MILESTONE 21: Store call hierarchy data in the database
+            if let Err(e) = self
+                .store_call_hierarchy_in_database_enhanced(
+                    &protocol_result,
+                    &absolute_file_path,
+                    &workspace_root,
+                    language.as_str(),
+                    &symbol_name,
+                    line,
+                    column,
+                )
+                .await
+            {
+                error!(
+                    "DATABASE_ERROR [call_hierarchy]: Failed to store call hierarchy in database for {} - {} | cause: {:?} | context: language={}, workspace={:?}",
+                    absolute_file_path.display(),
+                    e,
+                    e.chain().collect::<Vec<_>>(),
+                    format!("{:?}", language),
+                    workspace_root
+                );
+                // Track database error metrics (Step 30.3) - TODO: Make async
+                // self.metrics.increment_database_errors("call_hierarchy").await;
+            }
         }
 
         Ok(protocol_result)
@@ -3016,6 +2983,26 @@ impl LspDaemon {
         }
     }
 
+    /// Parse LSP implementation response (JSON) into Vec<Location>
+    fn parse_implementation_response(response: &serde_json::Value) -> Result<Vec<Location>> {
+        if let Some(locations) = response.as_array() {
+            let mut result = Vec::new();
+            for loc_value in locations {
+                let location: Location = serde_json::from_value(loc_value.clone())
+                    .context("Failed to parse implementation location")?;
+                result.push(location);
+            }
+            Ok(result)
+        } else if response.is_null() {
+            Ok(Vec::new())
+        } else {
+            Err(anyhow!(
+                "Invalid implementation response format: {}",
+                response
+            ))
+        }
+    }
+
     // ========================================================================================
     // New LSP Operation Handler Methods
     // ========================================================================================
@@ -3044,13 +3031,172 @@ impl LspDaemon {
 
     async fn handle_implementations(
         &self,
-        _file_path: &Path,
-        _line: u32,
-        _column: u32,
-        _workspace_hint: Option<PathBuf>,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        workspace_hint: Option<PathBuf>,
     ) -> Result<Vec<Location>> {
-        // TODO: Implement implementations support in LSP server
-        Err(anyhow!("Implementations operation is not yet implemented"))
+        debug!(
+            "handle_implementations called for {:?} at {}:{}",
+            file_path, line, column
+        );
+
+        // Check if file should be excluded from LSP processing
+        if should_exclude_from_lsp(file_path) {
+            warn!(
+                "Ignoring implementations request for excluded file: {:?} (build artifact/generated code)",
+                file_path
+            );
+            return Ok(Vec::new());
+        }
+
+        // Handle implementations request directly (universal cache middleware handles caching)
+        let absolute_file_path = safe_canonicalize(file_path);
+
+        let language = self.detector.detect(&absolute_file_path)?;
+        if language == Language::Unknown {
+            return Err(anyhow!(
+                "Unknown language for file: {:?}",
+                absolute_file_path
+            ));
+        }
+
+        let workspace_root = {
+            let mut resolver = self.workspace_resolver.lock().await;
+            resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
+        };
+
+        // Read file content for symbol resolution
+        let content = fs::read_to_string(&absolute_file_path)?;
+
+        // PHASE 1: Try database first
+        if let Ok(symbol_name) =
+            self.find_symbol_at_position(&absolute_file_path, &content, line, column)
+        {
+            // Generate consistent symbol UID for database lookup
+            let symbol_uid = match self
+                .generate_consistent_symbol_uid(
+                    &absolute_file_path,
+                    &symbol_name,
+                    line,
+                    column,
+                    language.as_str(),
+                    &workspace_root,
+                    &content,
+                )
+                .await
+            {
+                Ok(uid) => uid,
+                Err(e) => {
+                    debug!("[UID] Failed to generate consistent UID, falling back to simple format: {}", e);
+                    // Fallback to simple format if UID generation fails
+                    format!(
+                        "{}:{}:{}:{}",
+                        absolute_file_path.to_string_lossy(),
+                        symbol_name,
+                        line,
+                        column
+                    )
+                }
+            };
+
+            if let Ok(workspace_cache) = self
+                .workspace_cache_router
+                .cache_for_workspace(&workspace_root)
+                .await
+            {
+                // Generate workspace-specific ID from workspace_root
+                let workspace_id = self.generate_workspace_id_hash(&workspace_root);
+
+                match workspace_cache
+                    .get_implementations(workspace_id, &symbol_uid)
+                    .await
+                {
+                    Ok(Some(locations)) => {
+                        info!(
+                            "Database HIT for {} implementations at {}:{}:{}",
+                            symbol_name,
+                            absolute_file_path.display(),
+                            line,
+                            column
+                        );
+                        return Ok(locations);
+                    }
+                    Ok(None) => {
+                        debug!(
+                            "Database MISS for {} implementations - calling LSP",
+                            symbol_name
+                        );
+                    }
+                    Err(e) => {
+                        warn!("Database query error: {} - falling back to LSP", e);
+                    }
+                }
+            }
+        } else {
+            debug!(
+                "Could not resolve symbol at position {}:{}:{} - skipping database query",
+                absolute_file_path.display(),
+                line,
+                column
+            );
+        }
+
+        // PHASE 2: Database miss - proceed with LSP call
+        let server_instance = self
+            .server_manager
+            .ensure_workspace_registered(language, workspace_root.clone())
+            .await?;
+
+        // Make the implementation request directly without explicit document lifecycle
+        // The LSP server manages its own document state
+        let response_json = {
+            let server = server_instance.lock().await;
+            server
+                .server
+                .implementation(&absolute_file_path, line, column)
+                .await?
+        };
+
+        // Check if response is null vs empty array
+        let is_null_response = response_json.is_null();
+        let locations = Self::parse_implementation_response(&response_json)?;
+
+        // MILESTONE 21: Store implementations data in the database
+        // Only store if we got a valid response (not null)
+        // Empty array [] is valid and should create "none" edges
+        if !is_null_response {
+            if let Err(e) = self
+                .store_implementations_in_database(
+                    &locations,
+                    &absolute_file_path,
+                    &workspace_root,
+                    language.as_str(),
+                    line,
+                    column,
+                )
+                .await
+            {
+                error!(
+                    "DATABASE_ERROR [implementations]: Failed to store {} implementations in database for {}:{}:{} - {} | cause: {:?} | context: language={}, workspace={:?}",
+                    locations.len(),
+                    absolute_file_path.display(),
+                    line,
+                    column,
+                    e,
+                    e.chain().collect::<Vec<_>>(),
+                    format!("{:?}", language),
+                    workspace_root
+                );
+                // Track database error metrics (Step 30.3) - TODO: Make async
+                // self.metrics.increment_database_errors("implementations").await;
+            }
+        } else {
+            info!("LSP returned null for implementations at {}:{}:{} - not caching (LSP server may not be ready)",
+                  absolute_file_path.display(), line, column);
+        }
+
+        Ok(locations)
     }
 
     async fn handle_type_definition(
@@ -3062,6 +3208,479 @@ impl LspDaemon {
     ) -> Result<Vec<Location>> {
         // TODO: Implement type definition support in LSP server
         Err(anyhow!("Type definition operation is not yet implemented"))
+    }
+
+    // ========================================================================================
+    // Database Storage Methods for LSP Responses (Milestone 21)
+    // ========================================================================================
+
+    /// Store call hierarchy data in the database
+    async fn store_call_hierarchy_in_database(
+        &self,
+        result: &CallHierarchyResult,
+        request_file_path: &Path,
+        workspace_root: &Path,
+        language: &str,
+    ) -> Result<()> {
+        debug!(
+            "Storing call hierarchy data in database for file: {:?}",
+            request_file_path
+        );
+
+        // Create database adapter
+        let adapter = LspDatabaseAdapter::new();
+
+        // Get workspace cache
+        let workspace_cache = self
+            .workspace_cache_router
+            .cache_for_workspace(workspace_root)
+            .await
+            .with_context(|| format!("Failed to get workspace cache for {:?}", workspace_root))?;
+
+        match workspace_cache.backend() {
+            BackendType::SQLite(db) => {
+                // Store in database with proper cleanup
+                adapter
+                    .store_call_hierarchy_with_cleanup(
+                        &**db,
+                        result,
+                        request_file_path,
+                        language,
+                        1, // Default file_version_id for now
+                        workspace_root,
+                    )
+                    .await
+                    .with_context(|| {
+                        "Failed to store call hierarchy data with cleanup in database"
+                    })?;
+
+                info!(
+                    "Successfully stored call hierarchy data: {} symbols and {} edges",
+                    result.incoming.len() + result.outgoing.len() + 1, // +1 for main symbol
+                    result.incoming.len() + result.outgoing.len()
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Enhanced store call hierarchy with empty detection and "none" edges
+    /// This method detects when LSP returns empty call hierarchy and creates "none" edges
+    async fn store_call_hierarchy_in_database_enhanced(
+        &self,
+        result: &CallHierarchyResult,
+        request_file_path: &Path,
+        workspace_root: &Path,
+        language: &str,
+        symbol_name: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<()> {
+        debug!(
+            "Enhanced storing call hierarchy data in database for file: {:?}, symbol: {}",
+            request_file_path, symbol_name
+        );
+
+        // Create database adapter
+        let adapter = LspDatabaseAdapter::new();
+
+        // Get workspace cache
+        let workspace_cache = self
+            .workspace_cache_router
+            .cache_for_workspace(workspace_root)
+            .await
+            .with_context(|| format!("Failed to get workspace cache for {:?}", workspace_root))?;
+
+        match workspace_cache.backend() {
+            BackendType::SQLite(db) => {
+                // Convert LSP response to database format
+                let (symbols, edges) = adapter.convert_call_hierarchy_to_database(
+                    result,
+                    request_file_path,
+                    language,
+                    1,
+                    workspace_root,
+                )?;
+
+                info!("[DEBUG] store_call_hierarchy_in_database_enhanced: symbols.len()={}, edges.len()={}, incoming.len()={}, outgoing.len()={}, item.name='{}'",
+                     symbols.len(), edges.len(), result.incoming.len(), result.outgoing.len(), result.item.name);
+
+                // Detect empty call hierarchy and create "none" edges if needed
+                let edges_to_store = if edges.is_empty()
+                    && result.incoming.is_empty()
+                    && result.outgoing.is_empty()
+                {
+                    // LSP returned empty call hierarchy {incoming: [], outgoing: []} - create "none" edges
+                    info!("LSP returned empty call hierarchy for symbol '{}', creating 'none' edges to cache empty state", symbol_name);
+
+                    // Generate consistent symbol UID using actual line and column
+                    let content = std::fs::read_to_string(request_file_path)?;
+                    let symbol_uid = match self
+                        .generate_consistent_symbol_uid(
+                            request_file_path,
+                            symbol_name,
+                            line,
+                            column,
+                            language,
+                            workspace_root,
+                            &content,
+                        )
+                        .await
+                    {
+                        Ok(uid) => uid,
+                        Err(e) => {
+                            debug!(
+                                "[UID] Failed to generate consistent UID, using fallback: {}",
+                                e
+                            );
+                            format!(
+                                "{}:{}:{}:{}",
+                                request_file_path.to_string_lossy(),
+                                symbol_name,
+                                line,
+                                column
+                            )
+                        }
+                    };
+
+                    let none_edges = crate::database::create_none_call_hierarchy_edges(&symbol_uid);
+                    info!(
+                        "Created {} 'none' edges for symbol_uid '{}': {:?}",
+                        none_edges.len(),
+                        symbol_uid,
+                        none_edges
+                    );
+                    none_edges
+                } else {
+                    info!(
+                        "LSP returned {} real call hierarchy edges for symbol '{}'",
+                        edges.len(),
+                        symbol_name
+                    );
+                    edges
+                };
+
+                // Store symbols and edges (including "none" edges for empty results)
+                adapter
+                    .store_in_database(&**db, symbols, edges_to_store)
+                    .await
+                    .with_context(|| "Failed to store call hierarchy data in database")?;
+
+                let edge_count = if result.incoming.is_empty() && result.outgoing.is_empty() {
+                    2 // Two "none" edges for empty call hierarchy
+                } else {
+                    result.incoming.len() + result.outgoing.len()
+                };
+
+                info!(
+                    "Successfully stored call hierarchy data: {} symbols and {} edges",
+                    result.incoming.len() + result.outgoing.len() + 1, // +1 for main symbol
+                    edge_count
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Store references data in the database
+    async fn store_references_in_database(
+        &self,
+        locations: &[Location],
+        request_file_path: &Path,
+        workspace_root: &Path,
+        language: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<()> {
+        debug!(
+            "Storing references data in database for file: {:?}",
+            request_file_path
+        );
+
+        // Create database adapter
+        let adapter = LspDatabaseAdapter::new();
+
+        // Get workspace cache
+        let workspace_cache = self
+            .workspace_cache_router
+            .cache_for_workspace(workspace_root)
+            .await
+            .with_context(|| format!("Failed to get workspace cache for {:?}", workspace_root))?;
+
+        match workspace_cache.backend() {
+            BackendType::SQLite(db) => {
+                // Convert to database format
+                let edges = adapter
+                    .convert_references_to_database(
+                        locations,
+                        request_file_path,
+                        (line, column),
+                        language,
+                        1, // Default file_version_id for now
+                        workspace_root,
+                    )
+                    .await?;
+
+                // ✅ Handle empty references case
+                let edges_to_store = if edges.is_empty() && locations.is_empty() {
+                    // LSP returned empty references [] - create "none" edges
+                    let content = std::fs::read_to_string(request_file_path)?;
+                    let symbol_name =
+                        self.find_symbol_at_position(request_file_path, &content, line, column)?;
+                    info!("LSP returned empty references for symbol '{}', creating 'none' edges to cache empty state", symbol_name);
+
+                    // Generate consistent symbol UID
+                    let symbol_uid = match self
+                        .generate_consistent_symbol_uid(
+                            request_file_path,
+                            &symbol_name,
+                            line,
+                            column,
+                            language,
+                            workspace_root,
+                            &content,
+                        )
+                        .await
+                    {
+                        Ok(uid) => uid,
+                        Err(e) => {
+                            debug!(
+                                "[UID] Failed to generate consistent UID, using fallback: {}",
+                                e
+                            );
+                            format!(
+                                "{}:{}:{}:{}",
+                                request_file_path.to_string_lossy(),
+                                symbol_name,
+                                line,
+                                column
+                            )
+                        }
+                    };
+
+                    crate::database::create_none_reference_edges(&symbol_uid)
+                } else {
+                    info!("LSP returned {} real reference edges", edges.len());
+                    edges
+                };
+
+                // Store in database (references only create edges, no new symbols)
+                adapter
+                    .store_in_database(&**db, Vec::new(), edges_to_store)
+                    .await
+                    .with_context(|| "Failed to store references edges in database")?;
+
+                let edge_count = if locations.is_empty() {
+                    1
+                } else {
+                    locations.len()
+                };
+                info!("Successfully stored references data: {} edges", edge_count);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Store definitions data in the database
+    async fn store_definitions_in_database(
+        &self,
+        locations: &[Location],
+        request_file_path: &Path,
+        workspace_root: &Path,
+        language: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<()> {
+        debug!(
+            "Storing definitions data in database for file: {:?}",
+            request_file_path
+        );
+
+        // Create database adapter
+        let adapter = LspDatabaseAdapter::new();
+
+        // Get workspace cache
+        let workspace_cache = self
+            .workspace_cache_router
+            .cache_for_workspace(workspace_root)
+            .await
+            .with_context(|| format!("Failed to get workspace cache for {:?}", workspace_root))?;
+
+        match workspace_cache.backend() {
+            BackendType::SQLite(db) => {
+                // Convert to database format
+                let edges = adapter.convert_definitions_to_database(
+                    locations,
+                    request_file_path,
+                    (line, column),
+                    language,
+                    1, // Default file_version_id for now
+                    workspace_root,
+                )?;
+
+                // ✅ Handle empty definitions case
+                let edges_to_store = if edges.is_empty() && locations.is_empty() {
+                    // LSP returned empty definitions [] - create "none" edges
+                    let content = std::fs::read_to_string(request_file_path)?;
+                    let symbol_name =
+                        self.find_symbol_at_position(request_file_path, &content, line, column)?;
+                    info!("LSP returned empty definitions for symbol '{}', creating 'none' edges to cache empty state", symbol_name);
+
+                    // Generate consistent symbol UID
+                    let symbol_uid = match self
+                        .generate_consistent_symbol_uid(
+                            request_file_path,
+                            &symbol_name,
+                            line,
+                            column,
+                            language,
+                            workspace_root,
+                            &content,
+                        )
+                        .await
+                    {
+                        Ok(uid) => uid,
+                        Err(e) => {
+                            debug!(
+                                "[UID] Failed to generate consistent UID, using fallback: {}",
+                                e
+                            );
+                            format!(
+                                "{}:{}:{}:{}",
+                                request_file_path.to_string_lossy(),
+                                symbol_name,
+                                line,
+                                column
+                            )
+                        }
+                    };
+
+                    crate::database::create_none_definition_edges(&symbol_uid)
+                } else {
+                    info!("LSP returned {} real definition edges", edges.len());
+                    edges
+                };
+
+                // Store in database (definitions only create edges, no new symbols)
+                adapter
+                    .store_in_database(&**db, Vec::new(), edges_to_store)
+                    .await
+                    .with_context(|| "Failed to store definitions edges in database")?;
+
+                let edge_count = if locations.is_empty() {
+                    1
+                } else {
+                    locations.len()
+                };
+                info!("Successfully stored definitions data: {} edges", edge_count);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Store implementations data in the database
+    async fn store_implementations_in_database(
+        &self,
+        locations: &[Location],
+        request_file_path: &Path,
+        workspace_root: &Path,
+        language: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<()> {
+        debug!(
+            "Storing implementations data in database for file: {:?}",
+            request_file_path
+        );
+
+        // Create database adapter
+        let adapter = LspDatabaseAdapter::new();
+
+        // Get workspace cache
+        let workspace_cache = self
+            .workspace_cache_router
+            .cache_for_workspace(workspace_root)
+            .await
+            .with_context(|| format!("Failed to get workspace cache for {:?}", workspace_root))?;
+
+        match workspace_cache.backend() {
+            BackendType::SQLite(db) => {
+                // Convert to database format
+                let edges = adapter.convert_implementations_to_database(
+                    locations,
+                    request_file_path,
+                    (line, column),
+                    language,
+                    1, // Default file_version_id for now
+                    workspace_root,
+                )?;
+
+                // ✅ Handle empty implementations case
+                let edges_to_store = if edges.is_empty() && locations.is_empty() {
+                    // LSP returned empty implementations [] - create "none" edges
+                    let content = std::fs::read_to_string(request_file_path)?;
+                    let symbol_name =
+                        self.find_symbol_at_position(request_file_path, &content, line, column)?;
+                    info!("LSP returned empty implementations for symbol '{}', creating 'none' edges to cache empty state", symbol_name);
+
+                    // Generate consistent symbol UID
+                    let symbol_uid = match self
+                        .generate_consistent_symbol_uid(
+                            request_file_path,
+                            &symbol_name,
+                            line,
+                            column,
+                            language,
+                            workspace_root,
+                            &content,
+                        )
+                        .await
+                    {
+                        Ok(uid) => uid,
+                        Err(e) => {
+                            debug!(
+                                "[UID] Failed to generate consistent UID, using fallback: {}",
+                                e
+                            );
+                            format!(
+                                "{}:{}:{}:{}",
+                                request_file_path.to_string_lossy(),
+                                symbol_name,
+                                line,
+                                column
+                            )
+                        }
+                    };
+
+                    crate::database::create_none_implementation_edges(&symbol_uid)
+                } else {
+                    info!("LSP returned {} real implementation edges", edges.len());
+                    edges
+                };
+
+                // Store in database (implementations only create edges, no new symbols)
+                adapter
+                    .store_in_database(&**db, Vec::new(), edges_to_store)
+                    .await
+                    .with_context(|| "Failed to store implementations edges in database")?;
+
+                let edge_count = if locations.is_empty() {
+                    1
+                } else {
+                    locations.len()
+                };
+                info!(
+                    "Successfully stored implementations data: {} edges",
+                    edge_count
+                );
+            }
+        }
+
+        Ok(())
     }
 
     // ========================================================================================
@@ -3450,63 +4069,7 @@ impl LspDaemon {
         Ok(())
     }
 
-    /// Helper method to synchronize document state with the universal cache
-    /// This method prepares for future LSP document synchronization integration
-    pub async fn sync_document_state(
-        &self,
-        file_uri: &str,
-        content: Option<String>,
-        version: u64,
-    ) -> Result<()> {
-        // Update document provider state
-        if let Some(content) = content {
-            if self.document_provider.is_document_open(file_uri).await {
-                // Document already open, this is a change
-                self.document_provider
-                    .document_changed(file_uri, content, version)
-                    .await;
-                debug!("Updated document state for: {}", file_uri);
-            } else {
-                // New document
-                self.document_provider
-                    .document_opened(file_uri, content, version)
-                    .await;
-                debug!("Opened new document: {}", file_uri);
-            }
-        } else {
-            // Document saved (content from disk)
-            self.document_provider
-                .document_saved(file_uri, None, version)
-                .await;
-            debug!("Saved document: {}", file_uri);
-        }
-
-        // Invalidate relevant cache entries when document changes
-        if let Some(path_str) = file_uri.strip_prefix("file://") {
-            let path = std::path::Path::new(path_str);
-
-            // Invalidate universal cache for this file
-            if let Err(e) = self.universal_cache_layer.invalidate_file(path).await {
-                warn!(
-                    "Failed to invalidate universal cache for file {}: {}",
-                    file_uri, e
-                );
-            }
-
-            // Legacy cache invalidation removed - handled by universal cache
-
-            debug!("Invalidated caches for document: {}", file_uri);
-        }
-
-        Ok(())
-    }
-
-    /// Helper method to close a document and clean up state
-    pub async fn close_document(&self, file_uri: &str) -> Result<()> {
-        self.document_provider.document_closed(file_uri).await;
-        debug!("Closed document: {}", file_uri);
-        Ok(())
-    }
+    // Document synchronization methods removed - using database-first approach
 
     fn clone_refs(&self) -> Self {
         Self {
@@ -3537,12 +4100,16 @@ impl LspDaemon {
             watchdog_task: self.watchdog_task.clone(),
             process_monitor: self.process_monitor.clone(),
             child_first_seen: self.child_first_seen.clone(),
+            uid_generator: self.uid_generator.clone(),
             index_grace_secs: self.index_grace_secs,
             workspace_cache_router: self.workspace_cache_router.clone(),
             indexing_config: self.indexing_config.clone(),
             indexing_manager: self.indexing_manager.clone(),
-            universal_cache_layer: self.universal_cache_layer.clone(),
-            document_provider: self.document_provider.clone(),
+            metrics: self.metrics.clone(),
+            // Clone database health tracking fields
+            database_errors: self.database_errors.clone(),
+            last_database_error: self.last_database_error.clone(),
+            database_health_status: self.database_health_status.clone(),
         }
     }
 
@@ -3706,7 +4273,7 @@ impl LspDaemon {
             self.detector.clone(),
             self.server_manager.clone(),
             definition_cache,
-            self.universal_cache_layer.clone(),
+            self.workspace_cache_router.clone(),
         );
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -3720,7 +4287,6 @@ impl LspDaemon {
         // Start indexing in background
         let indexing_manager_clone = self.indexing_manager.clone();
         let workspace_root_clone = workspace_root.clone();
-        let _universal_cache_layer = self.universal_cache_layer.clone();
         let session_id_clone = session_id.clone();
 
         tokio::spawn(async move {
@@ -3994,118 +4560,11 @@ impl LspDaemon {
     }
 
     /// Warm the cache by loading previously cached entries from persistent storage
+    /// No-op since universal cache layer was removed
     #[allow(dead_code)]
-    async fn warm_cache_from_persistent_storage(&self, concurrency: usize) {
-        let start_time = std::time::Instant::now();
-        info!("Starting cache warming from persistent storage...");
-
-        // Get all workspace cache instances and warm them up
-        let workspace_cache_router = &self.workspace_cache_router;
-
-        // Use a semaphore to limit concurrent cache warming operations
-        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
-        let mut warming_tasks = Vec::new();
-
-        // Get all open caches from the workspace router
-        let open_caches = workspace_cache_router.get_all_open_caches().await;
-
-        if open_caches.is_empty() {
-            debug!("No open caches found for warming - will warm on first access");
-            return;
-        }
-
-        info!("Found {} workspace cache(s) to warm", open_caches.len());
-
-        for (workspace_id, persistent_cache) in open_caches {
-            let semaphore_clone = semaphore.clone();
-            let universal_cache = self.universal_cache_layer.clone();
-            let workspace_id_clone = workspace_id.clone();
-
-            let task = tokio::spawn(async move {
-                let _permit = semaphore_clone.acquire().await.unwrap();
-
-                match persistent_cache.iter_nodes().await {
-                    Ok(nodes) => {
-                        let node_count = nodes.len();
-                        if node_count == 0 {
-                            debug!(
-                                "No cached nodes found in workspace cache: {}",
-                                workspace_id_clone
-                            );
-                            return;
-                        }
-
-                        debug!(
-                            "Warming cache for workspace {} with {} nodes",
-                            workspace_id_clone, node_count
-                        );
-                        let mut loaded_count = 0;
-                        let mut error_count = 0;
-
-                        for node in nodes {
-                            // Build the universal cache key for call hierarchy
-                            let method = crate::universal_cache::LspMethod::CallHierarchy;
-                            let params = "{}"; // Use empty params since we don't have detailed structure
-
-                            // Pre-load into universal cache using the set method
-                            match universal_cache
-                                .get_universal_cache()
-                                .set(method, &node.file_path, params, &node.data)
-                                .await
-                            {
-                                Ok(_) => {
-                                    loaded_count += 1;
-                                    if loaded_count % 50 == 0 {
-                                        debug!(
-                                            "Cache warming progress for {}: {}/{} nodes loaded",
-                                            workspace_id_clone, loaded_count, node_count
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    error_count += 1;
-                                    if error_count < 5 {
-                                        // Only log first few errors to avoid spam
-                                        warn!("Failed to warm cache entry {}: {}", node.key, e);
-                                    }
-                                }
-                            }
-                        }
-
-                        info!(
-                            "Cache warming completed for workspace {}: loaded {} nodes ({} errors)",
-                            workspace_id_clone, loaded_count, error_count
-                        );
-                    }
-                    Err(e) => {
-                        warn!(
-                            "Failed to iterate nodes for cache warming in workspace {}: {}",
-                            workspace_id_clone, e
-                        );
-                    }
-                }
-            });
-
-            warming_tasks.push(task);
-        }
-
-        // Wait for all warming tasks to complete
-        let results = futures::future::join_all(warming_tasks).await;
-        let completed_count = results.iter().filter(|r| r.is_ok()).count();
-        let failed_count = results.len() - completed_count;
-
-        let elapsed = start_time.elapsed();
-        if failed_count > 0 {
-            warn!(
-                "Cache warming completed in {:?}: {} workspace(s) succeeded, {} failed",
-                elapsed, completed_count, failed_count
-            );
-        } else {
-            info!(
-                "Cache warming completed successfully in {:?} for {} workspace(s)",
-                elapsed, completed_count
-            );
-        }
+    async fn warm_cache_from_persistent_storage(&self, _concurrency: usize) {
+        // No-op: Universal cache layer was removed, cache warming is no longer needed
+        debug!("Cache warming skipped - universal cache layer removed");
     }
 
     /// Handle call hierarchy at commit request (stub - git functionality removed)
@@ -4150,10 +4609,297 @@ impl LspDaemon {
         Ok(Vec::new()) // Return empty history
     }
 
+    // Database health tracking methods for Priority 4
+
+    /// Record a database error and update health status
+    async fn record_database_error(&self, error: &anyhow::Error) {
+        let error_count = self.database_errors.fetch_add(1, Ordering::Relaxed) + 1;
+        let error_msg = format!("{:#}", error);
+
+        // Update last error
+        *self.last_database_error.lock().await = Some(error_msg.clone());
+
+        // Update health status
+        *self.database_health_status.lock().await = DatabaseHealth::Degraded {
+            error_count,
+            last_error: error_msg.clone(),
+        };
+
+        // Log with structured data for monitoring
+        error!(
+            database_error_count = error_count,
+            error_type = error.to_string(),
+            "Database operation failed"
+        );
+
+        // Also increment metrics for backward compatibility
+        self.metrics
+            .increment_database_errors("database_operation")
+            .await;
+    }
+
+    /// Get database health summary string for status responses
+    async fn get_database_health_summary(&self) -> String {
+        let health = self.database_health_status.lock().await;
+        match &*health {
+            DatabaseHealth::Healthy => "✅ Database operational".to_string(),
+            DatabaseHealth::Degraded {
+                error_count,
+                last_error,
+            } => {
+                format!(
+                    "⚠️ Database degraded ({} errors) - Last: {}",
+                    error_count, last_error
+                )
+            }
+            DatabaseHealth::Failed { error_message } => {
+                format!("❌ Database failed - {}", error_message)
+            }
+        }
+    }
+
+    /// Check if there have been recent database errors
+    async fn has_recent_database_errors(&self) -> bool {
+        let error_count = self.database_errors.load(Ordering::Relaxed);
+        error_count > 0
+    }
+
+    /// Mark database as completely failed (for critical errors)
+    async fn mark_database_failed(&self, error_message: String) {
+        *self.database_health_status.lock().await = DatabaseHealth::Failed {
+            error_message: error_message.clone(),
+        };
+
+        error!(
+            database_status = "failed",
+            error_message = error_message,
+            "Database marked as failed"
+        );
+    }
+
     /// Find what symbol is at a specific line/column position in a file
     /// This is used for persistent cache fallback when position index is empty after restart
     #[allow(dead_code)]
     fn find_symbol_at_position(
+        &self,
+        file_path: &Path,
+        content: &str,
+        line: u32,
+        column: u32,
+    ) -> Result<String> {
+        debug!(
+            "Looking for symbol at {}:{} in file: {:?}",
+            line, column, file_path
+        );
+
+        // Use tree-sitter to find the actual symbol at the position
+        let extension = file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .unwrap_or("");
+
+        // Try tree-sitter parsing for supported languages
+        if let Some(tree) = self.parse_with_tree_sitter(content, extension) {
+            // Find the symbol at the exact position using tree-sitter
+            if let Some(symbol_name) = self.find_symbol_at_position_tree_sitter(
+                tree.root_node(),
+                content.as_bytes(),
+                line,
+                column,
+            ) {
+                debug!(
+                    "Found symbol '{}' at position {}:{} using tree-sitter",
+                    symbol_name, line, column
+                );
+                return Ok(symbol_name);
+            }
+
+            debug!(
+                "No symbol found at position {}:{} using tree-sitter, falling back to regex",
+                line, column
+            );
+        } else {
+            debug!(
+                "Tree-sitter parsing not available for extension '{}', using regex fallback",
+                extension
+            );
+        }
+
+        // Fallback to regex-based approach
+        self.find_symbol_at_position_fallback(file_path, content, line, column)
+    }
+
+    /// Parse file with tree-sitter if supported language
+    fn parse_with_tree_sitter(&self, content: &str, extension: &str) -> Option<tree_sitter::Tree> {
+        use tree_sitter::Parser;
+
+        let mut parser = Parser::new();
+
+        let _language = match extension {
+            #[cfg(feature = "tree-sitter-rust")]
+            "rs" => {
+                parser
+                    .set_language(&tree_sitter_rust::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
+            #[cfg(feature = "tree-sitter-typescript")]
+            "ts" | "tsx" => {
+                parser
+                    .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+                    .ok()?;
+                Some(())
+            }
+            #[cfg(feature = "tree-sitter-javascript")]
+            "js" | "jsx" => {
+                parser
+                    .set_language(&tree_sitter_javascript::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
+            #[cfg(feature = "tree-sitter-python")]
+            "py" => {
+                parser
+                    .set_language(&tree_sitter_python::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
+            #[cfg(feature = "tree-sitter-go")]
+            "go" => {
+                parser.set_language(&tree_sitter_go::LANGUAGE.into()).ok()?;
+                Some(())
+            }
+            #[cfg(feature = "tree-sitter-java")]
+            "java" => {
+                parser
+                    .set_language(&tree_sitter_java::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
+            #[cfg(feature = "tree-sitter-c")]
+            "c" | "h" => {
+                parser.set_language(&tree_sitter_c::LANGUAGE.into()).ok()?;
+                Some(())
+            }
+            #[cfg(feature = "tree-sitter-cpp")]
+            "cpp" | "cc" | "cxx" | "hpp" => {
+                parser
+                    .set_language(&tree_sitter_cpp::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
+            _ => None,
+        }?;
+
+        parser.parse(content.as_bytes(), None)
+    }
+
+    /// Find any symbol at the given position using tree-sitter (helper function)
+    /// Simplified to let the LSP server handle all symbol semantics
+    fn find_symbol_at_position_tree_sitter(
+        &self,
+        node: tree_sitter::Node,
+        content: &[u8],
+        target_line: u32,
+        target_column: u32,
+    ) -> Option<String> {
+        // Check if this node contains the target position
+        let start_pos = node.start_position();
+        let end_pos = node.end_position();
+
+        if target_line < start_pos.row as u32 || target_line > end_pos.row as u32 {
+            return None;
+        }
+
+        if target_line == start_pos.row as u32 && target_column < start_pos.column as u32 {
+            return None;
+        }
+
+        if target_line == end_pos.row as u32 && target_column > end_pos.column as u32 {
+            return None;
+        }
+
+        // Check if this is any symbol node (function, struct, variable, etc.)
+        let node_kind = node.kind();
+        let is_symbol = match node_kind {
+            // Rust
+            "function_item" | "struct_item" | "enum_item" | "trait_item" | "union_item" => true,
+            // JavaScript/TypeScript
+            "function_declaration"
+            | "method_definition"
+            | "method_signature"
+            | "arrow_function"
+            | "function_expression"
+            | "class_declaration"
+            | "interface_declaration"
+            | "type_alias_declaration" => true,
+            // Python
+            "function_definition" | "class_definition" | "method" => true,
+            // Go
+            "func_declaration" | "method_declaration" | "type_declaration" | "struct_type"
+            | "interface_type" => true,
+            // Java
+            "constructor_declaration" | "enum_declaration" => true,
+            _ => false,
+        };
+
+        if is_symbol {
+            // Extract the symbol name from this node
+            if let Some(name) = self.extract_symbol_name_from_node(node, content) {
+                debug!(
+                    "Found symbol '{}' of type '{}' at {}:{}-{}:{}",
+                    name,
+                    node_kind,
+                    start_pos.row + 1,
+                    start_pos.column + 1,
+                    end_pos.row + 1,
+                    end_pos.column + 1
+                );
+                return Some(name);
+            }
+        }
+
+        // Recursively search child nodes
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if let Some(result) =
+                self.find_symbol_at_position_tree_sitter(child, content, target_line, target_column)
+            {
+                return Some(result);
+            }
+        }
+
+        None
+    }
+
+    /// Extract the name of any symbol from a tree-sitter node
+    fn extract_symbol_name_from_node(
+        &self,
+        node: tree_sitter::Node,
+        content: &[u8],
+    ) -> Option<String> {
+        // Look for identifier nodes within this callable node
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "identifier"
+                | "field_identifier"
+                | "type_identifier"
+                | "property_identifier"
+                | "function_declarator" => {
+                    if let Ok(name) = child.utf8_text(content) {
+                        return Some(name.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    /// Fallback regex-based symbol finding (original implementation)
+    fn find_symbol_at_position_fallback(
         &self,
         file_path: &Path,
         content: &str,
@@ -4177,7 +4923,7 @@ impl LspDaemon {
         let target_line_content = lines[line as usize];
 
         debug!(
-            "Looking for symbol at {}:{} in line: '{}'",
+            "Looking for symbol at {}:{} in line: '{}' (fallback mode)",
             line, column, target_line_content
         );
 
@@ -4202,7 +4948,7 @@ impl LspDaemon {
             // Look for function/method/struct definitions
             if let Some(symbol) = self.extract_symbol_from_line(line_content, file_path) {
                 debug!(
-                    "Found symbol '{}' from line {}: '{}'",
+                    "Found symbol '{}' from line {}: '{}' (fallback mode)",
                     symbol,
                     i + 1,
                     line_content
@@ -4214,7 +4960,7 @@ impl LspDaemon {
         // Fallback: try to extract any identifier from the target line at the given position
         if let Some(symbol) = self.extract_identifier_at_position(target_line_content, column) {
             debug!(
-                "Found identifier '{}' at position {}:{} in '{}'",
+                "Found identifier '{}' at position {}:{} in '{}' (fallback mode)",
                 symbol, line, column, target_line_content
             );
             return Ok(symbol);
@@ -4410,199 +5156,16 @@ impl LspDaemon {
         total_size
     }
 
-    /// Generate comprehensive cache statistics using the universal cache's list_keys functionality
+    /// Generate comprehensive cache statistics (universal cache removed - returns empty)
     async fn generate_comprehensive_cache_stats(
         &self,
     ) -> Result<(
         Vec<crate::protocol::WorkspaceCacheStats>,
         Vec<crate::protocol::OperationCacheStats>,
     )> {
-        use std::collections::HashMap;
-
-        // Get all cache keys using the universal cache's list_keys functionality
-        // Use a very large limit to ensure we get all keys (2952 is current count + buffer)
-        let (all_keys, total_count) = self
-            .universal_cache_layer
-            .get_universal_cache()
-            .list_keys(None, None, None, 50000, 0, Some("access-time"))
-            .await
-            .unwrap_or((Vec::new(), 0));
-
-        info!(
-            "Collected {} cache keys out of {} total for comprehensive statistics",
-            all_keys.len(),
-            total_count
-        );
-
-        // Group by workspace and operation
-        let mut workspace_stats: HashMap<String, crate::protocol::WorkspaceCacheStats> =
-            HashMap::new();
-        let mut operation_stats: HashMap<String, crate::protocol::OperationCacheStats> =
-            HashMap::new();
-
-        // Get hit/miss statistics from the universal cache
-        let cache_stats = self
-            .universal_cache_layer
-            .get_universal_cache()
-            .get_stats()
-            .await
-            .unwrap_or_else(|_| crate::universal_cache::CacheStats {
-                total_entries: 0,
-                total_size_bytes: 0,
-                active_workspaces: 0,
-                hit_rate: 0.0,
-                miss_rate: 0.0,
-                method_stats: HashMap::new(),
-            });
-
-        // Process each cache key
-        for key_info in &all_keys {
-            let workspace_id = key_info.workspace_id.clone();
-            let operation = key_info.operation.clone();
-
-            // Update workspace statistics
-            let workspace_stat = workspace_stats
-                .entry(workspace_id.clone())
-                .or_insert_with(|| {
-                    // Try to extract workspace path from workspace_id
-                    let workspace_path = if let Some(underscore_pos) = workspace_id.find('_') {
-                        std::path::PathBuf::from(&workspace_id[underscore_pos + 1..])
-                    } else {
-                        std::path::PathBuf::from(&workspace_id)
-                    };
-
-                    crate::protocol::WorkspaceCacheStats {
-                        workspace_id: workspace_id.clone(),
-                        workspace_path,
-                        entries: 0,
-                        size_bytes: 0,
-                        hit_rate: 0.0,
-                        miss_rate: 0.0,
-                        per_operation_stats: Vec::new(),
-                    }
-                });
-
-            workspace_stat.entries += 1;
-            workspace_stat.size_bytes += key_info.size_bytes as u64;
-
-            // Update operation statistics for this workspace
-            let mut found_operation = false;
-            for op_stat in &mut workspace_stat.per_operation_stats {
-                if op_stat.operation == operation {
-                    op_stat.entries += 1;
-                    op_stat.size_bytes += key_info.size_bytes as u64;
-                    found_operation = true;
-                    break;
-                }
-            }
-
-            if !found_operation {
-                workspace_stat
-                    .per_operation_stats
-                    .push(crate::protocol::OperationCacheStats {
-                        operation: operation.clone(),
-                        entries: 1,
-                        size_bytes: key_info.size_bytes as u64,
-                        hit_rate: 0.0,
-                        miss_rate: 0.0,
-                        avg_response_time_ms: None,
-                    });
-            }
-
-            // Update global operation statistics
-            let op_stat = operation_stats.entry(operation.clone()).or_insert_with(|| {
-                crate::protocol::OperationCacheStats {
-                    operation: operation.clone(),
-                    entries: 0,
-                    size_bytes: 0,
-                    hit_rate: 0.0,
-                    miss_rate: 0.0,
-                    avg_response_time_ms: None,
-                }
-            });
-
-            op_stat.entries += 1;
-            op_stat.size_bytes += key_info.size_bytes as u64;
-        }
-
-        // Apply hit/miss rates from universal cache statistics
-        for (method, method_stats) in &cache_stats.method_stats {
-            let operation_name = match method {
-                crate::universal_cache::LspMethod::CallHierarchy => "prepareCallHierarchy",
-                crate::universal_cache::LspMethod::Hover => "hover",
-                crate::universal_cache::LspMethod::Definition => "definition",
-                crate::universal_cache::LspMethod::References => "references",
-                crate::universal_cache::LspMethod::TypeDefinition => "typeDefinition",
-                crate::universal_cache::LspMethod::Implementation => "implementation",
-                crate::universal_cache::LspMethod::DocumentSymbols => "documentSymbol",
-                crate::universal_cache::LspMethod::WorkspaceSymbols => "workspaceSymbol",
-                _ => continue,
-            };
-
-            // Update global operation stats with hit/miss rates
-            if let Some(op_stat) = operation_stats.get_mut(operation_name) {
-                let total_ops = method_stats.hits + method_stats.misses;
-                if total_ops > 0 {
-                    op_stat.hit_rate = method_stats.hits as f64 / total_ops as f64;
-                    op_stat.miss_rate = method_stats.misses as f64 / total_ops as f64;
-                }
-            }
-        }
-
-        // Calculate workspace-level hit rates (average of operations)
-        for workspace_stat in workspace_stats.values_mut() {
-            let mut total_hit_rate = 0.0;
-            let mut operations_with_data = 0;
-
-            for op_stat in &mut workspace_stat.per_operation_stats {
-                // Apply global operation hit rates to workspace operations
-                if let Some(global_op_stat) = operation_stats.get(&op_stat.operation) {
-                    op_stat.hit_rate = global_op_stat.hit_rate;
-                    op_stat.miss_rate = global_op_stat.miss_rate;
-                    total_hit_rate += op_stat.hit_rate;
-                    operations_with_data += 1;
-                }
-            }
-
-            // Calculate workspace average hit rate
-            if operations_with_data > 0 {
-                workspace_stat.hit_rate = total_hit_rate / operations_with_data as f64;
-                workspace_stat.miss_rate = 1.0 - workspace_stat.hit_rate;
-            }
-        }
-
-        let per_workspace_stats: Vec<crate::protocol::WorkspaceCacheStats> =
-            workspace_stats.into_values().collect();
-        let per_operation_totals: Vec<crate::protocol::OperationCacheStats> =
-            operation_stats.into_values().collect();
-
-        info!(
-            "Generated comprehensive cache statistics: {} workspaces, {} operations",
-            per_workspace_stats.len(),
-            per_operation_totals.len()
-        );
-
-        // Debug log the statistics
-        for ws_stat in &per_workspace_stats {
-            info!(
-                "Workspace {}: {} entries, {:.1}% hit rate, {} operations",
-                ws_stat.workspace_id,
-                ws_stat.entries,
-                ws_stat.hit_rate * 100.0,
-                ws_stat.per_operation_stats.len()
-            );
-        }
-
-        for op_stat in &per_operation_totals {
-            info!(
-                "Operation {}: {} entries, {:.1}% hit rate",
-                op_stat.operation,
-                op_stat.entries,
-                op_stat.hit_rate * 100.0
-            );
-        }
-
-        Ok((per_workspace_stats, per_operation_totals))
+        // Universal cache layer removed - return empty statistics
+        info!("Cache statistics unavailable - universal cache layer removed");
+        Ok((Vec::new(), Vec::new()))
     }
 
     /// Generate enhanced cache statistics by reading directly from disk
@@ -4885,6 +5448,48 @@ impl LspDaemon {
         }
 
         "unknown".to_string()
+    }
+
+    /// Generate consistent UID for a symbol using SymbolUIDGenerator
+    /// This ensures storage and retrieval use identical UIDs
+    async fn generate_consistent_symbol_uid(
+        &self,
+        file_path: &Path,
+        symbol_name: &str,
+        line: u32,
+        column: u32,
+        _language: &str,
+        workspace_root: &Path,
+        file_content: &str,
+    ) -> Result<String> {
+        debug!(
+            "[VERSION_AWARE_UID] Generating consistent UID for symbol '{}' at {}:{}:{}",
+            symbol_name,
+            file_path.display(),
+            line,
+            column
+        );
+
+        // Generate version-aware UID using the same helper as storage path
+        let uid = generate_version_aware_uid(
+            workspace_root,
+            file_path,
+            file_content,
+            symbol_name,
+            line, // LSP lines are already 1-indexed for definitions
+        )
+        .with_context(|| {
+            format!(
+                "Failed to generate version-aware UID for symbol: {}",
+                symbol_name
+            )
+        })?;
+
+        debug!(
+            "[VERSION_AWARE_UID] Generated consistent UID for '{}': {}",
+            symbol_name, uid
+        );
+        Ok(uid)
     }
 }
 

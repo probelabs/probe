@@ -954,21 +954,41 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
-    fn create_mock_branch_manager() -> BranchManager<crate::database::sqlite_backend::SQLiteBackend>
-    {
-        // Note: This creates a mock manager for testing validation logic only
-        // Real integration tests should use the full test setup
+    async fn create_mock_branch_manager(
+    ) -> BranchManager<crate::database::sqlite_backend::SQLiteBackend> {
+        use crate::database::{DatabaseBackend, DatabaseConfig, SQLiteBackend};
+        use crate::indexing::versioning::FileVersionManager;
+
+        // Create a temporary in-memory SQLite database for testing
+        let config = DatabaseConfig {
+            path: None,
+            temporary: true,
+            compression: false,
+            cache_capacity: 1024 * 1024, // 1MB
+            compression_factor: 0,
+            flush_every_ms: None,
+        };
+
+        let database = Arc::new(
+            SQLiteBackend::new(config)
+                .await
+                .expect("Failed to create test database"),
+        );
+        let file_manager = FileVersionManager::new(database.clone(), Default::default())
+            .await
+            .expect("Failed to create file version manager");
+
         BranchManager {
-            database: Arc::new(unsafe { std::mem::zeroed() }), // This is just for testing
-            file_manager: unsafe { std::mem::zeroed() },
+            database,
+            file_manager,
             git_integration_enabled: true,
             branch_cache: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    #[test]
-    fn test_branch_name_validation() {
-        let manager = create_mock_branch_manager();
+    #[tokio::test]
+    async fn test_branch_name_validation() {
+        let manager = create_mock_branch_manager().await;
 
         // Valid branch names
         assert!(manager.validate_branch_name("main").is_ok());
@@ -1089,7 +1109,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_branch_cache_operations() {
-        let manager = create_mock_branch_manager();
+        let manager = create_mock_branch_manager().await;
         let workspace_id = 1;
         let branch_name = "test-branch";
 

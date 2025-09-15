@@ -243,91 +243,6 @@ impl PythonAnalyzer {
         symbols
     }
 
-    /// Extract Python-specific relationships
-    fn extract_python_relationships(
-        &self,
-        symbols: &[ExtractedSymbol],
-    ) -> Vec<ExtractedRelationship> {
-        let mut relationships = Vec::new();
-
-        // Build symbol lookup for efficient relationship creation
-        let symbol_lookup: HashMap<String, &ExtractedSymbol> =
-            symbols.iter().map(|s| (s.name.clone(), s)).collect();
-
-        for symbol in symbols {
-            // Extract class inheritance relationships
-            if symbol.kind == SymbolKind::Class {
-                if let Some(sig) = &symbol.signature {
-                    // Look for class inheritance patterns like "class Child(Parent):"
-                    if let Some(start) = sig.find('(') {
-                        if let Some(end) = sig[start..].find(')') {
-                            let parents_str = &sig[start + 1..start + end];
-
-                            // Handle multiple inheritance
-                            for parent in parents_str.split(',') {
-                                let parent_name =
-                                    parent.trim().split('.').last().unwrap_or(parent.trim());
-                                if !parent_name.is_empty() && parent_name != "object" {
-                                    if let Some(parent_symbol) = symbol_lookup.get(parent_name) {
-                                        let relationship = ExtractedRelationship::new(
-                                            symbol.uid.clone(),
-                                            parent_symbol.uid.clone(),
-                                            RelationType::InheritsFrom,
-                                        )
-                                        .with_confidence(0.9);
-
-                                        relationships.push(relationship);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Extract module relationships
-            if symbol.kind == SymbolKind::Module {
-                // Python modules contain other symbols
-                for other_symbol in symbols {
-                    if other_symbol.parent_scope.as_ref() == Some(&symbol.name) {
-                        let relationship = ExtractedRelationship::new(
-                            symbol.uid.clone(),
-                            other_symbol.uid.clone(),
-                            RelationType::Contains,
-                        )
-                        .with_confidence(0.95);
-
-                        relationships.push(relationship);
-                    }
-                }
-            }
-
-            // Extract import relationships
-            if symbol.kind == SymbolKind::Import {
-                if let Some(qualified_name) = &symbol.qualified_name {
-                    let relationship = ExtractedRelationship::new(
-                        format!("file::{}", symbol.location.file_path.display()),
-                        qualified_name.clone(),
-                        RelationType::Imports,
-                    )
-                    .with_confidence(0.9);
-
-                    relationships.push(relationship);
-                }
-            }
-
-            // Extract decorator relationships (decorators modify functions/classes)
-            if symbol.tags.contains(&"decorated_function".to_string())
-                || symbol.tags.contains(&"dataclass".to_string())
-            {
-                // In a full implementation, we'd extract the actual decorator symbols
-                // and create relationships between decorators and their targets
-            }
-        }
-
-        relationships
-    }
-
     /// Calculate Python-specific complexity metrics
     fn calculate_python_complexity(&self, symbols: &[ExtractedSymbol]) -> f32 {
         let mut complexity = 0.0;
@@ -549,6 +464,106 @@ impl PythonAnalyzer {
 
         violations
     }
+    /// Extract Python-specific relationships with enhanced detection
+    fn extract_python_relationships(
+        &self,
+        symbols: &[ExtractedSymbol],
+        content: &str,
+    ) -> Vec<ExtractedRelationship> {
+        let mut relationships = Vec::new();
+
+        // Build comprehensive symbol lookup maps
+        let symbol_lookup: HashMap<String, &ExtractedSymbol> =
+            symbols.iter().map(|s| (s.name.clone(), s)).collect();
+        let _fqn_lookup: HashMap<String, &ExtractedSymbol> = symbols
+            .iter()
+            .filter_map(|s| s.qualified_name.as_ref().map(|fqn| (fqn.clone(), s)))
+            .collect();
+
+        // Extract class inheritance relationships
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("class ") {
+                if let Some(colon_pos) = trimmed.find(':') {
+                    let class_def = &trimmed[6..colon_pos]; // Skip "class "
+
+                    if let Some(paren_start) = class_def.find('(') {
+                        let class_name = class_def[..paren_start].trim();
+                        let paren_end = class_def.rfind(')').unwrap_or(class_def.len());
+                        let base_classes_str = &class_def[paren_start + 1..paren_end];
+
+                        if let Some(class_symbol) = symbol_lookup.get(class_name) {
+                            for base_class in base_classes_str.split(',') {
+                                let base_class_name = base_class
+                                    .trim()
+                                    .split('.')
+                                    .last()
+                                    .unwrap_or(base_class.trim());
+
+                                if let Some(base_symbol) = symbol_lookup.get(base_class_name) {
+                                    let relationship =
+                                        ExtractedRelationship::new(
+                                            class_symbol.uid.clone(),
+                                            base_symbol.uid.clone(),
+                                            RelationType::InheritsFrom,
+                                        )
+                                        .with_confidence(0.95)
+                                        .with_context(
+                                            format!("class {}({})", class_name, base_class.trim()),
+                                        );
+
+                                    relationships.push(relationship);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Extract import relationships
+        for symbol in symbols {
+            if symbol.kind == SymbolKind::Import {
+                if let Some(qualified_name) = &symbol.qualified_name {
+                    let file_uid = format!("file::{}", symbol.location.file_path.display());
+                    let relationship = ExtractedRelationship::new(
+                        file_uid,
+                        qualified_name.clone(),
+                        RelationType::Imports,
+                    )
+                    .with_confidence(0.9);
+
+                    relationships.push(relationship);
+                }
+            }
+        }
+
+        // Extract method containment relationships
+        for symbol in symbols {
+            if symbol.kind == SymbolKind::Method || symbol.kind == SymbolKind::Field {
+                if let Some(parent_scope) = &symbol.parent_scope {
+                    if let Some(parent_symbol) = symbol_lookup.get(parent_scope) {
+                        if parent_symbol.kind == SymbolKind::Class {
+                            let relationship = ExtractedRelationship::new(
+                                parent_symbol.uid.clone(),
+                                symbol.uid.clone(),
+                                RelationType::Contains,
+                            )
+                            .with_confidence(1.0)
+                            .with_context(format!(
+                                "Class {} contains {}",
+                                parent_scope, symbol.name
+                            ));
+
+                            relationships.push(relationship);
+                        }
+                    }
+                }
+            }
+        }
+
+        relationships
+    }
 }
 
 #[async_trait]
@@ -580,7 +595,7 @@ impl CodeAnalyzer for PythonAnalyzer {
         result.symbols = self.enhance_python_symbols(result.symbols);
 
         // Add Python-specific relationships
-        let python_relationships = self.extract_python_relationships(&result.symbols);
+        let python_relationships = self.extract_python_relationships(&result.symbols, content);
         result.relationships.extend(python_relationships);
 
         // Update metadata to reflect Python-specific analysis

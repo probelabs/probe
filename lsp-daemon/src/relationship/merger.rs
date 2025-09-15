@@ -364,7 +364,9 @@ impl ConfidenceCalculator {
             _ => {}
         }
 
-        confidence.clamp(0.0, 1.0)
+        // Round confidence to 3 decimal places to avoid floating-point artifacts
+        let rounded_confidence = (confidence * 1000.0).round() / 1000.0;
+        rounded_confidence.clamp(0.0, 1.0)
     }
 
     /// Calculate confidence difference between relationships
@@ -1575,7 +1577,6 @@ impl HybridRelationshipMerger {
 mod tests {
     use super::*;
     use crate::analyzer::types::RelationType;
-    use crate::symbol::SymbolLocation;
     use std::path::PathBuf;
 
     fn create_test_relationship(

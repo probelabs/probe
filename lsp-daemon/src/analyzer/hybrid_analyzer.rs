@@ -21,7 +21,6 @@ use crate::relationship::{
 };
 use crate::server_manager::SingleServerManager;
 use crate::symbol::SymbolUIDGenerator;
-use crate::universal_cache::CacheLayer;
 use crate::workspace_resolver::WorkspaceResolver;
 
 /// Hybrid analyzer that combines structural and semantic analysis
@@ -147,7 +146,6 @@ impl HybridAnalyzer {
         server_manager: Arc<SingleServerManager>,
         language_detector: Arc<LanguageDetector>,
         workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
-        cache_layer: Arc<CacheLayer>,
     ) -> Self {
         let structural_analyzer = TreeSitterAnalyzer::new(uid_generator.clone());
         let semantic_analyzer = Box::new(LspAnalyzer::new(
@@ -160,7 +158,6 @@ impl HybridAnalyzer {
             Some(server_manager),
             language_detector,
             workspace_resolver,
-            cache_layer,
             uid_generator.clone(),
         )));
 
@@ -203,7 +200,6 @@ impl HybridAnalyzer {
         server_manager: Arc<SingleServerManager>,
         language_detector: Arc<LanguageDetector>,
         workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
-        cache_layer: Arc<CacheLayer>,
         config: HybridAnalyzerConfig,
     ) -> Self {
         let structural_analyzer = TreeSitterAnalyzer::new(uid_generator.clone());
@@ -217,7 +213,6 @@ impl HybridAnalyzer {
             Some(server_manager),
             language_detector,
             workspace_resolver,
-            cache_layer,
             uid_generator.clone(),
             config.lsp_enhancement.clone(),
         )));
@@ -724,7 +719,14 @@ mod tests {
 
     fn create_test_context() -> AnalysisContext {
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        AnalysisContext::new(1, 2, 3, "rust".to_string(), uid_generator)
+        AnalysisContext::new(
+            1,
+            2,
+            "rust".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("test.rs"),
+            uid_generator,
+        )
     }
 
     fn create_test_symbol(name: &str, kind: SymbolKind) -> ExtractedSymbol {

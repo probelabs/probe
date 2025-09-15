@@ -1035,7 +1035,6 @@ where
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use tempfile::TempDir;
 
     // Note: These tests would require a mock database backend for full testing
     // For now, they serve as examples of the intended API usage

@@ -15,6 +15,26 @@ use super::types::*;
 use crate::relationship::TreeSitterRelationshipExtractor;
 use crate::symbol::{SymbolContext, SymbolInfo, SymbolKind, SymbolLocation, SymbolUIDGenerator};
 
+/// Convert file extension to language name for tree-sitter parsers
+fn extension_to_language_name(extension: &str) -> Option<&'static str> {
+    match extension.to_lowercase().as_str() {
+        "rs" => Some("rust"),
+        "js" | "jsx" => Some("javascript"),
+        "ts" => Some("typescript"),
+        "tsx" => Some("typescript"), // TSX uses TypeScript parser
+        "py" => Some("python"),
+        "go" => Some("go"),
+        "c" | "h" => Some("c"),
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some("cpp"),
+        "java" => Some("java"),
+        "rb" => Some("ruby"),
+        "php" => Some("php"),
+        "swift" => Some("swift"),
+        "cs" => Some("csharp"),
+        _ => None,
+    }
+}
+
 /// Tree-sitter parser pool for efficient parser reuse
 pub struct ParserPool {
     parsers: HashMap<String, Vec<tree_sitter::Parser>>,
@@ -29,26 +49,34 @@ impl ParserPool {
         }
     }
 
-    /// Get a parser for the specified language
-    pub fn get_parser(&mut self, language: &str) -> Option<tree_sitter::Parser> {
+    /// Get a parser for the specified language (accepts either extension or language name)
+    pub fn get_parser(&mut self, language_or_extension: &str) -> Option<tree_sitter::Parser> {
+        // Convert extension to language name if needed
+        let language_name =
+            extension_to_language_name(language_or_extension).unwrap_or(language_or_extension);
+
         let language_parsers = self
             .parsers
-            .entry(language.to_string())
+            .entry(language_name.to_string())
             .or_insert_with(Vec::new);
 
         if let Some(parser) = language_parsers.pop() {
             Some(parser)
         } else {
             // Try to create a new parser for this language
-            self.create_parser(language)
+            self.create_parser(language_name)
         }
     }
 
-    /// Return a parser to the pool
-    pub fn return_parser(&mut self, language: &str, parser: tree_sitter::Parser) {
+    /// Return a parser to the pool (accepts either extension or language name)
+    pub fn return_parser(&mut self, language_or_extension: &str, parser: tree_sitter::Parser) {
+        // Convert extension to language name if needed
+        let language_name =
+            extension_to_language_name(language_or_extension).unwrap_or(language_or_extension);
+
         let language_parsers = self
             .parsers
-            .entry(language.to_string())
+            .entry(language_name.to_string())
             .or_insert_with(Vec::new);
 
         if language_parsers.len() < self.max_parsers_per_language {
@@ -171,7 +199,7 @@ impl TreeSitterAnalyzer {
     async fn parse_source(
         &self,
         content: &str,
-        language: &str,
+        language_or_extension: &str,
     ) -> Result<tree_sitter::Tree, AnalysisError> {
         if !self.config.enabled {
             return Err(AnalysisError::ConfigError {
@@ -179,19 +207,23 @@ impl TreeSitterAnalyzer {
             });
         }
 
+        // Convert extension to language name if needed
+        let language_name =
+            extension_to_language_name(language_or_extension).unwrap_or(language_or_extension);
+
         // Get parser from pool
         let parser = {
             let mut pool = self.parser_pool.lock().unwrap();
-            pool.get_parser(language)
+            pool.get_parser(language_name)
         };
 
         let mut parser = parser.ok_or_else(|| AnalysisError::ParserNotAvailable {
-            language: language.to_string(),
+            language: language_name.to_string(),
         })?;
 
         // Parse with timeout
         let pool_clone = self.parser_pool.clone();
-        let language_clone = language.to_string();
+        let language_clone = language_name.to_string();
         let content_owned = content.to_string(); // Convert to owned data
         let parse_future = tokio::task::spawn_blocking(move || {
             let parse_result = parser.parse(&content_owned, None);
@@ -237,12 +269,12 @@ impl TreeSitterAnalyzer {
         let root_node = tree.root_node();
         let content_bytes = content.as_bytes();
 
+        // Convert extension to language name for UID generation
+        let language_name =
+            extension_to_language_name(&context.language).unwrap_or(&context.language);
+
         // Create symbol context for UID generation
-        let symbol_context = SymbolContext::new(
-            context.workspace_id,
-            context.file_version_id,
-            context.language.clone(),
-        );
+        let symbol_context = SymbolContext::new(context.workspace_id, language_name.to_string());
 
         self.extract_symbols_recursive(
             root_node,
@@ -435,6 +467,15 @@ impl TreeSitterAnalyzer {
             "mod_item" => Some(SymbolKind::Module),
             "macro_definition" => Some(SymbolKind::Macro),
             "let_declaration" => Some(SymbolKind::Variable),
+            // Enhanced symbol extraction
+            "use_declaration" => Some(SymbolKind::Import),
+            "field_declaration" => Some(SymbolKind::Field),
+            "parameter" => Some(SymbolKind::Variable),
+            "enum_variant" => Some(SymbolKind::EnumVariant),
+            "associated_type" => Some(SymbolKind::Type),
+            "macro_rule" => Some(SymbolKind::Macro),
+            "closure_expression" => Some(SymbolKind::Function),
+            "impl_trait" => Some(SymbolKind::Method), // For trait impl blocks
             _ => None,
         }
     }
@@ -452,6 +493,18 @@ impl TreeSitterAnalyzer {
             "namespace_declaration" => Some(SymbolKind::Namespace),
             "import_statement" => Some(SymbolKind::Import),
             "export_statement" => Some(SymbolKind::Export),
+            // Enhanced symbol extraction
+            "property_signature" => Some(SymbolKind::Field),
+            "method_signature" => Some(SymbolKind::Method),
+            "enum_declaration" => Some(SymbolKind::Enum),
+            "enum_member" => Some(SymbolKind::EnumVariant),
+            "arrow_function" => Some(SymbolKind::Function),
+            "function_expression" => Some(SymbolKind::Function),
+            "variable_declarator" => Some(SymbolKind::Variable),
+            "parameter" => Some(SymbolKind::Variable),
+            "property_identifier" => Some(SymbolKind::Field),
+            "import_specifier" => Some(SymbolKind::Import),
+            "export_specifier" => Some(SymbolKind::Export),
             _ => None,
         }
     }
@@ -463,6 +516,15 @@ impl TreeSitterAnalyzer {
             "class_definition" => Some(SymbolKind::Class),
             "assignment" => Some(SymbolKind::Variable),
             "import_statement" | "import_from_statement" => Some(SymbolKind::Import),
+            // Enhanced symbol extraction
+            "decorated_definition" => Some(SymbolKind::Function), // @decorator def func
+            "lambda" => Some(SymbolKind::Function),
+            "parameter" => Some(SymbolKind::Variable),
+            "keyword_argument" => Some(SymbolKind::Variable),
+            "global_statement" => Some(SymbolKind::Variable),
+            "nonlocal_statement" => Some(SymbolKind::Variable),
+            "aliased_import" => Some(SymbolKind::Import),
+            "dotted_as_name" => Some(SymbolKind::Import),
             _ => None,
         }
     }
@@ -538,10 +600,22 @@ impl TreeSitterAnalyzer {
         node: tree_sitter::Node,
         content: &[u8],
     ) -> Result<String, AnalysisError> {
-        // Look for identifier child nodes
+        // Look for identifier child nodes with more comprehensive patterns
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "identifier" || child.kind() == "type_identifier" {
+            let child_kind = child.kind();
+            if matches!(
+                child_kind,
+                "identifier"
+                    | "type_identifier"
+                    | "field_identifier"
+                    | "property_identifier"
+                    | "variable_name"
+                    | "function_name"
+                    | "class_name"
+                    | "module_name"
+                    | "parameter_name"
+            ) {
                 let start_byte = child.start_byte();
                 let end_byte = child.end_byte();
                 if end_byte <= content.len() {
@@ -555,9 +629,18 @@ impl TreeSitterAnalyzer {
                     return Ok(name.to_string());
                 }
             }
+
+            // Recursively search in nested nodes for complex patterns
+            if let Ok(nested_name) = self.extract_symbol_name(child, content) {
+                if !nested_name.is_empty()
+                    && nested_name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                {
+                    return Ok(nested_name);
+                }
+            }
         }
 
-        // If no identifier child found, try to extract from node text
+        // If no identifier child found, try to extract from node text with better patterns
         let start_byte = node.start_byte();
         let end_byte = node.end_byte();
         if end_byte <= content.len() && end_byte > start_byte {
@@ -565,9 +648,46 @@ impl TreeSitterAnalyzer {
                 .unwrap_or("")
                 .trim();
 
-            // Extract first word as symbol name
-            if let Some(first_word) = text.split_whitespace().next() {
-                return Ok(first_word.to_string());
+            // Handle different node patterns
+            let name = match node.kind() {
+                "use_declaration" => {
+                    // Extract the last part of use statements: use std::collections::HashMap -> HashMap
+                    text.split("::").last().unwrap_or(text).to_string()
+                }
+                "import_statement" | "import_specifier" => {
+                    // Handle import { name } from 'module' patterns
+                    if let Some(brace_start) = text.find('{') {
+                        if let Some(brace_end) = text.find('}') {
+                            text[brace_start + 1..brace_end].trim().to_string()
+                        } else {
+                            text.split_whitespace().nth(1).unwrap_or("").to_string()
+                        }
+                    } else {
+                        text.split_whitespace().nth(1).unwrap_or("").to_string()
+                    }
+                }
+                "parameter" => {
+                    // Extract parameter names from function signatures
+                    text.split(':').next().unwrap_or(text).trim().to_string()
+                }
+                _ => {
+                    // Extract first valid identifier as symbol name
+                    text.split_whitespace()
+                        .find(|word| {
+                            !word.is_empty()
+                                && word
+                                    .chars()
+                                    .next()
+                                    .map_or(false, |c| c.is_alphabetic() || c == '_')
+                                && word.chars().all(|c| c.is_alphanumeric() || c == '_')
+                        })
+                        .unwrap_or("")
+                        .to_string()
+                }
+            };
+
+            if !name.is_empty() {
+                return Ok(name);
             }
         }
 
@@ -621,19 +741,62 @@ impl TreeSitterAnalyzer {
         match language.to_lowercase().as_str() {
             "rust" => matches!(
                 node_kind,
-                "impl_item" | "mod_item" | "struct_item" | "enum_item" | "trait_item"
+                "impl_item"
+                    | "mod_item"
+                    | "struct_item"
+                    | "enum_item"
+                    | "trait_item"
+                    | "function_item"
+                    | "closure_expression"
+                    | "block"
             ),
             "typescript" | "javascript" => matches!(
                 node_kind,
-                "class_declaration" | "interface_declaration" | "namespace_declaration"
+                "class_declaration"
+                    | "interface_declaration"
+                    | "namespace_declaration"
+                    | "function_declaration"
+                    | "arrow_function"
+                    | "function_expression"
+                    | "method_definition"
+                    | "block_statement"
             ),
-            "python" => matches!(node_kind, "class_definition"),
-            "go" => matches!(node_kind, "type_declaration" | "struct_type"),
+            "python" => matches!(
+                node_kind,
+                "class_definition"
+                    | "function_definition"
+                    | "lambda"
+                    | "if_statement"
+                    | "for_statement"
+                    | "while_statement"
+                    | "with_statement"
+                    | "try_statement"
+            ),
+            "go" => matches!(
+                node_kind,
+                "type_declaration"
+                    | "struct_type"
+                    | "function_declaration"
+                    | "method_declaration"
+                    | "interface_type"
+                    | "block"
+            ),
             "java" => matches!(
                 node_kind,
-                "class_declaration" | "interface_declaration" | "package_declaration"
+                "class_declaration"
+                    | "interface_declaration"
+                    | "package_declaration"
+                    | "method_declaration"
+                    | "constructor_declaration"
+                    | "block"
             ),
-            "c" | "cpp" => matches!(node_kind, "struct_specifier" | "union_specifier"),
+            "c" | "cpp" => matches!(
+                node_kind,
+                "struct_specifier"
+                    | "union_specifier"
+                    | "function_definition"
+                    | "compound_statement"
+            ),
             _ => false,
         }
     }
@@ -835,7 +998,14 @@ mod tests {
 
     fn create_test_context() -> AnalysisContext {
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        AnalysisContext::new(1, 2, 3, "rust".to_string(), uid_generator)
+        AnalysisContext::new(
+            1,
+            2,
+            "rust".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("test.rs"),
+            uid_generator,
+        )
     }
 
     #[test]
@@ -922,24 +1092,35 @@ mod tests {
         assert!(analyzer.creates_scope("struct_item", "rust"));
         assert!(analyzer.creates_scope("impl_item", "rust"));
         assert!(analyzer.creates_scope("mod_item", "rust"));
-        assert!(!analyzer.creates_scope("function_item", "rust"));
+        assert!(analyzer.creates_scope("function_item", "rust")); // Functions do create scope in Rust
 
         assert!(analyzer.creates_scope("class_declaration", "typescript"));
         assert!(analyzer.creates_scope("namespace_declaration", "typescript"));
-        assert!(!analyzer.creates_scope("function_declaration", "typescript"));
+        assert!(analyzer.creates_scope("function_declaration", "typescript")); // Functions do create scope in TypeScript
     }
 
     #[tokio::test]
     async fn test_parse_source_without_parsers() {
         let analyzer = create_test_analyzer();
 
-        // This should fail because we don't have tree-sitter parsers in test environment
-        let result = analyzer.parse_source("fn main() {}", "rust").await;
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            AnalysisError::ParserNotAvailable { .. }
-        ));
+        // Test with an extension that should be converted to a language name
+        let result = analyzer.parse_source("fn main() {}", "rs").await;
+
+        #[cfg(feature = "tree-sitter-rust")]
+        {
+            // With rust feature enabled, this should succeed
+            assert!(result.is_ok());
+        }
+
+        #[cfg(not(feature = "tree-sitter-rust"))]
+        {
+            // Without rust feature, this should fail with parser not available
+            assert!(result.is_err());
+            assert!(matches!(
+                result.unwrap_err(),
+                AnalysisError::ParserNotAvailable { .. }
+            ));
+        }
     }
 
     #[tokio::test]
@@ -964,9 +1145,24 @@ mod tests {
     fn test_parser_pool() {
         let mut pool = ParserPool::new();
 
-        // Try to get a parser (should return None in test environment)
-        let parser = pool.get_parser("rust");
-        assert!(parser.is_none());
+        // Test with feature-enabled language
+        #[cfg(feature = "tree-sitter-rust")]
+        {
+            let parser = pool.get_parser("rust");
+            assert!(
+                parser.is_some(),
+                "Should get a parser for rust when feature is enabled"
+            );
+        }
+
+        #[cfg(not(feature = "tree-sitter-rust"))]
+        {
+            let parser = pool.get_parser("rust");
+            assert!(
+                parser.is_none(),
+                "Should not get a parser for rust when feature is disabled"
+            );
+        }
 
         // Pool should handle unknown languages gracefully
         let parser = pool.get_parser("unknown_language");

@@ -9,6 +9,7 @@ mod git_service_test;
 pub mod ipc;
 pub mod language_detector;
 pub mod logging;
+pub mod path_resolver;
 pub mod path_safety;
 pub mod pid_lock;
 pub mod process_group;
@@ -19,11 +20,11 @@ pub mod socket_path;
 pub mod cache_types;
 pub mod database;
 pub mod database_cache_adapter;
-#[cfg(test)]
-mod database_cache_adapter_tests;
+// database_cache_adapter_tests removed - universal cache no longer used
 pub mod hash_utils;
 pub mod lsp_cache;
-pub mod universal_cache;
+pub mod lsp_database_adapter;
+// pub mod universal_cache; // Removed - using database-first approach
 
 // Handler modules removed
 
@@ -37,6 +38,7 @@ mod pool; // Keep for now but mark as deprecated
 pub mod server_manager;
 pub mod watchdog;
 pub mod workspace_cache_router;
+pub mod workspace_database_router;
 pub mod workspace_resolver;
 
 // Indexing subsystem
@@ -54,6 +56,9 @@ pub mod symbol;
 // Multi-language analyzer framework
 pub mod analyzer;
 pub mod relationship;
+
+// Graph export functionality
+pub mod graph_exporter;
 
 // Re-export commonly used types
 pub use protocol::{
@@ -92,6 +97,7 @@ pub use lsp_registry::LspRegistry;
 pub use watchdog::{ProcessHealth, ProcessMonitor, ProcessStats, Watchdog};
 
 pub use git_service::GitService;
+pub use path_resolver::PathResolver;
 
 // Re-export indexing types for external use
 pub use indexing::{
@@ -111,11 +117,11 @@ pub use workspace_cache_router::{
     WorkspaceCacheRouter, WorkspaceCacheRouterConfig, WorkspaceCacheRouterStats, WorkspaceStats,
 };
 
-// Re-export universal cache types for external use
-pub use universal_cache::{
-    CacheKey, CachePolicy, CacheScope, CacheStats, KeyBuilder, LspMethod, MethodStats,
-    PolicyRegistry, UniversalCache,
-};
+// Re-export workspace database router types for external use
+pub use workspace_database_router::{WorkspaceDatabaseRouter, WorkspaceDatabaseRouterConfig};
+
+// Universal cache types removed - using database-first approach
+// pub use universal_cache::{};
 
 // Re-export database types for external use
 pub use database::{

@@ -268,43 +268,51 @@ where
             });
         }
 
-        // Check if this content hash already exists in database
-        match self
-            .database
-            .get_file_version_by_digest(&content_digest)
-            .await
-        {
-            Ok(Some(existing_version)) => {
-                // Content exists - this is deduplication
-                debug!("Content deduplication for digest: {}", content_digest);
+        // Since we no longer use file versions in the simplified schema,
+        // we'll create a simple file version representation based on content hash
+        let file_version = FileVersion {
+            file_version_id: content_digest
+                .chars()
+                .take(10)
+                .collect::<String>()
+                .parse::<i64>()
+                .unwrap_or(1),
+            file_id: file_path
+                .to_string_lossy()
+                .chars()
+                .take(10)
+                .collect::<String>()
+                .parse::<i64>()
+                .unwrap_or(1),
+            content_digest: content_digest.clone(),
+            size_bytes: content.len() as u64,
+            git_blob_oid: None,
+            line_count: None,
+            detected_language: None,
+            mtime: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            ),
+        };
 
-                // Cache the result
-                self.add_to_cache(&content_digest, existing_version.clone())
-                    .await;
+        // Cache the result
+        self.add_to_cache(&content_digest, file_version.clone())
+            .await;
 
-                if self.config.collect_metrics {
-                    self.update_deduplication_metrics(start_time.elapsed())
-                        .await;
-                }
-
-                Ok(FileVersionInfo {
-                    file_version: existing_version,
-                    is_new_version: false,
-                    git_blob_oid: None,
-                    detected_language: self.detect_language(file_path),
-                    file_path: file_path.to_path_buf(),
-                })
-            }
-            Ok(None) => {
-                // New content - create new file version
-                self.create_new_file_version(file_path, content, &content_digest, start_time)
-                    .await
-            }
-            Err(e) => {
-                error!("Database error checking file version: {}", e);
-                Err(VersioningError::Database(e))
-            }
+        if self.config.collect_metrics {
+            self.update_deduplication_metrics(start_time.elapsed())
+                .await;
         }
+
+        Ok(FileVersionInfo {
+            file_version,
+            is_new_version: true, // For simplicity, always treat as new
+            git_blob_oid: None,
+            detected_language: self.detect_language(file_path),
+            file_path: file_path.to_path_buf(),
+        })
     }
 
     /// Process a batch of FileChange results from Phase 2.1 file change detection
@@ -614,20 +622,21 @@ where
         // Generate a unique file ID (this would typically come from a files table)
         let file_id = self.generate_file_id().await;
 
-        // Create file version in database
-        let file_version_id = self
-            .database
-            .create_file_version(file_id, content_digest, size_bytes, Some(mtime))
-            .await
-            .context("Failed to create file version in database")?;
+        // Since we no longer use database file versions, create a simple file version representation
+        let file_version_id = content_digest
+            .chars()
+            .take(10)
+            .collect::<String>()
+            .parse::<i64>()
+            .unwrap_or(1);
 
         // Construct FileVersion for result
         let file_version = FileVersion {
             file_version_id,
             file_id,
             content_digest: content_digest.to_string(),
-            git_blob_oid: None, // Will be set by git integration if enabled
             size_bytes,
+            git_blob_oid: None, // Will be set by git integration if enabled
             line_count: Some(self.count_lines(content)),
             detected_language: self.detect_language(file_path),
             mtime: Some(mtime),

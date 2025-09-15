@@ -20,7 +20,7 @@ fn main() {
                     None => println!("✗ Failed to parse Rust code"),
                 }
             }
-            Err(e) => println!("✗ Failed to set Rust language: {:?}", e),
+            Err(e) => println!("✗ Failed to set Rust language: {e:?}"),
         }
     }
 
@@ -38,7 +38,7 @@ fn main() {
                     None => println!("✗ Failed to parse Python code"),
                 }
             }
-            Err(e) => println!("✗ Failed to set Python language: {:?}", e),
+            Err(e) => println!("✗ Failed to set Python language: {e:?}"),
         }
     }
 
@@ -56,7 +56,7 @@ fn main() {
                     None => println!("✗ Failed to parse TypeScript code"),
                 }
             }
-            Err(e) => println!("✗ Failed to set TypeScript language: {:?}", e),
+            Err(e) => println!("✗ Failed to set TypeScript language: {e:?}"),
         }
     }
 

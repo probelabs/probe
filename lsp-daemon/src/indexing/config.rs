@@ -422,7 +422,7 @@ impl Default for IndexingConfig {
     fn default() -> Self {
         Self {
             enabled: true,     // Enabled by default - matches test expectations
-            auto_index: true,  // Auto-index enabled by default
+            auto_index: false, // Auto-index DISABLED by default to prevent infinite loops
             watch_files: true, // File watching enabled by default
             default_depth: 3,
             max_workers: num_cpus::get().min(8), // Reasonable default
@@ -1105,7 +1105,7 @@ impl IndexingConfig {
             languages: self
                 .priority_languages
                 .iter()
-                .map(|l| format!("{l:?}"))
+                .map(|l| l.as_str().to_string())
                 .collect(),
             recursive: true, // Always true in new config system
 
@@ -1619,7 +1619,7 @@ mod tests {
     fn test_default_config() {
         let config = IndexingConfig::default();
         assert!(config.enabled); // Should be enabled by default
-        assert!(config.auto_index); // Should be enabled by default
+        assert!(!config.auto_index); // Should be DISABLED by default to prevent infinite loops
         assert!(config.watch_files); // Should be enabled by default
         assert_eq!(config.default_depth, 3);
         assert!(config.max_workers > 0);

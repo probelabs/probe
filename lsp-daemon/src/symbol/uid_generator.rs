@@ -11,6 +11,26 @@ use blake3::Hasher as Blake3Hasher;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
+/// Convert file extension to language name for UID generation
+fn extension_to_language_name(extension: &str) -> Option<&'static str> {
+    match extension.to_lowercase().as_str() {
+        "rs" => Some("rust"),
+        "js" | "jsx" => Some("javascript"),
+        "ts" => Some("typescript"),
+        "tsx" => Some("typescript"), // TSX uses TypeScript parser
+        "py" => Some("python"),
+        "go" => Some("go"),
+        "c" | "h" => Some("c"),
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some("cpp"),
+        "java" => Some("java"),
+        "rb" => Some("ruby"),
+        "php" => Some("php"),
+        "swift" => Some("swift"),
+        "cs" => Some("csharp"),
+        _ => None,
+    }
+}
+
 /// Hash algorithm options for UID generation
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashAlgorithm {
@@ -334,9 +354,12 @@ impl SymbolUIDGenerator {
         }
     }
 
-    /// Get language rules for a specific language
+    /// Get language rules for a specific language (supports extensions and language names)
     fn get_language_rules(&self, language: &str) -> UIDResult<&LanguageRules> {
-        let lang_key = language.to_lowercase();
+        // Convert extension to language name if needed
+        let language_name = extension_to_language_name(language).unwrap_or(language);
+
+        let lang_key = language_name.to_lowercase();
         self.language_rules
             .get(&lang_key)
             .ok_or_else(|| UIDError::UnsupportedLanguage {
@@ -420,7 +443,7 @@ mod tests {
     }
 
     fn create_test_context() -> SymbolContext {
-        SymbolContext::new(1, 2, "rust".to_string())
+        SymbolContext::new(1, "rust".to_string())
             .push_scope("module".to_string())
             .push_scope("class".to_string())
     }
