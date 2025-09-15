@@ -305,6 +305,12 @@ Examples:
 			}
 			const tools = this.createTools(toolConfig);
 
+			// Calculate AI model timeout - use 80% of total timeout, minimum 60 seconds
+			const totalTimeoutMs = (options.timeout || 300) * 1000; // Convert to milliseconds
+			const aiTimeoutMs = Math.max(totalTimeoutMs * 0.8, 60000); // 80% of total, min 1 minute
+			
+			console.error(`[DEBUG] Total timeout: ${totalTimeoutMs/1000}s, AI model timeout: ${aiTimeoutMs/1000}s`);
+
 			// Configure generateText options
 			const generateOptions = {
 				model: this.provider(this.model),
@@ -330,7 +336,9 @@ Examples:
 				}),
 				maxSteps: 15,
 				temperature: 0.7,
-				maxTokens: config.maxTokens
+				maxTokens: config.maxTokens,
+				abortSignal: AbortSignal.timeout(aiTimeoutMs), // Add timeout for AI model
+				maxRetries: 2 // Add retry mechanism
 			};
 
 			// Add API-specific options
@@ -345,7 +353,26 @@ Examples:
 			}
 
 			// Generate response using AI model with tools
-			const result = await generateText(generateOptions);
+			console.error(`[DEBUG] Starting AI model generation at ${new Date().toISOString()}`);
+			const startTime = Date.now();
+			
+			let result;
+			try {
+				result = await generateText(generateOptions);
+				const endTime = Date.now();
+				const durationMs = endTime - startTime;
+				console.error(`[DEBUG] AI model generation completed in ${durationMs}ms (${(durationMs/1000).toFixed(1)}s)`);
+			} catch (error) {
+				const endTime = Date.now();
+				const durationMs = endTime - startTime;
+				console.error(`[ERROR] AI model generation failed after ${durationMs}ms (${(durationMs/1000).toFixed(1)}s): ${error.message}`);
+				
+				// Check if it's a timeout error
+				if (error.name === 'AbortError' || error.message.includes('timeout') || error.message.includes('timed out')) {
+					throw new Error(`AI model request timed out after ${(aiTimeoutMs/1000).toFixed(1)}s. Try increasing the timeout or simplifying your query.`);
+				}
+				throw error;
+			}
 
 			// Extract the text content from the response
 			const responseText = result.text;

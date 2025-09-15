@@ -89,12 +89,12 @@ try {
 }
 
 class ProbeAgentServer {
-	constructor(timeout = 120) {
+	constructor(timeout = 300) { // Increased from 120 to 300 seconds (5 minutes)
 		// Store timeout configuration
 		this.defaultTimeout = timeout;
 		
-		// Initialize the AI agent
-		this.agent = new ProbeAgent();
+		// Don't initialize AI agent on startup - lazy initialize when needed
+		this.agent = null;
 
 		// Initialize the MCP server
 		this.server = new Server(
@@ -120,11 +120,11 @@ class ProbeAgentServer {
 	}
 
 	setupToolHandlers() {
-		this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+		const toolsResponse = {
 			tools: [
 				{
-					name: 'search_code',
-					description: "Search code and answer questions about the codebase. This tool uses AI to analyze code and provide relevant code blocks and explanations.",
+					name: 'question',
+					description: "Ask a question about the codebase. This tool uses AI to analyze code and provide relevant answers.",
 					inputSchema: {
 						type: 'object',
 						properties: {
@@ -134,29 +134,28 @@ class ProbeAgentServer {
 							},
 							path: {
 								type: 'string',
-								description: 'Absolute path to one of the allowed directories to search in. For security reasons, only allowed folders can be searched.',
-							},
-							context: {
-								type: 'string',
-								description: 'Additional context to help the AI understand the request better.',
-							},
-							max_tokens: {
-								type: 'number',
-								description: 'Maximum number of tokens to return in the response.',
+								description: 'Optional: Absolute path to search in. If not provided, uses allowed folders.',
 							},
 							timeout: {
 								type: 'number',
-								description: 'Timeout for the search operation in seconds (default: 120)',
+								description: 'Timeout for the operation in seconds (default: 300)',
 							}
 						},
 						required: ['query']
 					},
 				},
 			],
-		}));
+		};
+		
+		console.error(`[DEBUG] Registering ${toolsResponse.tools.length} tools: ${toolsResponse.tools.map(t => t.name).join(', ')}`);
+		
+		this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+			console.error(`[DEBUG] Tools requested - returning ${toolsResponse.tools.length} tools`);
+			return toolsResponse;
+		});
 
 		this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-			if (request.params.name !== 'search_code') {
+			if (request.params.name !== 'question') {
 				throw new McpError(
 					ErrorCode.MethodNotFound,
 					`Unknown tool: ${request.params.name}`
@@ -178,6 +177,13 @@ class ProbeAgentServer {
 				// Validate required fields
 				if (!args.query) {
 					throw new Error("Query is required in arguments");
+				}
+
+				// Lazy initialize AI agent only when tool is called
+				if (!this.agent) {
+					console.error(`[DEBUG] Initializing AI agent on first tool call`);
+					const { ProbeAgent } = await import('./agent.js');
+					this.agent = new ProbeAgent();
 				}
 
 				// Process the query using the AI agent
@@ -221,6 +227,7 @@ class ProbeAgentServer {
 
 				// Pass timeout from args or use default
 				const timeout = args.timeout || this.defaultTimeout;
+				console.error(`[DEBUG] Using timeout: ${timeout} seconds for query processing`);
 				const result = await this.agent.processQuery(args.query, searchPath, { timeout });
 
 				// Get token usage
@@ -255,13 +262,21 @@ class ProbeAgentServer {
 	async run() {
 		try {
 			console.error("Starting Probe Agent MCP server...");
+			console.error(`[DEBUG] Default timeout: ${this.defaultTimeout}s`);
+			console.error(`[DEBUG] Process PID: ${process.pid}`);
+			console.error(`[DEBUG] Node.js version: ${process.version}`);
+			
+			// AI agent will be initialized lazily when first tool is called
+			console.error(`[DEBUG] AI agent: Lazy initialization (will load on first tool call)`);
 
 			// Connect the server to the transport
 			const transport = new StdioServerTransport();
 			await this.server.connect(transport);
 			console.error('Probe Agent MCP server running on stdio');
+			console.error(`[DEBUG] Server successfully connected and ready to receive requests`);
 		} catch (error) {
 			console.error('Error starting server:', error);
+			console.error(`[DEBUG] Error details: ${error.stack || error.message}`);
 			process.exit(1);
 		}
 	}
