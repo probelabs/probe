@@ -564,8 +564,6 @@ async fn create_comprehensive_test_project() -> Result<TestProject> {
 fn create_test_config() -> ManagerConfig {
     ManagerConfig {
         max_workers: 2,                        // Keep it small for tests
-        memory_budget_bytes: 64 * 1024 * 1024, // 64MB
-        memory_pressure_threshold: 0.8,
         max_queue_size: 100,
         exclude_patterns: vec![
             "*/target/*".to_string(),
@@ -933,13 +931,11 @@ impl Calculator {
 }
 
 #[tokio::test]
-async fn test_memory_pressure_handling() -> Result<()> {
+async fn test_indexing_progress_monitoring() -> Result<()> {
     let project = create_comprehensive_test_project().await?;
 
     let language_detector = Arc::new(LanguageDetector::new());
-    let mut config = create_test_config();
-    config.memory_budget_bytes = 1024; // Extremely small: 1KB
-    config.memory_pressure_threshold = 0.01; // Extremely low threshold (0.01 * 1024 = ~10 bytes)
+    let config = create_test_config();
 
     // Create mock LSP dependencies for testing
     let registry = Arc::new(LspRegistry::new().expect("Failed to create registry"));
@@ -999,21 +995,21 @@ async fn test_memory_pressure_handling() -> Result<()> {
         .start_indexing(project.root_path().to_path_buf())
         .await?;
 
-    // Monitor for memory pressure
-    let mut found_memory_pressure = false;
+    // Monitor indexing progress
+    let mut found_progress = false;
     let start = Instant::now();
 
     while start.elapsed() < Duration::from_secs(10) {
-        let is_pressure = manager.is_memory_pressure();
+        let progress = manager.get_progress().await;
         if start.elapsed().as_millis() % 1000 == 0 {
             println!(
-                "Checking memory pressure at {}s: {}",
+                "Checking progress at {}s: {} files processed",
                 start.elapsed().as_secs(),
-                is_pressure
+                progress.processed_files
             );
         }
-        if is_pressure {
-            found_memory_pressure = true;
+        if progress.processed_files > 0 {
+            found_progress = true;
             break;
         }
         sleep(Duration::from_millis(50)).await;
@@ -1021,14 +1017,8 @@ async fn test_memory_pressure_handling() -> Result<()> {
 
     manager.stop_indexing().await?;
 
-    // With such a small memory budget, we might have detected memory pressure
-    // But the test files might be too small to trigger it, which is also valid behavior
-    if found_memory_pressure {
-        println!("Successfully detected memory pressure with small budget");
-    } else {
-        println!("Memory pressure not detected - files may be too small to trigger threshold");
-        // This is acceptable behavior - small test files might not exceed even tiny memory budgets
-    }
+    // We should have processed some files
+    assert!(found_progress, "Expected indexing to process at least one file");
 
     Ok(())
 }

@@ -26,11 +26,6 @@ pub struct IndexingConfig {
     /// Number of worker threads for indexing
     pub max_workers: usize,
 
-    /// Memory budget in megabytes (0 = unlimited)
-    pub memory_budget_mb: u64,
-
-    /// Memory pressure threshold (0.0-1.0) to trigger backpressure
-    pub memory_pressure_threshold: f64,
 
     /// Maximum queue size for pending files (0 = unlimited)
     pub max_queue_size: usize,
@@ -371,8 +366,6 @@ pub struct LanguageIndexConfig {
     /// Language-specific worker count override
     pub max_workers: Option<usize>,
 
-    /// Language-specific memory budget override (MB)
-    pub memory_budget_mb: Option<u64>,
 
     /// Language-specific file size limit override
     pub max_file_size_bytes: Option<u64>,
@@ -426,8 +419,6 @@ impl Default for IndexingConfig {
             watch_files: true, // File watching enabled by default
             default_depth: 3,
             max_workers: num_cpus::get().min(8), // Reasonable default
-            memory_budget_mb: 512,
-            memory_pressure_threshold: 0.8,
             max_queue_size: 10000,
             global_exclude_patterns: vec![
                 // Only exclude version control and truly non-source directories
@@ -488,7 +479,6 @@ impl Default for LanguageIndexConfig {
         Self {
             enabled: None,
             max_workers: None,
-            memory_budget_mb: None,
             max_file_size_bytes: None,
             timeout_ms: None,
             file_extensions: vec![],
@@ -618,9 +608,6 @@ impl IndexingConfig {
             config.max_workers = workers;
         }
 
-        if let Some(memory_mb) = main_indexing.memory_budget_mb {
-            config.memory_budget_mb = memory_mb;
-        }
 
         if !main_indexing.exclude_patterns.is_empty() {
             config.global_exclude_patterns = main_indexing.exclude_patterns.clone();
@@ -740,25 +727,6 @@ impl IndexingConfig {
             }
         }
 
-        if let Ok(value) = std::env::var("PROBE_INDEX_MEMORY_MB") {
-            config.memory_budget_mb = value
-                .parse()
-                .context("Invalid value for PROBE_INDEX_MEMORY_MB")?;
-        }
-
-        if let Ok(value) = std::env::var("PROBE_INDEX_MEMORY_THRESHOLD") {
-            let threshold: f64 = value
-                .parse()
-                .context("Invalid value for PROBE_INDEX_MEMORY_THRESHOLD")?;
-            if (0.0..=1.0).contains(&threshold) {
-                config.memory_pressure_threshold = threshold;
-            } else {
-                return Err(anyhow!(
-                    "PROBE_INDEX_MEMORY_THRESHOLD must be between 0.0 and 1.0, got {}",
-                    threshold
-                ));
-            }
-        }
 
         if let Ok(value) = std::env::var("PROBE_INDEX_QUEUE_SIZE") {
             config.max_queue_size = value
@@ -930,8 +898,6 @@ impl IndexingConfig {
         merge_field!(watch_files);
         merge_field!(default_depth);
         merge_field!(max_workers);
-        merge_field!(memory_budget_mb);
-        merge_field!(memory_pressure_threshold);
         merge_field!(max_queue_size);
         merge_field!(max_file_size_bytes);
         merge_field!(incremental_mode);
@@ -982,11 +948,6 @@ impl IndexingConfig {
             ));
         }
 
-        if self.memory_pressure_threshold < 0.0 || self.memory_pressure_threshold > 1.0 {
-            return Err(anyhow!(
-                "memory_pressure_threshold must be between 0.0 and 1.0"
-            ));
-        }
 
         if self.default_depth == 0 {
             return Err(anyhow!("default_depth must be greater than 0"));
@@ -1030,9 +991,6 @@ impl IndexingConfig {
             max_workers: language_config
                 .and_then(|c| c.max_workers)
                 .unwrap_or(self.max_workers),
-            memory_budget_mb: language_config
-                .and_then(|c| c.memory_budget_mb)
-                .unwrap_or(self.memory_budget_mb),
             max_file_size_bytes: language_config
                 .and_then(|c| c.max_file_size_bytes)
                 .unwrap_or(self.max_file_size_bytes),
@@ -1097,7 +1055,7 @@ impl IndexingConfig {
 
         crate::protocol::IndexingConfig {
             max_workers: Some(self.max_workers),
-            memory_budget_mb: Some(self.memory_budget_mb),
+            memory_budget_mb: None, // Removed - no longer used
             exclude_patterns: self.global_exclude_patterns.clone(),
             include_patterns: self.global_include_patterns.clone(),
             max_file_size_mb: Some(self.max_file_size_bytes / 1024 / 1024),
@@ -1159,9 +1117,6 @@ impl IndexingConfig {
             config.max_workers = workers;
         }
 
-        if let Some(memory) = protocol.memory_budget_mb {
-            config.memory_budget_mb = memory;
-        }
 
         if !protocol.exclude_patterns.is_empty() {
             config.global_exclude_patterns = protocol.exclude_patterns.clone();
@@ -1247,7 +1202,6 @@ impl IndexingConfig {
 pub struct EffectiveConfig {
     pub enabled: bool,
     pub max_workers: usize,
-    pub memory_budget_mb: u64,
     pub max_file_size_bytes: u64,
     pub timeout_ms: u64,
     pub file_extensions: Vec<String>,
@@ -1429,12 +1383,6 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
             has_config = true;
         }
 
-        if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_MEMORY_MB")) {
-            config.memory_budget_mb = Some(value.parse().context(format!(
-                "Invalid value for PROBE_INDEX_{lang_str}_MEMORY_MB"
-            ))?);
-            has_config = true;
-        }
 
         if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_TIMEOUT_MS")) {
             config.timeout_ms = Some(value.parse().context(format!(
@@ -1623,7 +1571,6 @@ mod tests {
         assert!(config.watch_files); // Should be enabled by default
         assert_eq!(config.default_depth, 3);
         assert!(config.max_workers > 0);
-        assert!(config.memory_budget_mb > 0);
     }
 
     #[test]
@@ -1723,7 +1670,6 @@ mod tests {
 
         let mut override_config = IndexingConfig::default();
         override_config.enabled = true; // Explicitly set to test merge (same as default but explicit)
-        override_config.memory_budget_mb = 1024; // Different from default
         override_config.max_workers = 8; // Different from base, should be ignored since it's default
 
         base.merge_with(override_config);
@@ -1732,7 +1678,6 @@ mod tests {
         // Since override_config.enabled == default (true), it won't merge
         // So base.enabled stays false
         assert!(!base.enabled); // Should remain false since override equals default
-        assert_eq!(base.memory_budget_mb, 1024); // Should be overridden (different from default)
         assert_eq!(base.max_workers, 2); // Should remain from base
     }
 
@@ -1810,15 +1755,10 @@ mod tests {
         // Test protocol conversion
         let protocol_config = config.to_protocol_config();
         assert_eq!(protocol_config.max_workers, Some(config.max_workers));
-        assert_eq!(
-            protocol_config.memory_budget_mb,
-            Some(config.memory_budget_mb)
-        );
 
         // Test round-trip conversion
         let restored_config = IndexingConfig::from_protocol_config(&protocol_config);
         assert_eq!(restored_config.max_workers, config.max_workers);
-        assert_eq!(restored_config.memory_budget_mb, config.memory_budget_mb);
     }
 
     #[test]

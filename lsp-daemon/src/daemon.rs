@@ -4223,11 +4223,6 @@ impl LspDaemon {
         // Convert protocol config to internal manager config
         let manager_config = ManagerConfig {
             max_workers: config.max_workers.unwrap_or_else(|| num_cpus::get().max(2)),
-            memory_budget_bytes: config
-                .memory_budget_mb
-                .map(|mb| mb * 1024 * 1024)
-                .unwrap_or(512 * 1024 * 1024),
-            memory_pressure_threshold: 0.8,
             max_queue_size: 10000,
             exclude_patterns: config.exclude_patterns,
             include_patterns: config.include_patterns,
@@ -4366,8 +4361,6 @@ impl LspDaemon {
                     skipped_files: progress.skipped_files,
                     processed_bytes: progress.processed_bytes,
                     symbols_extracted: progress.symbols_extracted,
-                    memory_usage_bytes: progress.memory_usage_bytes,
-                    peak_memory_bytes: progress.peak_memory_bytes,
                     progress_ratio: if progress.total_files > 0 {
                         (progress.processed_files + progress.failed_files + progress.skipped_files)
                             as f64
@@ -4420,8 +4413,6 @@ impl LspDaemon {
                     skipped_files: 0,
                     processed_bytes: 0,
                     symbols_extracted: 0,
-                    memory_usage_bytes: 0,
-                    peak_memory_bytes: 0,
                     progress_ratio: 0.0,
                     files_per_second: 0.0,
                     bytes_per_second: 0.0,

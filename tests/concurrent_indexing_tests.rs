@@ -242,7 +242,7 @@ async fn test_progress_concurrent_updates() -> Result<()> {
 
             for update_id in 0..UPDATES_PER_WORKER {
                 // Simulate different types of updates
-                match update_id % 4 {
+                match update_id % 3 {
                     0 => {
                         progress_clone.start_file();
                         progress_clone.complete_file(1024, 5);
@@ -253,9 +253,6 @@ async fn test_progress_concurrent_updates() -> Result<()> {
                     }
                     2 => {
                         progress_clone.skip_file("Already processed");
-                    }
-                    3 => {
-                        progress_clone.update_memory_usage((worker_id * 1024 * 1024) as u64);
                     }
                     _ => unreachable!(),
                 }
@@ -305,8 +302,6 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
     let language_detector = Arc::new(LanguageDetector::new());
     let config = ManagerConfig {
         max_workers: 2,
-        memory_budget_bytes: 64 * 1024 * 1024,
-        memory_pressure_threshold: 0.8,
         max_queue_size: 100,
         exclude_patterns: vec![],
         include_patterns: vec![],
@@ -623,8 +618,6 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
     let language_detector = Arc::new(LanguageDetector::new());
     let config = ManagerConfig {
         max_workers: 4,
-        memory_budget_bytes: 128 * 1024 * 1024,
-        memory_pressure_threshold: 0.8,
         max_queue_size: 200,
         exclude_patterns: vec![],
         include_patterns: vec![],
@@ -776,11 +769,12 @@ async fn test_memory_tracking_thread_safety() -> Result<()> {
             let mut local_total = 0u64;
 
             for update_id in 0..UPDATES_PER_UPDATER {
-                let memory_change = ((updater_id * 1000) + update_id) as u64;
+                let bytes_processed = ((updater_id * 1000) + update_id) as u64;
 
-                // Update memory usage
-                progress_clone.update_memory_usage(memory_change);
-                local_total = memory_change; // Last value will be the final memory
+                // Simulate processing bytes
+                progress_clone.start_file();
+                progress_clone.complete_file(bytes_processed, 5);
+                local_total = bytes_processed; // Last value will be tracked
 
                 // Yield occasionally
                 if update_id % 100 == 0 {
@@ -801,14 +795,14 @@ async fn test_memory_tracking_thread_safety() -> Result<()> {
 
     let final_snapshot = progress.get_snapshot();
 
-    // Memory tracking should be consistent (exact value depends on timing)
-    assert!(final_snapshot.memory_usage_bytes > 0);
-    assert!(final_snapshot.peak_memory_bytes >= final_snapshot.memory_usage_bytes);
+    // Progress tracking should be consistent
+    assert!(final_snapshot.processed_bytes > 0);
+    assert!(final_snapshot.processed_files > 0);
 
     println!(
-        "Memory tracking test - Current: {} MB, Peak: {} MB",
-        final_snapshot.memory_usage_bytes / (1024 * 1024),
-        final_snapshot.peak_memory_bytes / (1024 * 1024)
+        "Progress tracking test - Processed: {} bytes, Files: {}",
+        final_snapshot.processed_bytes,
+        final_snapshot.processed_files
     );
 
     Ok(())
@@ -822,8 +816,6 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
     let language_detector = Arc::new(LanguageDetector::new());
     let config = ManagerConfig {
         max_workers: 6, // High concurrency
-        memory_budget_bytes: 64 * 1024 * 1024,
-        memory_pressure_threshold: 0.7,
         max_queue_size: 100,
         exclude_patterns: vec![],
         include_patterns: vec![],
@@ -919,7 +911,7 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
                         let _ = manager_clone.get_status().await;
                     }
                     4 => {
-                        let _ = manager_clone.is_memory_pressure();
+                        let _ = manager_clone.get_progress().await;
                     }
                     5 => {
                         // Occasionally try pause/resume to create state contention

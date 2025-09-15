@@ -68,17 +68,13 @@ fn queue_items_strategy() -> impl Strategy<Value = Vec<QueueItem>> {
 fn manager_config_strategy() -> impl Strategy<Value = ManagerConfig> {
     (
         1usize..8,         // max_workers
-        1u64..1024 * 1024, // memory_budget_bytes (up to 1MB for tests)
-        0.1f64..1.0,       // memory_pressure_threshold
         10usize..1000,     // max_queue_size
         1u64..1024,        // max_file_size_bytes
         1usize..50,        // discovery_batch_size
     )
         .prop_map(
-            |(workers, memory, threshold, queue_size, file_size, batch_size)| ManagerConfig {
+            |(workers, queue_size, file_size, batch_size)| ManagerConfig {
                 max_workers: workers,
-                memory_budget_bytes: memory,
-                memory_pressure_threshold: threshold,
                 max_queue_size: queue_size,
                 exclude_patterns: vec!["*.tmp".to_string(), "*/target/*".to_string()],
                 include_patterns: vec![],
@@ -338,9 +334,6 @@ proptest! {
     #[test]
     fn prop_manager_config_validation(config in manager_config_strategy()) {
         prop_assert!(config.max_workers > 0);
-        prop_assert!(config.memory_budget_bytes > 0);
-        prop_assert!(config.memory_pressure_threshold > 0.0);
-        prop_assert!(config.memory_pressure_threshold <= 1.0);
         prop_assert!(config.max_queue_size > 0);
         prop_assert!(config.max_file_size_bytes > 0);
         prop_assert!(config.discovery_batch_size > 0);
@@ -524,8 +517,6 @@ proptest! {
             let language_detector = Arc::new(LanguageDetector::new());
             let config = ManagerConfig {
                 max_workers: 2,
-                memory_budget_bytes: 64 * 1024 * 1024,
-                memory_pressure_threshold: 0.8,
                 max_queue_size: file_count * 2,
                 exclude_patterns: vec![],
                 include_patterns: vec![],

@@ -34,11 +34,6 @@ pub struct IndexingProgress {
     /// Total symbols extracted
     symbols_extracted: Arc<AtomicU64>,
 
-    /// Current memory usage estimate (bytes)
-    memory_usage: Arc<AtomicU64>,
-
-    /// Peak memory usage observed
-    peak_memory: Arc<AtomicU64>,
 
     /// Number of worker threads currently active
     active_workers: Arc<AtomicUsize>,
@@ -62,8 +57,6 @@ impl IndexingProgress {
             skipped_files: Arc::new(AtomicU64::new(0)),
             processed_bytes: Arc::new(AtomicU64::new(0)),
             symbols_extracted: Arc::new(AtomicU64::new(0)),
-            memory_usage: Arc::new(AtomicU64::new(0)),
-            peak_memory: Arc::new(AtomicU64::new(0)),
             active_workers: Arc::new(AtomicUsize::new(0)),
             start_time: now,
             last_update: Arc::new(AtomicU64::new(now.elapsed().as_millis() as u64)),
@@ -79,8 +72,6 @@ impl IndexingProgress {
         self.skipped_files.store(0, Ordering::Relaxed);
         self.processed_bytes.store(0, Ordering::Relaxed);
         self.symbols_extracted.store(0, Ordering::Relaxed);
-        self.memory_usage.store(0, Ordering::Relaxed);
-        self.peak_memory.store(0, Ordering::Relaxed);
         self.active_workers.store(0, Ordering::Relaxed);
         self.update_timestamp();
     }
@@ -133,56 +124,6 @@ impl IndexingProgress {
         debug!("Skipped file: {}", reason);
     }
 
-    /// Update memory usage estimate
-    pub fn update_memory_usage(&self, current_bytes: u64) {
-        self.memory_usage.store(current_bytes, Ordering::Relaxed);
-
-        // Update peak memory if current exceeds it
-        let current_peak = self.peak_memory.load(Ordering::Relaxed);
-        if current_bytes > current_peak {
-            // Use compare_exchange to avoid race conditions
-            let _ = self.peak_memory.compare_exchange_weak(
-                current_peak,
-                current_bytes,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            );
-        }
-
-        self.update_timestamp();
-    }
-
-    /// Add memory to current usage
-    pub fn add_memory_usage(&self, additional_bytes: u64) -> u64 {
-        let new_usage = self
-            .memory_usage
-            .fetch_add(additional_bytes, Ordering::Relaxed)
-            + additional_bytes;
-
-        // Update peak if needed
-        let current_peak = self.peak_memory.load(Ordering::Relaxed);
-        if new_usage > current_peak {
-            let _ = self.peak_memory.compare_exchange_weak(
-                current_peak,
-                new_usage,
-                Ordering::Relaxed,
-                Ordering::Relaxed,
-            );
-        }
-
-        self.update_timestamp();
-        new_usage
-    }
-
-    /// Subtract memory from current usage
-    pub fn subtract_memory_usage(&self, bytes_freed: u64) -> u64 {
-        let new_usage = self
-            .memory_usage
-            .fetch_sub(bytes_freed, Ordering::Relaxed)
-            .saturating_sub(bytes_freed);
-        self.update_timestamp();
-        new_usage
-    }
 
     /// Increment active worker count
     pub fn add_worker(&self) -> usize {
@@ -243,8 +184,6 @@ impl IndexingProgress {
             processed_bytes: bytes_processed,
             bytes_per_second,
             symbols_extracted: self.symbols_extracted.load(Ordering::Relaxed),
-            memory_usage_bytes: self.memory_usage.load(Ordering::Relaxed),
-            peak_memory_bytes: self.peak_memory.load(Ordering::Relaxed),
             active_workers: self.active_workers.load(Ordering::Relaxed),
             elapsed_time: elapsed,
         }
@@ -260,8 +199,6 @@ impl IndexingProgress {
             skipped_files: self.skipped_files.load(Ordering::Relaxed),
             processed_bytes: self.processed_bytes.load(Ordering::Relaxed),
             symbols_extracted: self.symbols_extracted.load(Ordering::Relaxed),
-            memory_usage_bytes: self.memory_usage.load(Ordering::Relaxed),
-            peak_memory_bytes: self.peak_memory.load(Ordering::Relaxed),
             active_workers: self.active_workers.load(Ordering::Relaxed),
             elapsed_seconds: self.start_time.elapsed().as_secs(),
         }
@@ -328,8 +265,6 @@ pub struct ProgressMetrics {
     pub processed_bytes: u64,
     pub bytes_per_second: f64,
     pub symbols_extracted: u64,
-    pub memory_usage_bytes: u64,
-    pub peak_memory_bytes: u64,
     pub active_workers: usize,
     pub elapsed_time: Duration,
 }
@@ -344,8 +279,6 @@ pub struct ProgressSnapshot {
     pub skipped_files: u64,
     pub processed_bytes: u64,
     pub symbols_extracted: u64,
-    pub memory_usage_bytes: u64,
-    pub peak_memory_bytes: u64,
     pub active_workers: usize,
     pub elapsed_seconds: u64,
 }
@@ -387,24 +320,6 @@ mod tests {
         assert_eq!(progress.symbols_extracted.load(Ordering::Relaxed), 50);
     }
 
-    #[test]
-    fn test_memory_tracking() {
-        let progress = IndexingProgress::new();
-
-        // Test memory usage tracking
-        progress.update_memory_usage(1024);
-        assert_eq!(progress.memory_usage.load(Ordering::Relaxed), 1024);
-        assert_eq!(progress.peak_memory.load(Ordering::Relaxed), 1024);
-
-        progress.add_memory_usage(512);
-        assert_eq!(progress.memory_usage.load(Ordering::Relaxed), 1536);
-        assert_eq!(progress.peak_memory.load(Ordering::Relaxed), 1536);
-
-        progress.subtract_memory_usage(256);
-        assert_eq!(progress.memory_usage.load(Ordering::Relaxed), 1280);
-        // Peak should remain at previous high
-        assert_eq!(progress.peak_memory.load(Ordering::Relaxed), 1536);
-    }
 
     #[test]
     fn test_worker_tracking() {
@@ -479,7 +394,6 @@ mod tests {
                         progress_clone.start_file();
                         progress_clone.complete_file(j * 10, j * 2);
                     } else {
-                        progress_clone.add_memory_usage(j * 100);
                         progress_clone.add_worker();
                         thread::sleep(StdDuration::from_millis(1));
                         progress_clone.remove_worker();
@@ -510,7 +424,6 @@ mod tests {
         progress.start_file();
         progress.complete_file(1000, 25);
         progress.add_worker();
-        progress.update_memory_usage(2048);
 
         // Verify progress was recorded
         assert!(progress.total_files.load(Ordering::Relaxed) > 0);
@@ -521,7 +434,6 @@ mod tests {
         assert_eq!(progress.total_files.load(Ordering::Relaxed), 0);
         assert_eq!(progress.processed_files.load(Ordering::Relaxed), 0);
         assert_eq!(progress.active_files.load(Ordering::Relaxed), 0);
-        assert_eq!(progress.memory_usage.load(Ordering::Relaxed), 0);
-        // Note: active_workers and peak_memory are not reset to preserve some state
+        // Note: active_workers is not reset to preserve some state
     }
 }

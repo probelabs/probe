@@ -2604,16 +2604,9 @@ impl LspManager {
                 println!(
                     "  {}: {}",
                     "Memory".bold(),
-                    format_bytes(progress.memory_usage_bytes as usize)
+                    "N/A".to_string()
                 );
 
-                if progress.peak_memory_bytes > progress.memory_usage_bytes {
-                    println!(
-                        "  {}: {}",
-                        "Peak Memory".bold(),
-                        format_bytes(progress.peak_memory_bytes as usize)
-                    );
-                }
 
                 println!("\n{}", "Queue".bold().cyan());
                 let queue = &status.queue;
@@ -2896,7 +2889,7 @@ impl LspManager {
                         );
 
                         if completed != last_files_processed {
-                            let memory_str = format_bytes(progress.memory_usage_bytes as usize);
+                            let memory_str = "N/A".to_string();
                             println!(" | {} | {} symbols", memory_str, progress.symbols_extracted);
                             last_files_processed = completed;
                         }

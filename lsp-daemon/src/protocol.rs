@@ -656,7 +656,7 @@ impl Default for IndexingConfig {
     fn default() -> Self {
         Self {
             max_workers: None,
-            memory_budget_mb: Some(512),
+            memory_budget_mb: None, // Removed - not used anymore
             exclude_patterns: vec![
                 "*.git/*".to_string(),
                 "*/node_modules/*".to_string(),
@@ -706,8 +706,6 @@ pub struct IndexingProgressInfo {
     pub skipped_files: u64,
     pub processed_bytes: u64,
     pub symbols_extracted: u64,
-    pub memory_usage_bytes: u64,
-    pub peak_memory_bytes: u64,
     pub progress_ratio: f64,
     pub files_per_second: f64,
     pub bytes_per_second: f64,
