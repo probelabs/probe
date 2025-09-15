@@ -30,6 +30,7 @@ import {
 } from './tools/common.js';
 import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
+import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
 
 export {
 	search,
@@ -43,6 +44,10 @@ export {
 	DEFAULT_SYSTEM_MESSAGE,
 	// Export AI Agent (NEW!)
 	ProbeAgent,
+	// Export telemetry classes
+	SimpleTelemetry,
+	SimpleAppTracer,
+	initializeSimpleTelemetryFromOptions,
 	// Export tool generators directly
 	searchTool,
 	queryTool,
