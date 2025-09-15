@@ -2048,8 +2048,6 @@ fn print_ellipsis_once(
 fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
     // Track actual content displayed for accurate token/byte counting
     let mut displayed_content = Vec::new();
-    let mut displayed_lines: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut displayed_ellipsis_ranges: Vec<(usize, usize)> = Vec::new();
 
     // Track last displayed line per file for proper gap handling
     let mut last_displayed_per_file: std::collections::HashMap<String, usize> =
@@ -2092,13 +2090,18 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
             let (lines_to_display, closing_brace_contexts) =
                 collect_outline_lines(result, &result.file);
 
+            // IMPORTANT: These must be per-file to avoid cross-file interference
+            let mut displayed_lines_for_this_file: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
+            let mut displayed_ellipsis_ranges_for_this_file: Vec<(usize, usize)> = Vec::new();
+
             // Phase 2: Render the collected lines with proper gaps
             render_outline_lines(
                 &lines_to_display,
                 &result.file,
-                &mut displayed_lines,
+                &mut displayed_lines_for_this_file,
                 &mut displayed_content,
-                &mut displayed_ellipsis_ranges,
+                &mut displayed_ellipsis_ranges_for_this_file,
                 &result.matched_keywords,
                 &closing_brace_contexts,
                 &mut last_displayed_per_file,
