@@ -721,6 +721,9 @@ graph TD
     });
 
     test('should call recordMermaidValidationEvent without errors', () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
       const tracer = new AppTracer(mockTelemetryConfig, 'test-session');
       
       // This should not throw an error (which was the original bug)
@@ -740,6 +743,9 @@ graph TD
     });
 
     test('should record multiple validation events correctly', () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
       const tracer = new AppTracer(mockTelemetryConfig, 'test-session');
       
       // Record different validation events
@@ -761,6 +767,9 @@ graph TD
     });
 
     test('should pass tracer to validateAndFixMermaidResponse without errors', async () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
       const tracer = new AppTracer(mockTelemetryConfig, 'test-session');
       
       const response = `Valid diagram:
@@ -792,6 +801,12 @@ graph TD
     });
 
     test('should handle tracer gracefully when disabled', () => {
+      // Reset the captured events for this test
+      capturedEvents = [];
+      
+      // For disabled tracer test, mock trace.getActiveSpan to return null
+      trace.getActiveSpan = jest.fn().mockReturnValue(null);
+      
       const disabledTracer = new AppTracer(null, 'test-session');
       
       // Should not throw even when telemetry is disabled
@@ -803,9 +818,15 @@ graph TD
       
       // No events should be captured since tracer is disabled
       expect(capturedEvents).toHaveLength(0);
+      
+      // Restore the mock for other tests
+      trace.getActiveSpan = jest.fn().mockReturnValue(mockActiveSpan);
     });
 
     test('should preserve session ID across different event types', () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
       const sessionId = 'unique-test-session-123';
       const tracer = new AppTracer(mockTelemetryConfig, sessionId);
       
