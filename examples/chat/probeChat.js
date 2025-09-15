@@ -671,17 +671,17 @@ When troubleshooting:
       if (this.debug) {
         console.log(`[DEBUG] Using predefined prompt: ${this.promptType}`);
       }
-      // Add common instructions to predefined prompts
-      systemMessage += commonInstructions;
     } else {
       // Use the default prompt (code explorer) if no prompt type is specified
       systemMessage = "<role>" + predefinedPrompts['code-explorer'] + "</role>";
       if (this.debug) {
         console.log(`[DEBUG] Using default prompt: code explorer`);
       }
-      // Add common instructions to the default prompt
-      systemMessage += commonInstructions;
     }
+
+    // ALWAYS add common instructions regardless of prompt type
+    // This ensures tool call guidance is never missing
+    systemMessage += commonInstructions;
     // Add XML Tool Guidelines
     systemMessage += `\n${xmlToolGuidelines}\n`;
 
@@ -1442,7 +1442,18 @@ When troubleshooting:
           if (consecutiveNoToolCallCount >= 3) {
             if (this.debug) console.log(`[DEBUG] Too many consecutive failures to detect tool calls (${consecutiveNoToolCallCount}). Forcing completion.`);
             
-            const forceCompletionContent = `You have failed to provide valid tool calls ${consecutiveNoToolCallCount} times in a row. This suggests your task may be complete or you're stuck in a loop. Please use <attempt_completion><result>Your final answer based on the work done so far</result></attempt_completion> to conclude this conversation. If the task is not fully complete, explain what was accomplished and what remains to be done.`;
+            const forceCompletionContent = `CRITICAL: ${consecutiveNoToolCallCount} consecutive invalid responses detected. You must complete this task NOW.
+
+You have failed to provide valid XML tool calls multiple times. This indicates the task should be concluded.
+
+You MUST respond with exactly this format:
+<attempt_completion>
+<result>
+[Based on the conversation above, provide your final answer. If the task was not fully completed, explain what was accomplished and what remains to be done.]
+</result>
+</attempt_completion>
+
+REQUIRED: Respond with ONLY the attempt_completion XML block above. No other text.`;
             currentMessages.push({ role: 'user', content: forceCompletionContent });
             this.tokenCounter.calculateContextSize(currentMessages);
           } else {
@@ -1451,9 +1462,43 @@ When troubleshooting:
             
             let forceToolContent;
             if (hasToolResults && consecutiveNoToolCallCount >= 2) {
-              forceToolContent = `Your response did not contain a valid tool call in the required XML format. Based on the tool results above, if you believe the user's question has been answered or the task is complete, use <attempt_completion><result>Your final answer</result></attempt_completion>. Otherwise, use another tool like <search>...</search> to continue investigating.`;
+              forceToolContent = `INVALID RESPONSE FORMAT: Your response must contain exactly ONE tool call in XML format.
+
+You have tool results available above. Based on those results:
+
+If the user's question is answered or task is complete:
+<attempt_completion>
+<result>Your final answer based on the tool results above</result>
+</attempt_completion>
+
+If you need more information:
+<search>
+<query>specific keywords</query>
+<path>specific path</path>
+</search>
+
+REQUIRED: Choose one option and respond with ONLY the XML tool call, no other text.`;
             } else {
-              forceToolContent = `Your response did not contain a valid tool call in the required XML format. You MUST respond with exactly one tool call (e.g., <search>...</search> or <attempt_completion>...</attempt_completion>) based on the previous steps and the user's goal. Analyze the situation and choose the appropriate next tool.`;
+              forceToolContent = `INVALID RESPONSE FORMAT: You did not provide a tool call in the required XML format.
+
+You MUST respond with exactly one tool call using this structure:
+<tool_name>
+<parameter_name>value</parameter_name>
+</tool_name>
+
+Available tools:
+- <search> - find code using keywords
+- <query> - find code using patterns  
+- <extract> - get specific files/lines
+- <attempt_completion> - provide final answer
+
+Example:
+<search>
+<query>authentication functions</query>
+<path>src</path>
+</search>
+
+REQUIRED: Respond with ONLY the XML tool call, no explanatory text.`;
             }
             
             currentMessages.push({ role: 'user', content: forceToolContent });
