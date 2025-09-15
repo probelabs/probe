@@ -10,6 +10,7 @@ import {
   validateAndFixMermaidResponse
 } from '../../src/agent/schemaUtils.js';
 import { AppTracer } from '../../src/agent/appTracer.js';
+import { trace } from '@opentelemetry/api';
 
 // Mock ProbeAgent to avoid actual API calls in tests
 const mockProbeAgent = {
@@ -662,28 +663,43 @@ graph TD
   describe('AppTracer Integration', () => {
     let mockTelemetryConfig;
     let capturedEvents;
+    let mockActiveSpan;
+    let originalGetActiveSpan;
 
     beforeEach(() => {
       capturedEvents = [];
       
+      // Create a mock active span that captures events
+      mockActiveSpan = {
+        setStatus: () => {},
+        recordException: () => {},
+        end: () => {},
+        addEvent: (name, attributes) => {
+          capturedEvents.push({ name, attributes });
+        },
+        setAttributes: (attributes) => {
+          capturedEvents.push({ type: 'setAttributes', attributes });
+        }
+      };
+      
+      // Mock trace.getActiveSpan to return our mock span
+      originalGetActiveSpan = trace.getActiveSpan;
+      trace.getActiveSpan = jest.fn().mockReturnValue(mockActiveSpan);
+      
       mockTelemetryConfig = {
         getTracer: () => ({
-          startSpan: (name, options) => ({
-            setStatus: () => {},
-            recordException: () => {},
-            end: () => {},
-            addEvent: (name, attributes) => {
-              capturedEvents.push({ name, attributes });
-            },
-            setAttributes: (attributes) => {
-              capturedEvents.push({ type: 'setAttributes', attributes });
-            }
-          })
+          startSpan: (name, options) => mockActiveSpan
         }),
         enableConsole: true,
         forceFlush: async () => {},
         shutdown: async () => {}
       };
+    });
+
+    afterEach(() => {
+      // Restore original trace.getActiveSpan
+      trace.getActiveSpan = originalGetActiveSpan;
+      jest.clearAllMocks();
     });
 
     test('should have all required tracer methods defined', () => {
