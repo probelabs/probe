@@ -37,10 +37,11 @@ export const delegateSchema = z.object({
 	task: z.string().describe('The task to delegate to a subagent. Be specific about what needs to be accomplished.')
 });
 
-// Schema for the attempt_completion tool - simplified to remove command parameter
-export const attemptCompletionSchema = z.object({
-	result: z.string().describe('The final result of the task. This should be the complete, ready-to-display answer in plain text format. Do not include JSON or structured data unless specifically requested by the user.')
-});
+// Schema for the attempt_completion tool - no validation, direct XML response
+export const attemptCompletionSchema = {
+	// No Zod validation - allow direct XML response
+	safeParse: (params) => ({ success: true, data: params })
+};
 
 
 // Tool descriptions for the system prompt (using XML format)
@@ -182,12 +183,17 @@ The agent uses this tool automatically when it identifies that work can be separ
 
 export const attemptCompletionToolDefinition = `
 ## attempt_completion
-Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user.
+Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user. You can provide your response directly inside the XML tags without any parameter wrapper.
 Parameters:
-- result: (required) The final result of the task. Provide your complete answer as plain text. Do not end with questions or offers for further assistance. Ensure your answer fully addresses the user's request in a clear and detailed manner.
-Usage Example:
+- No validation required - provide your complete answer directly inside the XML tags or use the <result> parameter (both formats supported).
+Usage Examples:
 <attempt_completion>
 <result>I have refactored the search module according to the requirements and verified the tests pass. The module now uses the new BM25 ranking algorithm and has improved error handling.</result>
+</attempt_completion>
+
+Or direct response:
+<attempt_completion>
+I have refactored the search module according to the requirements and verified the tests pass. The module now uses the new BM25 ranking algorithm and has improved error handling.
 </attempt_completion>
 `;
 
@@ -249,11 +255,15 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			params[paramName] = paramValue;
 		}
 
-		// Special handling for attempt_completion where result might contain nested XML/code
+		// Special handling for attempt_completion - allow direct XML response without validation
 		if (toolName === 'attempt_completion') {
+			// First try to find <result> tags (backward compatibility)
 			const resultMatch = innerContent.match(/<result>([\s\S]*?)<\/result>/);
 			if (resultMatch) {
-				params['result'] = resultMatch[1].trim(); // Keep result content as is - plain text response
+				params['result'] = resultMatch[1].trim();
+			} else {
+				// If no <result> tags, use the entire inner content as direct XML response
+				params['result'] = innerContent.trim();
 			}
 			// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
 			if (params.command) {
