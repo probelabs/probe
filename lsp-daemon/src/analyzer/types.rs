@@ -11,6 +11,7 @@ use thiserror::Error;
 
 use super::framework::LanguageAnalyzerConfig;
 use crate::database::{Edge, EdgeRelation, SymbolState};
+use crate::path_resolver::PathResolver;
 use crate::symbol::{SymbolKind, SymbolLocation, SymbolUIDGenerator, Visibility};
 
 /// Analysis error types
@@ -111,14 +112,17 @@ pub struct AnalysisContext {
     /// Workspace identifier
     pub workspace_id: i64,
 
-    /// File version identifier
-    pub file_version_id: i64,
-
     /// Analysis run identifier
     pub analysis_run_id: i64,
 
     /// Programming language
     pub language: String,
+
+    /// Path to the workspace root (used for path resolution)
+    pub workspace_path: PathBuf,
+
+    /// Path to the file being analyzed
+    pub file_path: PathBuf,
 
     /// Shared UID generator for consistent symbol identification
     pub uid_generator: Arc<SymbolUIDGenerator>,
@@ -131,16 +135,18 @@ impl AnalysisContext {
     /// Create a new analysis context
     pub fn new(
         workspace_id: i64,
-        file_version_id: i64,
         analysis_run_id: i64,
         language: String,
+        workspace_path: PathBuf,
+        file_path: PathBuf,
         uid_generator: Arc<SymbolUIDGenerator>,
     ) -> Self {
         Self {
             workspace_id,
-            file_version_id,
             analysis_run_id,
             language,
+            workspace_path,
+            file_path,
             uid_generator,
             language_config: LanguageAnalyzerConfig::default(),
         }
@@ -149,17 +155,19 @@ impl AnalysisContext {
     /// Create context with language configuration
     pub fn with_language_config(
         workspace_id: i64,
-        file_version_id: i64,
         analysis_run_id: i64,
         language: String,
+        workspace_path: PathBuf,
+        file_path: PathBuf,
         uid_generator: Arc<SymbolUIDGenerator>,
         language_config: LanguageAnalyzerConfig,
     ) -> Self {
         Self {
             workspace_id,
-            file_version_id,
             analysis_run_id,
             language,
+            workspace_path,
+            file_path,
             uid_generator,
             language_config,
         }
@@ -170,9 +178,10 @@ impl Default for AnalysisContext {
     fn default() -> Self {
         Self {
             workspace_id: 1,
-            file_version_id: 1,
             analysis_run_id: 1,
             language: "unknown".to_string(),
+            workspace_path: PathBuf::from("."),
+            file_path: PathBuf::from("unknown"),
             uid_generator: Arc::new(SymbolUIDGenerator::new()),
             language_config: LanguageAnalyzerConfig::default(),
         }
@@ -247,12 +256,16 @@ impl AnalysisResult {
 
     /// Convert to database storage format
     pub fn to_database_symbols(&self, context: &AnalysisContext) -> Vec<SymbolState> {
+        let path_resolver = PathResolver::new();
+        let relative_file_path =
+            path_resolver.get_relative_path(&context.file_path, &context.workspace_path);
+
         self.symbols
             .iter()
             .map(|symbol| {
                 SymbolState {
                     symbol_uid: symbol.uid.clone(),
-                    file_version_id: context.file_version_id,
+                    file_path: relative_file_path.clone(),
                     language: context.language.clone(),
                     name: symbol.name.clone(),
                     fqn: symbol.qualified_name.clone(),
@@ -284,7 +297,7 @@ impl AnalysisResult {
                 relation: rel.relation_type.to_edge_relation(),
                 source_symbol_uid: rel.source_symbol_uid.clone(),
                 target_symbol_uid: rel.target_symbol_uid.clone(),
-                anchor_file_version_id: context.file_version_id,
+                file_path: None, // Will be resolved by database queries when needed
                 start_line: rel.location.as_ref().map(|l| l.start_line),
                 start_char: rel.location.as_ref().map(|l| l.start_char),
                 confidence: rel.confidence,
@@ -505,6 +518,13 @@ impl ExtractedRelationship {
         self.metadata.insert(key, value);
         self
     }
+
+    /// Add context information to the relationship
+    pub fn with_context(mut self, context: String) -> Self {
+        self.metadata
+            .insert("context".to_string(), serde_json::Value::String(context));
+        self
+    }
 }
 
 /// Types of relationships between symbols
@@ -523,6 +543,14 @@ pub enum RelationType {
     CalledBy,
     Instantiates,
     Imports,
+    ImportsFrom, // New: For specific import source tracking
+
+    // Advanced usage relationships (Phase 3 enhancements)
+    Uses,     // Variable/symbol usage
+    Mutates,  // Variable mutation
+    Chains,   // Method chaining
+    Defines,  // Variable/symbol definition
+    Captures, // Closure captures (future use)
 
     // Type relationships
     TypeOf,
@@ -543,6 +571,13 @@ impl RelationType {
             RelationType::CalledBy => "called_by",
             RelationType::Instantiates => "instantiates",
             RelationType::Imports => "imports",
+            RelationType::ImportsFrom => "imports_from",
+            // Phase 3 relationship types
+            RelationType::Uses => "uses",
+            RelationType::Mutates => "mutates",
+            RelationType::Chains => "chains",
+            RelationType::Defines => "defines",
+            RelationType::Captures => "captures",
             RelationType::TypeOf => "type_of",
             RelationType::InstanceOf => "instance_of",
         }
@@ -561,6 +596,13 @@ impl RelationType {
             RelationType::CalledBy => EdgeRelation::Calls, // Reverse relationship
             RelationType::Instantiates => EdgeRelation::Instantiates,
             RelationType::Imports => EdgeRelation::Imports,
+            RelationType::ImportsFrom => EdgeRelation::Imports,
+            // Phase 3 relationship types mapping
+            RelationType::Uses => EdgeRelation::References,
+            RelationType::Mutates => EdgeRelation::References,
+            RelationType::Chains => EdgeRelation::Calls, // Method chains are function calls
+            RelationType::Defines => EdgeRelation::References,
+            RelationType::Captures => EdgeRelation::References,
             RelationType::TypeOf => EdgeRelation::References, // Map to generic reference
             RelationType::InstanceOf => EdgeRelation::References,
         }
@@ -599,6 +641,12 @@ impl RelationType {
                 | RelationType::CalledBy
                 | RelationType::Instantiates
                 | RelationType::Imports
+                | RelationType::ImportsFrom
+                | RelationType::Uses
+                | RelationType::Mutates
+                | RelationType::Chains
+                | RelationType::Defines
+                | RelationType::Captures
         )
     }
 }

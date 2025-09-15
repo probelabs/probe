@@ -59,12 +59,25 @@ fn find_identifier_position_in_node(
 
     // Heuristic 1 (preferred): Walk the AST and return the first identifier-like child
     // whose text equals `identifier_name`. This gives us the exact tree-sitter identifier position.
-    fn find_identifier_recursive(
+    // Skip identifiers that are inside attribute nodes to avoid matching derive macros.
+    fn find_identifier_recursive_with_parent(
         node: tree_sitter::Node,
         target_name: &str,
         content: &[u8],
         debug_mode: bool,
+        _parent_kind: Option<&str>,
     ) -> Option<(u32, u32)> {
+        // Check if we're inside an attribute node (Rust) - if so, skip this subtree
+        if node.kind() == "attribute_item"
+            || node.kind() == "attribute"
+            || node.kind() == "meta_item"
+        {
+            if debug_mode {
+                println!("[DEBUG] Skipping attribute node: {}", node.kind());
+            }
+            return None;
+        }
+
         let kind = node.kind();
         if kind == "identifier"
             || kind == "field_identifier"
@@ -114,14 +127,31 @@ fn find_identifier_position_in_node(
 
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if let Some(pos) = find_identifier_recursive(child, target_name, content, debug_mode) {
+            if let Some(pos) = find_identifier_recursive_with_parent(
+                child,
+                target_name,
+                content,
+                debug_mode,
+                Some(node.kind()),
+            ) {
                 return Some(pos);
             }
         }
         None
     }
 
+    fn find_identifier_recursive(
+        node: tree_sitter::Node,
+        target_name: &str,
+        content: &[u8],
+        debug_mode: bool,
+    ) -> Option<(u32, u32)> {
+        find_identifier_recursive_with_parent(node, target_name, content, debug_mode, None)
+    }
+
     // Try the AST search first since it gives us the exact identifier position
+    // For struct_item and enum_item nodes in Rust, we still use AST search but with improved
+    // filtering to avoid identifiers in derive attributes
     if let Some(pos) = find_identifier_recursive(node, identifier_name, content, debug_mode) {
         return Some(pos);
     }
@@ -167,10 +197,32 @@ fn find_identifier_position_in_node(
                 let after_idx = i + needle.len();
                 let after_ok = after_idx >= hay.len() || !is_ident_char(hay[after_idx]);
                 if before_ok && after_ok {
-                    // Compute (row, col) from node.start_position plus bytes in header[..i]
-                    let mut row = node.start_position().row as u32;
-                    let mut col = node.start_position().column as u32;
-                    for &b in &hay[..i] {
+                    // For struct_item and enum_item nodes, tree-sitter reports the node position
+                    // at the attribute line but the node bytes start at the actual struct/enum line.
+                    // We need to calculate the absolute position from the file start.
+                    let identifier_byte = start_byte + i;
+
+                    if debug_mode {
+                        println!("[DEBUG] Identifier found at byte offset {} in header", i);
+                        println!(
+                            "[DEBUG] Node start_byte: {}, identifier_byte: {}",
+                            start_byte, identifier_byte
+                        );
+                        // Show context around the identifier
+                        let context_start = identifier_byte.saturating_sub(20);
+                        let context_end = (identifier_byte + 20).min(content.len());
+                        if let Ok(context) =
+                            std::str::from_utf8(&content[context_start..context_end])
+                        {
+                            println!("[DEBUG] Context around identifier: {:?}", context);
+                        }
+                    }
+
+                    let mut row = 0u32;
+                    let mut col = 0u32;
+
+                    // Count lines and columns from file start to the identifier position
+                    for &b in &content[..identifier_byte] {
                         if b == b'\n' {
                             row += 1;
                             col = 0;
@@ -179,7 +231,7 @@ fn find_identifier_position_in_node(
                         }
                     }
                     if debug_mode {
-                        println!("[DEBUG] Header search found '{identifier_name}' at {row}:{col}");
+                        println!("[DEBUG] Header search found '{identifier_name}' at {row}:{col} (absolute position)");
                     }
                     return Some((row, col));
                 }

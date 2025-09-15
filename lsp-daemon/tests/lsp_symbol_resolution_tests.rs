@@ -336,7 +336,6 @@ impl LspSymbolResolutionTestSuite {
             Some(server_manager.clone()),
             language_detector,
             workspace_resolver,
-            cache_layer,
             uid_generator.clone(),
             lsp_config,
         ));
@@ -532,10 +531,10 @@ impl LspSymbolResolutionTestSuite {
             let mut unique_uids = HashSet::new();
             let mut fallback_resolved = 0;
 
-            for (file_path, line, column, symbol_name) in fallback_test_cases {
+            for (file_path, line, column, symbol_name) in &fallback_test_cases {
                 // Generate fallback UID directly
                 let fallback_uid =
-                    self.generate_fallback_uid(&file_path, line, column, symbol_name);
+                    self.generate_fallback_uid(&file_path, *line, *column, symbol_name);
                 unique_uids.insert(fallback_uid.clone());
                 fallback_resolved += 1;
 
@@ -548,7 +547,8 @@ impl LspSymbolResolutionTestSuite {
                 );
 
                 // Verify the UID is deterministic
-                let second_uid = self.generate_fallback_uid(&file_path, line, column, symbol_name);
+                let second_uid =
+                    self.generate_fallback_uid(&file_path, *line, *column, symbol_name);
                 if fallback_uid != second_uid {
                     result = result.with_error(format!(
                         "Non-deterministic fallback UID: {} != {}",
@@ -681,9 +681,11 @@ impl LspSymbolResolutionTestSuite {
 
             // Test should pass if we get unique UIDs for different positions
             if result.unique_uids != result.symbol_count {
+                let unique_uids = result.unique_uids;
+                let symbol_count = result.symbol_count;
                 result = result.with_error(format!(
                     "UID collision detected: {} unique UIDs for {} symbols",
-                    result.unique_uids, result.symbol_count
+                    unique_uids, symbol_count
                 ));
             }
 

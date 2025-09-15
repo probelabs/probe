@@ -94,6 +94,13 @@ impl MigrationRunner {
             current_version, target
         );
 
+        // Check for Turso compatibility issue: if this is a new database (version 0) and we have
+        // problematic migrations (v3 contains ALTER TABLE RENAME), use flattened schema instead
+        if current_version == 0 && self.should_use_flattened_schema(conn).await? {
+            info!("Detected new database with Turso compatibility needs, using flattened schema");
+            return self.apply_flattened_schema(conn, target).await;
+        }
+
         if current_version >= target {
             info!("Schema is already at or above target version, no migrations needed");
             return Ok(0);
@@ -275,9 +282,11 @@ impl MigrationRunner {
         let start_time = Instant::now();
 
         // Start transaction
-        conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
-            MigrationError::transaction_failed(format!("Failed to start transaction: {e}"))
-        })?;
+        conn.execute("BEGIN TRANSACTION", Vec::<turso::Value>::new())
+            .await
+            .map_err(|e| {
+                MigrationError::transaction_failed(format!("Failed to start transaction: {e}"))
+            })?;
 
         // Execute up SQL
         let result = self.execute_sql(conn, migration.up_sql()).await;
@@ -294,7 +303,7 @@ impl MigrationRunner {
                     [
                         turso::Value::Integer(version as i64),
                         turso::Value::Text(name.to_string()),
-                        turso::Value::Text(checksum),
+                        turso::Value::Text(checksum.to_string()),
                         turso::Value::Integer(execution_time_ms as i64),
                         turso::Value::Text(rollback_sql.to_string()),
                     ]
@@ -303,11 +312,13 @@ impl MigrationRunner {
                 match insert_result {
                     Ok(_) => {
                         // Commit transaction
-                        conn.execute("COMMIT", ()).await.map_err(|e| {
-                            MigrationError::transaction_failed(format!(
-                                "Failed to commit transaction: {e}"
-                            ))
-                        })?;
+                        conn.execute("COMMIT", Vec::<turso::Value>::new())
+                            .await
+                            .map_err(|e| {
+                                MigrationError::transaction_failed(format!(
+                                    "Failed to commit transaction: {e}"
+                                ))
+                            })?;
 
                         // Post-migration validation
                         migration.validate_post_migration(conn)?;
@@ -320,7 +331,7 @@ impl MigrationRunner {
                     }
                     Err(e) => {
                         // Rollback transaction
-                        let _ = conn.execute("ROLLBACK", ()).await;
+                        let _ = conn.execute("ROLLBACK", Vec::<turso::Value>::new()).await;
                         Err(MigrationError::execution_failed(
                             version,
                             format!("Failed to record migration: {e}"),
@@ -330,7 +341,7 @@ impl MigrationRunner {
             }
             Err(e) => {
                 // Rollback transaction
-                let _ = conn.execute("ROLLBACK", ()).await;
+                let _ = conn.execute("ROLLBACK", Vec::<turso::Value>::new()).await;
                 Err(e)
             }
         }
@@ -353,9 +364,11 @@ impl MigrationRunner {
             .ok_or_else(|| MigrationError::rollback_not_supported(version))?;
 
         // Start transaction
-        conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
-            MigrationError::transaction_failed(format!("Failed to start transaction: {e}"))
-        })?;
+        conn.execute("BEGIN TRANSACTION", Vec::<turso::Value>::new())
+            .await
+            .map_err(|e| {
+                MigrationError::transaction_failed(format!("Failed to start transaction: {e}"))
+            })?;
 
         // Execute down SQL
         let result = self.execute_sql(conn, down_sql).await;
@@ -366,25 +379,27 @@ impl MigrationRunner {
                 let delete_result = conn
                     .execute(
                         "DELETE FROM schema_migrations WHERE version = ?",
-                        [turso::Value::Integer(version as i64)],
+                        vec![turso::Value::Integer(version as i64)],
                     )
                     .await;
 
                 match delete_result {
                     Ok(_) => {
                         // Commit transaction
-                        conn.execute("COMMIT", ()).await.map_err(|e| {
-                            MigrationError::transaction_failed(format!(
-                                "Failed to commit rollback: {e}"
-                            ))
-                        })?;
+                        conn.execute("COMMIT", Vec::<turso::Value>::new())
+                            .await
+                            .map_err(|e| {
+                                MigrationError::transaction_failed(format!(
+                                    "Failed to commit rollback: {e}"
+                                ))
+                            })?;
 
                         info!("Migration {} rolled back successfully", version);
                         Ok(())
                     }
                     Err(e) => {
                         // Rollback transaction
-                        let _ = conn.execute("ROLLBACK", ()).await;
+                        let _ = conn.execute("ROLLBACK", Vec::<turso::Value>::new()).await;
                         Err(MigrationError::execution_failed(
                             version,
                             format!("Failed to remove migration record: {e}"),
@@ -394,7 +409,7 @@ impl MigrationRunner {
             }
             Err(e) => {
                 // Rollback transaction
-                let _ = conn.execute("ROLLBACK", ()).await;
+                let _ = conn.execute("ROLLBACK", Vec::<turso::Value>::new()).await;
                 Err(e)
             }
         }
@@ -413,9 +428,14 @@ impl MigrationRunner {
 
             debug!("Executing SQL: {}", trimmed);
 
-            conn.execute(trimmed, ()).await.map_err(|e| {
-                MigrationError::query_failed(format!("Failed to execute SQL '{}': {}", trimmed, e))
-            })?;
+            conn.execute(trimmed, Vec::<turso::Value>::new())
+                .await
+                .map_err(|e| {
+                    MigrationError::query_failed(format!(
+                        "Failed to execute SQL '{}': {}",
+                        trimmed, e
+                    ))
+                })?;
         }
 
         Ok(())
@@ -510,6 +530,134 @@ impl MigrationRunner {
         conn: &Connection,
     ) -> MigrationResult<HashMap<u32, super::AppliedMigration>> {
         super::get_applied_migrations(conn).await
+    }
+
+    /// Check if we should use the flattened schema for Turso compatibility
+    ///
+    /// We use the flattened schema when:
+    /// 1. This is a new database (version 0)
+    /// 2. The database might be Turso (no reliable way to detect, so we assume it could be)
+    /// 3. We have migrations that contain problematic ALTER TABLE RENAME operations
+    async fn should_use_flattened_schema(&self, _conn: &Connection) -> MigrationResult<bool> {
+        // Check if we have the V004 flattened migration available
+        let has_flattened = self.migrations.iter().any(|m| m.version() == 4);
+
+        if !has_flattened {
+            debug!("Flattened schema migration (V004) not available, using regular migrations");
+            return Ok(false);
+        }
+
+        // Check if we have migrations with potentially problematic operations
+        // V003 contains ALTER TABLE RENAME operations that crash Turso
+        let has_problematic_migrations = self.migrations.iter().any(|m| {
+            m.version() == 3
+                && m.up_sql().contains("ALTER TABLE")
+                && m.up_sql().contains("RENAME TO")
+        });
+
+        if has_problematic_migrations {
+            info!("Detected migrations with ALTER TABLE RENAME operations that may cause Turso compatibility issues");
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Apply the flattened schema for Turso compatibility
+    ///
+    /// This bypasses the problematic ALTER TABLE RENAME operations by applying
+    /// the final schema state directly using the V004 flattened migration.
+    async fn apply_flattened_schema(
+        &self,
+        conn: &Connection,
+        target_version: u32,
+    ) -> MigrationResult<u32> {
+        // Find the V004 flattened schema migration
+        let flattened_migration = self
+            .migrations
+            .iter()
+            .find(|m| m.version() == 4)
+            .ok_or_else(|| {
+                MigrationError::execution_failed(
+                    4,
+                    "V004 flattened schema migration not found".to_string(),
+                )
+            })?;
+
+        info!("Applying flattened schema migration V004 for Turso compatibility");
+
+        // Apply the flattened schema migration
+        self.apply_migration(conn, flattened_migration.as_ref())
+            .await?;
+
+        // Mark the intermediate migrations as applied (with special checksums)
+        // This prevents them from being run later and maintains version consistency
+        self.mark_intermediate_migrations_as_applied(conn).await?;
+
+        info!(
+            "Successfully applied flattened schema, database is now at version {}",
+            4
+        );
+
+        // If target version is higher than 4, apply additional migrations
+        if target_version > 4 {
+            let remaining_migrations: Vec<_> = self
+                .migrations
+                .iter()
+                .filter(|m| m.version() > 4 && m.version() <= target_version)
+                .collect();
+
+            info!(
+                "Applying {} additional migrations to reach target version {}",
+                remaining_migrations.len(),
+                target_version
+            );
+
+            for migration in remaining_migrations {
+                self.apply_migration(conn, migration.as_ref()).await?;
+            }
+        }
+
+        Ok(1) // Return number of major migrations applied (flattened schema counts as 1)
+    }
+
+    /// Mark intermediate migrations (V001-V003) as applied
+    ///
+    /// This prevents them from being applied later since their effects are already
+    /// included in the flattened V004 schema.
+    async fn mark_intermediate_migrations_as_applied(
+        &self,
+        conn: &Connection,
+    ) -> MigrationResult<()> {
+        let intermediate_versions = [1, 2, 3];
+
+        for version in intermediate_versions {
+            if let Some(migration) = self.migrations.iter().find(|m| m.version() == version) {
+                let checksum = format!("FLATTENED:{}", migration.checksum());
+                let name = migration.name();
+
+                let _insert_result = conn.execute(
+                    "INSERT INTO schema_migrations (version, name, checksum, execution_time_ms, rollback_sql) VALUES (?, ?, ?, ?, ?)",
+                    [
+                        turso::Value::Integer(version as i64),
+                        turso::Value::Text(format!("flattened_{}", name)),
+                        turso::Value::Text(checksum),
+                        turso::Value::Integer(0), // No execution time for virtual migration
+                        turso::Value::Text("-- Flattened migration, no individual rollback".to_string()),
+                    ]
+                ).await.map_err(|e| MigrationError::execution_failed(
+                    version,
+                    format!("Failed to mark intermediate migration {} as applied: {}", version, e)
+                ))?;
+
+                debug!(
+                    "Marked migration V{} as applied via flattened schema",
+                    version
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -677,15 +677,7 @@ impl LspClient {
             }
         };
 
-        // Get hover information for documentation
-        let (documentation, type_info) = match self.call_hover(file_path, line, column).await {
-            Ok(Some(hover)) => (Some(hover.contents.clone()), Some(hover.contents)),
-            Ok(None) => (None, None),
-            Err(e) => {
-                warn!("Failed to get hover info: {}", e);
-                (None, None)
-            }
-        };
+        // No longer fetch hover/documentation information to reduce noise and improve performance
 
         Ok(Some(EnhancedSymbolInfo {
             name: symbol_name.to_string(),
@@ -695,8 +687,8 @@ impl LspClient {
             symbol_kind: "unknown".to_string(), // Will be determined by tree-sitter
             call_hierarchy,
             references,
-            documentation,
-            type_info,
+            documentation: None,
+            type_info: None,
         }))
     }
 
@@ -1922,6 +1914,29 @@ impl LspClient {
         &mut self,
         request: DaemonRequest,
     ) -> Result<DaemonResponse> {
+        self.send_request(request).await
+    }
+
+    /// Send graph export request to daemon
+    pub async fn export_graph(
+        &mut self,
+        workspace_path: Option<PathBuf>,
+        format: String,
+        max_depth: Option<u32>,
+        symbol_types_filter: Option<Vec<String>>,
+        edge_types_filter: Option<Vec<String>>,
+        connected_only: bool,
+    ) -> Result<DaemonResponse> {
+        let request = DaemonRequest::ExportGraph {
+            request_id: Uuid::new_v4(),
+            workspace_path,
+            format,
+            max_depth,
+            symbol_types_filter,
+            edge_types_filter,
+            connected_only,
+        };
+
         self.send_request(request).await
     }
 }

@@ -16,6 +16,14 @@ use crate::indexing::{
 use crate::language_detector::{Language, LanguageDetector};
 use crate::lsp_cache::LspCache;
 use crate::server_manager::SingleServerManager;
+// Database imports removed - no longer needed for IndexingManager
+
+/// Dummy cache stats structure to replace universal cache stats
+#[derive(Debug)]
+struct DummyCacheStats {
+    total_entries: u64,
+    hit_rate: f64,
+}
 use anyhow::{anyhow, Result};
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
@@ -270,8 +278,13 @@ pub struct IndexingManager {
     #[allow(dead_code)]
     start_time: Instant,
 
-    /// Universal cache layer for storing LSP results during indexing
-    universal_cache_layer: Arc<crate::universal_cache::CacheLayer>,
+    /// Workspace cache router for database access to store symbols
+    workspace_cache_router: Arc<crate::workspace_database_router::WorkspaceDatabaseRouter>,
+
+    /// Incremental analysis engine for symbol extraction and database storage
+    analysis_engine: Option<
+        Arc<crate::indexing::analyzer::IncrementalAnalysisEngine<crate::database::SQLiteBackend>>,
+    >,
 }
 
 /// Compute content hash for a file (used for change detection)
@@ -328,10 +341,9 @@ fn get_file_metadata(file_path: &Path) -> Result<(u64, u64, u64)> {
 }
 
 impl IndexingManager {
-    /// Clean up cache entries for files that no longer exist
+    /// Clean up cache entries for files that no longer exist (universal cache removed)
     async fn cleanup_deleted_files(
         indexed_files: &Arc<RwLock<HashMap<PathBuf, FileIndexInfo>>>,
-        _universal_cache_layer: &Arc<crate::universal_cache::CacheLayer>,
     ) -> Result<usize> {
         let mut deleted_count = 0;
         let mut files_to_remove = Vec::new();
@@ -389,7 +401,7 @@ impl IndexingManager {
         language_detector: Arc<LanguageDetector>,
         server_manager: Arc<SingleServerManager>,
         definition_cache: Arc<LspCache<DefinitionInfo>>,
-        universal_cache_layer: Arc<crate::universal_cache::CacheLayer>,
+        workspace_cache_router: Arc<crate::workspace_database_router::WorkspaceDatabaseRouter>,
     ) -> Self {
         let queue = Arc::new(IndexingQueue::new(config.max_queue_size));
         let progress = Arc::new(IndexingProgress::new());
@@ -413,7 +425,8 @@ impl IndexingManager {
             server_manager,
             definition_cache,
             start_time: Instant::now(),
-            universal_cache_layer,
+            workspace_cache_router,
+            analysis_engine: None, // Initially None, set later with set_analysis_engine()
         }
     }
 
@@ -423,7 +436,7 @@ impl IndexingManager {
         language_detector: Arc<LanguageDetector>,
         server_manager: Arc<SingleServerManager>,
         definition_cache: Arc<LspCache<DefinitionInfo>>,
-        universal_cache_layer: Arc<crate::universal_cache::CacheLayer>,
+        workspace_cache_router: Arc<crate::workspace_database_router::WorkspaceDatabaseRouter>,
     ) -> Self {
         // Convert comprehensive config to legacy ManagerConfig for compatibility
         let manager_config = ManagerConfig {
@@ -449,8 +462,18 @@ impl IndexingManager {
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         )
+    }
+
+    /// Set the analysis engine for database storage
+    pub fn set_analysis_engine(
+        &mut self,
+        analysis_engine: Arc<
+            crate::indexing::analyzer::IncrementalAnalysisEngine<crate::database::SQLiteBackend>,
+        >,
+    ) {
+        self.analysis_engine = Some(analysis_engine);
     }
 
     /// Start indexing the specified directory
@@ -513,9 +536,7 @@ impl IndexingManager {
 
         // Clean up cache entries for deleted files (incremental mode)
         if self.config.incremental_mode {
-            match Self::cleanup_deleted_files(&self.indexed_files, &self.universal_cache_layer)
-                .await
-            {
+            match Self::cleanup_deleted_files(&self.indexed_files).await {
                 Ok(deleted_count) => {
                     if deleted_count > 0 {
                         info!("Cleaned up {} deleted files from caches", deleted_count);
@@ -618,21 +639,14 @@ impl IndexingManager {
             workspace_root
         );
 
-        // Access the universal cache to get overall cache statistics
-        // Since we can't easily access workspace-specific stats from here,
-        // we'll use a simpler approach that estimates based on overall cache activity
-        let universal_cache = self.universal_cache_layer.get_universal_cache();
+        // Universal cache layer removed - use simpler completion estimation
+        debug!("Using simplified completion estimation (universal cache removed)");
 
-        // Get overall cache stats to estimate workspace completion
-        let cache_stats = universal_cache
-            .get_stats()
-            .await
-            .map_err(|e| anyhow!("Failed to get cache statistics: {}", e))?;
-
-        debug!(
-            "Overall cache stats: {} entries across {} workspaces",
-            cache_stats.total_entries, cache_stats.active_workspaces
-        );
+        // Create dummy cache stats since universal cache is removed
+        let cache_stats = DummyCacheStats {
+            total_entries: 0,
+            hit_rate: 0.0,
+        };
 
         // Count total files in workspace that should be indexed
         let total_files = self.count_indexable_files(workspace_root).await?;
@@ -1010,11 +1024,18 @@ impl IndexingManager {
             // Check file size
             if let Ok(metadata) = entry.metadata() {
                 if metadata.len() > config.max_file_size_bytes {
-                    debug!(
-                        "Skipping large file: {:?} ({} bytes)",
-                        file_path,
-                        metadata.len()
-                    );
+                    // Only log large files that aren't common build artifacts
+                    if !file_path.to_string_lossy().contains("/target/")
+                        && !file_path.to_string_lossy().contains("/node_modules/")
+                        && metadata.len() > 50_000_000
+                    {
+                        // Only log files > 50MB
+                        debug!(
+                            "Skipping large file: {:?} ({} bytes)",
+                            file_path,
+                            metadata.len()
+                        );
+                    }
                     continue;
                 }
 
@@ -1081,7 +1102,7 @@ impl IndexingManager {
                                     );
                                 }
                             } else {
-                                debug!("New file discovered for indexing: {:?}", file_path);
+                                // New file - will be processed if it passes language filter
                             }
                         }
                         Err(e) => {
@@ -1107,17 +1128,23 @@ impl IndexingManager {
                     .enabled_languages
                     .iter()
                     .any(|enabled_lang| enabled_lang.eq_ignore_ascii_case(language_str));
+
+                // Skip verbose language filter logging to reduce noise
+
                 if !language_matches {
-                    debug!(
-                        "Skipping file due to language filter: {:?} (language: {:?}, enabled: {:?})",
-                        file_path, language_str, config.enabled_languages
-                    );
+                    // Skip file silently - no need to log every rejected file
                     continue;
                 }
             }
 
             // Determine priority based on language and file characteristics
             let priority = Self::determine_priority(&file_path, language);
+
+            // Log only when we're actually going to index the file
+            debug!(
+                "Queuing file for indexing: {:?} (language: {:?})",
+                file_path, language
+            );
 
             // Create queue item
             let item = QueueItem::new(file_path, priority)
@@ -1279,8 +1306,9 @@ impl IndexingManager {
         let current_memory = Arc::clone(&self.current_memory_usage);
         let server_manager = Arc::clone(&self.server_manager);
         let definition_cache = Arc::clone(&self.definition_cache);
-        let universal_cache_layer = Arc::clone(&self.universal_cache_layer);
+        let workspace_cache_router = Arc::clone(&self.workspace_cache_router);
         let indexed_files = Arc::clone(&self.indexed_files);
+        let analysis_engine = self.analysis_engine.clone();
         let config = self.config.clone();
 
         let handle = tokio::spawn(async move {
@@ -1345,8 +1373,9 @@ impl IndexingManager {
                     &current_memory,
                     &server_manager,
                     &definition_cache,
-                    &universal_cache_layer,
+                    &workspace_cache_router,
                     &indexed_files,
+                    &analysis_engine,
                 )
                 .await;
 
@@ -1393,8 +1422,15 @@ impl IndexingManager {
         current_memory: &Arc<AtomicU64>,
         server_manager: &Arc<SingleServerManager>,
         definition_cache: &Arc<LspCache<DefinitionInfo>>,
-        universal_cache_layer: &Arc<crate::universal_cache::CacheLayer>,
+        _workspace_cache_router: &Arc<crate::workspace_database_router::WorkspaceDatabaseRouter>,
         indexed_files: &Arc<RwLock<HashMap<PathBuf, FileIndexInfo>>>,
+        analysis_engine: &Option<
+            Arc<
+                crate::indexing::analyzer::IncrementalAnalysisEngine<
+                    crate::database::SQLiteBackend,
+                >,
+            >,
+        >,
     ) -> Result<(u64, u64)> {
         let file_path = &item.file_path;
 
@@ -1459,10 +1495,48 @@ impl IndexingManager {
                         language,
                         server_manager,
                         definition_cache,
-                        universal_cache_layer,
+                        _workspace_cache_router,
                     )
                     .await
                     .unwrap_or(0);
+                }
+
+                // Phase 2: Use IncrementalAnalysisEngine to analyze file and store symbols in database
+                // This provides the missing database storage that was only counting symbols before
+                if let Some(ref engine) = analysis_engine {
+                    debug!(
+                        "Worker {}: Starting analysis engine processing for {:?}",
+                        worker_id, file_path
+                    );
+
+                    // Call the analysis engine to extract symbols and store them in database
+                    // workspace_id = 1 is used for now (this should be parameterized later)
+                    match engine
+                        .analyze_file(
+                            1,
+                            file_path,
+                            crate::indexing::analyzer::AnalysisTaskType::FullAnalysis,
+                        )
+                        .await
+                    {
+                        Ok(analysis_result) => {
+                            debug!(
+                                "Worker {}: Analysis engine completed for {:?}: {} symbols extracted, {} relationships found",
+                                worker_id, file_path, analysis_result.symbols_extracted, analysis_result.relationships_found
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Worker {}: Analysis engine failed for {:?}: {}",
+                                worker_id, file_path, e
+                            );
+                        }
+                    }
+                } else {
+                    debug!(
+                        "Worker {}: No analysis engine available, skipping symbol storage for {:?}",
+                        worker_id, file_path
+                    );
                 }
 
                 // Record successful indexing in incremental mode tracking
@@ -1516,12 +1590,11 @@ impl IndexingManager {
         language: Language,
         server_manager: &Arc<SingleServerManager>,
         _definition_cache: &Arc<LspCache<DefinitionInfo>>,
-        universal_cache_layer: &Arc<crate::universal_cache::CacheLayer>,
+        _workspace_cache_router: &Arc<crate::workspace_database_router::WorkspaceDatabaseRouter>,
     ) -> Result<u64> {
         use crate::cache_types::{CallHierarchyInfo, CallInfo};
         use crate::hash_utils::md5_hex_file;
         use crate::protocol::{parse_call_hierarchy_from_lsp, DaemonResponse};
-        use crate::universal_cache::LspMethod;
         use std::time::Duration;
         use tokio::time::timeout;
         use uuid::Uuid;
@@ -1545,7 +1618,7 @@ impl IndexingManager {
         // Get the LSP server for this language with retry logic
         let server_instance = {
             let mut retry_count = 0;
-            let max_retries = 10; // Try for up to 10 times over ~2 minutes
+            let max_retries = 3; // Only try 3 times to avoid infinite loops
 
             loop {
                 retry_count += 1;
@@ -1599,8 +1672,8 @@ impl IndexingManager {
                     }
                 }
 
-                // Wait before retry with exponential backoff (capped at 15s)
-                let delay = std::cmp::min(retry_count * 2, 15);
+                // Wait before retry with shorter backoff (capped at 3s)
+                let delay = std::cmp::min(retry_count, 3);
                 tokio::time::sleep(Duration::from_secs(delay)).await;
             }
         };
@@ -1668,10 +1741,10 @@ impl IndexingManager {
                 // Wait before next readiness check
                 tokio::time::sleep(Duration::from_secs(1)).await;
 
-                // Safety: Give up after 2 minutes
-                if ready_check_count > 120 {
+                // Safety: Give up after 10 seconds to prevent infinite loops
+                if ready_check_count > 10 {
                     warn!(
-                        "Worker {}: {:?} server not ready after 2 minutes, proceeding anyway",
+                        "Worker {}: {:?} server not ready after 10 seconds, proceeding anyway",
                         worker_id, language
                     );
                     break;
@@ -1701,22 +1774,14 @@ impl IndexingManager {
             let column = symbol.column;
 
             // Check if this symbol is already cached before making expensive LSP calls
-            let params_json = serde_json::json!({
+            let _params_json = serde_json::json!({
                 "position": {"line": line, "character": column}
             })
             .to_string();
 
-            // Try to get from universal cache first
-            match universal_cache_layer
-                .get_universal_cache()
-                .get::<crate::protocol::DaemonResponse>(
-                    LspMethod::CallHierarchy,
-                    file_path,
-                    &params_json,
-                )
-                .await
-            {
-                Ok(Some(cached_response)) => {
+            // Universal cache removed - always cache miss, use database
+            match Option::<crate::protocol::DaemonResponse>::None {
+                Some(cached_response) => {
                     // Found cached data - skip the expensive LSP call
                     cache_hits += 1;
                     indexed_count += 1;
@@ -1735,18 +1800,11 @@ impl IndexingManager {
 
                     continue; // Skip to next symbol - this one is already cached
                 }
-                Ok(None) => {
-                    // Not in cache - proceed with LSP call
+                None => {
+                    // Universal cache removed - always proceed with LSP call
                     debug!(
-                        "Worker {}: Cache MISS for {} at {}:{} - making LSP call",
+                        "Worker {}: Universal cache removed - making LSP call for {} at {}:{}",
                         worker_id, symbol.name, line, column
-                    );
-                }
-                Err(e) => {
-                    // Cache error - proceed with LSP call but log the issue
-                    debug!(
-                        "Worker {}: Cache error for {} at {}:{}: {} - making LSP call",
-                        worker_id, symbol.name, line, column, e
                     );
                 }
             }
@@ -1886,8 +1944,8 @@ impl IndexingManager {
 
                 retry_count += 1;
 
-                // Safety limit: after 300 attempts (5 minutes), give up on this symbol
-                if retry_count >= 300 {
+                // Safety limit: after 5 attempts (30 seconds max), give up on this symbol
+                if retry_count >= 5 {
                     debug!(
                         "Worker {}: Giving up on {} at {}:{} after {} attempts",
                         worker_id, symbol.name, line, column, retry_count
@@ -1895,9 +1953,9 @@ impl IndexingManager {
                     break;
                 }
 
-                // Exponential backoff: start at 1s, max 10s
-                let backoff_secs = std::cmp::min(10, 1 << (retry_count.min(4) - 1));
-                tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                // Short backoff: start at 0.5s, max 2s
+                let backoff_secs = std::cmp::min(2, retry_count / 2 + 1);
+                tokio::time::sleep(Duration::from_millis(backoff_secs * 500)).await;
             }
 
             // If we got call hierarchy data, cache it properly
@@ -1952,7 +2010,7 @@ impl IndexingManager {
 
                 // Store the result directly in the universal cache using the same method as retrieval
                 // We need to use the UniversalCache.set method directly since CacheLayer.cache field is private
-                let params_json = serde_json::json!({
+                let _params_json = serde_json::json!({
                     "position": {"line": line, "character": column}
                 })
                 .to_string();
@@ -2070,38 +2128,18 @@ impl IndexingManager {
 
                 // Create DaemonResponse with the proper format
                 let request_id = Uuid::new_v4();
-                let response = DaemonResponse::CallHierarchy {
+                let _response = DaemonResponse::CallHierarchy {
                     request_id,
                     result: hierarchy_result,
+                    warnings: None,
                 };
 
-                // Store in universal cache by calling the UniversalCache.set method directly
-                match universal_cache_layer
-                    .get_universal_cache()
-                    .set(
-                        LspMethod::CallHierarchy,
-                        file_path,
-                        &params_json,
-                        &serde_json::to_value(&response)?,
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        indexed_count += 1;
-                        debug!(
-                            "Worker {}: Successfully cached call hierarchy for {} at {}:{} in universal cache",
-                            worker_id, symbol.name, line, column
-                        );
-
-                        // Universal cache handles all storage automatically
-                    }
-                    Err(e) => {
-                        debug!(
-                            "Worker {}: Failed to cache call hierarchy for {} in universal cache: {}",
-                            worker_id, symbol.name, e
-                        );
-                    }
-                }
+                // Universal cache removed - no caching needed
+                indexed_count += 1;
+                debug!(
+                    "Worker {}: Successfully processed call hierarchy for {} at {}:{} (universal cache removed)",
+                    worker_id, symbol.name, line, column
+                );
             }
         }
 
@@ -2179,35 +2217,28 @@ mod tests {
     use crate::cache_types::LspOperation;
     use crate::lsp_cache::LspCacheConfig;
     use crate::lsp_registry::LspRegistry;
+    use crate::workspace_database_router::WorkspaceDatabaseRouter;
     use std::fs;
     use std::time::Duration;
     use tempfile::tempdir;
 
-    /// Helper function to create universal cache layer for tests
-    async fn create_test_universal_cache_layer(
+    /// Helper function to create workspace database router for tests
+    fn create_test_workspace_cache_router(
         server_manager: Arc<SingleServerManager>,
-    ) -> Arc<crate::universal_cache::CacheLayer> {
+    ) -> Arc<WorkspaceDatabaseRouter> {
         let temp_cache_dir = tempdir().unwrap();
-        let workspace_config = crate::workspace_cache_router::WorkspaceCacheRouterConfig {
+        let workspace_config = crate::workspace_database_router::WorkspaceDatabaseRouterConfig {
             base_cache_dir: temp_cache_dir.path().to_path_buf(),
-            max_open_caches: 3,
             max_parent_lookup_depth: 2,
+            force_memory_only: true,
             ..Default::default()
         };
-        let workspace_router = Arc::new(crate::workspace_cache_router::WorkspaceCacheRouter::new(
-            workspace_config,
-            server_manager,
-        ));
-        let universal_cache = Arc::new(
-            crate::universal_cache::UniversalCache::new(workspace_router)
-                .await
-                .unwrap(),
-        );
-        Arc::new(crate::universal_cache::CacheLayer::new(
-            universal_cache,
-            None,
-            None,
-        ))
+        Arc::new(
+            crate::workspace_database_router::WorkspaceDatabaseRouter::new(
+                workspace_config,
+                server_manager,
+            ),
+        )
     }
 
     #[tokio::test]
@@ -2234,13 +2265,13 @@ mod tests {
 
         // Create persistent store for testing
 
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         // Test initial state
@@ -2322,13 +2353,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         // Initially no pressure
@@ -2433,13 +2464,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         // Initially no workers
@@ -2487,13 +2518,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         let temp_dir = tempdir().unwrap();
@@ -2540,13 +2571,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         // Initially empty queue
@@ -2603,13 +2634,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         let temp_dir = tempdir().unwrap();
@@ -2691,27 +2722,13 @@ mod tests {
             max_parent_lookup_depth: 2,
             ..Default::default()
         };
-        let workspace_router = Arc::new(crate::workspace_cache_router::WorkspaceCacheRouter::new(
-            workspace_config,
-            server_manager.clone(),
-        ));
-        let universal_cache = Arc::new(
-            crate::universal_cache::UniversalCache::new(workspace_router)
-                .await
-                .unwrap(),
-        );
-        let universal_cache_layer = Arc::new(crate::universal_cache::CacheLayer::new(
-            universal_cache,
-            None,
-            None,
-        ));
-
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager1 = IndexingManager::new(
             config.clone(),
             language_detector.clone(),
             server_manager.clone(),
             definition_cache.clone(),
-            universal_cache_layer.clone(),
+            workspace_cache_router.clone(),
         );
 
         manager1
@@ -2726,13 +2743,12 @@ mod tests {
         let progress1 = manager1.get_progress().await;
 
         // Second run - incremental (should detect no changes if file hasn't changed)
-        // Reuse the same cache layer so incremental detection can work
         let manager2 = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer.clone(),
+            workspace_cache_router,
         );
         manager2
             .start_indexing(temp_dir.path().to_path_buf())
@@ -2803,13 +2819,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         manager
@@ -2853,13 +2869,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         manager
@@ -2895,13 +2911,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = IndexingManager::from_indexing_config(
             &indexing_config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         );
 
         // Verify configuration was properly converted
@@ -2926,13 +2942,13 @@ mod tests {
                 .await
                 .expect("Failed to create LspCache"),
         );
-        let universal_cache_layer = create_test_universal_cache_layer(server_manager.clone()).await;
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
         let manager = Arc::new(IndexingManager::new(
             config,
             language_detector,
             server_manager,
             definition_cache,
-            universal_cache_layer,
+            workspace_cache_router,
         ));
 
         let temp_dir = tempdir().unwrap();

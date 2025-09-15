@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use colored::*;
+use dirs;
 use serde_json::json;
 use std::path::Path;
 use std::time::Duration;
@@ -158,6 +159,11 @@ impl LspManager {
                 lines,
                 clear,
             } => Self::handle_logs(*follow, *lines, *clear).await,
+            LspSubcommands::CrashLogs {
+                lines,
+                clear,
+                show_path,
+            } => Self::handle_crash_logs(*lines, *clear, *show_path).await,
             LspSubcommands::Init {
                 workspace,
                 languages,
@@ -213,6 +219,28 @@ impl LspManager {
                 Self::handle_index_config_command(config_command, format).await
             }
             LspSubcommands::Call { command } => Self::handle_call_command(command).await,
+            LspSubcommands::GraphExport {
+                workspace,
+                format,
+                output,
+                max_depth,
+                symbol_types,
+                edge_types,
+                connected_only,
+                daemon,
+            } => {
+                Self::handle_graph_export(
+                    workspace.clone(),
+                    format,
+                    output.clone(),
+                    *max_depth,
+                    symbol_types.clone(),
+                    edge_types.clone(),
+                    *connected_only,
+                    *daemon,
+                )
+                .await
+            }
         }
     }
 
@@ -1210,6 +1238,107 @@ impl LspManager {
                         }
                     );
                 }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handle crash logs command
+    async fn handle_crash_logs(lines: usize, clear: bool, show_path: bool) -> Result<()> {
+        use std::fs;
+        use std::path::PathBuf;
+
+        // Get crash log file path (same logic as in main.rs)
+        let crash_log_path = if cfg!(target_os = "macos") {
+            dirs::cache_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join("probe")
+                .join("lsp-daemon-crashes.log")
+        } else if cfg!(target_os = "windows") {
+            dirs::cache_dir()
+                .unwrap_or_else(|| PathBuf::from("C:\\temp"))
+                .join("probe")
+                .join("lsp-daemon-crashes.log")
+        } else {
+            dirs::cache_dir()
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+                .join("probe")
+                .join("lsp-daemon-crashes.log")
+        };
+
+        // Handle --path flag
+        if show_path {
+            println!("Crash log file: {}", crash_log_path.display());
+            return Ok(());
+        }
+
+        // Handle --clear flag
+        if clear {
+            match fs::remove_file(&crash_log_path) {
+                Ok(_) => {
+                    println!("{}", "✓ Crash log file cleared".green());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    println!("{}", "No crash log file to clear".yellow());
+                }
+                Err(e) => {
+                    println!("{}", format!("Failed to clear crash log: {}", e).red());
+                }
+            }
+            return Ok(());
+        }
+
+        // Read and display crash logs
+        match fs::read_to_string(&crash_log_path) {
+            Ok(content) => {
+                if content.trim().is_empty() {
+                    println!(
+                        "{}",
+                        "No crash logs found (daemon has been stable!)".green()
+                    );
+                    return Ok(());
+                }
+
+                println!("{}", "LSP Daemon Crash Logs".cyan().bold());
+                println!("{}", format!("File: {}", crash_log_path.display()).dimmed());
+                println!("{}", "─".repeat(80).dimmed());
+
+                // Show last N lines
+                let all_lines: Vec<&str> = content.lines().collect();
+                let start_idx = if all_lines.len() > lines {
+                    all_lines.len() - lines
+                } else {
+                    0
+                };
+
+                for line in &all_lines[start_idx..] {
+                    println!("{}", line);
+                }
+
+                println!("{}", "─".repeat(80).dimmed());
+                println!(
+                    "{}",
+                    format!(
+                        "Showing last {} lines of {} total",
+                        all_lines.len() - start_idx,
+                        all_lines.len()
+                    )
+                    .dimmed()
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                println!(
+                    "{}",
+                    "No crash logs found (daemon has been stable!)".green()
+                );
+                println!(
+                    "{}",
+                    format!("Crash log file: {}", crash_log_path.display()).dimmed()
+                );
+            }
+            Err(e) => {
+                println!("{}", format!("Failed to read crash log: {}", e).red());
             }
         }
 
@@ -3756,6 +3885,98 @@ impl LspManager {
             SymbolKind::Event => "⚡ Event".to_string(),
             SymbolKind::Operator => "➕ Operator".to_string(),
             SymbolKind::TypeParameter => "🏷️  TypeParameter".to_string(),
+        }
+    }
+
+    /// Handle graph export command
+    async fn handle_graph_export(
+        workspace: Option<std::path::PathBuf>,
+        format: &str,
+        output: Option<std::path::PathBuf>,
+        max_depth: Option<u32>,
+        symbol_types: Option<String>,
+        edge_types: Option<String>,
+        connected_only: bool,
+        daemon: bool,
+    ) -> Result<()> {
+        // Ensure daemon is ready if needed
+        if daemon {
+            Self::ensure_ready().await?;
+        }
+
+        // Parse symbol types filter
+        let symbol_types_filter = symbol_types.map(|types| {
+            types
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<String>>()
+        });
+
+        // Parse edge types filter
+        let edge_types_filter = edge_types.map(|types| {
+            types
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<String>>()
+        });
+
+        // Create LSP client
+        let config = LspConfig::default();
+        let mut client = LspClient::new(config).await?;
+
+        // Send export graph request
+        let response = client
+            .export_graph(
+                workspace,
+                format.to_string(),
+                max_depth,
+                symbol_types_filter,
+                edge_types_filter,
+                connected_only,
+            )
+            .await?;
+
+        match response {
+            lsp_daemon::DaemonResponse::GraphExported {
+                format: response_format,
+                workspace_path,
+                nodes_count,
+                edges_count,
+                graph_data,
+                ..
+            } => {
+                // Print summary
+                println!(
+                    "{}",
+                    format!(
+                        "Exported graph from workspace: {}",
+                        workspace_path.to_string_lossy()
+                    )
+                    .green()
+                    .bold()
+                );
+                println!("Format: {}", response_format);
+                println!("Nodes: {}", nodes_count);
+                println!("Edges: {}", edges_count);
+                println!();
+
+                // Write output
+                if let Some(output_path) = output {
+                    // Write to file
+                    std::fs::write(&output_path, graph_data)
+                        .with_context(|| format!("Failed to write output to {:?}", output_path))?;
+                    println!("Graph data written to: {}", output_path.to_string_lossy());
+                } else {
+                    // Write to stdout
+                    println!("{}", graph_data);
+                }
+
+                Ok(())
+            }
+            lsp_daemon::DaemonResponse::Error { error, .. } => {
+                Err(anyhow!("Graph export failed: {}", error))
+            }
+            _ => Err(anyhow!("Unexpected response type from daemon")),
         }
     }
 }

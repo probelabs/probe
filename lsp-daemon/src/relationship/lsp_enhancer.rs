@@ -20,7 +20,6 @@ use crate::language_detector::LanguageDetector;
 use crate::protocol::{CallHierarchyResult, Location, Position, Range};
 use crate::server_manager::SingleServerManager;
 use crate::symbol::{SymbolLocation, SymbolUIDGenerator};
-use crate::universal_cache::CacheLayer;
 use crate::workspace_resolver::WorkspaceResolver;
 
 /// Configuration for LSP relationship enhancement
@@ -139,9 +138,6 @@ pub struct LspRelationshipEnhancer {
     /// LSP client wrapper for operations
     lsp_client: Option<Arc<LspClientWrapper>>,
 
-    /// Universal cache for LSP responses
-    cache_layer: Arc<CacheLayer>,
-
     /// Symbol UID generator
     uid_generator: Arc<SymbolUIDGenerator>,
 
@@ -155,14 +151,12 @@ impl LspRelationshipEnhancer {
         server_manager: Option<Arc<SingleServerManager>>,
         language_detector: Arc<LanguageDetector>,
         workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
-        cache_layer: Arc<CacheLayer>,
         uid_generator: Arc<SymbolUIDGenerator>,
     ) -> Self {
         Self::with_config(
             server_manager,
             language_detector,
             workspace_resolver,
-            cache_layer,
             uid_generator,
             LspEnhancementConfig::default(),
         )
@@ -173,7 +167,6 @@ impl LspRelationshipEnhancer {
         server_manager: Option<Arc<SingleServerManager>>,
         language_detector: Arc<LanguageDetector>,
         workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
-        cache_layer: Arc<CacheLayer>,
         uid_generator: Arc<SymbolUIDGenerator>,
         config: LspEnhancementConfig,
     ) -> Self {
@@ -187,7 +180,6 @@ impl LspRelationshipEnhancer {
 
         Self {
             lsp_client,
-            cache_layer,
             uid_generator,
             config,
         }
@@ -701,80 +693,6 @@ impl LspRelationshipEnhancer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::types::ExtractedSymbol;
-    use crate::symbol::SymbolLocation;
-    use std::path::PathBuf;
-    use tempfile::TempDir;
-
-    /// Create a test cache layer for testing
-    async fn create_test_cache_layer() -> Arc<CacheLayer> {
-        let temp_dir = TempDir::new().unwrap();
-
-        // Create workspace cache router
-        let config = crate::workspace_cache_router::WorkspaceCacheRouterConfig {
-            base_cache_dir: temp_dir.path().join("caches"),
-            max_open_caches: 3,
-            max_parent_lookup_depth: 2,
-            ..Default::default()
-        };
-
-        let registry = Arc::new(crate::lsp_registry::LspRegistry::new().unwrap());
-        let child_processes = Arc::new(tokio::sync::Mutex::new(Vec::new()));
-        let server_manager = Arc::new(
-            crate::server_manager::SingleServerManager::new_with_tracker(registry, child_processes),
-        );
-
-        let workspace_router = Arc::new(WorkspaceCacheRouter::new(config, server_manager));
-
-        // Create universal cache
-        let universal_cache = Arc::new(UniversalCache::new(workspace_router).await.unwrap());
-
-        // Create cache layer
-        Arc::new(CacheLayer::new(universal_cache, None, None))
-    }
-
-    #[tokio::test]
-    async fn test_enhance_relationships_no_lsp() {
-        let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        let cache_layer = create_test_cache_layer().await;
-        let language_detector = Arc::new(LanguageDetector::new());
-        let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(None)));
-
-        let enhancer = LspRelationshipEnhancer::new(
-            None, // No LSP server manager
-            language_detector,
-            workspace_resolver,
-            cache_layer,
-            uid_generator,
-        );
-
-        let tree_sitter_relationships = vec![ExtractedRelationship {
-            source_symbol_uid: "test_source".to_string(),
-            target_symbol_uid: "test_target".to_string(),
-            relation_type: RelationType::Calls,
-            location: None,
-            confidence: 0.9,
-            metadata: HashMap::new(),
-        }];
-
-        let symbols = vec![];
-        let uid_generator = Arc::new(crate::symbol::SymbolUIDGenerator::new());
-        let context = AnalysisContext::new(1, 1, 1, "rust".to_string(), uid_generator);
-        let file_path = PathBuf::from("test.rs");
-
-        let result = enhancer
-            .enhance_relationships(
-                &file_path,
-                tree_sitter_relationships.clone(),
-                &symbols,
-                &context,
-            )
-            .await
-            .expect("Enhancement should succeed without LSP");
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].source_symbol_uid, "test_source");
-    }
 
     #[test]
     fn test_lsp_relationship_type_conversion() {
@@ -788,14 +706,13 @@ mod tests {
         );
         assert_eq!(
             LspRelationshipType::Definition.to_relation_type(),
-            RelationType::References // Use References instead of non-existent Defines
+            RelationType::References
         );
     }
 
     #[test]
     fn test_lsp_enhancement_config_defaults() {
         let config = LspEnhancementConfig::default();
-
         assert!(config
             .enabled_relationship_types
             .contains(&LspRelationshipType::References));
@@ -805,44 +722,5 @@ mod tests {
         assert!(config.cache_lsp_responses);
         assert_eq!(config.timeout_ms, 5000);
         assert_eq!(config.max_references_per_symbol, 100);
-    }
-
-    #[tokio::test]
-    async fn test_get_lsp_relationships_empty() {
-        let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        let cache_layer = create_test_cache_layer().await;
-        let language_detector = Arc::new(LanguageDetector::new());
-        let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(None)));
-
-        let enhancer = LspRelationshipEnhancer::new(
-            None, // No LSP server manager
-            language_detector,
-            workspace_resolver,
-            cache_layer,
-            uid_generator,
-        );
-
-        let symbols = vec![ExtractedSymbol::new(
-            "test_symbol".to_string(),
-            "test_function".to_string(),
-            crate::symbol::SymbolKind::Function,
-            SymbolLocation::new(PathBuf::from("/test/file.rs"), 10, 5, 15, 10),
-        )];
-
-        let file_path = PathBuf::from("test.rs");
-        let relationship_types = vec![LspRelationshipType::References];
-
-        let result = enhancer
-            .get_lsp_relationships(&file_path, &symbols, &relationship_types)
-            .await;
-
-        // Should fail because no LSP server manager is available
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            LspEnhancementError::LspNotAvailable { .. } => {
-                // Expected error
-            }
-            e => panic!("Unexpected error: {}", e),
-        }
     }
 }

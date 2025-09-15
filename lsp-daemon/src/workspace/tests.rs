@@ -5,13 +5,12 @@
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::database::{sqlite_backend::SQLiteBackend, DatabaseBackend, DatabaseConfig};
     use crate::workspace::config::CacheConfig;
     use crate::workspace::config::{
         DatabaseSettings, EvictionStrategy, MemoryLimits, PerformanceConfig,
     };
-    use crate::workspace::{FileChange, FileChangeType, WorkspaceConfig, WorkspaceManager};
+    use crate::workspace::{FileChangeType, WorkspaceConfig, WorkspaceManager};
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;

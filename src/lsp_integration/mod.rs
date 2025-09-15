@@ -70,6 +70,21 @@ pub enum LspSubcommands {
         clear: bool,
     },
 
+    /// View LSP daemon crash logs with stack traces
+    CrashLogs {
+        /// Number of lines to show from the end of the crash log
+        #[clap(short = 'n', long = "lines", default_value = "100")]
+        lines: usize,
+
+        /// Clear the crash log file
+        #[clap(long = "clear")]
+        clear: bool,
+
+        /// Show the crash log file path
+        #[clap(long = "path")]
+        show_path: bool,
+    },
+
     /// Start the LSP daemon (embedded mode)
     Start {
         /// Path to the IPC endpoint (Unix socket or Windows named pipe)
@@ -189,6 +204,41 @@ pub enum LspSubcommands {
     IndexConfig {
         #[clap(subcommand)]
         config_command: IndexConfigSubcommands,
+    },
+
+    /// Export graph data from indexed codebase
+    GraphExport {
+        /// Workspace path to export from (defaults to current directory)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Output format (json, graphml, dot)
+        #[clap(short = 'f', long = "format", default_value = "json", value_parser = ["json", "graphml", "dot"])]
+        format: String,
+
+        /// Output file path (defaults to stdout)
+        #[clap(short = 'o', long = "output")]
+        output: Option<std::path::PathBuf>,
+
+        /// Maximum depth for graph traversal (default: unlimited)
+        #[clap(long = "max-depth")]
+        max_depth: Option<u32>,
+
+        /// Filter by symbol types (comma-separated: function,class,struct,enum,variable)
+        #[clap(long = "symbol-types")]
+        symbol_types: Option<String>,
+
+        /// Filter by edge types (comma-separated: calls,references,inherits_from,implements)
+        #[clap(long = "edge-types")]
+        edge_types: Option<String>,
+
+        /// Include only symbols with incoming/outgoing connections
+        #[clap(long = "connected-only")]
+        connected_only: bool,
+
+        /// Use daemon mode (auto-start if not running)
+        #[clap(long = "daemon", default_value = "true")]
+        daemon: bool,
     },
 }
 

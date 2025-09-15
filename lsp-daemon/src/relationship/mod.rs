@@ -285,7 +285,7 @@ pub fn create_language_config(language: &str) -> RelationshipExtractionConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::symbol::{SymbolKind, SymbolLocation, SymbolUIDGenerator};
+    use crate::symbol::SymbolUIDGenerator;
     use std::path::PathBuf;
 
     #[test]
@@ -379,7 +379,14 @@ mod tests {
     #[tokio::test]
     async fn test_batch_extract_relationships_empty() {
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        let context = AnalysisContext::new(1, 2, 3, "rust".to_string(), uid_generator.clone());
+        let context = AnalysisContext::new(
+            1,
+            2,
+            "rust".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("test.rs"),
+            uid_generator.clone(),
+        );
 
         let files = Vec::new();
         let results = batch_extract_relationships(files, &context, uid_generator, None).await;

@@ -276,9 +276,10 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
 
 /// Check if a search result is likely to benefit from LSP enrichment
 fn is_lsp_relevant_result(result: &SearchResult, debug_mode: bool) -> bool {
-    // Only process function-like nodes and code blocks that likely contain functions
-    let is_function_node = matches!(
+    // Process function-like nodes, struct/enum definitions, and other important language constructs
+    let is_lsp_relevant_node = matches!(
         result.node_type.as_str(),
+        // Functions and methods
         "function_item"
             | "function_definition"
             | "method_definition"
@@ -286,36 +287,64 @@ fn is_lsp_relevant_result(result: &SearchResult, debug_mode: bool) -> bool {
             | "method_declaration"
             | "function"
             | "method"
-            | "impl_item"
+            // Structs, enums, and types
+            | "struct_item"
+            | "enum_item"
+            | "type_alias"
+            | "type_definition"
+            | "interface_declaration"
             | "class_definition"
+            | "impl_item"
+            // Constants and variables
+            | "const_item"
+            | "static_item"
+            | "let_declaration"
+            | "variable_declaration"
+            // Modules and traits
+            | "mod_item"
+            | "trait_item"
+            | "use_item"
     );
 
-    if is_function_node {
+    if is_lsp_relevant_node {
         return true;
     }
 
-    // For other node types, check if the code contains function definitions
-    let contains_function_code = result.code.lines().any(|line| {
+    // For other node types, check if the code contains definitions that benefit from LSP
+    let contains_relevant_code = result.code.lines().any(|line| {
         let trimmed = line.trim();
         trimmed.starts_with("pub fn ")
             || trimmed.starts_with("fn ")
             || trimmed.starts_with("async fn ")
             || trimmed.starts_with("pub async fn ")
+            || trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("struct ")
+            || trimmed.starts_with("pub enum ")
+            || trimmed.starts_with("enum ")
+            || trimmed.starts_with("pub trait ")
+            || trimmed.starts_with("trait ")
+            || trimmed.starts_with("pub type ")
+            || trimmed.starts_with("type ")
+            || trimmed.starts_with("pub const ")
+            || trimmed.starts_with("const ")
+            || trimmed.starts_with("pub static ")
+            || trimmed.starts_with("static ")
             || trimmed.starts_with("def ")
             || trimmed.starts_with("function ")
             || trimmed.starts_with("func ")
             || trimmed.starts_with("class ")
+            || trimmed.starts_with("interface ")
             || trimmed.starts_with("impl ")
     });
 
-    if debug_mode && !contains_function_code {
+    if debug_mode && !contains_relevant_code {
         println!(
-            "[DEBUG] Skipping LSP enrichment for non-function result: {} (node_type: {})",
+            "[DEBUG] Skipping LSP enrichment for non-relevant result: {} (node_type: {})",
             result.file, result.node_type
         );
     }
 
-    contains_function_code
+    contains_relevant_code
 }
 
 /// Information about a symbol extracted from a code block
@@ -412,13 +441,8 @@ async fn process_single_symbol_async_with_client(
         memo_map().remove(&cache_key);
     }
 
-    // Always return something (preserve previous behavior).
-    Some(result_json.unwrap_or_else(|| {
-        json!({
-            "symbol": symbol_info.name,
-            "node_type": node_type
-        })
-    }))
+    // Return the actual LSP result if we got one, otherwise None
+    result_json
 }
 
 /// Extract ALL symbols from a (possibly merged) code block using tree-sitter.
@@ -1063,6 +1087,7 @@ async fn get_lsp_info_async_with_client(
                 "symbol": symbol_name,
                 "call_hierarchy": info.call_hierarchy,
                 "references_count": references_count,
+                "references": info.references,
             });
 
             if debug_mode {

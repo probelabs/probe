@@ -428,18 +428,7 @@ fn format_extraction_internal(
                                     }
                                 }
 
-                                // Display documentation if available
-                                if let Some(doc) = &enhanced_symbol.documentation {
-                                    if format == "markdown" {
-                                        writeln!(output, "#### Documentation:")?;
-                                        writeln!(output, "```")?;
-                                        writeln!(output, "{doc}")?;
-                                        writeln!(output, "```")?;
-                                    } else {
-                                        writeln!(output, "  Documentation:")?;
-                                        writeln!(output, "    {}", doc.dimmed())?
-                                    }
-                                }
+                                // Documentation display removed to reduce noise and focus on call hierarchy and references
                             }
                             Err(e) => {
                                 // Debug: log deserialization error

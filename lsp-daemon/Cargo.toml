@@ -1,6 +1,6 @@
 [package]
 name = "lsp-daemon"
-version = "0.1.0"
+version = "0.6.0"
 edition = "2021"
 authors = ["Leonid Bugaev <leonsbox@gmail.com>"]
 description = "Multi-language LSP server pool daemon for instant code intelligence"
@@ -48,9 +48,9 @@ dirs = "5"
 which = "6"
 async-trait = "0.1"  # Required for DuckDB DatabaseBackend trait implementation
 clap = { version = "4", features = ["derive"] }
+chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 tempfile = "3"
-chrono = "0.4"
 fs2 = "0.4"
 md5 = "0.7"
 bincode = "1.3"
@@ -68,6 +68,7 @@ turso = "0.1.4"
 sha2 = "0.10.9"
 rayon = "1.8"
 tree-sitter = "0.24.5"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Tree-sitter language parsers (optional for selective language support)
 tree-sitter-rust = { version = "0.23.2", optional = true }

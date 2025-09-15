@@ -19,7 +19,7 @@ fn create_symbol(name: &str, kind: SymbolKind, language: &str, line: u32, char: 
 
 /// Helper function to create a test context
 fn create_context(workspace_id: i64, scopes: Vec<&str>) -> SymbolContext {
-    let mut context = SymbolContext::new(workspace_id, 1, "rust".to_string());
+    let mut context = SymbolContext::new(workspace_id, "rust".to_string());
     for scope in scopes {
         context = context.push_scope(scope.to_string());
     }
@@ -534,7 +534,7 @@ mod integration_tests {
         // Convert to database format
         let mut db_symbol: SymbolState = symbol.into();
         db_symbol.symbol_uid = uid;
-        db_symbol.file_version_id = context.file_version_id;
+        db_symbol.file_path = "test/path.rs".to_string();
         db_symbol.language = context.language.clone();
 
         // Verify conversion
@@ -543,7 +543,7 @@ mod integration_tests {
         assert_eq!(db_symbol.fqn, Some("module::test_func".to_string()));
         assert_eq!(db_symbol.kind, "function");
         assert_eq!(db_symbol.visibility, Some("public".to_string()));
-        assert_eq!(db_symbol.file_version_id, context.file_version_id);
+        assert_eq!(db_symbol.file_path, "test/path.rs".to_string());
         assert_eq!(db_symbol.language, context.language);
     }
 

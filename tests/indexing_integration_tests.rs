@@ -621,35 +621,26 @@ async fn test_end_to_end_indexing_workflow() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing
@@ -791,35 +782,26 @@ async fn test_incremental_indexing() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config.clone(),
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // First indexing run
@@ -896,35 +878,26 @@ impl Calculator {
 
     // Create universal cache layer for second manager
     let temp_cache_dir2 = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config2 = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config2 = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir2.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router2 = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config2,
             server_manager2.clone(),
         ),
     );
-    let universal_cache2 = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router2)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer2 = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache2,
-        None,
-        None,
-    ));
 
     let manager2 = IndexingManager::new(
         config.clone(),
         Arc::new(LanguageDetector::new()),
         server_manager2,
         definition_cache2,
-        universal_cache_layer2,
+        workspace_router2,
     );
     manager2
         .start_indexing(project.root_path().to_path_buf())
@@ -999,35 +972,26 @@ async fn test_memory_pressure_handling() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing
@@ -1106,35 +1070,26 @@ async fn test_pause_and_resume_functionality() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing
@@ -1218,35 +1173,26 @@ async fn test_worker_statistics_tracking() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing
@@ -1324,35 +1270,26 @@ async fn test_language_specific_processing() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing
@@ -1430,35 +1367,26 @@ async fn test_file_exclusion_patterns() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing
@@ -1534,35 +1462,26 @@ async fn test_queue_operations() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing
@@ -1650,35 +1569,26 @@ async fn test_error_recovery() -> Result<()> {
 
     // Create universal cache layer
     let temp_cache_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let workspace_config = lsp_daemon::workspace_cache_router::WorkspaceCacheRouterConfig {
+    let workspace_config = lsp_daemon::workspace_database_router::WorkspaceDatabaseRouterConfig {
         base_cache_dir: temp_cache_dir.path().to_path_buf(),
         max_open_caches: 3,
         max_parent_lookup_depth: 2,
+        force_memory_only: true,
         ..Default::default()
     };
     let workspace_router = Arc::new(
-        lsp_daemon::workspace_cache_router::WorkspaceCacheRouter::new(
+        lsp_daemon::workspace_database_router::WorkspaceDatabaseRouter::new(
             workspace_config,
             server_manager.clone(),
         ),
     );
-    let universal_cache = Arc::new(
-        lsp_daemon::universal_cache::UniversalCache::new(workspace_router)
-            .await
-            .expect("Failed to create universal cache"),
-    );
-    let universal_cache_layer = Arc::new(lsp_daemon::universal_cache::CacheLayer::new(
-        universal_cache,
-        None,
-        None,
-    ));
 
     let manager = IndexingManager::new(
         config,
         language_detector,
         server_manager,
         definition_cache,
-        universal_cache_layer,
+        workspace_router,
     );
 
     // Start indexing

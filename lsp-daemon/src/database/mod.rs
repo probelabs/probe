@@ -44,11 +44,15 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+// Import protocol types for database query methods
+use crate::protocol::{CallHierarchyResult, Location};
+
+pub mod converters;
 pub mod migrations;
 pub mod sqlite_backend;
-pub use migrations::{Migration, MigrationError, MigrationRunner};
+pub use converters::ProtocolConverter;
 pub use sqlite_backend::SQLiteBackend;
-// Legacy DuckDB exports removed - SQLite is now the primary backend
+// Using Turso (native SQLite implementation) as the primary backend
 
 /// Database error types specific to database operations
 #[derive(Debug, thiserror::Error)]
@@ -70,6 +74,9 @@ pub enum DatabaseError {
 
     #[error("Tree not found: {name}")]
     TreeNotFound { name: String },
+
+    #[error("Turso database error: {0}")]
+    TursoError(#[from] turso::Error),
 }
 
 /// Configuration for database backends
@@ -146,8 +153,8 @@ pub struct FileVersion {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SymbolState {
     pub symbol_uid: String,
-    pub file_version_id: i64,
-    pub language: String, // Language for direct language-based detection
+    pub file_path: String, // Relative path to the file (git-relative or workspace-relative)
+    pub language: String,  // Language for direct language-based detection
     pub name: String,
     pub fqn: Option<String>,
     pub kind: String,
@@ -175,6 +182,12 @@ pub enum EdgeRelation {
     Imports,
     Includes,
     DependsOn,
+    // LSP-specific call hierarchy relations
+    IncomingCall,
+    OutgoingCall,
+    // LSP-specific definition relations
+    Definition,
+    Implementation,
 }
 
 impl EdgeRelation {
@@ -191,6 +204,10 @@ impl EdgeRelation {
             EdgeRelation::Imports => "imports",
             EdgeRelation::Includes => "includes",
             EdgeRelation::DependsOn => "depends_on",
+            EdgeRelation::IncomingCall => "incoming_call",
+            EdgeRelation::OutgoingCall => "outgoing_call",
+            EdgeRelation::Definition => "definition",
+            EdgeRelation::Implementation => "implementation",
         }
     }
 
@@ -207,6 +224,10 @@ impl EdgeRelation {
             "imports" => Ok(EdgeRelation::Imports),
             "includes" => Ok(EdgeRelation::Includes),
             "depends_on" => Ok(EdgeRelation::DependsOn),
+            "incoming_call" => Ok(EdgeRelation::IncomingCall),
+            "outgoing_call" => Ok(EdgeRelation::OutgoingCall),
+            "definition" => Ok(EdgeRelation::Definition),
+            "implementation" => Ok(EdgeRelation::Implementation),
             _ => Err(DatabaseError::OperationFailed {
                 message: format!("Unknown edge relation: {}", s),
             }),
@@ -222,18 +243,107 @@ pub enum CallDirection {
     Both,
 }
 
+/// Standard edge types for consistent relationship classification
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum StandardEdgeType {
+    // Call relationships
+    Calls,    // A calls B
+    CalledBy, // A is called by B
+
+    // Reference relationships
+    References,   // A references B
+    ReferencedBy, // A is referenced by B
+
+    // Definition relationships
+    Defines,   // A defines B
+    DefinedBy, // A is defined by B
+
+    // Implementation relationships
+    Implements,    // A implements B
+    ImplementedBy, // A is implemented by B
+
+    // Type relationships
+    HasType, // A has type B
+    TypeOf,  // A is type of B
+
+    // Inheritance relationships
+    Extends,    // A extends B
+    ExtendedBy, // A is extended by B
+}
+
+impl StandardEdgeType {
+    /// Convert to string representation
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Calls => "calls",
+            Self::CalledBy => "called_by",
+            Self::References => "references",
+            Self::ReferencedBy => "referenced_by",
+            Self::Defines => "defines",
+            Self::DefinedBy => "defined_by",
+            Self::Implements => "implements",
+            Self::ImplementedBy => "implemented_by",
+            Self::HasType => "has_type",
+            Self::TypeOf => "type_of",
+            Self::Extends => "extends",
+            Self::ExtendedBy => "extended_by",
+        }
+    }
+}
+
 /// Edge representation
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Edge {
     pub relation: EdgeRelation,
     pub source_symbol_uid: String,
     pub target_symbol_uid: String,
-    pub anchor_file_version_id: i64,
+    pub file_path: Option<String>, // File path from symbol_state for direct access
     pub start_line: Option<u32>,
     pub start_char: Option<u32>,
     pub confidence: f32,
     pub language: String,         // Language for direct language-based detection
     pub metadata: Option<String>, // Additional metadata
+}
+
+/// Create a "none" edge to mark a symbol as "analyzed but empty"
+/// This prevents repeated LSP calls for symbols with no call hierarchy/references
+pub fn create_none_edge(source_symbol_uid: &str, relation: EdgeRelation) -> Edge {
+    Edge {
+        relation,
+        source_symbol_uid: source_symbol_uid.to_string(),
+        target_symbol_uid: "none".to_string(), // Special marker for "analyzed but empty"
+        file_path: None,                       // None edges don't need file path resolution
+        start_line: None,
+        start_char: None,
+        confidence: 1.0,
+        language: "unknown".to_string(), // Default language for none edges
+        metadata: Some("null_edge".to_string()), // Mark as a special edge type
+    }
+}
+
+/// Create "none" edges for empty call hierarchy results
+/// Used when LSP returns {incoming: [], outgoing: []} (not null!)
+pub fn create_none_call_hierarchy_edges(symbol_uid: &str) -> Vec<Edge> {
+    vec![
+        create_none_edge(symbol_uid, EdgeRelation::IncomingCall),
+        create_none_edge(symbol_uid, EdgeRelation::OutgoingCall),
+    ]
+}
+
+/// Create "none" edges for empty references results  
+/// Used when LSP returns [] for references (not null!)
+pub fn create_none_reference_edges(symbol_uid: &str) -> Vec<Edge> {
+    vec![create_none_edge(symbol_uid, EdgeRelation::References)]
+}
+
+/// Create "none" edges for empty definitions results
+pub fn create_none_definition_edges(symbol_uid: &str) -> Vec<Edge> {
+    vec![create_none_edge(symbol_uid, EdgeRelation::Definition)]
+}
+
+/// Create "none" edges for empty implementations results
+pub fn create_none_implementation_edges(symbol_uid: &str) -> Vec<Edge> {
+    vec![create_none_edge(symbol_uid, EdgeRelation::Implementation)]
 }
 
 /// Graph path for traversal results
@@ -254,6 +364,17 @@ pub struct AnalysisProgress {
     pub failed_files: u64,
     pub pending_files: u64,
     pub completion_percentage: f32,
+}
+
+/// Result of interpreting edges for a symbol and relation type
+#[derive(Debug, Clone, PartialEq)]
+pub enum EdgeInterpretation<T> {
+    /// No edges found - need fresh LSP call
+    Unknown,
+    /// Single null edge found - LSP analyzed but found nothing (return [])
+    AnalyzedEmpty,
+    /// Real edges found (nulls ignored if mixed)
+    HasData(Vec<T>),
 }
 
 /// Represents a database tree (hierarchical namespace for keys)
@@ -359,22 +480,9 @@ pub trait DatabaseBackend: Send + Sync {
     // File Version Management
     // ===================
 
-    /// Create a new file version
-    async fn create_file_version(
-        &self,
-        file_id: i64,
-        content_digest: &str,
-        size_bytes: u64,
-        mtime: Option<i64>,
-    ) -> Result<i64, DatabaseError>;
+    // File versioning methods removed
 
-    /// Get file version by content digest
-    async fn get_file_version_by_digest(
-        &self,
-        content_digest: &str,
-    ) -> Result<Option<FileVersion>, DatabaseError>;
-
-    /// Link file to workspace (add to workspace)
+    /// Link file to workspace (deprecated - workspace_file table removed)
     async fn link_file_to_workspace(
         &self,
         workspace_id: i64,
@@ -392,7 +500,7 @@ pub trait DatabaseBackend: Send + Sync {
     /// Get symbols by file version and language
     async fn get_symbols_by_file(
         &self,
-        file_version_id: i64,
+        file_path: &str,
         language: &str,
     ) -> Result<Vec<SymbolState>, DatabaseError>;
 
@@ -462,10 +570,54 @@ pub trait DatabaseBackend: Send + Sync {
     /// Queue file for analysis
     async fn queue_file_analysis(
         &self,
-        file_version_id: i64,
+        file_id: i64,
         language: &str,
         priority: i32,
     ) -> Result<(), DatabaseError>;
+
+    // ===================
+    // Graph Export Support
+    // ===================
+
+    /// Get all symbols in the database (for graph export)
+    async fn get_all_symbols(&self) -> Result<Vec<SymbolState>, DatabaseError>;
+
+    /// Get all edges in the database (for graph export)
+    async fn get_all_edges(&self) -> Result<Vec<Edge>, DatabaseError>;
+
+    // ===================
+    // LSP Protocol Query Methods
+    // ===================
+
+    /// Get call hierarchy for a symbol, returns wire protocol type
+    /// Note: Symbol resolution happens at daemon layer, not database layer
+    async fn get_call_hierarchy_for_symbol(
+        &self,
+        workspace_id: i64,
+        symbol_uid: &str,
+    ) -> Result<Option<CallHierarchyResult>, DatabaseError>;
+
+    /// Get references for a symbol, returns wire protocol type
+    async fn get_references_for_symbol(
+        &self,
+        workspace_id: i64,
+        symbol_uid: &str,
+        include_declaration: bool,
+    ) -> Result<Vec<Location>, DatabaseError>;
+
+    /// Get definitions for a symbol
+    async fn get_definitions_for_symbol(
+        &self,
+        workspace_id: i64,
+        symbol_uid: &str,
+    ) -> Result<Vec<Location>, DatabaseError>;
+
+    /// Get implementations for a symbol
+    async fn get_implementations_for_symbol(
+        &self,
+        workspace_id: i64,
+        symbol_uid: &str,
+    ) -> Result<Vec<Location>, DatabaseError>;
 }
 
 /// Convenience functions for serializable types
@@ -537,6 +689,66 @@ mod tests {
         assert!(!config.temporary);
         assert!(!config.compression);
         assert_eq!(config.cache_capacity, 64 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_standard_edge_type_as_str() {
+        // Test call relationships
+        assert_eq!(StandardEdgeType::Calls.as_str(), "calls");
+        assert_eq!(StandardEdgeType::CalledBy.as_str(), "called_by");
+
+        // Test reference relationships
+        assert_eq!(StandardEdgeType::References.as_str(), "references");
+        assert_eq!(StandardEdgeType::ReferencedBy.as_str(), "referenced_by");
+
+        // Test definition relationships
+        assert_eq!(StandardEdgeType::Defines.as_str(), "defines");
+        assert_eq!(StandardEdgeType::DefinedBy.as_str(), "defined_by");
+
+        // Test implementation relationships
+        assert_eq!(StandardEdgeType::Implements.as_str(), "implements");
+        assert_eq!(StandardEdgeType::ImplementedBy.as_str(), "implemented_by");
+
+        // Test type relationships
+        assert_eq!(StandardEdgeType::HasType.as_str(), "has_type");
+        assert_eq!(StandardEdgeType::TypeOf.as_str(), "type_of");
+
+        // Test inheritance relationships
+        assert_eq!(StandardEdgeType::Extends.as_str(), "extends");
+        assert_eq!(StandardEdgeType::ExtendedBy.as_str(), "extended_by");
+    }
+
+    #[test]
+    fn test_standard_edge_type_serialization() {
+        // Test that the enum can be serialized and deserialized
+        let edge_type = StandardEdgeType::Calls;
+        let serialized = serde_json::to_string(&edge_type).expect("Failed to serialize");
+        let deserialized: StandardEdgeType =
+            serde_json::from_str(&serialized).expect("Failed to deserialize");
+        assert_eq!(edge_type, deserialized);
+
+        // Test all variants
+        let all_types = vec![
+            StandardEdgeType::Calls,
+            StandardEdgeType::CalledBy,
+            StandardEdgeType::References,
+            StandardEdgeType::ReferencedBy,
+            StandardEdgeType::Defines,
+            StandardEdgeType::DefinedBy,
+            StandardEdgeType::Implements,
+            StandardEdgeType::ImplementedBy,
+            StandardEdgeType::HasType,
+            StandardEdgeType::TypeOf,
+            StandardEdgeType::Extends,
+            StandardEdgeType::ExtendedBy,
+        ];
+
+        for edge_type in all_types {
+            let serialized = serde_json::to_string(&edge_type).expect("Failed to serialize");
+            let deserialized: StandardEdgeType =
+                serde_json::from_str(&serialized).expect("Failed to deserialize");
+            assert_eq!(edge_type, deserialized);
+        }
     }
 
     // Additional integration tests will be added in the backend implementations

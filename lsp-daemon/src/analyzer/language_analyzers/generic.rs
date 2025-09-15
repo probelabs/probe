@@ -533,7 +533,14 @@ mod tests {
 
     fn create_test_context() -> AnalysisContext {
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        AnalysisContext::new(1, 2, 3, "generic".to_string(), uid_generator)
+        AnalysisContext::new(
+            1,
+            2,
+            "generic".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("test.generic"),
+            uid_generator,
+        )
     }
 
     fn create_test_symbol(name: &str, kind: SymbolKind) -> ExtractedSymbol {

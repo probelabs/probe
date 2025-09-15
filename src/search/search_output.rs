@@ -179,9 +179,40 @@ pub fn format_and_print_search_results(
                                                 }
                                             }
                                         }
-                                        if let Some(refs_count) =
+                                        // Display references if available
+                                        if let Some(references) =
+                                            sobj.get("references").and_then(|v| v.as_array())
+                                        {
+                                            if !references.is_empty() {
+                                                println!("    References:");
+                                                for reference in references {
+                                                    if let Some(ref_obj) = reference.as_object() {
+                                                        let file_path = ref_obj
+                                                            .get("file_path")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("");
+                                                        let line = ref_obj
+                                                            .get("line")
+                                                            .and_then(|v| v.as_u64())
+                                                            .unwrap_or(0);
+                                                        let context = ref_obj
+                                                            .get("context")
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("reference");
+                                                        let file_path = file_path
+                                                            .strip_prefix("file://")
+                                                            .unwrap_or(file_path);
+                                                        println!(
+                                                            "      - {}:{} - {}",
+                                                            file_path, line, context
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        } else if let Some(refs_count) =
                                             sobj.get("references_count").and_then(|v| v.as_u64())
                                         {
+                                            // Fallback to count if references array is not available
                                             if refs_count > 0 {
                                                 println!("    References: {refs_count}");
                                             }
@@ -259,10 +290,40 @@ pub fn format_and_print_search_results(
                                     }
                                 }
 
-                                // Display references count if available
-                                if let Some(refs_count) =
+                                // Display references if available
+                                if let Some(references) =
+                                    obj.get("references").and_then(|v| v.as_array())
+                                {
+                                    if !references.is_empty() {
+                                        println!("  References:");
+                                        for reference in references {
+                                            if let Some(ref_obj) = reference.as_object() {
+                                                let file_path = ref_obj
+                                                    .get("file_path")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("");
+                                                let line = ref_obj
+                                                    .get("line")
+                                                    .and_then(|v| v.as_u64())
+                                                    .unwrap_or(0);
+                                                let context = ref_obj
+                                                    .get("context")
+                                                    .and_then(|v| v.as_str())
+                                                    .unwrap_or("reference");
+                                                let file_path = file_path
+                                                    .strip_prefix("file://")
+                                                    .unwrap_or(file_path);
+                                                println!(
+                                                    "    - {}:{} - {}",
+                                                    file_path, line, context
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else if let Some(refs_count) =
                                     obj.get("references_count").and_then(|v| v.as_u64())
                                 {
+                                    // Fallback to count if references array is not available
                                     if refs_count > 0 {
                                         println!("  References: {refs_count}");
                                     }

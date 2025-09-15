@@ -467,6 +467,21 @@ impl GitService {
         Ok(self.repo.find_reference(&branch_ref).is_ok())
     }
 
+    /// Get the remote URL for a given remote name (usually "origin")
+    /// Returns Ok(Some(url)) if remote exists and has URL, Ok(None) if remote doesn't exist or has no URL
+    pub fn get_remote_url(&self, remote_name: &str) -> Result<Option<String>, GitServiceError> {
+        match self.repo.find_remote(remote_name) {
+            Ok(remote) => {
+                if let Some(url) = remote.url(gix::remote::Direction::Fetch) {
+                    Ok(Some(url.to_bstring().to_string()))
+                } else {
+                    Ok(None)
+                }
+            }
+            Err(_) => Ok(None), // Remote doesn't exist
+        }
+    }
+
     /// Get list of files with merge conflicts
     pub fn get_conflicted_files(&self) -> Result<Vec<String>, GitServiceError> {
         if self.repo_workdir.is_none() {

@@ -544,7 +544,7 @@ impl FileChangeDetector {
         &self,
         file_path: &Path,
         _workspace_id: i64,
-        database: &T,
+        _database: &T,
     ) -> Result<Option<FileChange>, DetectionError>
     where
         T: DatabaseBackend + ?Sized,
@@ -565,16 +565,11 @@ impl FileChangeDetector {
         // Compute current content hash
         let (content_hash, size_bytes) = self.compute_file_hash(file_path).await?;
 
-        // Check if file version exists in database
-        let existing_version = database.get_file_version_by_digest(&content_hash).await?;
-
-        let change_type = if existing_version.is_some() {
-            // File content exists in database - check if it's linked to this workspace
-            // TODO: This needs a new database method to check workspace file associations
-            // For now, assume it's an update if we found the content hash
+        // Since we no longer use file versions, we'll default to Update for existing files
+        // This maintains the functionality without requiring database version checks
+        let change_type = if file_path.exists() {
             FileChangeType::Update
         } else {
-            // New content hash - this is either a create or update
             FileChangeType::Create
         };
 

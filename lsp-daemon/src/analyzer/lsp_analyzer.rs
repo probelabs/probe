@@ -373,7 +373,14 @@ mod tests {
 
     fn create_test_context() -> AnalysisContext {
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
-        AnalysisContext::new(1, 2, 3, "rust".to_string(), uid_generator)
+        AnalysisContext::new(
+            1,
+            2,
+            "rust".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("test.rs"),
+            uid_generator,
+        )
     }
 
     #[test]

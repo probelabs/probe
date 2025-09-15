@@ -338,9 +338,10 @@ mod tests {
     fn create_test_context() -> AnalysisContext {
         AnalysisContext {
             workspace_id: 1,
-            file_version_id: 2,
             analysis_run_id: 1,
             language: "rust".to_string(),
+            workspace_path: PathBuf::from("/test/workspace"),
+            file_path: PathBuf::from("/test/workspace/test.rs"),
             uid_generator: Arc::new(SymbolUIDGenerator::new()),
             language_config: LanguageAnalyzerConfig::default(),
         }
