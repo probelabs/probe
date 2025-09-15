@@ -332,8 +332,6 @@ pub fn multiply(a: i32, b: i32) -> i32 {
     let manager_config = ManagerConfig {
         incremental_mode: true,
         max_workers: 2,
-        memory_budget_bytes: 64 * 1024 * 1024,
-        memory_pressure_threshold: 0.8,
         max_queue_size: 100,
         exclude_patterns: vec![],
         include_patterns: vec![],

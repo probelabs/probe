@@ -4,7 +4,6 @@
 //! - Worker pool management with configurable concurrency
 //! - File discovery and enumeration  
 //! - Priority assignment and queue management
-//! - Memory budget tracking and backpressure handling
 //! - Language-specific pipeline execution
 //! - Progress reporting and status monitoring
 
@@ -31,7 +30,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{RwLock, Semaphore};
@@ -106,11 +105,6 @@ pub struct ManagerConfig {
     /// Maximum number of worker threads
     pub max_workers: usize,
 
-    /// Memory budget in bytes (0 = unlimited)
-    pub memory_budget_bytes: u64,
-
-    /// Memory usage threshold to trigger backpressure (0.0-1.0)
-    pub memory_pressure_threshold: f64,
 
     /// Maximum queue size (0 = unlimited)
     pub max_queue_size: usize,
@@ -141,8 +135,6 @@ impl Default for ManagerConfig {
     fn default() -> Self {
         Self {
             max_workers: num_cpus::get().max(2),    // At least 2 workers
-            memory_budget_bytes: 512 * 1024 * 1024, // 512MB default
-            memory_pressure_threshold: 0.8,         // 80% threshold
             max_queue_size: 10000,                  // 10k files max
             exclude_patterns: vec![
                 "*.git/*".to_string(),
@@ -198,7 +190,7 @@ pub enum ManagerStatus {
     /// Actively indexing files with worker pool
     Indexing,
 
-    /// Indexing paused due to memory pressure or other constraints
+    /// Indexing paused due to constraints
     Paused,
 
     /// Shutting down, stopping workers
@@ -265,8 +257,6 @@ pub struct IndexingManager {
     /// Files already indexed (for incremental mode)
     indexed_files: Arc<RwLock<HashMap<PathBuf, FileIndexInfo>>>, // path -> index information
 
-    /// Current memory usage tracking
-    current_memory_usage: Arc<AtomicU64>,
 
     /// LSP server manager for language server pool management
     server_manager: Arc<SingleServerManager>,
@@ -421,7 +411,6 @@ impl IndexingManager {
             next_worker_id: Arc::new(AtomicUsize::new(1)),
             background_tasks: Arc::new(RwLock::new(Vec::new())),
             indexed_files: Arc::new(RwLock::new(HashMap::new())),
-            current_memory_usage: Arc::new(AtomicU64::new(0)),
             server_manager,
             definition_cache,
             start_time: Instant::now(),
@@ -441,8 +430,6 @@ impl IndexingManager {
         // Convert comprehensive config to legacy ManagerConfig for compatibility
         let manager_config = ManagerConfig {
             max_workers: config.max_workers,
-            memory_budget_bytes: config.memory_budget_mb * 1024 * 1024,
-            memory_pressure_threshold: config.memory_pressure_threshold,
             max_queue_size: config.max_queue_size,
             exclude_patterns: config.global_exclude_patterns.clone(),
             include_patterns: config.global_include_patterns.clone(),
@@ -807,25 +794,12 @@ impl IndexingManager {
         self.worker_stats.read().await.values().cloned().collect()
     }
 
-    /// Check if memory pressure requires throttling
-    pub fn is_memory_pressure(&self) -> bool {
-        if self.config.memory_budget_bytes == 0 {
-            return false; // No limit
-        }
-
-        let current = self.current_memory_usage.load(Ordering::Relaxed);
-        let threshold =
-            (self.config.memory_budget_bytes as f64 * self.config.memory_pressure_threshold) as u64;
-
-        current > threshold
-    }
 
     /// Reset internal state for new indexing session
     async fn reset_state(&self) {
         self.progress.reset();
         self.queue.clear().await;
         self.shutdown_signal.store(false, Ordering::Relaxed);
-        self.current_memory_usage.store(0, Ordering::Relaxed);
         self.worker_stats.write().await.clear();
 
         // Clear indexed files if not in incremental mode
@@ -871,29 +845,6 @@ impl IndexingManager {
             tasks.push(status_task);
         }
 
-        // Start memory monitoring task
-        {
-            let memory_usage = Arc::clone(&self.current_memory_usage);
-            let progress = Arc::clone(&self.progress);
-            let shutdown = Arc::clone(&self.shutdown_signal);
-
-            let memory_task = tokio::spawn(async move {
-                let mut interval = interval(Duration::from_secs(10)); // Check every 10 seconds
-
-                while !shutdown.load(Ordering::Relaxed) {
-                    interval.tick().await;
-
-                    let current = memory_usage.load(Ordering::Relaxed);
-                    progress.update_memory_usage(current);
-
-                    // Could add memory cleanup logic here if needed
-                }
-
-                debug!("Memory monitoring task shut down");
-            });
-
-            tasks.push(memory_task);
-        }
 
         info!("Started {} background tasks", tasks.len());
         Ok(())
@@ -1303,13 +1254,12 @@ impl IndexingManager {
         let language_detector = Arc::clone(&self.language_detector);
         let semaphore = Arc::clone(&self.worker_semaphore);
         let shutdown = Arc::clone(&self.shutdown_signal);
-        let current_memory = Arc::clone(&self.current_memory_usage);
         let server_manager = Arc::clone(&self.server_manager);
         let definition_cache = Arc::clone(&self.definition_cache);
         let workspace_cache_router = Arc::clone(&self.workspace_cache_router);
         let indexed_files = Arc::clone(&self.indexed_files);
         let analysis_engine = self.analysis_engine.clone();
-        let config = self.config.clone();
+        let _config = self.config.clone();
 
         let handle = tokio::spawn(async move {
             debug!("Worker {} starting", worker_id);
@@ -1329,13 +1279,6 @@ impl IndexingManager {
                     }
                 };
 
-                // Check memory pressure
-                let memory_usage = current_memory.load(Ordering::Relaxed);
-                if config.memory_budget_bytes > 0 && memory_usage > config.memory_budget_bytes {
-                    debug!("Worker {} waiting due to memory pressure", worker_id);
-                    sleep(Duration::from_secs(1)).await;
-                    continue;
-                }
 
                 // Get next item from queue
                 let item = match queue.dequeue().await {
@@ -1370,7 +1313,6 @@ impl IndexingManager {
                     item,
                     &pipelines,
                     &language_detector,
-                    &current_memory,
                     &server_manager,
                     &definition_cache,
                     &workspace_cache_router,
@@ -1419,7 +1361,6 @@ impl IndexingManager {
         item: QueueItem,
         pipelines: &Arc<RwLock<HashMap<Language, IndexingPipeline>>>,
         language_detector: &Arc<LanguageDetector>,
-        current_memory: &Arc<AtomicU64>,
         server_manager: &Arc<SingleServerManager>,
         definition_cache: &Arc<LspCache<DefinitionInfo>>,
         _workspace_cache_router: &Arc<crate::workspace_database_router::WorkspaceDatabaseRouter>,
@@ -1452,11 +1393,6 @@ impl IndexingManager {
             worker_id, file_path, language
         );
 
-        // Estimate memory usage for this file
-        let file_size = item.estimated_size.unwrap_or(1024);
-        let estimated_memory = file_size * 2; // Rough estimate: 2x file size for processing
-
-        current_memory.fetch_add(estimated_memory, Ordering::Relaxed);
 
         // First, use the existing pipeline to extract symbols from the file
         let symbols_result = {
@@ -1575,8 +1511,6 @@ impl IndexingManager {
             Err(e) => Err(anyhow!("Failed to process {:?}: {}", file_path, e)),
         };
 
-        // Release memory estimate
-        current_memory.fetch_sub(estimated_memory, Ordering::Relaxed);
 
         result
     }
@@ -2245,7 +2179,6 @@ mod tests {
     async fn test_manager_lifecycle() {
         let config = ManagerConfig {
             max_workers: 2,
-            memory_budget_bytes: 1024 * 1024, // 1MB
             ..ManagerConfig::default()
         };
 
@@ -2336,43 +2269,6 @@ mod tests {
         assert_eq!(unknown_priority, Priority::Low);
     }
 
-    #[tokio::test]
-    async fn test_memory_pressure_detection() {
-        let config = ManagerConfig {
-            memory_budget_bytes: 1000,
-            memory_pressure_threshold: 0.8,
-            ..ManagerConfig::default()
-        };
-
-        let language_detector = Arc::new(LanguageDetector::new());
-        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
-        let server_manager = Arc::new(SingleServerManager::new(registry));
-        let lsp_cache_config = LspCacheConfig::default();
-        let definition_cache = Arc::new(
-            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
-                .await
-                .expect("Failed to create LspCache"),
-        );
-        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
-        let manager = IndexingManager::new(
-            config,
-            language_detector,
-            server_manager,
-            definition_cache,
-            workspace_cache_router,
-        );
-
-        // Initially no pressure
-        assert!(!manager.is_memory_pressure());
-
-        // Simulate memory usage above threshold
-        manager.current_memory_usage.store(850, Ordering::Relaxed); // 85% of 1000
-        assert!(manager.is_memory_pressure());
-
-        // Back below threshold
-        manager.current_memory_usage.store(700, Ordering::Relaxed); // 70% of 1000
-        assert!(!manager.is_memory_pressure());
-    }
 
     #[tokio::test]
     async fn test_file_exclusion_patterns() {
@@ -2899,7 +2795,6 @@ mod tests {
         let mut indexing_config = IndexingConfig::default();
         indexing_config.enabled = true;
         indexing_config.max_workers = 3;
-        indexing_config.memory_budget_mb = 128;
         indexing_config.max_queue_size = 500;
 
         let language_detector = Arc::new(LanguageDetector::new());
@@ -2922,7 +2817,6 @@ mod tests {
 
         // Verify configuration was properly converted
         assert_eq!(manager.config.max_workers, 3);
-        assert_eq!(manager.config.memory_budget_bytes, 128 * 1024 * 1024);
         assert_eq!(manager.config.max_queue_size, 500);
     }
 
