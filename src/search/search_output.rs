@@ -2055,18 +2055,40 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
 
     use colored::*;
 
-    for (file_index, result) in results.iter().enumerate() {
+    // Group results by file and sort each group by line number
+    let mut files_map: std::collections::HashMap<String, Vec<&SearchResult>> =
+        std::collections::HashMap::new();
+
+    for result in results {
+        files_map
+            .entry(result.file.clone())
+            .or_default()
+            .push(result);
+    }
+
+    // Sort files for consistent output
+    let mut files: Vec<(String, Vec<&SearchResult>)> = files_map.into_iter().collect();
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Sort results within each file by line number (not by score)
+    for (_, file_results) in &mut files {
+        file_results.sort_by_key(|r| r.lines.0);
+    }
+
+    for (file_index, (file_path, file_results)) in files.iter().enumerate() {
         // Handle dry run (just collect content without printing)
         if dry_run {
             // Add placeholder content for token/byte counting
             displayed_content.push("---".to_string());
-            displayed_content.push(format!("File: {}", result.file));
+            displayed_content.push(format!("File: {}", file_path));
             displayed_content.push("".to_string());
 
-            if let Some(matched_line_indices) = &result.matched_lines {
-                for &matched_line_idx in matched_line_indices {
-                    let absolute_line = result.lines.0 + matched_line_idx;
-                    displayed_content.push(format!("{}", absolute_line));
+            for result in file_results {
+                if let Some(matched_line_indices) = &result.matched_lines {
+                    for &matched_line_idx in matched_line_indices {
+                        let absolute_line = result.lines.0 + matched_line_idx;
+                        displayed_content.push(format!("{}", absolute_line));
+                    }
                 }
             }
             displayed_content.push("".to_string());
@@ -2078,35 +2100,105 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
             println!();
         }
 
-        // File header
+        // File header (only once per file)
         println!("{}", "---".dimmed());
-        println!("{} {}", "File:".dimmed(), result.file.bold());
+        println!("{} {}", "File:".dimmed(), file_path.bold());
         println!();
 
-        // Always use outline format since this function is specifically for outline format
-        {
-            // For outline mode, collect all lines to display and then render them
-            // Phase 1: Collect all lines that need to be displayed
+        // Track lines for this entire file
+        let mut all_lines_for_file: Vec<(usize, OutlineLineType)> = Vec::new();
+        let mut all_closing_brace_contexts: std::collections::HashMap<
+            usize,
+            crate::models::ParentContext,
+        > = std::collections::HashMap::new();
+
+        // Collect all matched keywords from all results for this file
+        let mut all_keywords: Option<Vec<String>> = None;
+        for result in file_results {
+            if let Some(ref keywords) = result.matched_keywords {
+                if all_keywords.is_none() {
+                    all_keywords = Some(Vec::new());
+                }
+                if let Some(ref mut all_kw) = all_keywords {
+                    for kw in keywords {
+                        if !all_kw.contains(kw) {
+                            all_kw.push(kw.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Process each result and collect all lines to display
+        for result in file_results {
+            // Collect lines for this result
             let (lines_to_display, closing_brace_contexts) =
                 collect_outline_lines(result, &result.file);
 
-            // IMPORTANT: These must be per-file to avoid cross-file interference
-            let mut displayed_lines_for_this_file: std::collections::HashSet<usize> =
-                std::collections::HashSet::new();
-            let mut displayed_ellipsis_ranges_for_this_file: Vec<(usize, usize)> = Vec::new();
+            // Merge into the file-level collections
+            for line in lines_to_display {
+                if !all_lines_for_file.iter().any(|(l, _)| *l == line.0) {
+                    all_lines_for_file.push(line);
+                }
+            }
 
-            // Phase 2: Render the collected lines with proper gaps
-            render_outline_lines(
-                &lines_to_display,
-                &result.file,
-                &mut displayed_lines_for_this_file,
-                &mut displayed_content,
-                &mut displayed_ellipsis_ranges_for_this_file,
-                &result.matched_keywords,
-                &closing_brace_contexts,
-                &mut last_displayed_per_file,
-            );
+            for (line_num, context) in closing_brace_contexts {
+                all_closing_brace_contexts.insert(line_num, context);
+            }
         }
+
+        // Sort all lines for this file by line number
+        all_lines_for_file.sort_by_key(|(line, _)| *line);
+
+        // Remove duplicates, keeping the most important line type
+        let mut deduped_lines = Vec::new();
+        let mut seen_lines = std::collections::HashMap::new();
+
+        for (line, line_type) in all_lines_for_file {
+            if let Some(existing_type) = seen_lines.get(&line).copied() {
+                // Preserve more specific types over generic ones
+                let should_replace = match (existing_type, line_type) {
+                    // MatchedLine is most important
+                    (_, OutlineLineType::MatchedLine) => true,
+                    (OutlineLineType::MatchedLine, _) => false,
+                    // FunctionSignature is more important than context
+                    (OutlineLineType::ParentContext, OutlineLineType::FunctionSignature) => true,
+                    (OutlineLineType::NestedContext, OutlineLineType::FunctionSignature) => true,
+                    (OutlineLineType::FunctionSignature, OutlineLineType::ParentContext) => false,
+                    (OutlineLineType::FunctionSignature, OutlineLineType::NestedContext) => false,
+                    // Keep first occurrence otherwise
+                    _ => false,
+                };
+
+                if should_replace {
+                    seen_lines.insert(line, line_type);
+                    // Find and update existing entry
+                    if let Some(pos) = deduped_lines.iter().position(|(l, _)| *l == line) {
+                        deduped_lines[pos] = (line, line_type);
+                    }
+                }
+            } else {
+                seen_lines.insert(line, line_type);
+                deduped_lines.push((line, line_type));
+            }
+        }
+
+        // IMPORTANT: These must be per-file to avoid cross-file interference
+        let mut displayed_lines_for_this_file: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        let mut displayed_ellipsis_ranges_for_this_file: Vec<(usize, usize)> = Vec::new();
+
+        // Render all lines for this file at once
+        render_outline_lines(
+            &deduped_lines,
+            file_path,
+            &mut displayed_lines_for_this_file,
+            &mut displayed_content,
+            &mut displayed_ellipsis_ranges_for_this_file,
+            &all_keywords,
+            &all_closing_brace_contexts,
+            &mut last_displayed_per_file,
+        );
     }
 
     // Print summary at the end
