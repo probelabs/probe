@@ -44,6 +44,8 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 		console.error(`[DELEGATE] Task: ${task}`);
 		console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
 		console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
+		console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
+		console.error(`[DELEGATE] Using clean agent environment with code-researcher prompt`);
 	}
 
 	try {
@@ -52,6 +54,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 		
 		if (debug) {
 			console.error(`[DELEGATE] Using binary at: ${binaryPath}`);
+			console.error(`[DELEGATE] Command args: ${args.join(' ')}`);
 		}
 
 		// Create the agent command with automatic subagent configuration
@@ -86,7 +89,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				stdout += chunk;
 				
 				if (debug) {
-					console.error(`[DELEGATE] stdout: ${chunk}`);
+					console.error(`[DELEGATE] stdout chunk received (${chunk.length} chars): ${chunk.substring(0, 200)}${chunk.length > 200 ? '...' : ''}`);
 				}
 			});
 
@@ -96,7 +99,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				stderr += chunk;
 				
 				if (debug) {
-					console.error(`[DELEGATE] stderr: ${chunk}`);
+					console.error(`[DELEGATE] stderr chunk received (${chunk.length} chars): ${chunk.substring(0, 200)}${chunk.length > 200 ? '...' : ''}`);
 				}
 			});
 
@@ -109,6 +112,9 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 
 				if (debug) {
 					console.error(`[DELEGATE] Process completed with code ${code} in ${duration}ms`);
+					console.error(`[DELEGATE] Duration: ${(duration / 1000).toFixed(2)}s`);
+					console.error(`[DELEGATE] Total stdout: ${stdout.length} chars`);
+					console.error(`[DELEGATE] Total stderr: ${stderr.length} chars`);
 				}
 
 				if (code === 0) {
@@ -116,14 +122,69 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 					const response = stdout.trim();
 					
 					if (!response) {
+						if (debug) {
+							console.error(`[DELEGATE] Task completed but returned empty response for session ${sessionId}`);
+						}
 						reject(new Error('Delegate agent returned empty response'));
 						return;
 					}
 
+					if (debug) {
+						console.error(`[DELEGATE] Task completed successfully for session ${sessionId}`);
+						console.error(`[DELEGATE] Response length: ${response.length} chars`);
+					}
+					
+					// Record successful completion in telemetry
+					if (tracer) {
+						tracer.recordDelegationEvent('completed', {
+							'delegation.session_id': sessionId,
+							'delegation.duration_ms': duration,
+							'delegation.response_length': response.length,
+							'delegation.success': true
+						});
+						
+						if (delegationSpan) {
+							delegationSpan.setAttributes({
+								'delegation.result.success': true,
+								'delegation.result.response_length': response.length,
+								'delegation.result.duration_ms': duration
+							});
+							delegationSpan.setStatus({ code: 1 }); // OK
+							delegationSpan.end();
+						}
+					}
+					
 					resolve(response);
 				} else {
 					// Failed delegation
 					const errorMessage = stderr.trim() || `Delegate process failed with exit code ${code}`;
+					if (debug) {
+						console.error(`[DELEGATE] Task failed for session ${sessionId} with code ${code}`);
+						console.error(`[DELEGATE] Error message: ${errorMessage}`);
+					}
+					
+					// Record failure in telemetry
+					if (tracer) {
+						tracer.recordDelegationEvent('failed', {
+							'delegation.session_id': sessionId,
+							'delegation.duration_ms': duration,
+							'delegation.exit_code': code,
+							'delegation.error_message': errorMessage,
+							'delegation.success': false
+						});
+						
+						if (delegationSpan) {
+							delegationSpan.setAttributes({
+								'delegation.result.success': false,
+								'delegation.result.exit_code': code,
+								'delegation.result.error': errorMessage,
+								'delegation.result.duration_ms': duration
+							});
+							delegationSpan.setStatus({ code: 2, message: errorMessage }); // ERROR
+							delegationSpan.end();
+						}
+					}
+					
 					reject(new Error(`Delegation failed: ${errorMessage}`));
 				}
 			});
@@ -133,8 +194,12 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				if (isResolved) return;
 				isResolved = true;
 
+				const duration = Date.now() - startTime;
+
 				if (debug) {
-					console.error(`[DELEGATE] Process error:`, error);
+					console.error(`[DELEGATE] Process spawn error after ${duration}ms:`, error);
+					console.error(`[DELEGATE] Session ${sessionId} failed during process creation`);
+					console.error(`[DELEGATE] Error type: ${error.code || 'unknown'}`);
 				}
 
 				reject(new Error(`Failed to start delegate process: ${error.message}`));
@@ -145,8 +210,13 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				if (isResolved) return;
 				isResolved = true;
 
+				const duration = Date.now() - startTime;
+
 				if (debug) {
-					console.error(`[DELEGATE] Timeout after ${timeout} seconds`);
+					console.error(`[DELEGATE] Process timeout after ${(duration / 1000).toFixed(2)}s (limit: ${timeout}s)`);
+					console.error(`[DELEGATE] Terminating session ${sessionId} due to timeout`);
+					console.error(`[DELEGATE] Partial stdout: ${stdout.substring(0, 500)}${stdout.length > 500 ? '...' : ''}`);
+					console.error(`[DELEGATE] Partial stderr: ${stderr.substring(0, 500)}${stderr.length > 500 ? '...' : ''}`);
 				}
 
 				// Kill the process
@@ -155,6 +225,9 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				// Give it a moment to terminate gracefully
 				setTimeout(() => {
 					if (!process.killed) {
+						if (debug) {
+							console.error(`[DELEGATE] Force killing process ${sessionId} after graceful timeout`);
+						}
 						process.kill('SIGKILL');
 					}
 				}, 5000);
@@ -164,8 +237,12 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 		});
 
 	} catch (error) {
+		const duration = Date.now() - startTime;
+
 		if (debug) {
-			console.error(`[DELEGATE] Error in delegate function:`, error);
+			console.error(`[DELEGATE] Error in delegate function after ${duration}ms:`, error);
+			console.error(`[DELEGATE] Session ${sessionId} failed during setup`);
+			console.error(`[DELEGATE] Error stack: ${error.stack}`);
 		}
 		throw new Error(`Delegation setup failed: ${error.message}`);
 	}

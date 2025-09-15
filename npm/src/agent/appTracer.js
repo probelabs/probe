@@ -143,6 +143,133 @@ export class AppTracer {
   }
 
   /**
+   * Create a span for delegation operations
+   */
+  createDelegationSpan(task, attributes = {}) {
+    if (!this.isEnabled()) return null;
+
+    return this.tracer.startSpan('agent.delegation', {
+      attributes: {
+        'delegation.task': task.substring(0, 200) + (task.length > 200 ? '...' : ''),
+        'delegation.task_length': task.length,
+        'session.id': this.sessionId,
+        ...attributes,
+      },
+    });
+  }
+
+  /**
+   * Create a span for JSON validation operations
+   */
+  createJsonValidationSpan(responseLength, attributes = {}) {
+    if (!this.isEnabled()) return null;
+
+    return this.tracer.startSpan('validation.json', {
+      attributes: {
+        'validation.response_length': responseLength,
+        'session.id': this.sessionId,
+        ...attributes,
+      },
+    });
+  }
+
+  /**
+   * Create a span for Mermaid validation operations
+   */
+  createMermaidValidationSpan(diagramCount, attributes = {}) {
+    if (!this.isEnabled()) return null;
+
+    return this.tracer.startSpan('validation.mermaid', {
+      attributes: {
+        'validation.diagram_count': diagramCount,
+        'session.id': this.sessionId,
+        ...attributes,
+      },
+    });
+  }
+
+  /**
+   * Create a span for schema processing operations
+   */
+  createSchemaProcessingSpan(schemaType, attributes = {}) {
+    if (!this.isEnabled()) return null;
+
+    return this.tracer.startSpan('schema.processing', {
+      attributes: {
+        'schema.type': schemaType,
+        'session.id': this.sessionId,
+        ...attributes,
+      },
+    });
+  }
+
+  /**
+   * Record delegation events
+   */
+  recordDelegationEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`delegation.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
+  /**
+   * Record JSON validation events
+   */
+  recordJsonValidationEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`json_validation.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
+  /**
+   * Record Mermaid validation events
+   */
+  recordMermaidValidationEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`mermaid_validation.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
+  /**
+   * Add an event to the current or most recent span
+   */
+  addEvent(name, attributes = {}) {
+    if (!this.isEnabled()) return;
+
+    // Try to add to the current span in context
+    const activeSpan = this.telemetryConfig?.tracer?.getActiveSpan?.();
+    if (activeSpan) {
+      activeSpan.addEvent(name, attributes);
+    } else {
+      // Fallback: log as structured data if no active span
+      if (this.telemetryConfig?.enableConsole) {
+        console.log(`[Event] ${name}:`, attributes);
+      }
+    }
+  }
+
+  /**
+   * Set attributes on the current span
+   */
+  setAttributes(attributes) {
+    if (!this.isEnabled()) return;
+
+    const activeSpan = this.telemetryConfig?.tracer?.getActiveSpan?.();
+    if (activeSpan) {
+      activeSpan.setAttributes(attributes);
+    }
+  }
+
+  /**
    * Wrap a function with automatic span creation
    */
   wrapFunction(spanName, fn, attributes = {}) {

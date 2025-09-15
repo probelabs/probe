@@ -633,12 +633,22 @@ When troubleshooting:
                       ...toolParams,
                       currentIteration,
                       maxIterations,
-                      debug: this.debug
+                      debug: this.debug,
+                      tracer: this.tracer
                     };
                     
                     if (this.debug) {
                       console.log(`[DEBUG] Executing delegate tool at iteration ${currentIteration}/${maxIterations}`);
                       console.log(`[DEBUG] Delegate task: ${toolParams.task?.substring(0, 100)}...`);
+                    }
+                    
+                    // Record delegation start in telemetry
+                    if (this.tracer) {
+                      this.tracer.recordDelegationEvent('tool_started', {
+                        'delegation.iteration': currentIteration,
+                        'delegation.max_iterations': maxIterations,
+                        'delegation.task_preview': toolParams.task?.substring(0, 200) + (toolParams.task?.length > 200 ? '...' : '')
+                      });
                     }
                     
                     return await this.toolImplementations[toolName].execute(enhancedParams);
@@ -790,42 +800,86 @@ Convert your previous response content into actual JSON data that follows this s
           
           // Step 3: Validate and fix Mermaid diagrams if present
           try {
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: Starting enhanced mermaid validation...`);
+            }
+            
+            // Record mermaid validation start in telemetry
+            if (this.tracer) {
+              this.tracer.recordMermaidValidationEvent('schema_processing_started', {
+                'mermaid_validation.context': 'schema_processing',
+                'mermaid_validation.response_length': finalResult.length
+              });
+            }
+            
             const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
               debug: this.debug,
               path: this.allowedFolders[0],
               provider: this.clientApiProvider,
-              model: this.model
+              model: this.model,
+              tracer: this.tracer
             });
             
             if (mermaidValidation.wasFixed) {
               finalResult = mermaidValidation.fixedResponse;
               if (this.debug) {
-                console.log(`[DEBUG] Mermaid diagrams fixed`);
+                console.log(`[DEBUG] Mermaid validation: Diagrams successfully fixed`);
+                
+                if (mermaidValidation.performanceMetrics) {
+                  const metrics = mermaidValidation.performanceMetrics;
+                  console.log(`[DEBUG] Mermaid validation: Performance - total: ${metrics.totalTimeMs}ms, AI fixing: ${metrics.aiFixingTimeMs}ms`);
+                  console.log(`[DEBUG] Mermaid validation: Results - ${metrics.diagramsFixed}/${metrics.diagramsProcessed} diagrams fixed`);
+                }
+                
                 if (mermaidValidation.fixingResults) {
                   mermaidValidation.fixingResults.forEach((fixResult, index) => {
                     if (fixResult.wasFixed) {
-                      console.log(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
+                      const method = fixResult.fixedWithHtmlDecoding ? 'HTML entity decoding' : 'AI correction';
+                      const time = fixResult.aiFixingTimeMs ? ` in ${fixResult.aiFixingTimeMs}ms` : '';
+                      console.log(`[DEBUG] Mermaid validation: Fixed diagram ${fixResult.diagramIndex + 1} with ${method}${time}`);
+                      console.log(`[DEBUG] Mermaid validation: Original error: ${fixResult.originalError}`);
+                    } else {
+                      console.log(`[DEBUG] Mermaid validation: Failed to fix diagram ${fixResult.diagramIndex + 1}: ${fixResult.fixingError}`);
                     }
                   });
                 }
               }
+            } else if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: No fixes needed or fixes unsuccessful`);
+              if (mermaidValidation.diagrams?.length > 0) {
+                console.log(`[DEBUG] Mermaid validation: Found ${mermaidValidation.diagrams.length} diagrams, all valid: ${mermaidValidation.isValid}`);
+              }
             }
           } catch (error) {
             if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation failed: ${error.message}`);
+              console.log(`[DEBUG] Mermaid validation: Process failed with error: ${error.message}`);
+              console.log(`[DEBUG] Mermaid validation: Stack trace: ${error.stack}`);
             }
           }
           
           // Step 4: Validate and potentially correct JSON responses
           if (isJsonSchema(options.schema)) {
-            let validation = validateJsonResponse(finalResult);
+            if (this.debug) {
+              console.log(`[DEBUG] JSON validation: Starting validation process for schema response`);
+              console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
+            }
+            
+            // Record JSON validation start in telemetry
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('started', {
+                'json_validation.response_length': finalResult.length,
+                'json_validation.schema_type': 'JSON'
+              });
+            }
+            
+            let validation = validateJsonResponse(finalResult, { debug: this.debug });
             let retryCount = 0;
             const maxRetries = 3;
             
             // First check if the response is valid JSON but is actually a schema definition
-            if (validation.isValid && isJsonSchemaDefinition(finalResult)) {
+            if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
               if (this.debug) {
-                console.log(`[DEBUG] Response is a JSON schema definition instead of data, correcting...`);
+                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, correcting...`);
               }
               
               // Use specialized correction prompt for schema definition confusion
@@ -846,15 +900,16 @@ Convert your previous response content into actual JSON data that follows this s
             
             while (!validation.isValid && retryCount < maxRetries) {
               if (this.debug) {
-                console.log(`[DEBUG] JSON validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
+                console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
+                console.log(`[DEBUG] JSON validation: Invalid response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
               }
               
               // Check if the invalid response is actually a schema definition
               let correctionPrompt;
               try {
-                if (isJsonSchemaDefinition(finalResult)) {
+                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
                   if (this.debug) {
-                    console.log(`[DEBUG] Response is still a schema definition, using specialized correction`);
+                    console.log(`[DEBUG] JSON validation: Response is still a schema definition, using specialized correction`);
                   }
                   correctionPrompt = createSchemaDefinitionCorrectionPrompt(
                     finalResult,
@@ -886,16 +941,35 @@ Convert your previous response content into actual JSON data that follows this s
               finalResult = cleanSchemaResponse(finalResult);
               
               // Validate the corrected response
-              validation = validateJsonResponse(finalResult);
+              validation = validateJsonResponse(finalResult, { debug: this.debug });
               retryCount++;
               
-              if (this.debug && !validation.isValid && retryCount < maxRetries) {
-                console.log(`[DEBUG] JSON still invalid after correction ${retryCount}, retrying...`);
+              if (this.debug) {
+                if (!validation.isValid && retryCount < maxRetries) {
+                  console.log(`[DEBUG] JSON validation: Still invalid after correction ${retryCount}, retrying...`);
+                  console.log(`[DEBUG] JSON validation: Corrected response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
+                } else if (validation.isValid) {
+                  console.log(`[DEBUG] JSON validation: Successfully corrected after ${retryCount} attempts`);
+                }
               }
             }
             
             if (!validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON still invalid after ${maxRetries} correction attempts:`, validation.error);
+              console.log(`[DEBUG] JSON validation: Still invalid after ${maxRetries} correction attempts:`, validation.error);
+              console.log(`[DEBUG] JSON validation: Final invalid response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+            } else if (validation.isValid && this.debug) {
+              console.log(`[DEBUG] JSON validation: Final validation successful`);
+            }
+            
+            // Record JSON validation completion in telemetry
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('completed', {
+                'json_validation.success': validation.isValid,
+                'json_validation.retry_count': retryCount,
+                'json_validation.max_retries': maxRetries,
+                'json_validation.final_response_length': finalResult.length,
+                'json_validation.error': validation.isValid ? null : validation.error
+              });
             }
           }
         } catch (error) {
@@ -908,25 +982,41 @@ Convert your previous response content into actual JSON data that follows this s
           finalResult = cleanSchemaResponse(finalResult);
           
           // Validate and fix Mermaid diagrams if present
+          if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result...`);
+          }
+          
           const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
             debug: this.debug,
             path: this.allowedFolders[0],
             provider: this.clientApiProvider,
-            model: this.model
+            model: this.model,
+            tracer: this.tracer
           });
           
           if (mermaidValidation.wasFixed) {
             finalResult = mermaidValidation.fixedResponse;
             if (this.debug) {
-              console.log(`[DEBUG] Mermaid diagrams fixed in attempt_completion result`);
+              console.log(`[DEBUG] Mermaid validation: attempt_completion diagrams fixed`);
+              if (mermaidValidation.performanceMetrics) {
+                console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
+              }
             }
+          } else if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
           }
           
           // Validate JSON if schema expects JSON
           if (isJsonSchema(options.schema)) {
-            const validation = validateJsonResponse(finalResult);
+            if (this.debug) {
+              console.log(`[DEBUG] JSON validation: Validating attempt_completion result`);
+            }
+            const validation = validateJsonResponse(finalResult, { debug: this.debug });
             if (!validation.isValid && this.debug) {
-              console.log(`[DEBUG] attempt_completion result JSON validation failed: ${validation.error}`);
+              console.log(`[DEBUG] JSON validation: attempt_completion result validation failed: ${validation.error}`);
+              console.log(`[DEBUG] JSON validation: attempt_completion response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+            } else if (validation.isValid && this.debug) {
+              console.log(`[DEBUG] JSON validation: attempt_completion result validation successful`);
             }
           }
         } catch (error) {
