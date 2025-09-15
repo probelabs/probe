@@ -3,6 +3,8 @@
  * Supports JSON and Mermaid diagram validation
  */
 
+import { createMessagePreview } from '../tools/common.js';
+
 /**
  * HTML entity decoder map for common entities that might appear in mermaid diagrams
  */
@@ -128,7 +130,8 @@ export function validateJsonResponse(response, options = {}) {
   
   if (debug) {
     console.log(`[DEBUG] JSON validation: Starting validation for response (${response.length} chars)`);
-    console.log(`[DEBUG] JSON validation: Preview: ${response.substring(0, 200)}${response.length > 200 ? '...' : ''}`);
+    const preview = createMessagePreview(response);
+    console.log(`[DEBUG] JSON validation: Preview: ${preview}`);
   }
   
   try {
