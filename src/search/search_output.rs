@@ -768,6 +768,17 @@ fn is_comment_node(node: &tree_sitter::Node) -> bool {
     )
 }
 
+/// Check if a line is a comment line based on its content
+fn is_comment_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("//")
+        || trimmed.starts_with("///")
+        || trimmed.starts_with("/*")
+        || trimmed.starts_with("*")
+        || trimmed.starts_with("*/")
+        || (trimmed.starts_with("#") && !trimmed.starts_with("#[")) // Python/shell comments but not Rust attributes
+}
+
 fn file_extension(path: &std::path::Path) -> &str {
     path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
 }
@@ -1310,6 +1321,37 @@ fn collect_outline_lines(
         // Add the actual matched lines
         for &line_num in &matched_lines {
             lines.push((line_num, OutlineLineType::MatchedLine));
+
+            // If this matched line is a comment, also include the code that follows it
+            let source_lines: Vec<&str> = full_source.lines().collect();
+            if let Some(line_content) = source_lines.get(line_num - 1) {
+                if is_comment_line(line_content) {
+                    // Add up to 3 lines of non-comment code following the comment
+                    let mut added_lines = 0;
+                    for offset in 1..=5 {
+                        // Look ahead up to 5 lines
+                        if added_lines >= 3 {
+                            break; // Limit to 3 lines of code
+                        }
+
+                        let following_line_num = line_num + offset;
+                        if let Some(following_line) = source_lines.get(following_line_num - 1) {
+                            let trimmed = following_line.trim();
+
+                            // Skip empty lines and additional comments
+                            if trimmed.is_empty() || is_comment_line(following_line) {
+                                continue;
+                            }
+
+                            // Add this line as a matched line (it provides context for the comment)
+                            lines.push((following_line_num, OutlineLineType::MatchedLine));
+                            added_lines += 1;
+                        } else {
+                            break; // End of file
+                        }
+                    }
+                }
+            }
         }
 
         // Add closing braces for functions and other contexts
