@@ -16,6 +16,7 @@ fn test_merge_ranked_blocks() {
         code:
             "fn test_function() {\n    let x = 1;\n    let y = 2;\n    println!(\"{}\", x + y);\n}"
                 .to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(1),
         score: Some(0.9),
@@ -35,12 +36,15 @@ fn test_merge_ranked_blocks() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+        parent_context: None,
+        matched_lines: None,
     };
     let block2 = SearchResult {
     file: "test_file.rs".to_string(),
     lines: (6, 10),
     node_type: "function".to_string(),
     code: "fn another_function() {\n    let z = 3;\n    let result = z * 2;\n    println!(\"{}\", result);\n}".to_string(),
+        symbol_signature: None,
     matched_by_filename: None,
     rank: Some(2),
     score: Some(0.8),
@@ -60,6 +64,8 @@ fn test_merge_ranked_blocks() {
     block_id: None,
     matched_keywords: None,
     tokenized_content: None,
+            parent_context: None,
+            matched_lines: None,
 };
 
     // Create block from a different file that should not be merged
@@ -68,6 +74,7 @@ fn test_merge_ranked_blocks() {
         lines: (1, 5),
         node_type: "function".to_string(),
         code: "fn other_function() {\n    let a = 10;\n    let b = 20;\n    println!(\"{}\", a + b);\n}".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: Some(3),
         score: Some(0.7),
@@ -87,6 +94,8 @@ fn test_merge_ranked_blocks() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+            parent_context: None,
+        matched_lines: None,
     };
 
     // Create a vector with all blocks

@@ -62,7 +62,7 @@ where
     type Output = ProcessedData<T, R>;
     type Error = ComplexProcessingError<T::Error>;
 
-    // This implementation might be missed if line range filtering 
+    // This implementation might be missed if line range filtering
     // doesn't account for the trait bounds above
     async fn process_batch(
         &self,
@@ -90,9 +90,9 @@ where
         // but might be in a different "line range" from the perspective of early termination
         for (index, item) in input.iter().enumerate() {
             if !self.is_valid_item(item) {
-                return Err(ComplexProcessingError::InvalidInput { 
-                    index, 
-                    item: item.clone() 
+                return Err(ComplexProcessingError::InvalidInput {
+                    index,
+                    item: item.clone()
                 });
             }
         }
@@ -107,7 +107,7 @@ macro_rules! generate_service_endpoints {
         $(
             $service_name:ident {
                 $(
-                    $method:ident($($param:ident: $param_type:ty),*) -> $return_type:ty 
+                    $method:ident($($param:ident: $param_type:ty),*) -> $return_type:ty
                     => $endpoint:expr
                 ),*
             }
@@ -116,7 +116,7 @@ macro_rules! generate_service_endpoints {
         $(  // Each service generates multiple functions
             pub mod $service_name {
                 use super::*;
-                
+
                 $(  // Each method becomes a function
                     pub async fn $method(
                         client: &HttpClient,
@@ -130,7 +130,7 @@ macro_rules! generate_service_endpoints {
                             }))
                             .send()
                             .await?;
-                        
+
                         if response.status().is_success() {
                             Ok(response.json().await?)
                         } else {
@@ -164,15 +164,15 @@ generate_service_endpoints! {
 // TEST CASE 4: Documentation with Embedded Code Examples
 /// A complex service that demonstrates various patterns that might be missed
 /// by early termination optimizations.
-/// 
+///
 /// # Usage Examples
-/// 
+///
 /// Basic usage:
 /// ```rust
 /// let service = ComplexService::new(config);
 /// let result = service.process_data(input).await?;
 /// ```
-/// 
+///
 /// Advanced usage with custom transformers:
 /// ```rust
 /// let service = ComplexService::builder()
@@ -183,13 +183,13 @@ generate_service_endpoints! {
 ///     .with_retry_policy(RetryPolicy::exponential_backoff())
 ///     .with_timeout(Duration::from_secs(30))
 ///     .build()?;
-/// 
+///
 /// let processed = service
 ///     .process_batch(input_data)
 ///     .with_context("batch_processing")
 ///     .await?;
 /// ```
-/// 
+///
 /// Error handling patterns:
 /// ```rust
 /// match service.process_data(risky_input).await {
@@ -228,7 +228,7 @@ where
     pub fn new(config: ServiceConfiguration) -> Result<Self, ServiceCreationError> {
         let processor = Self::create_default_processor(&config)?;
         let metrics = Arc::new(Mutex::new(ServiceMetrics::new()));
-        
+
         Ok(ComplexService {
             processor,
             config,
@@ -245,7 +245,7 @@ where
     ) -> Result<ProcessingOutput<R>, ProcessingError> {
         let start_time = Instant::now();
         let processing_id = Uuid::new_v4();
-        
+
         // Pre-processing validation - might be in different "optimization zone"
         self.validate_processing_input(&input)
             .map_err(|e| ProcessingError::ValidationFailed {
@@ -268,7 +268,7 @@ where
         let final_result = self
             .apply_post_processing_rules(intermediate_result)
             .await?;
-        
+
         self.update_processing_metrics(processing_id, start_time.elapsed())
             .await;
 
@@ -305,7 +305,7 @@ where
         // but might be separated from the main processing logic
         // by AST node boundary calculations
         let mut output = ProcessingOutput::from_intermediate(intermediate);
-        
+
         for rule in &self.config.post_processing_rules {
             output = rule.apply(output).await?;
         }
@@ -338,7 +338,7 @@ where
 impl<T, K, E> GenericRepository<T, K, E>
 where
     T: Entity<Key = K> + Serialize + DeserializeOwned + Clone + Debug + Send + Sync + 'static,
-    K: EntityKey + Hash + Eq + Clone + Debug + Send + Sync + 'static,  
+    K: EntityKey + Hash + Eq + Clone + Debug + Send + Sync + 'static,
     E: RepositoryError + From<DatabaseError> + Send + Sync + 'static,
     T::QueryBuilder: QueryBuilder<T, K> + Send + Sync,
     T::Validator: EntityValidator<T> + Send + Sync,

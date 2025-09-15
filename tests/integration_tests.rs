@@ -102,7 +102,7 @@ class SearchResult:
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_search_function() {
         let query = "search term";
@@ -611,10 +611,10 @@ fn calculate_product(a: i32, b: i32) -> i32 {
 fn main() {
     let x = 5;
     let y = 10;
-    
+
     let sum = calculate_sum(x, y);
     println!("Sum: {}", sum);
-    
+
     let product = calculate_product(x, y);
     println!("Product: {}", product);
 }

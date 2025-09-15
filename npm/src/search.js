@@ -28,7 +28,8 @@ const SEARCH_FLAG_MAP = {
 	mergeThreshold: '--merge-threshold',
 	session: '--session',
 	timeout: '--timeout',
-	language: '--language'
+	language: '--language',
+	format: '--format'
 };
 
 /**
@@ -52,6 +53,7 @@ const SEARCH_FLAG_MAP = {
  * @param {string} [options.session] - Session ID for caching results
  * @param {number} [options.timeout] - Timeout in seconds (default: 30)
  * @param {string} [options.language] - Limit search to files of a specific programming language
+ * @param {string} [options.format] - Output format ('json', 'outline-xml', etc.)
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
@@ -74,9 +76,15 @@ export async function search(options) {
 	// Build CLI arguments from options
 	const cliArgs = buildCliArgs(options, SEARCH_FLAG_MAP);
 
-	// Add JSON format if requested
-	if (options.json) {
+	// Add format if specified, with json option taking precedence for backwards compatibility
+	if (options.json && !options.format) {
 		cliArgs.push('--format', 'json');
+	} else if (options.format) {
+		// Format is already handled by buildCliArgs through SEARCH_FLAG_MAP
+		// but we need to ensure json parsing for json format
+		if (options.format === 'json') {
+			options.json = true;
+		}
 	}
 
 	// Set default maxTokens if not provided

@@ -6,13 +6,13 @@ use colored::*;
 pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-    
+
     // Check if colors should be disabled
     let no_color = std::env::var("NO_COLOR").is_ok();
-    
+
     // Filter out results with empty file paths
     let valid_results: Vec<&SearchResult> = results.iter().filter(|r| !r.file.is_empty()).collect();
-    
+
     if !valid_results.is_empty() {
         if dry_run {
             // More compact header for dry-run mode
@@ -30,7 +30,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
         // In dry-run mode, only print file names and line numbers in a compact format
         for (index, result) in valid_results.iter().enumerate() {
             let is_full_file = result.node_type == "file";
-            
+
             if is_full_file {
                 println!("{} {}: {}",
                     format!("#{}", index + 1).bold().blue(),
@@ -43,7 +43,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                 } else {
                     "".to_string()
                 };
-                
+
                 println!("{} {}: {} {} ({})",
                     format!("#{}", index + 1).bold().blue(),
                     "File".bold().green(),
@@ -67,7 +67,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
 
             // Print result number
             println!("{} {}", "Result".bold().blue(), format!("#{num}", num = index + 1).bold().blue());
-            
+
             // Print the file path and node info with color
             if is_full_file {
                 println!("{} {}", "File:".bold().green(), result.file.yellow());
@@ -109,7 +109,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                 if let Some(total_matches) = result.total_matches {
                     println!("{} {total_matches}", "Total term matches:".dimmed());
                 }
-                
+
                 // Display block-level match statistics in debug mode
                 if let Some(block_unique_terms) = result.block_unique_terms {
                     println!("{} {block_unique_terms}", "Block unique terms matched:".dimmed());
@@ -155,7 +155,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                 };
 
                 println!("{}", "Code:".bold().magenta());
-                
+
                 // Print the content with or without syntax highlighting
                 if !language.is_empty() {
                     println!("{}", format!("```{language}").cyan());

@@ -91,6 +91,7 @@ pub fn find_symbol_in_file(
                 lines: (1, lines.len()),
                 node_type: "file".to_string(),
                 code: content.to_string(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: None,
                 score: None,
@@ -109,7 +110,9 @@ pub fn find_symbol_in_file(
                 parent_file_id: None,
                 block_id: None,
                 matched_keywords: None,
+                matched_lines: None,
                 tokenized_content: Some(tokenized_content),
+                parent_context: None,
             });
         }
     };
@@ -501,6 +504,7 @@ pub fn find_symbol_in_file(
             lines: (node_start_line, node_end_line),
             node_type: found_node.kind().to_string(),
             code: node_text_str,
+            symbol_signature: None,
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -519,7 +523,9 @@ pub fn find_symbol_in_file(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: Some(tokenized_content),
+            parent_context: None,
         });
     }
 
@@ -618,6 +624,7 @@ pub fn find_symbol_in_file(
             lines: (start_line, end_line),
             node_type: "text_search".to_string(),
             code: context,
+            symbol_signature: None,
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -636,7 +643,9 @@ pub fn find_symbol_in_file(
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: Some(tokenized_content),
+            parent_context: None,
         });
     }
 
@@ -668,7 +677,7 @@ mod tests {
 
         let content = r#"resource "test" "example" {
   name = "test"
-  
+
   variable "nodes" {
     type = map(number)
   }

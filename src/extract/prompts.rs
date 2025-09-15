@@ -23,9 +23,9 @@ pub const ENGINEER_PROMPT: &str = r#"As a senior software engineer, your task is
 
 3. Structure responses precisely as follows:
 
-   File: path/filename.ext  
-   Change: Concise description of change made  
-   ```language  
+   File: path/filename.ext
+   Change: Concise description of change made
+   ```language
    [Complete code block of the specified change] "#;
 
 /// Built-in architect prompt template
@@ -57,7 +57,7 @@ pub const CODE_REVIEW_PROMPT: &str = r#"You are going to perform code review acc
 
 When reviewing code:
 - Look for bugs, edge cases, and potential issues
-- Identify performance bottlenecks and optimization opportunities  
+- Identify performance bottlenecks and optimization opportunities
 - Check for security vulnerabilities and best practices
 - Evaluate code style and consistency
 - Assess backward compatibility impacts

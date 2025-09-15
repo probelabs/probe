@@ -77,7 +77,7 @@ pub struct Args {
 
     /// Output format (default: color)
     /// Use 'json' or 'xml' for machine-readable output
-    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
+    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
     pub format: String,
 
     /// Session ID for caching search results
@@ -188,7 +188,7 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
         format: String,
 
         /// Session ID for caching search results
@@ -230,7 +230,7 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color", "outline-xml"])]
         format: String,
 
         /// Read input from clipboard instead of files
@@ -320,7 +320,7 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color", "outline-xml"])]
         format: String,
     },
 

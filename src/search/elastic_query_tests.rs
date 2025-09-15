@@ -34,7 +34,7 @@ fn assert_parse_eq_with_stemming(input: &str, expected: Expr) {
                         },
                         _ => assert_eq!(**left1, **left2, "Left sides don't match for input: {input}"),
                     }
-                    
+
                     // Compare the right sides
                     match (&**right1, &**right2) {
                         (Expr::Term { keywords: kw1, .. }, Expr::Term { keywords: kw2, .. }) => {
@@ -61,14 +61,14 @@ fn assert_parse_fails(input: &str) {
     let should_fail = input.trim().is_empty() ||
                       input == "()" ||
                       input == "AND OR"; // Only operators without identifiers
-    
+
     if should_fail {
         if let Ok(expr) = parse_query_test(input) {
             panic!("Expected parsing to fail for input: '{input}', but got: {expr:?}");
         }
         return;
     }
-    
+
     // For other previously invalid queries, we now expect them to be parsed successfully
     // The parser will extract valid identifiers and create a Term or expression
     match parse_query_test(input) {
@@ -143,22 +143,22 @@ fn test_term_extraction() {
     assert_terms_eq("foo", vec![], vec!["foo"]);
     assert_terms_eq("+foo", vec!["foo"], vec![]);
     assert_terms_eq("-foo", vec![], vec![]);
-    
+
     // Multiple terms - treated as OR (Lucene semantics)
     assert_terms_eq("foo bar", vec![], vec!["foo", "bar"]);
     assert_terms_eq("+foo +bar", vec!["foo", "bar"], vec![]);
     assert_terms_eq("+foo bar", vec!["foo"], vec!["bar"]);
-    
+
     // Mixed required and optional with excluded
     assert_terms_eq("+foo bar -baz", vec!["foo"], vec!["bar"]);
     assert_terms_eq("foo +bar +baz", vec!["bar", "baz"], vec!["foo"]);
     assert_terms_eq("-foo bar", vec![], vec!["bar"]);
-    
+
     // With boolean operators
     assert_terms_eq("foo AND +bar", vec!["bar"], vec!["foo"]);
     assert_terms_eq("+foo OR bar", vec!["foo"], vec!["bar"]);
     assert_terms_eq("foo OR -bar AND baz", vec![], vec!["foo", "baz"]);
-    
+
     // Complex expressions
     assert_terms_eq(
         "(+foo -bar) AND (baz OR +qux)",
@@ -176,10 +176,10 @@ fn test_term_extraction() {
 fn test_single_terms() {
     // Basic term
     assert_parse_eq("foo", term("foo"));
-    
+
     // Required term
     assert_parse_eq("+foo", required_term("foo"));
-    
+
     // Excluded term
     assert_parse_eq("-foo", excluded_term("foo"));
 }
@@ -207,19 +207,19 @@ fn test_multiple_terms_implicit_combinations() {
             Box::new(term("baz"))
         )
     );
-    
+
     // Multiple required terms use AND when explicit + on each
     assert_parse_eq(
         "+foo +bar",
         Expr::And(Box::new(required_term("foo")), Box::new(required_term("bar")))
     );
-    
+
     // Mixed required and excluded use AND for modifier combinations
     assert_parse_eq(
         "+foo -bar",
         Expr::And(Box::new(required_term("foo")), Box::new(excluded_term("bar")))
     );
-    
+
     // Three terms with excluded - using OR for implicit combinations
     assert_parse_eq(
         "-foo bar baz",
@@ -414,11 +414,11 @@ fn test_mixed_prefixes_and_operators() {
         } else {
             panic!("Expected Or expression for right side");
         }
-        
+
         // Check the left side structure
         if let Expr::Or(left_left, left_right) = *left {
             assert_eq!(*left_right, term("baz"));
-            
+
             // The first part should be And with the new implementation
             if let Expr::And(and_left, and_right) = *left_left {
                 assert_eq!(*and_left, required_term("foo"));
@@ -451,20 +451,20 @@ fn test_edge_cases() {
     // Empty inputs
     assert_parse_fails("");
     assert_parse_fails("   ");
-    
+
     // Unbalanced parentheses
     assert_parse_fails("(foo AND bar");
     assert_parse_fails("foo AND bar)");
-    
+
     // Unknown symbols
     assert_parse_fails("foo & bar");
-    
+
     // Trailing tokens are treated as implicit OR
     assert_parse_eq(
         "(foo) some_extra",
         Expr::Or(Box::new(term("foo")), Box::new(term("extra")))  // Changed "some_extra" to "extra"
     );
-    
+
     // Empty parentheses
     assert_parse_fails("()");
 }
@@ -524,7 +524,7 @@ fn test_stop_word_removal() {
     // Test that stop words like "type" are properly removed from queries
     // "type" is a programming stop word, so "JWT AND type" should be parsed as just "JWT"
     let result = parse_query_test("JWT AND type").unwrap();
-    
+
     // The result should be a Term with just "JWT" as the keyword
     match result {
         Expr::Term { keywords, .. } => {
@@ -572,7 +572,7 @@ fn test_quoted_strings() {
 
     // Quoted string with underscores and special characters
     assert_parse_eq(
-        "\"discover_config\"", 
+        "\"discover_config\"",
         Expr::Term {
             keywords: vec!["discover_config".to_string()],
             field: None,

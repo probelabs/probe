@@ -13,9 +13,17 @@ fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
 
     for (line_number, expected_start, expected_end) in expected_outputs {
         // Call process_file_for_extraction for the current line number
-        let result =
-            process_file_for_extraction(&file_path, Some(line_number), None, None, false, 0, None)
-                .unwrap();
+        let result = process_file_for_extraction(
+            &file_path,
+            Some(line_number),
+            None,
+            None,
+            false,
+            0,
+            None,
+            false,
+        )
+        .unwrap();
 
         // Compare outputs against the expected output structure
         assert_eq!(result.file, file_path.to_string_lossy().to_string());
@@ -38,13 +46,13 @@ fn test_javascript_extraction_aframe_component() {
 AFRAME.registerComponent('position', positionComponent)
 const positionComponent = {
 	schema: {type: 'vec3'},
-	
+
 	update: function () {
 		var object3D = this.el.object3D;
 		var data = this.data;
 		object3D.position.set(data.x, data.y, data.z);
 	},
-	
+
 	remove: function () {
 		// Pretty much for mixins.
 		this.el.object3D.position.set(0, 0, 0);

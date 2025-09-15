@@ -77,7 +77,7 @@ function escapeTest(input) {
 function processQuery(query) {
     // Check if the query contains multiple terms
     const terms = query.split(' ');
-    
+
     // Process each term
     return terms.map(term => {
         return {

@@ -39,7 +39,7 @@ impl BertSimulator {
         // Simulate tokenization and processing time
         let token_count = self.estimate_token_count(query, document);
         let inference_time = self.setup_overhead + (self.inference_time_per_token * token_count as u32);
-        
+
         // Actually sleep to simulate real inference time
         std::thread::sleep(inference_time);
 
@@ -58,10 +58,10 @@ impl BertSimulator {
         // Simulate BERT cross-encoder output by computing more sophisticated similarity
         let query_lower = query.to_lowercase();
         let doc_lower = document.to_lowercase();
-        
+
         let query_words: Vec<&str> = query_lower.split_whitespace().collect();
         let doc_words: Vec<&str> = doc_lower.split_whitespace().collect();
-        
+
         if query_words.is_empty() || doc_words.is_empty() {
             return 0.0;
         }
@@ -115,8 +115,8 @@ impl BertSimulator {
         };
 
         // Combine scores with weights that simulate BERT's behavior
-        let final_score = (exact_match_score * 3.0 + 
-                          partial_match_score * 2.0 + 
+        let final_score = (exact_match_score * 3.0 +
+                          partial_match_score * 2.0 +
                           prog_match_score * 1.5) * length_penalty;
 
         // Add some realistic noise and transform to BERT-like logit range
@@ -128,7 +128,7 @@ impl BertSimulator {
 
     fn get_programming_keywords(&self) -> HashMap<&'static str, Vec<&'static str>> {
         let mut keywords = HashMap::new();
-        
+
         keywords.insert("rust", vec!["cargo", "rustc", "trait", "impl", "struct", "enum", "match", "ownership", "borrow"]);
         keywords.insert("async", vec!["await", "future", "tokio", "task", "runtime", "executor"]);
         keywords.insert("search", vec!["index", "query", "algorithm", "tree", "hash", "lookup", "find"]);
@@ -139,7 +139,7 @@ impl BertSimulator {
         keywords.insert("neural", vec!["network", "transformer", "bert", "attention", "layer", "weight"]);
         keywords.insert("database", vec!["sql", "index", "table", "query", "schema", "transaction"]);
         keywords.insert("api", vec!["rest", "http", "endpoint", "request", "response", "server"]);
-        
+
         keywords
     }
 }

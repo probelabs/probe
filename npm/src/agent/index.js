@@ -123,7 +123,8 @@ function parseArgs() {
     traceFile: undefined,
     traceRemote: undefined,
     traceConsole: false,
-    useStdin: false // New flag to indicate stdin should be used
+    useStdin: false, // New flag to indicate stdin should be used
+    outline: false // New flag to enable outline format
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -159,6 +160,8 @@ function parseArgs() {
       config.traceRemote = args[++i];
     } else if (arg === '--trace-console') {
       config.traceConsole = true;
+    } else if (arg === '--outline') {
+      config.outline = true;
     } else if (!arg.startsWith('--') && !config.question) {
       // First non-flag argument is the question
       config.question = arg;
@@ -198,6 +201,7 @@ Options:
   --model <name>                   Override model name
   --allow-edit                     Enable code modification capabilities
   --verbose                        Enable verbose output
+  --outline                        Use outline-xml format for code search results
   --mcp                           Run as MCP server
   --acp                           Run as ACP server (Agent Client Protocol)
   --max-iterations <number>        Max tool iterations (default: 30)
@@ -593,7 +597,8 @@ async function main() {
       customPrompt: systemPrompt,
       allowEdit: config.allowEdit,
       debug: config.verbose,
-      tracer: appTracer
+      tracer: appTracer,
+      outline: config.outline
     };
 
     const agent = new ProbeAgent(agentConfig);

@@ -712,6 +712,7 @@ mod tests {
             lines: (10, 20),
             node_type: "function".to_string(),
             code: "".to_string(),
+            symbol_signature: None,
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -730,7 +731,9 @@ mod tests {
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: None,
+            parent_context: None,
         };
 
         let result2 = SearchResult {
@@ -738,6 +741,7 @@ mod tests {
             lines: (10, 20),
             node_type: "function".to_string(),
             code: "".to_string(),
+            symbol_signature: None,
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -756,7 +760,9 @@ mod tests {
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: None,
+            parent_context: None,
         };
 
         // Generate cache keys for both results

@@ -142,7 +142,7 @@ function invisibleChars() {
     // Zero-width joiner (U+200D): "‍"
     // Left-to-right mark (U+200E): "‎"
     // Right-to-left mark (U+200F): "‏"
-    
+
     const text = "This\u{200B} has‌ invisible‍ characters‎ in‏ it";
     return text;
 }
@@ -162,7 +162,7 @@ function mixedEncodings() {
     // Japanese: "こんにちは、世界！"
     // Korean: "안녕하세요, 세계!"
     // Thai: "สวัสดี, โลก!"
-    
+
     const greetings = [
         "Hello, World!",
         "Привет, мир!",
@@ -174,7 +174,7 @@ function mixedEncodings() {
         "안녕하세요, 세계!",
         "สวัสดี, โลก!"
     ];
-    
+
     return greetings;
 }
 "#;

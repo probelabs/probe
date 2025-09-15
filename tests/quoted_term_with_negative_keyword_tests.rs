@@ -13,7 +13,7 @@ fn create_test_files(temp_dir: &Path) {
 fn test_function() {
     // This is keywordAlpha
     let x = 1;
-    
+
     println!("Result: {}", x);
 }
 "#;
@@ -25,10 +25,10 @@ fn test_function() {
 fn another_function() {
     // This is keywordAlpha
     let x = 1;
-    
+
     // This is keywordGamma
     let z = 3;
-    
+
     println!("Result: {}", x + z);
 }
 "#;

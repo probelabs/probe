@@ -96,7 +96,7 @@ pub fn merge_line_ranges(line_numbers: &HashSet<usize>) -> Vec<(usize, usize)> {
 ///            if !line_numbers.contains(&line) {
 ///                continue;
 ///            }
-///            
+///
 ///            // Process the line as usual...
 ///        }
 ///    }

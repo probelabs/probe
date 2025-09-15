@@ -1,0 +1,9 @@
+#!/bin/sh
+# Vow - AI accountability gate
+# This hook runs at the end of the pre-commit pipeline
+
+npx @probelabs/vow check
+if [ $? -ne 0 ]; then
+  echo "Vow check failed. Commit aborted."
+  exit 1
+fi

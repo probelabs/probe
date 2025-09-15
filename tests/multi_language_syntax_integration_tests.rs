@@ -121,6 +121,7 @@ pub fn standalone_function() {
             true,
             0,
             None,
+            false,
         );
 
         if let Ok(search_result) = result {
@@ -140,6 +141,7 @@ pub fn standalone_function() {
                 true,
                 0,
                 None,
+                false,
             );
 
             match simple_result {
@@ -196,6 +198,7 @@ impl TestService {
             true,
             0,
             None,
+            false,
         );
 
         match result {

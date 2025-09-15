@@ -104,17 +104,17 @@ class Calculator {
     constructor(name) {
         this.name = name;
     }
-    
+
     // Method with function expression
     add = function(a, b) {
         return a + b;
     };
-    
+
     // Arrow method
     multiply = (a, b) => {
         return a * b;
     };
-    
+
     // Regular method
     subtract(a, b) {
         return a - b;
@@ -191,12 +191,12 @@ const api = {
     getData() {
         return fetch('/api/data');
     },
-    
+
     // Function expression property
     processData: function(data) {
         return data.map(item => item.value);
     },
-    
+
     // Arrow function property
     validateData: (data) => {
         return data.every(item => item.id);
@@ -273,12 +273,12 @@ export const validateUser = (user) => {
 // Default export with function expression
 export default function Router() {
     const routes = {};
-    
+
     return {
         get: function(path, handler) {
             routes[path] = handler;
         },
-        
+
         handle: (req) => {
             const handler = routes[req.path];
             return handler ? handler(req) : null;
@@ -346,7 +346,7 @@ fn test_javascript_iife_patterns() {
 // Immediately Invoked Function Expression (IIFE)
 (function() {
     const privateVar = "secret";
-    
+
     window.myModule = {
         publicMethod: function() {
             return privateVar;
@@ -357,7 +357,7 @@ fn test_javascript_iife_patterns() {
 // Arrow IIFE
 (() => {
     const config = { api: '/api/v1' };
-    
+
     window.appConfig = config;
 })();
 "#;

@@ -125,3 +125,6 @@ examples/reranker/models/*/model.safetensors
 examples/reranker/models/*/vocab.txt
 examples/reranker/cross_encoder_test_results.json
 *.tgz
+
+# Vow - AI accountability files
+.vow*

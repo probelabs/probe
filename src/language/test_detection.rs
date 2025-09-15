@@ -9,7 +9,7 @@ pub fn is_test_file(path: &Path) -> bool {
         // Rust: *_test.rs, *_tests.rs, test_*.rs, tests.rs
         if file_name.ends_with("_test.rs")
             || file_name.ends_with("_tests.rs")
-            || file_name.starts_with("test_")
+            || (file_name.starts_with("test_") && file_name.ends_with(".rs"))
             || file_name == "tests.rs"
         {
             if _debug_mode {

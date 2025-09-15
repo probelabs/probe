@@ -20,6 +20,7 @@ use std::path::Path;
 /// * `system_prompt` - Optional system prompt for LLM models
 /// * `user_instructions` - Optional user instructions for LLM models
 /// * `is_dry_run` - Whether this is a dry-run request (only file names/line numbers)
+/// * `symbols` - Whether to show symbol signatures instead of full code
 fn format_extraction_internal(
     results: &[SearchResult],
     format: &str,
@@ -27,6 +28,7 @@ fn format_extraction_internal(
     system_prompt: Option<&str>,
     user_instructions: Option<&str>,
     is_dry_run: bool,
+    symbols: bool,
 ) -> Result<String> {
     let mut output = String::new();
 
@@ -103,6 +105,8 @@ fn format_extraction_internal(
                     node_type: &'a str,
                     code: &'a str,
                     #[serde(skip_serializing_if = "Option::is_none")]
+                    symbol_signature: Option<&'a String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
                     original_input: Option<&'a str>,
                 }
 
@@ -128,6 +132,7 @@ fn format_extraction_internal(
                         lines: r.lines,
                         node_type: &r.node_type,
                         code: &r.code,
+                        symbol_signature: r.symbol_signature.as_ref(),
                         // We no longer put original_input per result. If you truly need it,
                         // you can uncomment the line below, but it's typically at the root.
                         // original_input: r.original_input.as_deref(),
@@ -138,14 +143,29 @@ fn format_extraction_internal(
                 // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for extract JSON output:
                 // Process all code blocks in batch to leverage content deduplication
                 let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
-                let total_tokens = sum_tokens_with_deduplication(&code_blocks);
+                let total_tokens = if symbols {
+                    // In symbols mode, count tokens from symbol signatures instead of full code
+                    let symbol_blocks: Vec<&str> = results
+                        .iter()
+                        .filter_map(|r| r.symbol_signature.as_deref())
+                        .collect();
+                    sum_tokens_with_deduplication(&symbol_blocks)
+                } else {
+                    sum_tokens_with_deduplication(&code_blocks)
+                };
 
                 // Create a wrapper object with results and summary
                 let mut wrapper = serde_json::json!({
                     "results": json_results,
                     "summary": {
                         "count": results.len(),
-                        "total_bytes": results.iter().map(|r| r.code.len()).sum::<usize>(),
+                        "total_bytes": if symbols {
+                            results.iter().map(|r| {
+                                r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0)
+                            }).sum::<usize>()
+                        } else {
+                            results.iter().map(|r| r.code.len()).sum::<usize>()
+                        },
                         "total_tokens": total_tokens,
                     },
                     "version": probe_code::version::get_version()
@@ -227,6 +247,15 @@ fn format_extraction_internal(
                         writeln!(output, "    <node_type>{}</node_type>", &result.node_type)?;
                     }
 
+                    // Include symbol signature if available
+                    if let Some(symbol_signature) = &result.symbol_signature {
+                        writeln!(
+                            output,
+                            "    <symbol_signature><![CDATA[{}]]></symbol_signature>",
+                            symbol_signature
+                        )?;
+                    }
+
                     // Use CDATA to preserve formatting and special characters
                     writeln!(output, "    <code><![CDATA[{}]]></code>", &result.code)?;
 
@@ -239,12 +268,28 @@ fn format_extraction_internal(
                 writeln!(
                     output,
                     "    <total_bytes>{}</total_bytes>",
-                    results.iter().map(|r| r.code.len()).sum::<usize>()
+                    if symbols {
+                        results
+                            .iter()
+                            .map(|r| r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0))
+                            .sum::<usize>()
+                    } else {
+                        results.iter().map(|r| r.code.len()).sum::<usize>()
+                    }
                 )?;
                 // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for extract XML output:
                 // Process all code blocks in batch to leverage content deduplication
                 let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
-                let total_tokens = sum_tokens_with_deduplication(&code_blocks);
+                let total_tokens = if symbols {
+                    // In symbols mode, count tokens from symbol signatures instead of full code
+                    let symbol_blocks: Vec<&str> = results
+                        .iter()
+                        .filter_map(|r| r.symbol_signature.as_deref())
+                        .collect();
+                    sum_tokens_with_deduplication(&symbol_blocks)
+                } else {
+                    sum_tokens_with_deduplication(&code_blocks)
+                };
 
                 writeln!(output, "    <total_tokens>{total_tokens}</total_tokens>")?;
                 writeln!(output, "  </summary>")?;
@@ -318,50 +363,66 @@ fn format_extraction_internal(
                         }
                     }
 
-                    // In dry-run, we do NOT print the code
+                    // In dry-run, we do NOT print the code or symbols
                     if !is_dry_run {
-                        // Attempt a basic "highlight" approach by checking file extension
-                        let extension = Path::new(&result.file)
-                            .extension()
-                            .and_then(|ext| ext.to_str())
-                            .unwrap_or("");
-                        let language = get_language_from_extension(extension);
+                        // Check if we should display symbols instead of code
+                        if symbols {
+                            if let Some(symbol_signature) = &result.symbol_signature {
+                                if format == "markdown" {
+                                    writeln!(output, "### Symbol: {}", symbol_signature)?;
+                                } else {
+                                    writeln!(output, "Symbol: {}", symbol_signature)?;
+                                }
+                            } else if format == "markdown" {
+                                writeln!(output, "### Symbol: *not available*")?;
+                            } else {
+                                writeln!(output, "Symbol: <not available>")?;
+                            }
+                        } else {
+                            // Show full code (existing behavior)
+                            // Attempt a basic "highlight" approach by checking file extension
+                            let extension = Path::new(&result.file)
+                                .extension()
+                                .and_then(|ext| ext.to_str())
+                                .unwrap_or("");
+                            let language = get_language_from_extension(extension);
 
-                        match format {
-                            "markdown" => {
-                                if !language.is_empty() {
-                                    writeln!(output, "```{language}")?;
-                                } else {
+                            match format {
+                                "markdown" => {
+                                    if !language.is_empty() {
+                                        writeln!(output, "```{language}")?;
+                                    } else {
+                                        writeln!(output, "```")?;
+                                    }
+                                    writeln!(output, "{}", result.code)?;
                                     writeln!(output, "```")?;
                                 }
-                                writeln!(output, "{}", result.code)?;
-                                writeln!(output, "```")?;
-                            }
-                            "plain" => {
-                                writeln!(output)?;
-                                writeln!(output, "{}", result.code)?;
-                                writeln!(output)?;
-                                writeln!(output, "----------------------------------------")?;
-                                writeln!(output)?;
-                            }
-                            "color" => {
-                                if !language.is_empty() {
-                                    writeln!(output, "```{language}")?;
-                                } else {
+                                "plain" => {
+                                    writeln!(output)?;
+                                    writeln!(output, "{}", result.code)?;
+                                    writeln!(output)?;
+                                    writeln!(output, "----------------------------------------")?;
+                                    writeln!(output)?;
+                                }
+                                "color" => {
+                                    if !language.is_empty() {
+                                        writeln!(output, "```{language}")?;
+                                    } else {
+                                        writeln!(output, "```")?;
+                                    }
+                                    writeln!(output, "{}", result.code)?;
                                     writeln!(output, "```")?;
                                 }
-                                writeln!(output, "{}", result.code)?;
-                                writeln!(output, "```")?;
-                            }
-                            // "terminal" or anything else not covered
-                            _ => {
-                                if !language.is_empty() {
-                                    writeln!(output, "```{language}")?;
-                                } else {
+                                // "terminal" or anything else not covered
+                                _ => {
+                                    if !language.is_empty() {
+                                        writeln!(output, "```{language}")?;
+                                    } else {
+                                        writeln!(output, "```")?;
+                                    }
+                                    writeln!(output, "{}", result.code)?;
                                     writeln!(output, "```")?;
                                 }
-                                writeln!(output, "{}", result.code)?;
-                                writeln!(output, "```")?;
                             }
                         }
                     }
@@ -414,12 +475,28 @@ fn format_extraction_internal(
                         }
                     )?;
 
-                    let total_bytes: usize = results.iter().map(|r| r.code.len()).sum();
+                    let total_bytes: usize = if symbols {
+                        results
+                            .iter()
+                            .map(|r| r.symbol_signature.as_ref().map(|s| s.len()).unwrap_or(0))
+                            .sum()
+                    } else {
+                        results.iter().map(|r| r.code.len()).sum()
+                    };
 
                     // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for extract terminal output:
                     // Process all code blocks in batch to leverage content deduplication
                     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
-                    let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
+                    let total_tokens: usize = if symbols {
+                        // In symbols mode, count tokens from symbol signatures instead of full code
+                        let symbol_blocks: Vec<&str> = results
+                            .iter()
+                            .filter_map(|r| r.symbol_signature.as_deref())
+                            .collect();
+                        sum_tokens_with_deduplication(&symbol_blocks)
+                    } else {
+                        sum_tokens_with_deduplication(&code_blocks)
+                    };
                     writeln!(output, "Total bytes returned: {total_bytes}")?;
                     writeln!(output, "Total tokens returned: {total_tokens}")?;
                 }
@@ -438,12 +515,14 @@ fn format_extraction_internal(
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
 /// * `system_prompt` - Optional system prompt for LLM models
 /// * `user_instructions` - Optional user instructions for LLM models
+/// * `symbols` - Whether to show symbol signatures instead of full code
 pub fn format_extraction_dry_run(
     results: &[SearchResult],
     format: &str,
     original_input: Option<&str>,
     system_prompt: Option<&str>,
     user_instructions: Option<&str>,
+    symbols: bool,
 ) -> Result<String> {
     format_extraction_internal(
         results,
@@ -452,6 +531,7 @@ pub fn format_extraction_dry_run(
         system_prompt,
         user_instructions,
         true, // is_dry_run
+        symbols,
     )
 }
 
@@ -463,12 +543,14 @@ pub fn format_extraction_dry_run(
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
 /// * `system_prompt` - Optional system prompt for LLM models
 /// * `user_instructions` - Optional user instructions for LLM models
+/// * `symbols` - Whether to show symbol signatures instead of full code
 pub fn format_extraction_results(
     results: &[SearchResult],
     format: &str,
     original_input: Option<&str>,
     system_prompt: Option<&str>,
     user_instructions: Option<&str>,
+    symbols: bool,
 ) -> Result<String> {
     format_extraction_internal(
         results,
@@ -477,6 +559,7 @@ pub fn format_extraction_results(
         system_prompt,
         user_instructions,
         false, // is_dry_run
+        symbols,
     )
 }
 
@@ -488,6 +571,7 @@ pub fn format_extraction_results(
 /// * `format` - The output format (terminal, markdown, plain, json, or color)
 /// * `system_prompt` - Optional system prompt for LLM models
 /// * `user_instructions` - Optional user instructions for LLM models
+/// * `symbols` - Whether to show symbol signatures instead of full code
 #[allow(dead_code)]
 pub fn format_and_print_extraction_results(
     results: &[SearchResult],
@@ -495,6 +579,7 @@ pub fn format_and_print_extraction_results(
     original_input: Option<&str>,
     system_prompt: Option<&str>,
     user_instructions: Option<&str>,
+    symbols: bool,
 ) -> Result<()> {
     let output = format_extraction_results(
         results,
@@ -502,6 +587,7 @@ pub fn format_and_print_extraction_results(
         original_input,
         system_prompt,
         user_instructions,
+        symbols,
     )?;
     println!("{output}");
     Ok(())
