@@ -296,8 +296,11 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 
 		// Parse parameters using string-based approach for better safety
 		// Common parameter names to look for (can be extended as needed)
+		// Note: includes both camelCase and underscore_case variants to handle inconsistencies
 		const commonParams = ['query', 'file_path', 'line', 'end_line', 'path', 'recursive', 'includeHidden', 
-		                      'max_results', 'result', 'command', 'description', 'task', 'param'];
+		                      'max_results', 'maxResults', 'result', 'command', 'description', 'task', 'param', 'pattern',
+		                      'allow_tests', 'exact', 'maxTokens', 'language', 'input_content',
+		                      'context_lines', 'format', 'directory', 'autoCommits', 'files'];
 		
 		for (const paramName of commonParams) {
 			const paramOpenTag = `<${paramName}>`;
