@@ -772,203 +772,6 @@ fn file_extension(path: &std::path::Path) -> &str {
     path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
 }
 
-/// Collect parent context for a specific line in the source
-/// Find the complete multiline construct (expression/statement) that contains the target line
-/// Modified to only return lines that actually contain search terms or are structurally necessary
-fn find_complete_construct_for_line(
-    file_path: &str,
-    target_line: usize,
-    source: &str,
-    keywords: &Option<Vec<String>>,
-) -> Vec<(usize, String)> {
-    // Get file extension and use existing tree parsing infrastructure
-    let extension = file_extension(std::path::Path::new(file_path));
-
-    // Parse the tree (using cached tree if available)
-    let tree = match get_or_parse_tree_pooled(file_path, source, extension) {
-        Ok(t) => t,
-        Err(_) => return Vec::new(), // Return empty if can't parse
-    };
-
-    let lines: Vec<&str> = source.lines().collect();
-    if target_line == 0 || target_line > lines.len() {
-        return Vec::new();
-    }
-
-    // Convert 1-based line number to 0-based for tree-sitter
-    let target_row = target_line - 1;
-
-    // Find the most specific node that contains the target line
-    let mut cursor = tree.walk();
-    let mut best_node = None;
-    let mut best_size = usize::MAX;
-
-    fn find_smallest_containing_node<'a>(
-        cursor: &mut tree_sitter::TreeCursor<'a>,
-        target_row: usize,
-        best_node: &mut Option<tree_sitter::Node<'a>>,
-        best_size: &mut usize,
-    ) {
-        let node = cursor.node();
-        let start_row = node.start_position().row;
-        let end_row = node.end_position().row;
-
-        // Check if this node contains the target line
-        if start_row <= target_row && target_row <= end_row {
-            let size = end_row - start_row + 1;
-
-            // Look for expression or statement nodes specifically
-            // Prioritize more specific nodes over generic ones
-            if matches!(
-                node.kind(),
-                "call_expression" | "macro_invocation" |
-                "if_expression" | "while_expression" | "for_expression" | "match_expression" |
-                "assignment_expression" | "binary_expression" | "unary_expression" |
-                "return_statement" | "break_statement" | "continue_statement" |
-                // Add more language-specific constructs as needed
-                "function_call" | "method_call" | "array_expression" | "object_expression"
-            ) && size < *best_size
-            {
-                *best_node = Some(node);
-                *best_size = size;
-            } else if matches!(node.kind(), "expression_statement" | "block")
-                && size < *best_size
-                && size <= 10
-            {
-                // Only accept small expression_statements/blocks
-                *best_node = Some(node);
-                *best_size = size;
-            }
-
-            // Recurse into children
-            if cursor.goto_first_child() {
-                loop {
-                    find_smallest_containing_node(cursor, target_row, best_node, best_size);
-                    if !cursor.goto_next_sibling() {
-                        break;
-                    }
-                }
-                cursor.goto_parent();
-            }
-        }
-    }
-
-    find_smallest_containing_node(&mut cursor, target_row, &mut best_node, &mut best_size);
-
-    // If we found a suitable node, extract the complete construct
-    if let Some(node) = best_node {
-        let start_line = node.start_position().row + 1;
-        let end_line = node.end_position().row + 1;
-        let total_lines = end_line - start_line + 1;
-
-        // Debug output for node detection
-        if std::env::var("DEBUG").unwrap_or_default() == "1" {
-            eprintln!(
-                "DEBUG: Found node kind '{}' with {} lines",
-                node.kind(),
-                total_lines
-            );
-        }
-
-        // For very large constructs (like arrays), truncate the display
-        const MAX_ARRAY_LINES: usize = 20; // Show at most 20 lines for arrays
-        const CONTEXT_LINES: usize = 5; // Show 5 lines at start and end
-
-        if total_lines > MAX_ARRAY_LINES
-            && matches!(
-                node.kind(),
-                "array_expression" | "object_expression" | "list" | "dictionary" |
-            "macro_invocation" | // Rust vec![], hashmap![], etc.
-            "arguments" | "argument_list" | "parameters" |
-            "tuple_expression" | "list_expression" | "array" | "table" |
-            "vector" | "sequence" | "collection"
-            )
-        {
-            // Debug output for truncation
-            if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                eprintln!(
-                    "DEBUG: Truncating {} with {} lines (> {})",
-                    node.kind(),
-                    total_lines,
-                    MAX_ARRAY_LINES
-                );
-            }
-            // For large arrays/objects, show first and last few lines with ellipsis
-            let mut result = Vec::new();
-
-            // Helper function to check if a line contains any keywords
-            let line_contains_keywords = |line_text: &str| -> bool {
-                if let Some(kws) = keywords {
-                    for keyword in kws {
-                        let search_term = if keyword.starts_with('"') && keyword.ends_with('"') {
-                            &keyword[1..keyword.len() - 1]
-                        } else {
-                            keyword
-                        };
-                        if line_text
-                            .to_lowercase()
-                            .contains(&search_term.to_lowercase())
-                        {
-                            return true;
-                        }
-                    }
-                }
-                false
-            };
-
-            // Add first few lines
-            for line_num in start_line..=(start_line + CONTEXT_LINES).min(end_line) {
-                if line_num > 0 && line_num <= lines.len() {
-                    result.push((line_num, lines[line_num - 1].to_string()));
-                }
-            }
-
-            // Find and add any lines in the middle that contain keywords
-            let mut middle_matches = Vec::new();
-            if end_line > start_line + CONTEXT_LINES * 2 {
-                let middle_start = start_line + CONTEXT_LINES + 1;
-                let middle_end = end_line - CONTEXT_LINES;
-
-                for line_num in middle_start..=middle_end {
-                    if line_num > 0 && line_num <= lines.len() {
-                        let line_text = lines[line_num - 1];
-                        if line_contains_keywords(line_text) {
-                            middle_matches.push((line_num, line_text.to_string()));
-                        }
-                    }
-                }
-            }
-
-            // Add middle matches if any
-            result.extend(middle_matches);
-
-            // Add marker for truncated content if we're actually truncating
-            if end_line > start_line + CONTEXT_LINES * 2 {
-                // Add the last few lines
-                for line_num in (end_line - CONTEXT_LINES + 1)..=end_line {
-                    if line_num > 0 && line_num <= lines.len() {
-                        result.push((line_num, lines[line_num - 1].to_string()));
-                    }
-                }
-            }
-
-            result
-        } else {
-            // Extract all lines of the construct for non-array types or small arrays
-            let mut result = Vec::new();
-            for line_num in start_line..=end_line {
-                if line_num > 0 && line_num <= lines.len() {
-                    result.push((line_num, lines[line_num - 1].to_string()));
-                }
-            }
-            result
-        }
-    } else {
-        // Fallback: return just the single line
-        vec![(target_line, lines[target_line - 1].to_string())]
-    }
-}
-
 fn collect_parent_context_for_line(
     file_path: &str,
     line_num: usize,
@@ -1173,8 +976,9 @@ fn collect_parent_context_for_line(
             let start_line = parent.start_position().row + 1;
             let end_line = parent.end_position().row + 1;
 
-            // In outline mode, we want to show ALL structural parents, not just "suitable" ones
-            // Include functions, methods, classes, loops, conditionals, match statements, etc.
+            // In outline mode, we want to show meaningful structural parents, not all conditionals
+            // Include functions, methods, classes, loops, match statements, etc.
+            // BUT exclude simple if statements as they're typically at the same level as search results
             let should_include = matches!(
                 parent.kind(),
                 // Functions and methods
@@ -1187,8 +991,8 @@ fn collect_parent_context_for_line(
                 "class_definition" | "class_declaration" | "struct_item" |
                 "impl_item" | "trait_item" | "interface_declaration" |
 
-                // Control flow
-                "if_statement" | "if_expression" | "while_statement" | "while_expression" |
+                // Control flow - REMOVED if_statement and if_expression for outline mode
+                "while_statement" | "while_expression" |
                 "for_statement" | "for_expression" | "loop_statement" | "loop_expression" |
                 "match_statement" | "match_expression" | "switch_statement" |
                 "try_statement" | "try_expression" |
@@ -1202,16 +1006,6 @@ fn collect_parent_context_for_line(
                 // Async/concurrency
                 "async_block" | "spawn_statement" | "go_statement"
             ) || language_impl.is_acceptable_parent(&parent);
-
-            // Debug: log what node types we're considering
-            if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                eprintln!(
-                    "DEBUG: Considering parent: {} at line {} (included={})",
-                    parent.kind(),
-                    start_line,
-                    should_include
-                );
-            }
 
             if should_include {
                 // Special handling for match arms - show the complete pattern
@@ -1294,12 +1088,14 @@ fn collect_parent_context_for_line(
                         }
 
                         // Fallback to the original behavior if we can't find a function declaration
-                        found_line.or_else(|| {
+                        let result = found_line.or_else(|| {
                             source
                                 .lines()
                                 .nth(parent.start_position().row)
                                 .map(|s| s.to_string())
-                        })
+                        });
+
+                        result
                     } else {
                         source
                             .lines()
@@ -1423,10 +1219,6 @@ fn collect_outline_lines(
         }
     };
 
-    if std::env::var("DEBUG").unwrap_or_default() == "1" {
-        eprintln!("DEBUG: Found matched lines: {:?}", matched_lines);
-    }
-
     if !matched_lines.is_empty() {
         // Collect parent contexts for all matched lines
         let mut all_contexts = Vec::new();
@@ -1517,33 +1309,7 @@ fn collect_outline_lines(
 
         // Add the actual matched lines
         for &line_num in &matched_lines {
-            // Find the complete construct for this line
-            let construct_lines = find_complete_construct_for_line(
-                file_path,
-                line_num,
-                &full_source,
-                &result.matched_keywords,
-            );
-            if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                eprintln!(
-                    "DEBUG: Complete construct for line {}: found {} lines",
-                    line_num,
-                    construct_lines.len()
-                );
-                for (cl, _) in &construct_lines {
-                    eprintln!("  - Line {}", cl);
-                }
-            }
-            if !construct_lines.is_empty() {
-                for (construct_line, _) in construct_lines {
-                    // Only add real lines (skip truncation markers with line number 0)
-                    if construct_line > 0 {
-                        lines.push((construct_line, OutlineLineType::MatchedLine));
-                    }
-                }
-            } else {
-                lines.push((line_num, OutlineLineType::MatchedLine));
-            }
+            lines.push((line_num, OutlineLineType::MatchedLine));
         }
 
         // Add closing braces for functions and other contexts
@@ -1562,7 +1328,7 @@ fn collect_outline_lines(
                 "impl_item" | "struct_item" | "enum_item" | "trait_item" | "mod_item" |
 
                 // Control flow statements (both statement and expression forms)
-                "if_statement" | "if_expression" |
+                // Note: if_statement/if_expression removed - they're too granular for outline
                 "while_statement" | "while_expression" |
                 "for_statement" | "for_expression" |
                 "loop_statement" | "loop_expression" |
@@ -1599,8 +1365,34 @@ fn collect_outline_lines(
                 if should_add_closing_brace(&context.node_type) && context.end_line > 0 {
                     let block_size = context.end_line - context.start_line;
                     closing_braces.insert(context.end_line);
-                    // Store the context for this closing brace (may overwrite, but that's OK)
-                    closing_brace_contexts.insert(context.end_line, context.clone());
+
+                    // Store the context for this closing brace, but prioritize function/class contexts over generic blocks
+                    let should_update = if let Some(existing) =
+                        closing_brace_contexts.get(&context.end_line)
+                    {
+                        // If we have a generic block and found a more specific context, use the specific one
+                        let is_existing_generic =
+                            matches!(existing.node_type.as_str(), "block" | "compound_statement");
+                        let is_new_specific = matches!(
+                            context.node_type.as_str(),
+                            "function_item"
+                                | "function_definition"
+                                | "method_definition"
+                                | "function"
+                                | "class_definition"
+                                | "class_declaration"
+                                | "struct_item"
+                                | "impl_item"
+                        );
+                        is_existing_generic && is_new_specific
+                    } else {
+                        true
+                    };
+
+                    if should_update {
+                        closing_brace_contexts.insert(context.end_line, context.clone());
+                    }
+
                     // Track block size for later gap analysis
                     block_info.insert(context.end_line, block_size);
                 }
@@ -1915,22 +1707,6 @@ fn is_contextual_parent(node: &Node, language_impl: &dyn LanguageImpl, _source: 
         "closure_expression" | "lambda" | "arrow_function"
     ) {
         return true;
-    }
-
-    // Special handling for if statements - only include them if they're substantial
-    if matches!(node_kind, "if_statement" | "if_expression") {
-        // Only consider if statements as contextual parents if they span multiple lines
-        // and contain significant code (more than just a single simple statement)
-        let node_lines = node.end_position().row - node.start_position().row + 1;
-
-        // If the if statement spans more than 3 lines, it's likely significant enough
-        // to be shown as context (e.g., complex conditional blocks)
-        if node_lines > 3 {
-            return true;
-        }
-
-        // Otherwise, don't treat simple if statements as contextual parents
-        return false;
     }
 
     // Use language-specific acceptable parent check for top-level items
@@ -2329,6 +2105,18 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
             );
         }
     }
+
+    // Print summary at the end
+    println!();
+    println!("Found {} search results", results.len());
+
+    // Calculate total bytes and tokens from displayed content
+    let total_bytes: usize = displayed_content.iter().map(|s| s.len()).sum();
+    let code_blocks: Vec<&str> = displayed_content.iter().map(|s| s.as_str()).collect();
+    let total_tokens: usize = sum_tokens_with_deduplication(&code_blocks);
+
+    println!("Total bytes returned: {total_bytes}");
+    println!("Total tokens returned: {total_tokens}");
 }
 
 #[cfg(test)]
