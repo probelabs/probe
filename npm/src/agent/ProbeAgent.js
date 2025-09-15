@@ -762,7 +762,9 @@ When troubleshooting:
 
       // Schema handling - format response according to provided schema
       // Skip schema processing if result came from attempt_completion tool
-      if (options.schema && !options._schemaFormatted && !completionAttempted) {
+      // Don't apply schema formatting if we failed due to max iterations
+      const reachedMaxIterations = currentIteration >= maxIterations && !completionAttempted;
+      if (options.schema && !options._schemaFormatted && !completionAttempted && !reachedMaxIterations) {
         if (this.debug) {
           console.log('[DEBUG] Schema provided, applying automatic formatting...');
         }
@@ -976,6 +978,8 @@ Convert your previous response content into actual JSON data that follows this s
           console.error('[ERROR] Schema formatting failed:', error);
           // Return the original result if schema formatting fails
         }
+      } else if (reachedMaxIterations && options.schema && this.debug) {
+        console.log('[DEBUG] Skipping schema formatting due to max iterations reached without completion');
       } else if (completionAttempted && options.schema) {
         // For attempt_completion results with schema, still clean markdown if needed
         try {

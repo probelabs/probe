@@ -671,17 +671,17 @@ When troubleshooting:
       if (this.debug) {
         console.log(`[DEBUG] Using predefined prompt: ${this.promptType}`);
       }
-      // Add common instructions to predefined prompts
-      systemMessage += commonInstructions;
     } else {
       // Use the default prompt (code explorer) if no prompt type is specified
       systemMessage = "<role>" + predefinedPrompts['code-explorer'] + "</role>";
       if (this.debug) {
         console.log(`[DEBUG] Using default prompt: code explorer`);
       }
-      // Add common instructions to the default prompt
-      systemMessage += commonInstructions;
     }
+
+    // ALWAYS add common instructions regardless of prompt type
+    // This ensures tool call guidance is never missing
+    systemMessage += commonInstructions;
     // Add XML Tool Guidelines
     systemMessage += `\n${xmlToolGuidelines}\n`;
 
@@ -916,6 +916,7 @@ When troubleshooting:
     let currentIteration = 0;
     let completionAttempted = false;
     let finalResult = `Error: Max tool iterations (${MAX_TOOL_ITERATIONS}) reached without completion. You can increase this limit using the MAX_TOOL_ITERATIONS environment variable or --max-iterations flag.`; // Default error
+    let consecutiveNoToolCallCount = 0;
 
     this.abortController = new AbortController();
     const debugFilePath = join(process.cwd(), 'probe-debug.txt');
@@ -1306,6 +1307,8 @@ When troubleshooting:
 
         const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent);
         if (parsedTool) {
+          // Reset counter on successful tool call detection
+          consecutiveNoToolCallCount = 0;
           const { toolName, params } = parsedTool;
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
           
@@ -1432,10 +1435,75 @@ When troubleshooting:
           }
 
         } else {
-          if (this.debug) console.log(`[DEBUG] Assistant response did not contain a valid XML tool call.`);
-          const forceToolContent = `Your response did not contain a valid tool call in the required XML format. You MUST respond with exactly one tool call (e.g., <search>...</search> or <attempt_completion>...</attempt_completion>) based on the previous steps and the user's goal. Analyze the situation and choose the appropriate next tool.`;
-          currentMessages.push({ role: 'user', content: forceToolContent });
-          this.tokenCounter.calculateContextSize(currentMessages);
+          consecutiveNoToolCallCount++;
+          if (this.debug) console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
+          
+          // After 3 consecutive failures to provide tool calls, force completion
+          if (consecutiveNoToolCallCount >= 3) {
+            if (this.debug) console.log(`[DEBUG] Too many consecutive failures to detect tool calls (${consecutiveNoToolCallCount}). Forcing completion.`);
+            
+            const forceCompletionContent = `CRITICAL: ${consecutiveNoToolCallCount} consecutive invalid responses detected. You must complete this task NOW.
+
+You have failed to provide valid XML tool calls multiple times. This indicates the task should be concluded.
+
+You MUST respond with exactly this format:
+<attempt_completion>
+<result>
+[Based on the conversation above, provide your final answer. If the task was not fully completed, explain what was accomplished and what remains to be done.]
+</result>
+</attempt_completion>
+
+REQUIRED: Respond with ONLY the attempt_completion XML block above. No other text.`;
+            currentMessages.push({ role: 'user', content: forceCompletionContent });
+            this.tokenCounter.calculateContextSize(currentMessages);
+          } else {
+            // Check if we've done substantial work that might indicate completion is appropriate
+            const hasToolResults = currentMessages.some(msg => msg.content && msg.content.includes('<tool_result>'));
+            
+            let forceToolContent;
+            if (hasToolResults && consecutiveNoToolCallCount >= 2) {
+              forceToolContent = `INVALID RESPONSE FORMAT: Your response must contain exactly ONE tool call in XML format.
+
+You have tool results available above. Based on those results:
+
+If the user's question is answered or task is complete:
+<attempt_completion>
+<result>Your final answer based on the tool results above</result>
+</attempt_completion>
+
+If you need more information:
+<search>
+<query>specific keywords</query>
+<path>specific path</path>
+</search>
+
+REQUIRED: Choose one option and respond with ONLY the XML tool call, no other text.`;
+            } else {
+              forceToolContent = `INVALID RESPONSE FORMAT: You did not provide a tool call in the required XML format.
+
+You MUST respond with exactly one tool call using this structure:
+<tool_name>
+<parameter_name>value</parameter_name>
+</tool_name>
+
+Available tools:
+- <search> - find code using keywords
+- <query> - find code using patterns  
+- <extract> - get specific files/lines
+- <attempt_completion> - provide final answer
+
+Example:
+<search>
+<query>authentication functions</query>
+<path>src</path>
+</search>
+
+REQUIRED: Respond with ONLY the XML tool call, no explanatory text.`;
+            }
+            
+            currentMessages.push({ role: 'user', content: forceToolContent });
+            this.tokenCounter.calculateContextSize(currentMessages);
+          }
         }
 
         if (currentMessages.length > MAX_HISTORY_MESSAGES + 3) {
