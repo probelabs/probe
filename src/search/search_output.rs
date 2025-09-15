@@ -2365,12 +2365,8 @@ fn format_and_print_outline_xml_results(results: &[&SearchResult], dry_run: bool
             &mut displayed_content,
         );
 
-        // Print the file element with content
-        println!(
-            "  <file path=\"{}\">{}</file>",
-            escape_xml(file_path),
-            xml_content
-        );
+        // Print the file element with content (no XML escaping for simpler output)
+        println!("  <file path=\"{}\">{}</file>", file_path, xml_content);
     }
 
     println!("</matches>");
@@ -2422,8 +2418,8 @@ fn generate_outline_xml_content(
                 // For dry run, just show line numbers
                 result.push_str(&format!("{}", line_num));
             } else {
-                // Add the actual line content
-                result.push_str(&escape_xml(line_content));
+                // Add line number and actual line content (no XML escaping for simpler output)
+                result.push_str(&format!("{:4} {}", line_num, line_content));
                 displayed_content.push(line_content.to_string());
             }
         }
