@@ -9,6 +9,8 @@ import {
   MermaidFixingAgent,
   validateAndFixMermaidResponse
 } from '../../src/agent/schemaUtils.js';
+import { AppTracer } from '../../src/agent/appTracer.js';
+import { trace } from '@opentelemetry/api';
 
 // Mock ProbeAgent to avoid actual API calls in tests
 const mockProbeAgent = {
@@ -655,6 +657,189 @@ graph TD
       expect(result.fixedResponse).toBe(normalResponse);
       expect(result.wasFixed).toBe(false);
       expect(result.isValid).toBe(true);
+    });
+  });
+
+  describe('AppTracer Integration', () => {
+    let mockTelemetryConfig;
+    let capturedEvents;
+    let mockActiveSpan;
+    let originalGetActiveSpan;
+
+    beforeEach(() => {
+      capturedEvents = [];
+      
+      // Create a mock active span that captures events
+      mockActiveSpan = {
+        setStatus: () => {},
+        recordException: () => {},
+        end: () => {},
+        addEvent: (name, attributes) => {
+          capturedEvents.push({ name, attributes });
+        },
+        setAttributes: (attributes) => {
+          capturedEvents.push({ type: 'setAttributes', attributes });
+        }
+      };
+      
+      // Mock trace.getActiveSpan to return our mock span
+      originalGetActiveSpan = trace.getActiveSpan;
+      trace.getActiveSpan = jest.fn().mockReturnValue(mockActiveSpan);
+      
+      mockTelemetryConfig = {
+        getTracer: () => ({
+          startSpan: (name, options) => mockActiveSpan
+        }),
+        enableConsole: true,
+        forceFlush: async () => {},
+        shutdown: async () => {}
+      };
+    });
+
+    afterEach(() => {
+      // Restore original trace.getActiveSpan
+      trace.getActiveSpan = originalGetActiveSpan;
+      jest.clearAllMocks();
+    });
+
+    test('should have all required tracer methods defined', () => {
+      const tracer = new AppTracer(mockTelemetryConfig, 'test-session');
+      
+      // Verify all record methods exist and are functions
+      expect(typeof tracer.recordMermaidValidationEvent).toBe('function');
+      expect(typeof tracer.recordJsonValidationEvent).toBe('function');
+      expect(typeof tracer.recordDelegationEvent).toBe('function');
+      
+      // Verify all span creation methods exist
+      expect(typeof tracer.createMermaidValidationSpan).toBe('function');
+      expect(typeof tracer.createJsonValidationSpan).toBe('function');
+      expect(typeof tracer.createDelegationSpan).toBe('function');
+      
+      // Verify core methods exist
+      expect(typeof tracer.addEvent).toBe('function');
+      expect(typeof tracer.setAttributes).toBe('function');
+    });
+
+    test('should call recordMermaidValidationEvent without errors', () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
+      const tracer = new AppTracer(mockTelemetryConfig, 'test-session');
+      
+      // This should not throw an error (which was the original bug)
+      expect(() => {
+        tracer.recordMermaidValidationEvent('started', {
+          'mermaid_validation.response_length': 1000,
+          'mermaid_validation.provider': 'anthropic',
+          'mermaid_validation.model': 'claude-3'
+        });
+      }).not.toThrow();
+      
+      // Verify the event was recorded
+      expect(capturedEvents).toHaveLength(1);
+      expect(capturedEvents[0].name).toBe('mermaid_validation.started');
+      expect(capturedEvents[0].attributes['session.id']).toBe('test-session');
+      expect(capturedEvents[0].attributes['mermaid_validation.response_length']).toBe(1000);
+    });
+
+    test('should record multiple validation events correctly', () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
+      const tracer = new AppTracer(mockTelemetryConfig, 'test-session');
+      
+      // Record different validation events
+      tracer.recordMermaidValidationEvent('started', { test: 'mermaid' });
+      tracer.recordJsonValidationEvent('completed', { test: 'json' });
+      tracer.recordDelegationEvent('timeout', { test: 'delegation' });
+      
+      expect(capturedEvents).toHaveLength(3);
+      
+      // Check event names and session IDs
+      expect(capturedEvents[0].name).toBe('mermaid_validation.started');
+      expect(capturedEvents[1].name).toBe('json_validation.completed');
+      expect(capturedEvents[2].name).toBe('delegation.timeout');
+      
+      // All should have session ID
+      capturedEvents.forEach(event => {
+        expect(event.attributes['session.id']).toBe('test-session');
+      });
+    });
+
+    test('should pass tracer to validateAndFixMermaidResponse without errors', async () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
+      const tracer = new AppTracer(mockTelemetryConfig, 'test-session');
+      
+      const response = `Valid diagram:
+\`\`\`mermaid
+graph TD
+  A --> B
+\`\`\``;
+
+      // This should not throw "recordMermaidValidationEvent is not a function"
+      expect(async () => {
+        await validateAndFixMermaidResponse(response, {
+          debug: false,
+          tracer: tracer
+        });
+      }).not.toThrow();
+      
+      // Execute the function to verify it actually works
+      const result = await validateAndFixMermaidResponse(response, {
+        debug: false,
+        tracer: tracer
+      });
+      
+      expect(result.isValid).toBe(true);
+      expect(result.wasFixed).toBe(false);
+      
+      // Should have recorded mermaid validation events
+      const mermaidEvents = capturedEvents.filter(e => e.name && e.name.includes('mermaid_validation'));
+      expect(mermaidEvents.length).toBeGreaterThan(0);
+    });
+
+    test('should handle tracer gracefully when disabled', () => {
+      // Reset the captured events for this test
+      capturedEvents = [];
+      
+      // For disabled tracer test, mock trace.getActiveSpan to return null
+      trace.getActiveSpan = jest.fn().mockReturnValue(null);
+      
+      const disabledTracer = new AppTracer(null, 'test-session');
+      
+      // Should not throw even when telemetry is disabled
+      expect(() => {
+        disabledTracer.recordMermaidValidationEvent('started', { test: 'data' });
+        disabledTracer.recordJsonValidationEvent('completed', { test: 'data' });
+        disabledTracer.recordDelegationEvent('failed', { test: 'data' });
+      }).not.toThrow();
+      
+      // No events should be captured since tracer is disabled
+      expect(capturedEvents).toHaveLength(0);
+      
+      // Restore the mock for other tests
+      trace.getActiveSpan = jest.fn().mockReturnValue(mockActiveSpan);
+    });
+
+    test('should preserve session ID across different event types', () => {
+      // Reset captured events for this test
+      capturedEvents = [];
+      
+      const sessionId = 'unique-test-session-123';
+      const tracer = new AppTracer(mockTelemetryConfig, sessionId);
+      
+      tracer.recordMermaidValidationEvent('html_fix_completed', { diagrams: 2 });
+      tracer.recordJsonValidationEvent('retry_attempt', { attempt: 1 });
+      tracer.recordDelegationEvent('spawn_error', { error: 'timeout' });
+      
+      expect(capturedEvents).toHaveLength(3);
+      
+      // All events should have the same session ID
+      capturedEvents.forEach(event => {
+        expect(event.attributes['session.id']).toBe(sessionId);
+      });
     });
   });
 });
