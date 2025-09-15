@@ -1010,15 +1010,115 @@ Convert your previous response content into actual JSON data that follows this s
             console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
           }
           
-          // Validate JSON if schema expects JSON
+          // Validate and potentially correct JSON for attempt_completion results
           if (isJsonSchema(options.schema)) {
             if (this.debug) {
-              console.log(`[DEBUG] JSON validation: Validating attempt_completion result`);
+              console.log(`[DEBUG] JSON validation: Starting validation process for attempt_completion result`);
+              console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
             }
-            const validation = validateJsonResponse(finalResult, { debug: this.debug });
+            
+            // Record JSON validation start in telemetry
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('attempt_completion_started', {
+                'json_validation.response_length': finalResult.length,
+                'json_validation.schema_type': 'JSON',
+                'json_validation.context': 'attempt_completion'
+              });
+            }
+            
+            let validation = validateJsonResponse(finalResult, { debug: this.debug });
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            // First check if the response is valid JSON but is actually a schema definition
+            if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
+              if (this.debug) {
+                console.log(`[DEBUG] JSON validation: attempt_completion response is a JSON schema definition instead of data, correcting...`);
+              }
+              
+              // Use specialized correction prompt for schema definition confusion
+              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
+                finalResult,
+                options.schema,
+                0
+              );
+              
+              finalResult = await this.answer(schemaDefinitionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              validation = validateJsonResponse(finalResult);
+              retryCount = 1; // Start at 1 since we already did one correction
+            }
+            
+            while (!validation.isValid && retryCount < maxRetries) {
+              if (this.debug) {
+                console.log(`[DEBUG] JSON validation: attempt_completion validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
+                console.log(`[DEBUG] JSON validation: Invalid response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
+              }
+              
+              // Check if the invalid response is actually a schema definition
+              let correctionPrompt;
+              try {
+                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] JSON validation: attempt_completion response is still a schema definition, using specialized correction`);
+                  }
+                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
+                    finalResult,
+                    options.schema,
+                    retryCount
+                  );
+                } else {
+                  correctionPrompt = createJsonCorrectionPrompt(
+                    finalResult, 
+                    options.schema, 
+                    validation.error,
+                    retryCount
+                  );
+                }
+              } catch (error) {
+                // If we can't parse to check if it's a schema definition, use regular correction
+                correctionPrompt = createJsonCorrectionPrompt(
+                  finalResult, 
+                  options.schema, 
+                  validation.error,
+                  retryCount
+                );
+              }
+              
+              finalResult = await this.answer(correctionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              
+              // Validate the corrected response
+              validation = validateJsonResponse(finalResult, { debug: this.debug });
+              retryCount++;
+              
+              if (this.debug) {
+                if (validation.isValid) {
+                  console.log(`[DEBUG] JSON validation: attempt_completion correction successful on attempt ${retryCount}`);
+                } else {
+                  console.log(`[DEBUG] JSON validation: attempt_completion correction failed on attempt ${retryCount}: ${validation.error}`);
+                }
+              }
+            }
+            
+            // Record final validation result
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('attempt_completion_completed', {
+                'json_validation.success': validation.isValid,
+                'json_validation.retry_count': retryCount,
+                'json_validation.final_response_length': finalResult.length
+              });
+            }
+            
             if (!validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON validation: attempt_completion result validation failed: ${validation.error}`);
-              console.log(`[DEBUG] JSON validation: attempt_completion response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+              console.log(`[DEBUG] JSON validation: attempt_completion result validation failed after ${maxRetries} attempts: ${validation.error}`);
+              console.log(`[DEBUG] JSON validation: Final attempt_completion response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
             } else if (validation.isValid && this.debug) {
               console.log(`[DEBUG] JSON validation: attempt_completion result validation successful`);
             }
