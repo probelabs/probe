@@ -52,6 +52,7 @@ export class ProbeAgent {
    * @param {string} [options.provider] - Force specific AI provider
    * @param {string} [options.model] - Override model name
    * @param {boolean} [options.debug] - Enable debug mode
+   * @param {boolean} [options.outline] - Enable outline-xml format for search results
    */
   constructor(options = {}) {
     // Basic configuration
@@ -62,6 +63,7 @@ export class ProbeAgent {
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this.tracer = options.tracer || null;
+    this.outline = !!options.outline;
 
     // Search configuration
     this.allowedFolders = options.path ? [options.path] : [process.cwd()];
@@ -101,7 +103,8 @@ export class ProbeAgent {
       sessionId: this.sessionId,
       debug: this.debug,
       defaultPath: this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd(),
-      allowedFolders: this.allowedFolders
+      allowedFolders: this.allowedFolders,
+      outline: this.outline
     };
 
     // Create base tools

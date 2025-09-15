@@ -17,10 +17,10 @@ import { fileURLToPath } from 'url';
 import { search, query, extract, getBinaryPath, setBinaryPath } from '../index.js';
 
 // Parse command-line arguments
-function parseArgs(): { timeout?: number } {
+function parseArgs(): { timeout?: number; format?: string } {
   const args = process.argv.slice(2);
-  const config: { timeout?: number } = {};
-  
+  const config: { timeout?: number; format?: string } = {};
+
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--timeout' || args[i] === '-t') && i + 1 < args.length) {
       const timeout = parseInt(args[i + 1], 10);
@@ -31,6 +31,10 @@ function parseArgs(): { timeout?: number } {
         console.error(`Invalid timeout value: ${args[i + 1]}. Using default.`);
       }
       i++; // Skip the next argument
+    } else if (args[i] === '--format' && i + 1 < args.length) {
+      config.format = args[i + 1];
+      console.error(`Format set to ${config.format}`);
+      i++; // Skip the next argument
     } else if (args[i] === '--help' || args[i] === '-h') {
       console.log(`
 Probe MCP Server
@@ -40,12 +44,13 @@ Usage:
 
 Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
+  --format <format>       Set output format (json, outline-xml, etc.)
   --help, -h              Show this help message
 `);
       process.exit(0);
     }
   }
-  
+
   return config;
 }
 
@@ -144,9 +149,11 @@ interface ExtractCodeArgs {
 class ProbeServer {
   private server: Server;
   private defaultTimeout: number;
+  private defaultFormat?: string;
 
-  constructor(timeout: number = 30) {
+  constructor(timeout: number = 30, format?: string) {
     this.defaultTimeout = timeout;
+    this.defaultFormat = format;
     this.server = new Server(
       {
         name: '@probelabs/probe',
@@ -426,6 +433,14 @@ class ProbeServer {
       } else if (this.defaultTimeout !== undefined) {
         options.timeout = this.defaultTimeout;
       }
+
+      // Handle format options
+      if (this.defaultFormat === 'outline-xml') {
+        // For outline-xml format, we pass it as a format flag to the search command
+        options.format = 'outline-xml';
+      } else if (this.defaultFormat === 'json') {
+        options.json = true;
+      }
       
       console.error("Executing search with options:", JSON.stringify(options, null, 2));
       
@@ -589,5 +604,5 @@ class ProbeServer {
   }
 }
 
-const server = new ProbeServer(cliConfig.timeout);
+const server = new ProbeServer(cliConfig.timeout, cliConfig.format);
 server.run().catch(console.error);
