@@ -56,6 +56,7 @@ export class ProbeAgent {
    * @param {string} [options.model] - Override model name
    * @param {boolean} [options.debug] - Enable debug mode
    * @param {boolean} [options.outline] - Enable outline-xml format for search results
+   * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
    */
   constructor(options = {}) {
     // Basic configuration
@@ -67,6 +68,7 @@ export class ProbeAgent {
     this.cancelled = false;
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
+    this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
 
     // Search configuration
     this.allowedFolders = options.path ? [options.path] : [process.cwd()];
@@ -564,11 +566,17 @@ When troubleshooting:
           console.log(`[DEBUG] Estimated context tokens BEFORE LLM call (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
         }
 
-        let maxResponseTokens = 4000;
-        if (this.model.includes('claude-3-opus') || this.model.startsWith('gpt-4-')) {
-          maxResponseTokens = 4096;
-        } else if (this.model.includes('claude-3-5-sonnet') || this.model.startsWith('gpt-4o')) {
-          maxResponseTokens = 8192;
+        let maxResponseTokens = this.maxResponseTokens;
+        if (!maxResponseTokens) {
+          // Use model-based defaults if not explicitly configured
+          maxResponseTokens = 4000;
+          if (this.model.includes('opus') || this.model.includes('sonnet') || this.model.startsWith('gpt-4-')) {
+            maxResponseTokens = 8192;
+          } else if (this.model.startsWith('gpt-4o')) {
+            maxResponseTokens = 8192;
+          } else if (this.model.startsWith('gemini')) {
+            maxResponseTokens = 32000;
+          }
         }
 
         // Make AI request
