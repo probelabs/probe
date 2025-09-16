@@ -77,13 +77,13 @@ Security recommendations:
 });
 
 describe('Simplified attempt_completion XML Parsing', () => {
-  test('should parse simple attempt_completion with plain text result', () => {
+  test('should parse simple attempt_completion with direct content (no result wrapper)', () => {
     const xml = `<attempt_completion>
-<result>The authentication system has been analyzed successfully. It uses secure JWT tokens.</result>
+The authentication system has been analyzed successfully. It uses secure JWT tokens.
 </attempt_completion>`;
-    
+
     const parsed = parseXmlToolCallWithThinking(xml);
-    
+
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
     expect(parsed.params.result).toBe('The authentication system has been analyzed successfully. It uses secure JWT tokens.');
@@ -91,7 +91,7 @@ describe('Simplified attempt_completion XML Parsing', () => {
 
   test('should parse multiline result with formatting', () => {
     const xml = `<attempt_completion>
-<result>Analysis Complete:
+Analysis Complete:
 
 **Security Findings:**
 - JWT tokens are properly signed
@@ -101,11 +101,11 @@ describe('Simplified attempt_completion XML Parsing', () => {
 **Recommendations:**
 1. Add 2FA support
 2. Implement session timeouts
-3. Add audit logging</result>
+3. Add audit logging
 </attempt_completion>`;
-    
+
     const parsed = parseXmlToolCallWithThinking(xml);
-    
+
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
     expect(parsed.params.result).toContain('Analysis Complete:');
@@ -115,7 +115,7 @@ describe('Simplified attempt_completion XML Parsing', () => {
 
   test('should handle result with code blocks', () => {
     const xml = `<attempt_completion>
-<result>I found the authentication function:
+I found the authentication function:
 
 \`\`\`javascript
 function authenticate(token) {
@@ -123,11 +123,11 @@ function authenticate(token) {
 }
 \`\`\`
 
-This function validates JWT tokens using the secret key.</result>
+This function validates JWT tokens using the secret key.
 </attempt_completion>`;
-    
+
     const parsed = parseXmlToolCallWithThinking(xml);
-    
+
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
     expect(parsed.params.result).toContain('```javascript');
@@ -136,49 +136,50 @@ This function validates JWT tokens using the secret key.</result>
 
   test('should handle result with XML-like content', () => {
     const xml = `<attempt_completion>
-<result>The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;/database&gt;</result>
+The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;/database&gt;
 </attempt_completion>`;
-    
+
     const parsed = parseXmlToolCallWithThinking(xml);
-    
+
     expect(parsed).toBeDefined();
     // XML entities should remain as-is in the result (not decoded)
     expect(parsed.params.result).toContain('&lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;/database&gt;');
   });
 
-  test('should ignore command tags (legacy compatibility)', () => {
-    // Test that command tags are ignored if present in old XML format
+  test('should treat all content as direct content (including old-style tags)', () => {
+    // Test that everything inside attempt_completion is treated as content
     const xml = `<attempt_completion>
 <result>Analysis complete. The system is secure.</result>
 <command>echo "test"</command>
 </attempt_completion>`;
-    
+
     const parsed = parseXmlToolCallWithThinking(xml);
-    
+
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
-    expect(parsed.params.result).toBe('Analysis complete. The system is secure.');
-    expect(parsed.params.command).toBeUndefined(); // Command should not be parsed
+    expect(parsed.params.result).toContain('Analysis complete. The system is secure.');
+    expect(parsed.params.result).toContain('<result>');
+    expect(parsed.params.result).toContain('<command>echo "test"</command>');
+    expect(parsed.params.command).toBeUndefined(); // Command should not be a separate parameter
   });
 
-  test('should handle empty result tag', () => {
+  test('should handle empty content', () => {
     const xml = `<attempt_completion>
-<result></result>
 </attempt_completion>`;
-    
+
     const parsed = parseXmlToolCallWithThinking(xml);
-    
+
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toBe('');
   });
 
-  test('should handle result with special characters', () => {
+  test('should handle content with special characters', () => {
     const xml = `<attempt_completion>
-<result>Found 5 files with "special" characters: @#$%^&*()[]{}|\\:";'<>?,./</result>
+Found 5 files with "special" characters: @#$%^&*()[]{}|\\:";'<>?,./
 </attempt_completion>`;
-    
+
     const parsed = parseXmlToolCallWithThinking(xml);
-    
+
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toContain('special');
     expect(parsed.params.result).toContain('@#$%^&*()[]{}|\\:');
@@ -239,35 +240,35 @@ The implementation follows security best practices.`
 });
 
 describe('Legacy Compatibility', () => {
-  test('should maintain backward compatibility with existing XML format', () => {
-    // Ensure existing attempt_completion XML still works
-    const legacyXml = `<attempt_completion>
-<result>Task completed successfully.</result>
+  test('should maintain backward compatibility with direct content format', () => {
+    // Ensure direct content attempt_completion XML works
+    const directXml = `<attempt_completion>
+Task completed successfully.
 </attempt_completion>`;
-    
-    const parsed = parseXmlToolCallWithThinking(legacyXml);
-    
+
+    const parsed = parseXmlToolCallWithThinking(directXml);
+
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
     expect(parsed.params.result).toBe('Task completed successfully.');
   });
 
-  test('should gracefully ignore legacy command parameter in XML', () => {
-    // Old format with command should still parse, but command is ignored
-    const legacyXmlWithCommand = `<attempt_completion>
-<result>Task completed.</result>
+  test('should handle content that includes old-style tags', () => {
+    // Content might include old-style tags, which should be treated as content now
+    const xmlWithOldTags = `<attempt_completion>
+Task completed.
 <command>npm test</command>
 </attempt_completion>`;
-    
-    const parsed = parseXmlToolCallWithThinking(legacyXmlWithCommand);
-    
+
+    const parsed = parseXmlToolCallWithThinking(xmlWithOldTags);
+
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
-    expect(parsed.params.result).toBe('Task completed.');
-    
-    // Command parameter should not be present in simplified version
+    expect(parsed.params.result).toContain('Task completed.');
+    expect(parsed.params.result).toContain('<command>npm test</command>');
+
+    // The result should include everything as content
     const validation = attemptCompletionSchema.safeParse(parsed.params);
     expect(validation.success).toBe(true);
-    expect(validation.data).toEqual({ result: 'Task completed.' });
   });
 });

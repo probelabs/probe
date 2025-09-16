@@ -126,7 +126,7 @@ User: Find all markdown files in the docs directory, but only at the top level.
 `;
 
 /**
- * Enhanced XML parser that handles thinking tags
+ * Enhanced XML parser that handles thinking tags and attempt_complete shorthand
  * This function removes any <thinking></thinking> tags from the input string
  * before passing it to the original parseXmlToolCall function
  * @param {string} xmlString - The XML string to parse
@@ -139,7 +139,17 @@ export function parseXmlToolCallWithThinking(xmlString, validTools) {
   const thinkingContent = thinkingMatch ? thinkingMatch[1].trim() : null;
 
   // Remove thinking tags and their content from the XML string
-  const cleanedXmlString = xmlString.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+  let cleanedXmlString = xmlString.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+
+  // Check for attempt_complete shorthand (single tag with no closing tag and no parameters)
+  const attemptCompleteMatch = cleanedXmlString.match(/^<attempt_complete>\s*$/);
+  if (attemptCompleteMatch) {
+    // Convert shorthand to full attempt_completion format with special marker
+    return {
+      toolName: 'attempt_completion',
+      params: { result: '__PREVIOUS_RESPONSE__' }
+    };
+  }
 
   // Use the original parseXmlToolCall function to parse the cleaned XML string
   const parsedTool = parseXmlToolCall(cleanedXmlString, validTools);

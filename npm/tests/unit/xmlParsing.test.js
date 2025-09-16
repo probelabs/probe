@@ -27,15 +27,14 @@ describe('XML Tool Call Parsing', () => {
         });
       });
 
-      test('should parse attempt_completion with special handling', () => {
-        const xmlString = '<attempt_completion><result>Task completed successfully</result><command>npm test</command></attempt_completion>';
+      test('should parse attempt_completion with direct content', () => {
+        const xmlString = '<attempt_completion>Task completed successfully</attempt_completion>';
         const result = parseXmlToolCall(xmlString);
-        
+
         expect(result).toEqual({
           toolName: 'attempt_completion',
           params: {
             result: 'Task completed successfully'
-            // command parameter is intentionally removed for backward compatibility
           }
         });
       });
@@ -148,9 +147,9 @@ describe('XML Tool Call Parsing', () => {
 
       test('should work with single tool in valid list', () => {
         const singleTool = ['attempt_completion'];
-        const xmlString = '<attempt_completion><result>done</result></attempt_completion>';
+        const xmlString = '<attempt_completion>done</attempt_completion>';
         const result = parseXmlToolCall(xmlString, singleTool);
-        
+
         expect(result).toEqual({
           toolName: 'attempt_completion',
           params: { result: 'done' }
