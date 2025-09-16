@@ -84,26 +84,16 @@ where
         sql, context
     );
 
-    match panic::catch_unwind(AssertUnwindSafe(|| {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(conn.execute(sql, params))
-        })
-    })) {
+    // Execute the async call directly without blocking operations
+    match conn.execute(sql, params).await {
         Ok(result) => {
             eprintln!("✅ SQL_DEBUG: Execute completed successfully: '{}'", sql);
-            result.map_err(|e| DatabaseError::OperationFailed {
-                message: format!("{}: {}", context, e),
-            })
+            Ok(result)
         }
-        Err(panic_err) => {
-            let panic_msg = extract_panic_message(panic_err);
-            eprintln!("💥 SQL_DEBUG: Execute PANICKED: '{}' - {}", sql, panic_msg);
-            error!(
-                "Turso execute panicked in {}: SQL='{}' - {}",
-                context, sql, panic_msg
-            );
+        Err(e) => {
+            eprintln!("❌ SQL_DEBUG: Execute failed: '{}' - Error: {}", sql, e);
             Err(DatabaseError::OperationFailed {
-                message: format!("{}: Turso panic - {}", context, panic_msg),
+                message: format!("{}: {}", context, e),
             })
         }
     }

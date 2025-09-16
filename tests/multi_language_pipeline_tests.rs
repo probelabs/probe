@@ -1312,7 +1312,8 @@ async fn test_individual_pipeline_processing() -> Result<()> {
     let mut rust_pipeline = IndexingPipeline::new(Language::Rust)?;
 
     let rust_file = workspace.path().join("rust/lib.rs");
-    let result = rust_pipeline.process_file(&rust_file).await?;
+    let database_adapter = lsp_daemon::lsp_database_adapter::LspDatabaseAdapter::new();
+    let result = rust_pipeline.process_file(&rust_file, &database_adapter).await?;
 
     assert!(
         result.symbols_found > 0,

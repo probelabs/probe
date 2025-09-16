@@ -59,30 +59,14 @@ impl RelationshipParserPool {
         let mut parser = tree_sitter::Parser::new();
 
         let tree_sitter_language = match language.to_lowercase().as_str() {
-            #[cfg(feature = "tree-sitter-rust")]
             "rust" => Some(tree_sitter_rust::LANGUAGE),
-
-            #[cfg(feature = "tree-sitter-typescript")]
             "typescript" | "ts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
-
-            #[cfg(feature = "tree-sitter-javascript")]
             "javascript" | "js" => Some(tree_sitter_javascript::LANGUAGE),
-
-            #[cfg(feature = "tree-sitter-python")]
             "python" | "py" => Some(tree_sitter_python::LANGUAGE),
-
-            #[cfg(feature = "tree-sitter-go")]
             "go" => Some(tree_sitter_go::LANGUAGE),
-
-            #[cfg(feature = "tree-sitter-java")]
             "java" => Some(tree_sitter_java::LANGUAGE),
-
-            #[cfg(feature = "tree-sitter-c")]
             "c" => Some(tree_sitter_c::LANGUAGE),
-
-            #[cfg(feature = "tree-sitter-cpp")]
             "cpp" | "c++" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
-
             _ => None,
         };
 
@@ -821,24 +805,12 @@ mod tests {
     fn test_parser_pool_operations() {
         let mut pool = RelationshipParserPool::new();
 
-        // Test with feature-enabled language
-        #[cfg(feature = "tree-sitter-rust")]
-        {
-            let parser = pool.borrow_parser("rust");
-            assert!(
-                parser.is_some(),
-                "Should get a parser for rust when feature is enabled"
-            );
-        }
-
-        #[cfg(not(feature = "tree-sitter-rust"))]
-        {
-            let parser = pool.borrow_parser("rust");
-            assert!(
-                parser.is_none(),
-                "Should not get a parser for rust when feature is disabled"
-            );
-        }
+        // Test with rust language
+        let parser = pool.borrow_parser("rust");
+        assert!(
+            parser.is_some(),
+            "Should get a parser for rust when tree-sitter-rust is available"
+        );
 
         // Pool should handle unknown languages gracefully
         let parser = pool.borrow_parser("unknown_language");

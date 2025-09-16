@@ -67,10 +67,10 @@ fn queue_items_strategy() -> impl Strategy<Value = Vec<QueueItem>> {
 // Strategy for manager configuration
 fn manager_config_strategy() -> impl Strategy<Value = ManagerConfig> {
     (
-        1usize..8,         // max_workers
-        10usize..1000,     // max_queue_size
-        1u64..1024,        // max_file_size_bytes
-        1usize..50,        // discovery_batch_size
+        1usize..8,     // max_workers
+        10usize..1000, // max_queue_size
+        1u64..1024,    // max_file_size_bytes
+        1usize..50,    // discovery_batch_size
     )
         .prop_map(
             |(workers, queue_size, file_size, batch_size)| ManagerConfig {

@@ -801,8 +801,7 @@ async fn test_memory_tracking_thread_safety() -> Result<()> {
 
     println!(
         "Progress tracking test - Processed: {} bytes, Files: {}",
-        final_snapshot.processed_bytes,
-        final_snapshot.processed_files
+        final_snapshot.processed_bytes, final_snapshot.processed_files
     );
 
     Ok(())

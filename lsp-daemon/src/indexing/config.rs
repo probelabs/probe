@@ -26,7 +26,6 @@ pub struct IndexingConfig {
     /// Number of worker threads for indexing
     pub max_workers: usize,
 
-
     /// Maximum queue size for pending files (0 = unlimited)
     pub max_queue_size: usize,
 
@@ -80,6 +79,10 @@ pub struct IndexingConfig {
 /// Configuration for LSP operation caching during indexing
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspCachingConfig {
+    /// Master switch to enable/disable all LSP operations during indexing
+    /// When false, only structural analysis (tree-sitter AST) will be performed
+    pub enabled: bool,
+
     /// Enable caching of call hierarchy operations during indexing
     pub cache_call_hierarchy: bool,
 
@@ -115,6 +118,9 @@ pub struct LspCachingConfig {
 impl Default for LspCachingConfig {
     fn default() -> Self {
         Self {
+            // Master enable/disable switch - disabled by default for structural analysis focus
+            enabled: false, // 🔒 DISABLED by default - only structural analysis (AST)
+
             // CORRECTED defaults - cache operations actually used by search/extract
             cache_call_hierarchy: true, // ✅ MOST IMPORTANT - primary operation for search/extract
             cache_definitions: false,   // ❌ NOT used by search/extract commands
@@ -144,6 +150,11 @@ impl LspCachingConfig {
     /// Load LSP caching configuration from environment variables
     pub fn from_env() -> Result<Self> {
         let mut config = Self::default();
+
+        // Master enable/disable flag
+        if let Ok(value) = std::env::var("PROBE_LSP_INDEXING_ENABLED") {
+            config.enabled = parse_bool_env(&value, "PROBE_LSP_INDEXING_ENABLED")?;
+        }
 
         // Individual operation caching flags
         if let Ok(value) = std::env::var("PROBE_LSP_CACHE_CALL_HIERARCHY") {
@@ -213,6 +224,7 @@ impl LspCachingConfig {
             };
         }
 
+        merge_bool_field!(enabled);
         merge_bool_field!(cache_call_hierarchy);
         merge_bool_field!(cache_definitions);
         merge_bool_field!(cache_references);
@@ -236,6 +248,31 @@ impl LspCachingConfig {
 
         if !other.disabled_operations.is_empty() {
             self.disabled_operations = other.disabled_operations;
+        }
+    }
+
+    /// Check if LSP indexing is enabled
+    pub fn is_lsp_indexing_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    /// Check if a specific LSP operation should be performed during indexing
+    pub fn should_perform_operation(&self, operation: &LspOperation) -> bool {
+        if !self.enabled {
+            return false; // LSP indexing completely disabled
+        }
+
+        if self.disabled_operations.contains(operation) {
+            return false; // This specific operation is disabled
+        }
+
+        // Check if the specific caching flag is enabled
+        match operation {
+            LspOperation::CallHierarchy => self.cache_call_hierarchy,
+            LspOperation::Definition => self.cache_definitions,
+            LspOperation::References => self.cache_references,
+            LspOperation::Hover => self.cache_hover,
+            LspOperation::DocumentSymbols => self.cache_document_symbols,
         }
     }
 
@@ -365,7 +402,6 @@ pub struct LanguageIndexConfig {
 
     /// Language-specific worker count override
     pub max_workers: Option<usize>,
-
 
     /// Language-specific file size limit override
     pub max_file_size_bytes: Option<u64>,
@@ -608,7 +644,6 @@ impl IndexingConfig {
             config.max_workers = workers;
         }
 
-
         if !main_indexing.exclude_patterns.is_empty() {
             config.global_exclude_patterns = main_indexing.exclude_patterns.clone();
         }
@@ -634,6 +669,7 @@ impl IndexingConfig {
         }
 
         // Map LSP caching configuration
+        config.lsp_caching.enabled = main_indexing.lsp_indexing_enabled.unwrap_or(false);
         config.lsp_caching.cache_call_hierarchy =
             main_indexing.cache_call_hierarchy.unwrap_or(true);
         config.lsp_caching.cache_definitions = main_indexing.cache_definitions.unwrap_or(false);
@@ -726,7 +762,6 @@ impl IndexingConfig {
                 ));
             }
         }
-
 
         if let Ok(value) = std::env::var("PROBE_INDEX_QUEUE_SIZE") {
             config.max_queue_size = value
@@ -948,7 +983,6 @@ impl IndexingConfig {
             ));
         }
 
-
         if self.default_depth == 0 {
             return Err(anyhow!("default_depth must be greater than 0"));
         }
@@ -1089,6 +1123,7 @@ impl IndexingConfig {
                 .iter()
                 .map(op_to_string)
                 .collect(),
+            lsp_indexing_enabled: Some(self.lsp_caching.enabled),
         }
     }
 
@@ -1116,7 +1151,6 @@ impl IndexingConfig {
         if let Some(workers) = protocol.max_workers {
             config.max_workers = workers;
         }
-
 
         if !protocol.exclude_patterns.is_empty() {
             config.global_exclude_patterns = protocol.exclude_patterns.clone();
@@ -1191,6 +1225,10 @@ impl IndexingConfig {
                 .iter()
                 .filter_map(|s| string_to_op(s))
                 .collect();
+        }
+
+        if let Some(lsp_indexing_enabled) = protocol.lsp_indexing_enabled {
+            config.lsp_caching.enabled = lsp_indexing_enabled;
         }
 
         config
@@ -1382,7 +1420,6 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
             );
             has_config = true;
         }
-
 
         if let Ok(value) = std::env::var(format!("PROBE_INDEX_{lang_str}_TIMEOUT_MS")) {
             config.timeout_ms = Some(value.parse().context(format!(

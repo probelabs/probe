@@ -11,6 +11,8 @@
 //! LSP daemon serves requests, providing semantic enhancement capabilities.
 
 pub mod analyzer;
+pub mod ast_extractor;
+pub mod batch_conversion;
 pub mod config;
 pub mod file_detector;
 pub mod language_strategies;
@@ -18,6 +20,7 @@ pub mod manager;
 pub mod pipelines;
 pub mod progress;
 pub mod queue;
+pub mod symbol_conversion;
 pub mod versioning;
 
 // Re-export commonly used types
@@ -25,6 +28,13 @@ pub use analyzer::{
     AnalysisEngineConfig, AnalysisTask, AnalysisTaskPriority, AnalysisTaskType, DependencyGraph,
     DependencyNode, FileAnalysisResult, IncrementalAnalysisEngine, ProcessingResult,
     WorkspaceAnalysisResult,
+};
+pub use ast_extractor::{
+    AstSymbolExtractor, ExtractedSymbol, GenericLanguageExtractor, LanguageExtractor,
+};
+pub use batch_conversion::{
+    BatchConversionConfig, BatchConversionResult, BatchSymbolConverter, ConsoleProgressReporter,
+    ProgressReporter, SymbolDatabaseIntegrator,
 };
 pub use config::{
     CacheStrategy, EffectiveConfig, IndexingConfig, IndexingFeatures, LanguageIndexConfig,
@@ -40,6 +50,9 @@ pub use manager::{IndexingManager, ManagerConfig, ManagerStatus, WorkerStats};
 pub use pipelines::{IndexingPipeline, LanguagePipeline, PipelineConfig, PipelineResult};
 pub use progress::{IndexingProgress, ProgressMetrics, ProgressSnapshot};
 pub use queue::{IndexingQueue, Priority, QueueItem, QueueMetrics, QueueSnapshot};
+pub use symbol_conversion::{
+    ConversionContext, FieldValidator, MetadataBuilder, SymbolUIDGenerator, ToSymbolState,
+};
 pub use versioning::{
     FileVersionInfo, FileVersionManager, ProcessingResults, VersioningConfig, VersioningError,
     VersioningMetrics,

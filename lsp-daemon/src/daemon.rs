@@ -356,7 +356,7 @@ impl LspDaemon {
 
         // Initialize persistent cache store configuration
         let backend_type =
-            std::env::var("PROBE_LSP_CACHE_BACKEND_TYPE").unwrap_or_else(|_| "duckdb".to_string());
+            std::env::var("PROBE_LSP_CACHE_BACKEND_TYPE").unwrap_or_else(|_| "sqlite".to_string());
 
         info!("LSP daemon using {} database backend", backend_type);
 
@@ -4727,52 +4727,44 @@ impl LspDaemon {
         let mut parser = Parser::new();
 
         let _language = match extension {
-            #[cfg(feature = "tree-sitter-rust")]
             "rs" => {
                 parser
                     .set_language(&tree_sitter_rust::LANGUAGE.into())
                     .ok()?;
                 Some(())
             }
-            #[cfg(feature = "tree-sitter-typescript")]
             "ts" | "tsx" => {
                 parser
                     .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
                     .ok()?;
                 Some(())
             }
-            #[cfg(feature = "tree-sitter-javascript")]
             "js" | "jsx" => {
                 parser
                     .set_language(&tree_sitter_javascript::LANGUAGE.into())
                     .ok()?;
                 Some(())
             }
-            #[cfg(feature = "tree-sitter-python")]
             "py" => {
                 parser
                     .set_language(&tree_sitter_python::LANGUAGE.into())
                     .ok()?;
                 Some(())
             }
-            #[cfg(feature = "tree-sitter-go")]
             "go" => {
                 parser.set_language(&tree_sitter_go::LANGUAGE.into()).ok()?;
                 Some(())
             }
-            #[cfg(feature = "tree-sitter-java")]
             "java" => {
                 parser
                     .set_language(&tree_sitter_java::LANGUAGE.into())
                     .ok()?;
                 Some(())
             }
-            #[cfg(feature = "tree-sitter-c")]
             "c" | "h" => {
                 parser.set_language(&tree_sitter_c::LANGUAGE.into()).ok()?;
                 Some(())
             }
-            #[cfg(feature = "tree-sitter-cpp")]
             "cpp" | "cc" | "cxx" | "hpp" => {
                 parser
                     .set_language(&tree_sitter_cpp::LANGUAGE.into())
@@ -4878,7 +4870,8 @@ impl LspDaemon {
                 | "type_identifier"
                 | "property_identifier"
                 | "function_declarator" => {
-                    if let Ok(name) = child.utf8_text(content) {
+                    let name = child.utf8_text(content).unwrap_or("");
+                    if !name.is_empty() {
                         return Some(name.to_string());
                     }
                 }

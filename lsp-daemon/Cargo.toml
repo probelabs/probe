@@ -22,16 +22,6 @@ path = "src/test_tree_sitter.rs"
 name = "lsp_daemon"
 path = "src/lib.rs"
 
-[features]
-default = ["tree-sitter-rust", "tree-sitter-typescript", "tree-sitter-python"]
-tree-sitter-rust = ["dep:tree-sitter-rust"]
-tree-sitter-typescript = ["dep:tree-sitter-typescript"]
-tree-sitter-javascript = ["dep:tree-sitter-javascript"]
-tree-sitter-python = ["dep:tree-sitter-python"]
-tree-sitter-go = ["dep:tree-sitter-go"]
-tree-sitter-java = ["dep:tree-sitter-java"]
-tree-sitter-c = ["dep:tree-sitter-c"]
-tree-sitter-cpp = ["dep:tree-sitter-cpp"]
 
 [dependencies]
 anyhow = "1"
@@ -70,15 +60,19 @@ rayon = "1.8"
 tree-sitter = "0.24.5"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Tree-sitter language parsers (optional for selective language support)
-tree-sitter-rust = { version = "0.23.2", optional = true }
-tree-sitter-typescript = { version = "0.23.2", optional = true }
-tree-sitter-javascript = { version = "0.23.1", optional = true }
-tree-sitter-python = { version = "0.23.6", optional = true }
-tree-sitter-go = { version = "0.23.4", optional = true }
-tree-sitter-java = { version = "0.23.5", optional = true }
-tree-sitter-c = { version = "0.23.4", optional = true }
-tree-sitter-cpp = { version = "0.23.4", optional = true }
+# Tree-sitter language parsers - directly included like main probe app
+tree-sitter-rust = "0.23.2"
+tree-sitter-typescript = "0.23.2"
+tree-sitter-javascript = "0.23.1"
+tree-sitter-python = "0.23.6"
+tree-sitter-go = "0.23.4"
+tree-sitter-java = "0.23.5"
+tree-sitter-c = "0.23.4"
+tree-sitter-cpp = "0.23.4"
+tree-sitter-c-sharp = "0.23.1"
+tree-sitter-ruby = "0.23.1"
+tree-sitter-swift = "0.7.0"
+tree-sitter-php = "0.23.11"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
