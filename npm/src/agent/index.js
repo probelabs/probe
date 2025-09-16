@@ -120,6 +120,7 @@ function parseArgs() {
     verbose: false,
     help: false,
     maxIterations: null,
+    maxResponseTokens: null,
     traceFile: undefined,
     traceRemote: undefined,
     traceConsole: false,
@@ -154,6 +155,8 @@ function parseArgs() {
       config.model = args[++i];
     } else if (arg === '--max-iterations' && i + 1 < args.length) {
       config.maxIterations = parseInt(args[++i], 10);
+    } else if (arg === '--max-response-tokens' && i + 1 < args.length) {
+      config.maxResponseTokens = parseInt(args[++i], 10);
     } else if (arg === '--trace-file' && i + 1 < args.length) {
       config.traceFile = args[++i];
     } else if (arg === '--trace-remote' && i + 1 < args.length) {
@@ -205,6 +208,7 @@ Options:
   --mcp                           Run as MCP server
   --acp                           Run as ACP server (Agent Client Protocol)
   --max-iterations <number>        Max tool iterations (default: 30)
+  --max-response-tokens <number>   Max tokens for AI response (overrides model defaults)
   --trace-file <path>              Enable tracing to file (JSONL format)
   --trace-remote <endpoint>        Enable tracing to remote OTLP endpoint
   --trace-console                  Enable tracing to console output
@@ -216,6 +220,7 @@ Environment Variables:
   GOOGLE_API_KEY                  Google Gemini API key
   FORCE_PROVIDER                  Force specific provider (anthropic, openai, google)
   MODEL_NAME                      Override model name
+  MAX_RESPONSE_TOKENS             Maximum tokens for AI response
   DEBUG                           Enable verbose mode (set to '1')
 
 Examples:
@@ -305,6 +310,10 @@ class ProbeAgentMcpServer {
                 type: 'number',
                 description: 'Maximum number of tool iterations (default: 30).',
               },
+              max_response_tokens: {
+                type: 'number',
+                description: 'Maximum tokens for AI response (overrides model defaults).',
+              },
               schema: {
                 type: 'string',
                 description: 'Optional output schema (JSON, XML, or any format - text or file path).',
@@ -369,7 +378,8 @@ class ProbeAgentMcpServer {
           provider: args.provider,
           model: args.model,
           allowEdit: !!args.allow_edit,
-          debug: process.env.DEBUG === '1'
+          debug: process.env.DEBUG === '1',
+          maxResponseTokens: args.max_response_tokens
         };
 
         const agent = new ProbeAgent(agentConfig);
@@ -598,7 +608,8 @@ async function main() {
       allowEdit: config.allowEdit,
       debug: config.verbose,
       tracer: appTracer,
-      outline: config.outline
+      outline: config.outline,
+      maxResponseTokens: config.maxResponseTokens
     };
 
     const agent = new ProbeAgent(agentConfig);
