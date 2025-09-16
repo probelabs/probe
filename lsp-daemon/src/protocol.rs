@@ -630,6 +630,8 @@ pub struct IndexingConfig {
 
     // LSP Caching Configuration
     #[serde(default)]
+    pub lsp_indexing_enabled: Option<bool>,
+    #[serde(default)]
     pub cache_call_hierarchy: Option<bool>,
     #[serde(default)]
     pub cache_definitions: Option<bool>,
@@ -656,7 +658,8 @@ impl Default for IndexingConfig {
     fn default() -> Self {
         Self {
             max_workers: None,
-            memory_budget_mb: None, // Removed - not used anymore
+            memory_budget_mb: None,            // Removed - not used anymore
+            lsp_indexing_enabled: Some(false), // Disabled by default for structural analysis focus
             exclude_patterns: vec![
                 "*.git/*".to_string(),
                 "*/node_modules/*".to_string(),

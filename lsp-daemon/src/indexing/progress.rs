@@ -34,7 +34,6 @@ pub struct IndexingProgress {
     /// Total symbols extracted
     symbols_extracted: Arc<AtomicU64>,
 
-
     /// Number of worker threads currently active
     active_workers: Arc<AtomicUsize>,
 
@@ -123,7 +122,6 @@ impl IndexingProgress {
         self.update_timestamp();
         debug!("Skipped file: {}", reason);
     }
-
 
     /// Increment active worker count
     pub fn add_worker(&self) -> usize {
@@ -319,7 +317,6 @@ mod tests {
         assert_eq!(progress.processed_bytes.load(Ordering::Relaxed), 1000);
         assert_eq!(progress.symbols_extracted.load(Ordering::Relaxed), 50);
     }
-
 
     #[test]
     fn test_worker_tracking() {

@@ -563,7 +563,7 @@ async fn create_comprehensive_test_project() -> Result<TestProject> {
 /// Create a minimal indexing configuration for testing
 fn create_test_config() -> ManagerConfig {
     ManagerConfig {
-        max_workers: 2,                        // Keep it small for tests
+        max_workers: 2, // Keep it small for tests
         max_queue_size: 100,
         exclude_patterns: vec![
             "*/target/*".to_string(),
@@ -1018,7 +1018,10 @@ async fn test_indexing_progress_monitoring() -> Result<()> {
     manager.stop_indexing().await?;
 
     // We should have processed some files
-    assert!(found_progress, "Expected indexing to process at least one file");
+    assert!(
+        found_progress,
+        "Expected indexing to process at least one file"
+    );
 
     Ok(())
 }

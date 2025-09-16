@@ -44,7 +44,7 @@ serde_json = "1.0"
 rust-stemmers = "1.2"
 tokio = { version = "1", features = ["full"] }
 tiktoken-rs = "0.6.0"
-lsp-daemon = { path = "lsp-daemon", features = ["tree-sitter-rust", "tree-sitter-python", "tree-sitter-typescript"] }
+lsp-daemon = { path = "lsp-daemon" }
 uuid = { version = "1", features = ["v4", "serde"] }
 # rusqlite removed - migrated to turso
 tracing = "0.1"

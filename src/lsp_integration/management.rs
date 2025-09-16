@@ -2601,12 +2601,7 @@ impl LspManager {
                     "Extracted".bold(),
                     progress.symbols_extracted
                 );
-                println!(
-                    "  {}: {}",
-                    "Memory".bold(),
-                    "N/A".to_string()
-                );
-
+                println!("  {}: {}", "Memory".bold(), "N/A".to_string());
 
                 println!("\n{}", "Queue".bold().cyan());
                 let queue = &status.queue;
