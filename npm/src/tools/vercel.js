@@ -135,7 +135,7 @@ export const extractTool = (options = {}) => {
 		name: 'extract',
 		description: extractDescription,
 		parameters: extractSchema,
-		execute: async ({ file_path, input_content, line, end_line, allow_tests, context_lines, format }) => {
+		execute: async ({ targets, input_content, line, end_line, allow_tests, context_lines, format }) => {
 			try {
 				// Use the defaultPath from config for context
 				let extractPath = options.defaultPath || '.';
@@ -149,8 +149,8 @@ export const extractTool = (options = {}) => {
 				}
 
 				if (debug) {
-					if (file_path) {
-						console.error(`Executing extract with file: "${file_path}", path: "${extractPath}", context lines: ${context_lines || 10}`);
+					if (targets) {
+						console.error(`Executing extract with targets: "${targets}", path: "${extractPath}", context lines: ${context_lines || 10}`);
 					} else if (input_content) {
 						console.error(`Executing extract with input content, path: "${extractPath}", context lines: ${context_lines || 10}`);
 					}
@@ -188,9 +188,9 @@ export const extractTool = (options = {}) => {
 						contextLines: context_lines,
 						format: effectiveFormat
 					};
-				} else if (file_path) {
-					// Parse file_path to handle line numbers and symbol names
-					const files = [file_path];
+				} else if (targets) {
+					// Parse targets to handle line numbers and symbol names
+					const files = [targets];
 
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;
@@ -206,7 +206,7 @@ export const extractTool = (options = {}) => {
 						format: effectiveFormat
 					};
 				} else {
-					throw new Error('Either file_path or input_content must be provided');
+					throw new Error('Either targets or input_content must be provided');
 				}
 
 				// Execute the extract command

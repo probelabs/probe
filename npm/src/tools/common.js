@@ -270,13 +270,8 @@ export const attemptCompletionToolDefinition = `
 ## attempt_completion
 Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user. You can provide your response directly inside the XML tags without any parameter wrapper.
 Parameters:
-- No validation required - provide your complete answer directly inside the XML tags or use the <result> parameter (both formats supported).
-Usage Examples:
-<attempt_completion>
-<result>I have refactored the search module according to the requirements and verified the tests pass. The module now uses the new BM25 ranking algorithm and has improved error handling.</result>
-</attempt_completion>
-
-Or direct response:
+- No validation required - provide your complete answer directly inside the XML tags.
+Usage Example:
 <attempt_completion>
 I have refactored the search module according to the requirements and verified the tests pass. The module now uses the new BM25 ranking algorithm and has improved error handling.
 </attempt_completion>
@@ -368,30 +363,9 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			params[paramName] = paramValue;
 		}
 
-		// Special handling for attempt_completion - allow direct XML response without validation
+		// Special handling for attempt_completion - use entire inner content as result
 		if (toolName === 'attempt_completion') {
-			// First try to find <result> tags (backward compatibility) using string-based approach
-			const resultOpenTag = '<result>';
-			const resultCloseTag = '</result>';
-			const resultOpenIndex = innerContent.indexOf(resultOpenTag);
-			
-			if (resultOpenIndex !== -1) {
-				const resultCloseIndex = innerContent.indexOf(resultCloseTag, resultOpenIndex + resultOpenTag.length);
-				if (resultCloseIndex !== -1) {
-					params['result'] = innerContent.substring(
-						resultOpenIndex + resultOpenTag.length,
-						resultCloseIndex
-					).trim();
-				}
-			} else {
-				// Count how many parameters were parsed (excluding command which will be removed)
-				const paramsCount = Object.keys(params).filter(key => key !== 'command').length;
-				
-				// If no <result> tags and no other meaningful parameters parsed, use the entire inner content as direct XML response
-				if (paramsCount === 0) {
-					params['result'] = innerContent.trim();
-				}
-			}
+			params['result'] = innerContent.trim();
 			// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
 			if (params.command) {
 				delete params.command;

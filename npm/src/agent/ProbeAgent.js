@@ -254,20 +254,37 @@ ${attemptCompletionToolDefinition}
     let xmlToolGuidelines = `
 # Tool Use Formatting
 
-Tool use MUST be formatted using XML-style tags. The tool name is enclosed in opening and closing tags, and each parameter is similarly enclosed within its own set of tags. You MUST use exactly ONE tool call per message until you are ready to complete the task.
+Tool use MUST be formatted using XML-style tags. Each tool call requires BOTH opening and closing tags with the exact tool name. Each parameter is similarly enclosed within its own set of opening and closing tags. You MUST use exactly ONE tool call per message until you are ready to complete the task.
 
-Structure:
+**CRITICAL: Every XML tag MUST have both opening <tag> and closing </tag> parts.**
+
+Structure (note the closing tags):
 <tool_name>
 <parameter1_name>value1</parameter1_name>
 <parameter2_name>value2</parameter2_name>
 ...
 </tool_name>
 
-Example:
+Examples:
 <search>
 <query>error handling</query>
 <path>src/search</path>
 </search>
+
+<extract>
+<path>src/config.js</path>
+<start_line>15</start_line>
+<end_line>25</end_line>
+</extract>
+
+<attempt_completion>
+<result>The configuration is loaded from src/config.js lines 15-25 which contains the database settings.</result>
+</attempt_completion>
+
+# Special Case: Quick Completion
+If your previous response was already correct and complete, you may respond with just:
+<attempt_complete>
+This signals to use your previous response as the final answer without repeating content.
 
 # Thinking Process
 
@@ -283,12 +300,13 @@ I need to find code related to error handling in the search module. The most app
 1. Think step-by-step about how to achieve the user's goal.
 2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool.
 3. Choose **one** tool that helps achieve the current step.
-4. Format the tool call using the specified XML format. Ensure all required parameters are included.
+4. Format the tool call using the specified XML format with BOTH opening and closing tags. Ensure all required parameters are included.
 5. **You MUST respond with exactly one tool call in the specified XML format in each turn.**
 6. Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
 7. Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
 8. If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
 9. If you cannot proceed (e.g., missing information, invalid request), explain the issue clearly before using \`<attempt_completion>\` with an appropriate message in the \`<result>\` tag.
+10. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
 
 Available Tools:
 - search: Search code using keyword queries.
@@ -298,6 +316,7 @@ Available Tools:
 - searchFiles: Find files matching a glob pattern with recursive search capability.
 ${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
+- attempt_complete: Quick completion using previous response (shorthand).
 `;
 
     // Common instructions
@@ -618,13 +637,33 @@ When troubleshooting:
 
           if (toolName === 'attempt_completion') {
             completionAttempted = true;
-            const validation = attemptCompletionSchema.safeParse(params);
-            if (validation.success) {
-              finalResult = validation.data.result;
-              if (this.debug) console.log(`[DEBUG] Task completed successfully with result: ${finalResult.substring(0, 100)}...`);
+
+            // Handle attempt_complete shorthand - use previous response
+            if (params.result === '__PREVIOUS_RESPONSE__') {
+              // Find the last assistant message with actual content (not tool calls)
+              const lastAssistantMessage = [...currentMessages].reverse().find(msg =>
+                msg.role === 'assistant' &&
+                msg.content &&
+                !parseXmlToolCallWithThinking(msg.content, validTools)
+              );
+
+              if (lastAssistantMessage) {
+                finalResult = lastAssistantMessage.content;
+                if (this.debug) console.log(`[DEBUG] Using previous response as completion: ${finalResult.substring(0, 100)}...`);
+              } else {
+                finalResult = 'Error: No previous response found to use as completion.';
+                if (this.debug) console.log(`[DEBUG] No suitable previous response found for attempt_complete shorthand`);
+              }
             } else {
-              console.error(`[ERROR] Invalid attempt_completion parameters:`, validation.error);
-              finalResult = 'Error: Invalid completion attempt. The task could not be completed properly.';
+              // Standard attempt_completion handling
+              const validation = attemptCompletionSchema.safeParse(params);
+              if (validation.success) {
+                finalResult = validation.data.result;
+                if (this.debug) console.log(`[DEBUG] Task completed successfully with result: ${finalResult.substring(0, 100)}...`);
+              } else {
+                console.error(`[ERROR] Invalid attempt_completion parameters:`, validation.error);
+                finalResult = 'Error: Invalid completion attempt. The task could not be completed properly.';
+              }
             }
             break;
           } else {
@@ -738,9 +777,45 @@ When troubleshooting:
         } else {
           // No tool call found, add assistant response and ask for tool usage
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+
+          // Build appropriate reminder message based on whether schema is provided
+          let reminderContent;
+          if (options.schema) {  // Apply for ANY schema, not just JSON schemas
+            // When schema is provided, give specific instructions
+            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
+
+Remember: Use proper XML format with BOTH opening and closing tags:
+
+<tool_name>
+<parameter>value</parameter>
+</tool_name>
+
+IMPORTANT: A schema was provided. You MUST respond with data that matches this schema.
+Use attempt_completion with your response directly inside the tags:
+
+<attempt_completion>
+{"key": "value", "field": "your actual data here matching the schema"}
+</attempt_completion>
+
+Your response must conform to this schema:
+${options.schema}`;
+          } else {
+            // Standard reminder without schema
+            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
+
+Remember: Use proper XML format with BOTH opening and closing tags:
+
+<tool_name>
+<parameter>value</parameter>
+</tool_name>
+
+Or for quick completion if your previous response was already correct:
+<attempt_complete>`;
+          }
+
           currentMessages.push({
             role: 'user',
-            content: 'Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.'
+            content: reminderContent
           });
           if (this.debug) {
             console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
