@@ -27,7 +27,6 @@ impl YamlLanguage {
         node.kind() == "block_mapping_pair"
     }
 
-
     /// Extract key from a key-value pair
     fn extract_key_text(&self, node: &Node, source: &[u8]) -> Option<String> {
         if self.is_key_value_pair(node) {
@@ -87,7 +86,7 @@ impl YamlLanguage {
 
 impl LanguageImpl for YamlLanguage {
     fn get_tree_sitter_language(&self) -> TSLanguage {
-        tree_sitter_yaml::language().into()
+        tree_sitter_yaml::language()
     }
 
     fn get_extension(&self) -> &'static str {
@@ -122,7 +121,7 @@ impl LanguageImpl for YamlLanguage {
                 | "alias"                // *aliases
                 | "tag"                  // !tags
                 | "comment"              // # comments
-                | "directive"            // %directives
+                | "directive" // %directives
         );
 
         if debug_mode && acceptable {
@@ -173,7 +172,10 @@ impl LanguageImpl for YamlLanguage {
         }
 
         // Check scalar values that might contain test file paths or names
-        if matches!(node.kind(), "plain_scalar" | "single_quoted_scalar" | "double_quoted_scalar") {
+        if matches!(
+            node.kind(),
+            "plain_scalar" | "single_quoted_scalar" | "double_quoted_scalar"
+        ) {
             let scalar_text = self.get_node_text(node, source);
             if self.contains_test_keywords(&scalar_text) {
                 if debug_mode {
@@ -313,9 +315,7 @@ mod tests {
 
     fn parse_yaml(source: &str) -> tree_sitter::Tree {
         let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_yaml::language().into())
-            .unwrap();
+        parser.set_language(&tree_sitter_yaml::language()).unwrap();
         parser.parse(source, None).unwrap()
     }
 
@@ -341,7 +341,6 @@ mod tests {
         let _lang = YamlLanguage::new();
         // Basic test to ensure YamlLanguage can be created
     }
-
 
     #[test]
     fn test_acceptable_parents() {
