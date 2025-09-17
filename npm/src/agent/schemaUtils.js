@@ -638,6 +638,15 @@ export async function validateMermaidDiagram(diagram) {
             detailedError: `Line "${line}" contains special characters in diamond node that may cause GitHub parsing errors. Use simpler text or escape characters.`
           };
         }
+        
+        // GitHub-strict: Check for parentheses in subgraph labels (causes PS token error)
+        if (line.startsWith('subgraph ') && line.match(/subgraph\s+[^"]*\([^"]*\)/)) {
+          return {
+            isValid: false,
+            error: `Parentheses in subgraph label on line ${i + 1} (GitHub incompatible)`,
+            detailedError: `Line "${line}" contains parentheses in subgraph label. GitHub mermaid renderer fails with 'got PS' error. Use quotes around the label or avoid parentheses.`
+          };
+        }
       }
       
       if (diagramType === 'sequence') {
@@ -794,6 +803,8 @@ FIXING METHODOLOGY:
    - Missing or incorrect arrows and connectors
    - Invalid node IDs or labels
    - Incorrect formatting for diagram-specific elements
+   - **Parentheses in node labels or subgraph names**: Wrap text containing parentheses in double quotes to prevent GitHub parsing errors
+   - Single quotes in node labels (GitHub's parser expects double quotes)
 4. **Preserve semantic meaning** - never change the intended flow or relationships
 5. **Use proper escaping** for special characters and spaces
 6. **Ensure consistency** in naming conventions and formatting
@@ -804,6 +815,7 @@ CRITICAL RULES:
 - PRESERVE the original diagram's intended meaning and flow
 - FIX syntax errors without changing the logical structure
 - ENSURE the output is valid, parseable Mermaid syntax
+- WRAP text containing parentheses in double quotes for GitHub compatibility
 
 When presented with a broken Mermaid diagram, analyze it thoroughly and provide the corrected version that maintains the original intent while fixing all syntax issues.`;
   }
@@ -1114,7 +1126,255 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       }
     }
     
-    // Still have invalid diagrams after HTML entity decoding, proceed with AI fixing
+    // Second pass: Try auto-fixing unquoted subgraph names with parentheses
+    let subgraphFixesApplied = false;
+    
+    // Re-extract diagrams and re-validate after HTML entity fixes
+    const { diagrams: postHtmlDiagrams } = extractMermaidFromMarkdown(fixedResponse);
+    const postHtmlValidation = await validateMermaidResponse(fixedResponse);
+    
+    const stillInvalidAfterHtml = postHtmlValidation.diagrams
+      .map((result, index) => ({ ...result, originalIndex: index }))
+      .filter(result => !result.isValid)
+      .reverse();
+
+    for (const invalidDiagram of stillInvalidAfterHtml) {
+      // Check if this is a subgraph parentheses error that we can auto-fix
+      if (invalidDiagram.error && invalidDiagram.error.includes('Parentheses in subgraph label')) {
+        const originalContent = invalidDiagram.content;
+        const lines = originalContent.split('\n');
+        let wasFixed = false;
+        
+        // Find and fix unquoted subgraph lines with parentheses
+        const fixedLines = lines.map(line => {
+          const trimmedLine = line.trim();
+          if (trimmedLine.startsWith('subgraph ') && 
+              !trimmedLine.match(/subgraph\s+"[^"]*"/) && // not already quoted
+              trimmedLine.match(/subgraph\s+[^"]*\([^"]*\)/)) { // has unquoted parentheses
+            
+            // Extract the subgraph name part
+            const match = trimmedLine.match(/^(\s*subgraph\s+)(.+)$/);
+            if (match) {
+              const prefix = match[1];
+              const name = match[2];
+              const fixedLine = line.replace(trimmedLine, `${prefix.trim()} "${name}"`);
+              wasFixed = true;
+              return fixedLine;
+            }
+          }
+          return line;
+        });
+        
+        if (wasFixed) {
+          const fixedContent = fixedLines.join('\n');
+          
+          // Validate the fixed content
+          try {
+            const quickValidation = await validateMermaidDiagram(fixedContent);
+            if (quickValidation.isValid) {
+              // Subgraph auto-fix worked!
+              const originalDiagram = postHtmlDiagrams[invalidDiagram.originalIndex];
+              const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
+              const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${fixedContent}\n\`\`\``;
+              
+              fixedResponse = fixedResponse.slice(0, originalDiagram.startIndex) + 
+                             newCodeBlock + 
+                             fixedResponse.slice(originalDiagram.endIndex);
+              
+              fixingResults.push({
+                originalIndex: invalidDiagram.originalIndex,
+                wasFixed: true,
+                originalError: invalidDiagram.error,
+                fixMethod: 'subgraph_quote_wrapping',
+                fixedWithSubgraphQuoting: true
+              });
+              
+              subgraphFixesApplied = true;
+              
+              if (debug) {
+                console.log(`[DEBUG] Mermaid validation: Fixed diagram ${invalidDiagram.originalIndex + 1} with subgraph quote wrapping`);
+                console.log(`[DEBUG] Mermaid validation: Original error: ${invalidDiagram.error}`);
+              }
+            }
+          } catch (error) {
+            if (debug) {
+              console.log(`[DEBUG] Mermaid validation: Subgraph auto-fix didn't work for diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+            }
+          }
+        }
+      }
+    }
+    
+    // If subgraph fixes were applied, re-validate the entire response
+    if (subgraphFixesApplied) {
+      const revalidation = await validateMermaidResponse(fixedResponse);
+      if (revalidation.isValid) {
+        // All diagrams are now valid, return without AI fixing
+        const totalTime = Date.now() - startTime;
+        if (debug) {
+          console.log(`[DEBUG] Mermaid validation: All diagrams fixed with auto-fixes in ${totalTime}ms, no AI needed`);
+          console.log(`[DEBUG] Mermaid validation: Applied ${fixingResults.length} auto-fixes (HTML entities + subgraph quotes)`);
+        }
+        
+        // Record auto-fix success in telemetry
+        if (tracer) {
+          tracer.recordMermaidValidationEvent('auto_fix_completed', {
+            'mermaid_validation.success': true,
+            'mermaid_validation.fix_method': 'auto_fixes',
+            'mermaid_validation.diagrams_fixed': fixingResults.length,
+            'mermaid_validation.duration_ms': totalTime
+          });
+        }
+        return {
+          ...revalidation,
+          wasFixed: true,
+          originalResponse: response,
+          fixedResponse: fixedResponse,
+          fixingResults: fixingResults,
+          performanceMetrics: {
+            totalTimeMs: totalTime,
+            aiFixingTimeMs: 0,
+            finalValidationTimeMs: 0,
+            diagramsProcessed: fixingResults.length,
+            diagramsFixed: fixingResults.length
+          }
+        };
+      }
+    }
+    
+    // Third pass: Try auto-fixing node labels with parentheses
+    let nodeLabelFixesApplied = false;
+    
+    // Re-extract diagrams and re-validate after previous fixes
+    const { diagrams: postSubgraphDiagrams } = extractMermaidFromMarkdown(fixedResponse);
+    const postSubgraphValidation = await validateMermaidResponse(fixedResponse);
+    
+    const stillInvalidAfterSubgraph = postSubgraphValidation.diagrams
+      .map((result, index) => ({ ...result, originalIndex: index }))
+      .filter(result => !result.isValid)
+      .reverse();
+
+    for (const invalidDiagram of stillInvalidAfterSubgraph) {
+      // Check if this is a node label parentheses error that we can auto-fix
+      if (invalidDiagram.error && 
+          (invalidDiagram.error.includes('Parentheses in node label') || 
+           invalidDiagram.error.includes('Complex expression in diamond node'))) {
+        const originalContent = invalidDiagram.content;
+        const lines = originalContent.split('\n');
+        let wasFixed = false;
+        
+        // Find and fix node labels with unquoted parentheses
+        const fixedLines = lines.map(line => {
+          const trimmedLine = line.trim();
+          let modifiedLine = line;
+          
+          // Look for node definitions with unquoted parentheses in square brackets
+          // Pattern: [some text (with parens) more text]
+          if (trimmedLine.match(/\[[^\]"]*\([^\]"]*\]/)) {
+            modifiedLine = modifiedLine.replace(/\[([^\]"]*\([^\]"]*)\]/g, (match, content) => {
+              // Only fix if it's not already quoted
+              if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
+                wasFixed = true;
+                return `["${content}"]`;
+              }
+              return match;
+            });
+          }
+          
+          // Look for diamond node definitions with unquoted parentheses
+          // Pattern: {some text (with parens) more text}
+          if (trimmedLine.match(/\{[^{}"]*\([^{}"]*\}/)) {
+            modifiedLine = modifiedLine.replace(/\{([^{}"]*\([^{}"]*)\}/g, (match, content) => {
+              // Only fix if it's not already quoted
+              if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
+                wasFixed = true;
+                return `{"${content}"}`;
+              }
+              return match;
+            });
+          }
+          
+          return modifiedLine;
+        });
+        
+        if (wasFixed) {
+          const fixedContent = fixedLines.join('\n');
+          
+          // Validate the fixed content
+          try {
+            const quickValidation = await validateMermaidDiagram(fixedContent);
+            if (quickValidation.isValid) {
+              // Node label auto-fix worked!
+              const originalDiagram = postSubgraphDiagrams[invalidDiagram.originalIndex];
+              const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
+              const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${fixedContent}\n\`\`\``;
+              
+              fixedResponse = fixedResponse.slice(0, originalDiagram.startIndex) + 
+                             newCodeBlock + 
+                             fixedResponse.slice(originalDiagram.endIndex);
+              
+              fixingResults.push({
+                originalIndex: invalidDiagram.originalIndex,
+                wasFixed: true,
+                originalError: invalidDiagram.error,
+                fixMethod: 'node_label_quote_wrapping',
+                fixedWithNodeLabelQuoting: true
+              });
+              
+              nodeLabelFixesApplied = true;
+              
+              if (debug) {
+                console.log(`[DEBUG] Mermaid validation: Fixed diagram ${invalidDiagram.originalIndex + 1} with node label quote wrapping`);
+                console.log(`[DEBUG] Mermaid validation: Original error: ${invalidDiagram.error}`);
+              }
+            }
+          } catch (error) {
+            if (debug) {
+              console.log(`[DEBUG] Mermaid validation: Node label auto-fix didn't work for diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+            }
+          }
+        }
+      }
+    }
+    
+    // If node label fixes were applied, re-validate the entire response
+    if (nodeLabelFixesApplied) {
+      const revalidation = await validateMermaidResponse(fixedResponse);
+      if (revalidation.isValid) {
+        // All diagrams are now valid, return without AI fixing
+        const totalTime = Date.now() - startTime;
+        if (debug) {
+          console.log(`[DEBUG] Mermaid validation: All diagrams fixed with auto-fixes in ${totalTime}ms, no AI needed`);
+          console.log(`[DEBUG] Mermaid validation: Applied ${fixingResults.length} auto-fixes (HTML entities + subgraph quotes + node label quotes)`);
+        }
+        
+        // Record auto-fix success in telemetry
+        if (tracer) {
+          tracer.recordMermaidValidationEvent('auto_fix_completed', {
+            'mermaid_validation.success': true,
+            'mermaid_validation.fix_method': 'auto_fixes',
+            'mermaid_validation.diagrams_fixed': fixingResults.length,
+            'mermaid_validation.duration_ms': totalTime
+          });
+        }
+        return {
+          ...revalidation,
+          wasFixed: true,
+          originalResponse: response,
+          fixedResponse: fixedResponse,
+          fixingResults: fixingResults,
+          performanceMetrics: {
+            totalTimeMs: totalTime,
+            aiFixingTimeMs: 0,
+            finalValidationTimeMs: 0,
+            diagramsProcessed: fixingResults.length,
+            diagramsFixed: fixingResults.length
+          }
+        };
+      }
+    }
+    
+    // Still have invalid diagrams after all auto-fixes, proceed with AI fixing
     if (debug) {
       const stillInvalidAfterHtml = updatedValidation?.diagrams?.filter(d => !d.isValid)?.length || invalidCount;
       console.log(`[DEBUG] Mermaid validation: ${stillInvalidAfterHtml} diagrams still invalid after HTML entity decoding, starting AI fixing...`);
