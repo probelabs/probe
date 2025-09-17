@@ -150,7 +150,8 @@ pub enum Commands {
             "ruby", "rb",
             "php",
             "swift",
-            "csharp", "cs"
+            "csharp", "cs",
+            "yaml", "yml"
         ])]
         language: Option<String>,
 
@@ -298,7 +299,8 @@ pub enum Commands {
             "ruby", "rb",
             "php",
             "swift",
-            "csharp", "cs"
+            "csharp", "cs",
+            "yaml", "yml"
         ])]
         language: Option<String>,
 

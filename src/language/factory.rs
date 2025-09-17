@@ -13,6 +13,7 @@ use probe_code::language::ruby::RubyLanguage;
 use probe_code::language::rust::RustLanguage;
 use probe_code::language::swift::SwiftLanguage;
 use probe_code::language::typescript::TypeScriptLanguage;
+use probe_code::language::yaml::YamlLanguage;
 
 /// Factory function to get the appropriate language implementation based on file extension
 pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
@@ -32,6 +33,7 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         "cs" => Some(Box::new(CSharpLanguage::new())),
         "html" | "htm" => Some(Box::new(HtmlLanguage::new())),
         "md" | "markdown" => Some(Box::new(MarkdownLanguage::new())),
+        "yaml" | "yml" => Some(Box::new(YamlLanguage::new())),
         _ => None,
     }
 }

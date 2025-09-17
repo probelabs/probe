@@ -480,6 +480,8 @@ fn get_language_extensions(language: &str) -> Vec<String> {
         "php" => vec![".php".to_string()],
         "swift" => vec![".swift".to_string()],
         "csharp" => vec![".cs".to_string()],
+        "markdown" => vec![".md".to_string(), ".markdown".to_string()],
+        "yaml" => vec![".yaml".to_string(), ".yml".to_string()],
         _ => vec![], // Return empty vector for unknown languages
     }
 }

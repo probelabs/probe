@@ -249,7 +249,7 @@ class ProbeServer {
               },
               language: {
                 type: 'string',
-                description: 'The programming language to search in. If not specified, the tool will try to infer the language from file extensions. Supported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp.',
+                description: 'The programming language to search in. If not specified, the tool will try to infer the language from file extensions. Supported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp, yaml.',
               },
               ignore: {
                 type: 'array',

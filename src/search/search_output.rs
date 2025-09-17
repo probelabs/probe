@@ -1793,7 +1793,7 @@ fn get_comment_prefix(extension: &str) -> &'static str {
         | "tsx" | "cs" | "swift" | "go" | "php" => "//",
 
         // Python-style comments
-        "py" | "rb" | "sh" | "bash" | "pl" | "r" => "#",
+        "py" | "rb" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
 
         // HTML-style comments
         "md" | "markdown" => "<!--",

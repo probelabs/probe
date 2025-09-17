@@ -33,6 +33,7 @@ tree-sitter-swift = { version = "0.7.0" }
 tree-sitter-c-sharp = { version = "0.23.1" }
 tree-sitter-html = "0.23.2"
 tree-sitter-md = "0.3.2"
+tree-sitter-yaml = "0.6.1"
 ast-grep-core = "0.36.1"
 ast-grep-language = "0.36.1"
 clap = { version = "4.3", features = ["derive"] }

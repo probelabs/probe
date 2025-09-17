@@ -20,6 +20,7 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | Swift | `.swift` | ✅ | ✅ |
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
+| YAML | `.yaml`, `.yml` | ✅ | ✅ |
 
 ## Language Detection
 
@@ -134,6 +135,16 @@ Go also implements special handling for nested struct types.
 - **List Extraction**: Extracts complete lists
 - **Table Extraction**: Extracts complete tables
 - **Frontmatter Handling**: Properly handles YAML frontmatter
+
+### YAML
+
+- **Key-Value Pair Extraction**: Extracts mapping pairs with keys and values
+- **Sequence Extraction**: Extracts arrays and lists
+- **Scalar Extraction**: Extracts literal and folded block scalars
+- **Comment Extraction**: Extracts comments and preserves them in context
+- **Document Structure**: Handles multi-document YAML streams
+- **Anchor and Alias Support**: Properly handles YAML anchors and aliases
+- **Test Detection**: Identifies test-related configuration keys and values
 
 ## Test Detection
 
