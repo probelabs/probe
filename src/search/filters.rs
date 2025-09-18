@@ -45,8 +45,8 @@ impl SearchFilters {
                         let ext = ext.trim();
                         if !ext.is_empty() {
                             // Remove leading dot if present
-                            let normalized = if ext.starts_with('.') {
-                                ext[1..].to_string()
+                            let normalized = if let Some(stripped) = ext.strip_prefix('.') {
+                                stripped.to_string()
                             } else {
                                 ext.to_string()
                             };

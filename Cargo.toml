@@ -10,6 +10,10 @@ readme = "README.md"
 keywords = ["search", "code", "ast", "grep", "semantic"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
 
+[lints.clippy]
+# Allow uninlined format args for existing code - will be addressed in future cleanup
+uninlined_format_args = "allow"
+
 [dependencies]
 ahash = "0.8.6"  # Fast, non-cryptographic hash function
 dashmap = "5.5.3"  # Thread-safe concurrent HashMap

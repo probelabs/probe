@@ -8,6 +8,15 @@ use std::time::{Duration, Instant};
 // No need for term_exceptions import
 
 use probe_code::models::{LimitedSearchResults, SearchResult};
+
+/// Configuration for search with structured patterns
+#[derive(Debug, Clone)]
+pub struct SearchConfig<'a> {
+    pub custom_ignores: &'a [String],
+    pub allow_tests: bool,
+    pub language: Option<&'a str>,
+    pub no_gitignore: bool,
+}
 use probe_code::path_resolver::resolve_path;
 use probe_code::search::{
     cache,
@@ -382,7 +391,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let (search_filters, simplified_ast) = SearchFilters::extract_and_simplify(initial_ast);
 
     if debug_mode && !search_filters.is_empty() {
-        println!("DEBUG: Extracted search filters: {:?}", search_filters);
+        println!("DEBUG: Extracted search filters: {search_filters:?}");
     }
 
     // If we have a simplified AST, create a query plan from it
@@ -456,14 +465,18 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Normalize language parameter to handle aliases
     let lang_param = language.as_ref().map(|lang| normalize_language_alias(lang));
 
+    let search_config = SearchConfig {
+        custom_ignores,
+        allow_tests: *allow_tests,
+        language: lang_param,
+        no_gitignore: *no_gitignore,
+    };
+
     let mut file_term_map = search_with_structured_patterns(
         path,
         &plan,
         &structured_patterns,
-        custom_ignores,
-        *allow_tests,
-        lang_param,
-        *no_gitignore,
+        &search_config,
         &search_filters,
     )?;
 
@@ -1592,16 +1605,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 /// * `root_path` - The base path to search in
 /// * `plan` - The parsed query plan
 /// * `patterns` - The generated regex patterns with their term indices
-/// * `custom_ignores` - Custom ignore patterns
-/// * `allow_tests` - Whether to include test files
+/// * `config` - Search configuration options
+/// * `search_filters` - File filtering options
 pub fn search_with_structured_patterns(
     root_path_str: &Path,
     _plan: &QueryPlan,
     patterns: &[(String, HashSet<usize>)],
-    custom_ignores: &[String],
-    allow_tests: bool,
-    language: Option<&str>,
-    no_gitignore: bool,
+    config: &SearchConfig,
     search_filters: &SearchFilters,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
     // Resolve the path if it's a special format (e.g., "go:github.com/user/repo")
@@ -1692,16 +1702,16 @@ pub fn search_with_structured_patterns(
     // Step 2: Get filtered file list from cache
     if debug_mode {
         println!("DEBUG: Getting filtered file list from cache");
-        println!("DEBUG: Custom ignore patterns: {custom_ignores:?}");
+        println!("DEBUG: Custom ignore patterns: {:?}", config.custom_ignores);
     }
 
     // Use file_list_cache to get a filtered list of files, with language filtering if specified
     let initial_file_list = crate::search::file_list_cache::get_file_list_by_language(
         &root_path,
-        allow_tests,
-        custom_ignores,
-        language,
-        no_gitignore,
+        config.allow_tests,
+        config.custom_ignores,
+        config.language,
+        config.no_gitignore,
     )?;
 
     // Apply search filters to further filter the file list
@@ -1719,7 +1729,7 @@ pub fn search_with_structured_patterns(
             .filter(|file_path| {
                 let matches = search_filters.matches_file(file_path);
                 if debug_mode && !matches {
-                    println!("DEBUG: Filter excluded file: {:?}", file_path);
+                    println!("DEBUG: Filter excluded file: {file_path:?}");
                 }
                 matches
             })
