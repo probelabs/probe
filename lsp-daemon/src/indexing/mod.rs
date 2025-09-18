@@ -16,6 +16,8 @@ pub mod batch_conversion;
 pub mod config;
 pub mod file_detector;
 pub mod language_strategies;
+pub mod lsp_enrichment_queue;
+pub mod lsp_enrichment_worker;
 pub mod manager;
 pub mod pipelines;
 pub mod progress;
@@ -45,6 +47,13 @@ pub use file_detector::{
 pub use language_strategies::{
     FileImportanceStrategy, IndexingPriority, LanguageIndexingStrategy, LanguageStrategyFactory,
     LspOperationStrategy, SymbolPriorityStrategy,
+};
+pub use lsp_enrichment_queue::{
+    EnrichmentPriority, EnrichmentQueueStats, LspEnrichmentQueue, QueueItem as EnrichmentQueueItem,
+};
+pub use lsp_enrichment_worker::{
+    EnrichmentWorkerConfig, EnrichmentWorkerStats, EnrichmentWorkerStatsSnapshot,
+    LspEnrichmentWorkerPool,
 };
 pub use manager::{IndexingManager, ManagerConfig, ManagerStatus, WorkerStats};
 pub use pipelines::{IndexingPipeline, LanguagePipeline, PipelineConfig, PipelineResult};

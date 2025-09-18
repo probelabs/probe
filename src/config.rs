@@ -1353,7 +1353,7 @@ impl ProbeConfig {
             },
             indexing: ResolvedIndexingConfig {
                 enabled: indexing.enabled.unwrap_or(true),
-                auto_index: indexing.auto_index.unwrap_or(true),
+                auto_index: indexing.auto_index.unwrap_or(false),
                 watch_files: indexing.watch_files.unwrap_or(true),
                 default_depth: indexing.default_depth.unwrap_or(3),
                 max_workers: indexing.max_workers.unwrap_or(8),

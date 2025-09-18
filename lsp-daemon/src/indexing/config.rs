@@ -118,8 +118,8 @@ pub struct LspCachingConfig {
 impl Default for LspCachingConfig {
     fn default() -> Self {
         Self {
-            // Master enable/disable switch - disabled by default for structural analysis focus
-            enabled: false, // 🔒 DISABLED by default - only structural analysis (AST)
+            // Master enable/disable switch - enabled by default for full LSP features
+            enabled: true, // ✅ ENABLED by default - includes LSP enrichment
 
             // CORRECTED defaults - cache operations actually used by search/extract
             cache_call_hierarchy: true, // ✅ MOST IMPORTANT - primary operation for search/extract
