@@ -20,7 +20,7 @@ fn main() {
     println!("Hello, world!");
     let mut map = HashMap::new();
     map.insert("key", "value");
-    
+
     for i in 0..1000 {
         process_item(i);
     }
@@ -47,7 +47,7 @@ impl DataProcessor {
             processed: false,
         }
     }
-    
+
     fn process(&mut self) {
         self.data.sort();
         self.processed = true;
@@ -68,21 +68,21 @@ pub use parser::*;
 /// Main library functionality
 pub fn run_search(query: &str, path: &str) -> Vec<String> {
     let mut results = Vec::new();
-    
+
     // Simulate search logic
     for i in 0..100 {
         if i % 10 == 0 {
             results.push(format!("Result {}: {}", i, query));
         }
     }
-    
+
     results
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_search() {
         let results = run_search("test", ".");
@@ -98,21 +98,21 @@ use std::collections::HashMap;
 
 pub fn calculate_metrics(data: &[i32]) -> HashMap<String, f64> {
     let mut metrics = HashMap::new();
-    
+
     if data.is_empty() {
         return metrics;
     }
-    
+
     let sum: i32 = data.iter().sum();
     let avg = sum as f64 / data.len() as f64;
     let min = *data.iter().min().unwrap();
     let max = *data.iter().max().unwrap();
-    
+
     metrics.insert("average".to_string(), avg);
     metrics.insert("min".to_string(), min as f64);
     metrics.insert("max".to_string(), max as f64);
     metrics.insert("sum".to_string(), sum as f64);
-    
+
     metrics
 }
 
@@ -156,10 +156,10 @@ impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, position: 0 }
     }
-    
+
     pub fn parse(&mut self) -> Result<HashMap<String, Token>, String> {
         let mut symbols = HashMap::new();
-        
+
         while self.position < self.tokens.len() {
             match &self.tokens[self.position] {
                 Token::Identifier(name) => {
@@ -174,10 +174,10 @@ impl Parser {
             }
             self.position += 1;
         }
-        
+
         Ok(symbols)
     }
-    
+
     fn parse_function(&mut self, symbols: &mut HashMap<String, Token>) -> Result<(), String> {
         self.position += 1;
         if self.position < self.tokens.len() {
@@ -192,7 +192,7 @@ impl Parser {
 pub fn tokenize(input: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let words: Vec<&str> = input.split_whitespace().collect();
-    
+
     for word in words {
         if word.chars().all(|c| c.is_ascii_digit()) {
             if let Ok(num) = word.parse::<i32>() {
@@ -208,7 +208,7 @@ pub fn tokenize(input: &str) -> Vec<Token> {
             tokens.push(Token::Identifier(word.to_string()));
         }
     }
-    
+
     tokens
 }
 "#,

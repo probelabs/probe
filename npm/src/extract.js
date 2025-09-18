@@ -66,17 +66,19 @@ export async function extract(options) {
 		}
 	}
 
-	// Create a single log record with all extract parameters
-	let logMessage = `\nExtract:`;
-	if (options.files && options.files.length > 0) {
-		logMessage += ` files="${options.files.join(', ')}"`;
+	// Create a single log record with all extract parameters (only in debug mode)
+	if (process.env.DEBUG === '1') {
+		let logMessage = `\nExtract:`;
+		if (options.files && options.files.length > 0) {
+			logMessage += ` files="${options.files.join(', ')}"`;
+		}
+		if (options.inputFile) logMessage += ` inputFile="${options.inputFile}"`;
+		if (options.allowTests) logMessage += " allowTests=true";
+		if (options.contextLines) logMessage += ` contextLines=${options.contextLines}`;
+		if (options.format) logMessage += ` format=${options.format}`;
+		if (options.json) logMessage += " json=true";
+		console.error(logMessage);
 	}
-	if (options.inputFile) logMessage += ` inputFile="${options.inputFile}"`;
-	if (options.allowTests) logMessage += " allowTests=true";
-	if (options.contextLines) logMessage += ` contextLines=${options.contextLines}`;
-	if (options.format) logMessage += ` format=${options.format}`;
-	if (options.json) logMessage += " json=true";
-	console.error(logMessage);
 
 	// Execute command
 	const command = `${binaryPath} extract ${cliArgs.join(' ')}`;

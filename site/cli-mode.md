@@ -62,11 +62,47 @@ probe search "auth* connect*" ./
 # Exclude terms with NOT operator
 probe search "database NOT sqlite" ./
 
+# Use search hints to filter by file properties
+probe search "function AND ext:rs" ./          # Only search in .rs files
+probe search "class AND file:src/**/*.py" ./   # Only search in Python files under src/
+probe search "error AND dir:tests" ./          # Only search in files under tests/ directory
+probe search "struct AND type:rust" ./         # Only search in Rust files
+probe search "component AND lang:javascript" ./ # Only search in JavaScript files
+
 # Output as JSON for programmatic use
 probe search "authentication" --format json
 
 # Output as XML
 probe search "authentication" --format xml
+```
+
+### Search Hints
+
+Filter search results by file properties using search hints. These filters are applied at the file discovery stage:
+
+| Hint | Description | Examples |
+|------|-------------|----------|
+| `ext:<extension>` | Filter by file extension | `ext:rs`, `ext:py,js,ts` |
+| `file:<pattern>` | Filter by file path pattern (supports globs) | `file:src/**/*.rs`, `file:*test*` |
+| `path:<pattern>` | Alias for `file:` | `path:src/main.rs` |
+| `dir:<pattern>` | Filter by directory pattern | `dir:src`, `dir:tests` |
+| `type:<filetype>` | Filter by ripgrep file type | `type:rust`, `type:javascript` |
+| `lang:<language>` | Filter by programming language | `lang:rust`, `lang:python` |
+
+**Search Hint Examples:**
+
+```bash
+# Search for "function" only in Rust files
+probe search "function AND ext:rs" ./
+
+# Search for "config" in source files with multiple extensions
+probe search "config AND ext:rs,py,js" ./src
+
+# Complex search with multiple filters
+probe search "(error OR exception) AND ext:rs AND dir:src" ./
+
+# Search in test directories only
+probe search "assert AND dir:tests" ./
 ```
 
 ## Extract Command

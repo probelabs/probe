@@ -78,7 +78,7 @@ pub struct Args {
 
     /// Output format (default: color)
     /// Use 'json' or 'xml' for machine-readable output
-    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
+    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
     pub format: String,
 
     /// Session ID for caching search results
@@ -109,6 +109,15 @@ pub enum Commands {
     /// It uses frequency-based search with stemming and stopword removal by default,
     /// and ranks results using the BM25 algorithm.
     /// Results are presented as code blocks with relevant context.
+    ///
+    /// Search hints can be used to filter results by file properties:
+    /// - ext:<extension>: Filter by file extension (e.g., "ext:rs")
+    /// - file:<pattern>: Filter by file path pattern (e.g., "file:src/**/*.py")
+    /// - dir:<pattern>: Filter by directory pattern (e.g., "dir:tests")
+    /// - type:<filetype>: Filter by ripgrep file type (e.g., "type:rust")
+    /// - lang:<language>: Filter by programming language (e.g., "lang:javascript")
+    ///
+    /// Example: probe search "function AND ext:rs" ./
     Search {
         /// Search pattern (regex supported)
         #[arg(value_name = "PATTERN")]
@@ -155,7 +164,8 @@ pub enum Commands {
             "ruby", "rb",
             "php",
             "swift",
-            "csharp", "cs"
+            "csharp", "cs",
+            "yaml", "yml"
         ])]
         language: Option<String>,
 
@@ -193,7 +203,7 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
         format: String,
 
         /// Session ID for caching search results
@@ -239,7 +249,7 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color", "outline-xml"])]
         format: String,
 
         /// Read input from clipboard instead of files
@@ -269,7 +279,7 @@ pub enum Commands {
         #[arg(short = 'k', long = "keep-input")]
         keep_input: bool,
 
-        /// System prompt template for LLM models (engineer, architect, or path to file)
+        /// System prompt template for LLM models (engineer, architect, code-review, code-review-template, or path to file)
         #[arg(long = "prompt")]
         prompt: Option<String>,
 
@@ -315,7 +325,8 @@ pub enum Commands {
             "ruby", "rb",
             "php",
             "swift",
-            "csharp", "cs"
+            "csharp", "cs",
+            "yaml", "yml"
         ])]
         language: Option<String>,
 
@@ -337,7 +348,7 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color"])]
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color", "outline-xml"])]
         format: String,
     },
 

@@ -43,7 +43,7 @@ jobs:
 
       # Install Rust toolchain
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.84.0
+        uses: dtolnay/rust-toolchain@1.85.0
         with:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
@@ -238,49 +238,6 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  publish-mcp:
-    name: Publish MCP to npm
-    needs: publish-npm-package
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Extract version from tag
-        id: extract_version
-        run: |
-          # Remove 'v' prefix from tag (e.g., v1.0.0 -> 1.0.0)
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Extracted version: $VERSION"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          registry-url: "https://registry.npmjs.org/"
-          scope: "@buger"
-          token: ${{ secrets.NPM_TOKEN }} # Let setup-node handle authentication
-
-      - name: Install dependencies
-        run: cd mcp && npm install
-
-      - name: Update package version and dependencies
-        run: |
-          cd mcp
-          # Update version in package.json without git operations
-          npm version "$VERSION" --no-git-tag-version
-          # Update dependency on @buger/probe to use the specific version
-          npm pkg set dependencies."@buger/probe"="^$VERSION"
-          echo "Updated MCP package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
-
-      - name: Build
-        run: cd mcp && npm run build
-
-      - name: Publish to npm
-        run: cd mcp && npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-npm-package:
     name: Publish Node.js Package to npm
@@ -315,6 +272,9 @@ jobs:
           # Update version in package.json without git operations
           npm version "$VERSION" --no-git-tag-version
           echo "Updated npm package.json to version $VERSION"
+
+      - name: Build all npm packages
+        run: cd npm && npm run build
 
       - name: Publish to npm
         run: cd npm && npm publish --access public
@@ -366,7 +326,7 @@ jobs:
 
   publish-docker-images:
     name: Publish Docker Images
-    needs: build-and-release
+    needs: [build-and-release, publish-npm-package]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code

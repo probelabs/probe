@@ -17,7 +17,8 @@ fn test_process_file_for_extraction_full_file() {
     fs::write(&file_path, content).unwrap();
 
     // Test processing the full file
-    let result = process_file_for_extraction(&file_path, None, None, None, false, 0, None).unwrap();
+    let result =
+        process_file_for_extraction(&file_path, None, None, None, false, 0, None, false).unwrap();
 
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.lines, (1, 3)); // 3 lines in the content
@@ -26,8 +27,8 @@ fn test_process_file_for_extraction_full_file() {
 
     // Test with non-existent file
     let non_existent = temp_dir.path().join("non_existent.txt");
-    let err =
-        process_file_for_extraction(&non_existent, None, None, None, false, 0, None).unwrap_err();
+    let err = process_file_for_extraction(&non_existent, None, None, None, false, 0, None, false)
+        .unwrap_err();
     assert!(err.to_string().contains("does not exist"));
 }
 
@@ -39,7 +40,7 @@ fn test_process_file_for_extraction_with_line() {
     let content = r#"
 fn main() {
     println!("Hello, world!");
-    
+
     let x = 42;
     if x > 0 {
         println!("Positive");
@@ -63,7 +64,8 @@ impl Point {
 
     // Test extracting a function
     let result =
-        process_file_for_extraction(&file_path, Some(3), None, None, false, 0, None).unwrap();
+        process_file_for_extraction(&file_path, Some(3), None, None, false, 0, None, false)
+            .unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert!(result.lines.0 <= 3 && result.lines.1 >= 3);
     assert!(result.code.contains("fn main()"));
@@ -71,7 +73,8 @@ impl Point {
 
     // Test extracting a struct
     let result =
-        process_file_for_extraction(&file_path, Some(13), None, None, false, 0, None).unwrap();
+        process_file_for_extraction(&file_path, Some(13), None, None, false, 0, None, false)
+            .unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert!(result.lines.0 <= 13 && result.lines.1 >= 13);
     assert!(result.code.contains("struct Point"));
@@ -80,7 +83,8 @@ impl Point {
 
     // Test with out-of-bounds line number (should be clamped to valid range)
     let result =
-        process_file_for_extraction(&file_path, Some(1000), None, None, false, 0, None).unwrap();
+        process_file_for_extraction(&file_path, Some(1000), None, None, false, 0, None, false)
+            .unwrap();
     // The line number should be clamped to the maximum valid line
     // Don't check for exact equality, just make sure it's within valid range
     assert!(result.lines.0 <= result.lines.1);
@@ -101,7 +105,8 @@ fn test_process_file_for_extraction_fallback() {
 
     // Test fallback to line-based context with default context lines (10)
     let result =
-        process_file_for_extraction(&file_path, Some(15), None, None, false, 10, None).unwrap();
+        process_file_for_extraction(&file_path, Some(15), None, None, false, 10, None, false)
+            .unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.node_type, "context");
 
@@ -115,19 +120,22 @@ fn test_process_file_for_extraction_fallback() {
 
     // Test with a line at the beginning of the file
     let result =
-        process_file_for_extraction(&file_path, Some(2), None, None, false, 10, None).unwrap();
+        process_file_for_extraction(&file_path, Some(2), None, None, false, 10, None, false)
+            .unwrap();
     assert!(result.lines.0 <= 2); // Should start at or before line 2
     assert!(result.lines.1 >= 2); // Should include line 2
 
     // Test with a line at the end of the file
     let result =
-        process_file_for_extraction(&file_path, Some(25), None, None, false, 10, None).unwrap();
+        process_file_for_extraction(&file_path, Some(25), None, None, false, 10, None, false)
+            .unwrap();
     assert!(result.lines.0 <= 25); // Should include some lines before line 25
     assert_eq!(result.lines.1, 25); // Can't go beyond the last line
 
     // Test with custom context lines
     let result =
-        process_file_for_extraction(&file_path, Some(15), None, None, false, 5, None).unwrap();
+        process_file_for_extraction(&file_path, Some(15), None, None, false, 5, None, false)
+            .unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.node_type, "context");
 
@@ -149,6 +157,7 @@ fn test_format_and_print_extraction_results() {
         lines: (1, 5),
         node_type: "function".to_string(),
         code: "fn test() {\n    println!(\"Hello\");\n}".to_string(),
+        symbol_signature: None,
         matched_by_filename: None,
         rank: None,
         score: None,
@@ -169,17 +178,19 @@ fn test_format_and_print_extraction_results() {
         matched_keywords: None,
         tokenized_content: None,
         lsp_info: None,
+        parent_context: None,
+        matched_lines: None,
     };
 
     // Test different formats
     let results = vec![result];
 
     // We can't easily test the output directly, but we can at least ensure the function doesn't panic
-    format_and_print_extraction_results(&results, "terminal", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "markdown", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "plain", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "json", None, None, None).unwrap();
-    format_and_print_extraction_results(&results, "xml", None, None, None).unwrap();
+    format_and_print_extraction_results(&results, "terminal", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "markdown", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "plain", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "json", None, None, None, false).unwrap();
+    format_and_print_extraction_results(&results, "xml", None, None, None, false).unwrap();
 
     // Test with system prompt and user instructions
     format_and_print_extraction_results(
@@ -188,6 +199,7 @@ fn test_format_and_print_extraction_results() {
         None,
         Some("Test system prompt"),
         Some("Test user instructions"),
+        false,
     )
     .unwrap();
 }
@@ -606,7 +618,8 @@ fn test_process_file_for_extraction_with_range() {
 
     // Test extracting a range of lines
     let result =
-        process_file_for_extraction(&file_path, Some(1), Some(10), None, false, 0, None).unwrap();
+        process_file_for_extraction(&file_path, Some(1), Some(10), None, false, 0, None, false)
+            .unwrap();
     assert_eq!(result.file, file_path.to_string_lossy().to_string());
     assert_eq!(result.lines, (1, 10));
     assert_eq!(result.node_type, "range");
@@ -617,7 +630,8 @@ fn test_process_file_for_extraction_with_range() {
 
     // Test with a different range
     let result =
-        process_file_for_extraction(&file_path, Some(5), Some(15), None, false, 0, None).unwrap();
+        process_file_for_extraction(&file_path, Some(5), Some(15), None, false, 0, None, false)
+            .unwrap();
     assert_eq!(result.lines, (5, 15));
 
     // Check that the extracted content contains exactly lines 5-15
@@ -631,14 +645,16 @@ fn test_process_file_for_extraction_with_range() {
 
     // Test with invalid range (start > end) - should be clamped to valid range
     let result =
-        process_file_for_extraction(&file_path, Some(10), Some(5), None, false, 0, None).unwrap();
+        process_file_for_extraction(&file_path, Some(10), Some(5), None, false, 0, None, false)
+            .unwrap();
     // The start and end lines should be clamped to valid values
     assert!(result.lines.0 <= result.lines.1);
     assert!(result.lines.1 <= content.lines().count());
 
     // Test with out-of-bounds range (should be clamped to valid range)
     let result =
-        process_file_for_extraction(&file_path, Some(15), Some(25), None, false, 0, None).unwrap();
+        process_file_for_extraction(&file_path, Some(15), Some(25), None, false, 0, None, false)
+            .unwrap();
     // The end line should be clamped to the maximum valid line
     assert!(result.lines.0 <= 15);
     assert!(result.lines.1 <= content.lines().count());
@@ -1056,7 +1072,7 @@ index abcdef1..1234567 100644
 +++ b/tests/tokenization_tests.rs
 @@ -20,7 +20,7 @@ fn test_tokenize_with_stemming() {
     let tokens = tokenize_with_stemming("running runs runner");
-    
+
 -    assert_eq!(tokens, vec!["run", "run", "runner"]);
 +    assert_eq!(tokens, vec!["run", "run", "run"]);
 }
@@ -1434,7 +1450,7 @@ fn test_integration_extract_command_with_multiple_files_diff() {
 fn test_create_structured_patterns() {
     let plan = create_query_plan("test query", false).unwrap();
     let patterns = create_structured_patterns(&plan);
-    
+
     // Check that we have at least one pattern for each term
     for (term, &idx) in &plan.term_indices {
         assert!(!patterns[idx].is_empty());
@@ -1447,7 +1463,7 @@ fn test_create_structured_patterns() {
     let content2 = r#"
 fn test_tokenize_with_stemming() {
     let tokens = tokenize_with_stemming("running runs runner");
-    
+
     assert_eq!(tokens, vec!["run", "run", "runner"]);
 }
 "#;
@@ -1489,7 +1505,7 @@ fn test_tokenize_with_stemming() {
 fn test_create_structured_patterns() {
     let plan = create_query_plan("test query", false).unwrap();
     let patterns = create_structured_patterns(&plan, false);
-    
+
     // Check that we have at least one pattern for each term
     for (term, &idx) in &plan.term_indices {
         assert!(!patterns[idx].is_empty());
@@ -1501,7 +1517,7 @@ fn test_create_structured_patterns() {
     let content2_modified = r#"
 fn test_tokenize_with_stemming() {
     let tokens = tokenize_with_stemming("running runs runner");
-    
+
     assert_eq!(tokens, vec!["run", "run", "run"]);
 }
 "#;
@@ -1711,7 +1727,7 @@ fn test_extract_unsupported_file_type_symbol() {
 resource "aws_instance" "example" {
   ami           = "ami-0c55b159cbfafe1f0"
   instance_type = "t2.micro"
-  
+
   tags = {
     Name = "ExampleInstance"
   }
@@ -1733,6 +1749,7 @@ output "instance_id" {
         false,                // allow_tests
         0,                    // context_lines
         None,                 // specific_line_numbers
+        false,                // symbols
     )
     .unwrap();
 
@@ -1774,6 +1791,7 @@ services:
         false,   // allow_tests
         0,       // context_lines
         None,    // specific_line_numbers
+        false,   // symbols
     )
     .unwrap();
 

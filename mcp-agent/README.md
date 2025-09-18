@@ -21,17 +21,17 @@ This MCP server exposes a single tool called `search_code` that returns AI-gener
 
 ```bash
 # Install globally
-npm install -g @buger/probe-mcp-agent
+npm install -g @probelabs/probe-mcp-agent
 
 # Or install locally
-npm install @buger/probe-mcp-agent
+npm install @probelabs/probe-mcp-agent
 ```
 
 ### From Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/buger/probe.git
+git clone https://github.com/probelabs/probe.git
 
 # Navigate to the directory
 cd probe/mcp-agent

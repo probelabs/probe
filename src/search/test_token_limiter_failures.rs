@@ -11,6 +11,7 @@ mod token_limiter_failure_tests {
             lines: (1, 1),
             node_type: "test".to_string(),
             code: code.to_string(),
+            symbol_signature: None,
             matched_by_filename: None,
             rank,
             score: None,
@@ -29,8 +30,10 @@ mod token_limiter_failure_tests {
             parent_file_id: None,
             block_id: None,
             matched_keywords: None,
+            matched_lines: None,
             tokenized_content: None,
             lsp_info: None,
+            parent_context: None,
         }
     }
 
@@ -76,7 +79,7 @@ mod token_limiter_failure_tests {
         // The key is to use content that tokenizes inefficiently (many tokens per character)
         let deceptive_blocks = [
             "function normal() { return 42; }",  // Normal code (~8 tokens, 33 chars)
-            "const value = getData();",          // Normal code (~6 tokens, 25 chars)  
+            "const value = getData();",          // Normal code (~6 tokens, 25 chars)
             // Killer block: lots of individual tokens that don't compress well
             "const a1=1,a2=2,a3=3,a4=4,a5=5,a6=6,a7=7,a8=8,a9=9,a10=10,a11=11,a12=12,a13=13,a14=14,a15=15,a16=16,a17=17,a18=18,a19=19,a20=20,a21=21,a22=22,a23=23,a24=24,a25=25,a26=26,a27=27,a28=28,a29=29,a30=30,a31=31,a32=32,a33=33,a34=34,a35=35,a36=36,a37=37,a38=38,a39=39,a40=40,a41=41,a42=42,a43=43,a44=44,a45=45,a46=46,a47=47,a48=48,a49=49,a50=50;",
         ];

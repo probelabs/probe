@@ -34,10 +34,10 @@ jobs:
       run: |
         echo "Running tests"
         cargo test --all
-        
+
     - name: Check formatting
       run: cargo fmt --check
-      
+
   build:
     needs: test
     runs-on: ubuntu-latest

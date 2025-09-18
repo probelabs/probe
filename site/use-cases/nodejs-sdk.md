@@ -21,7 +21,7 @@ Key benefits:
 Create custom AI assistants that understand your codebase:
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -88,7 +88,7 @@ Build a REST API for code search:
 
 ```javascript
 import express from 'express';
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 
 const app = express();
 app.use(express.json());
@@ -148,7 +148,7 @@ app.listen(3000, () => {
 Create automated code analysis pipelines:
 
 ```javascript
-import { search, query } from '@buger/probe';
+import { search, query } from '@probelabs/probe';
 import fs from 'fs/promises';
 
 async function analyzeCodebase(codebasePath) {
@@ -249,7 +249,7 @@ console.log(`Found ${analysis.potentialIssues.length} potential security issues`
 Automatically generate documentation for your codebase:
 
 ```javascript
-import { query, extract } from '@buger/probe';
+import { query, extract } from '@probelabs/probe';
 import fs from 'fs/promises';
 import path from 'path';
 import { ChatOpenAI } from '@langchain/openai';
@@ -318,7 +318,7 @@ await generateDocumentation('/path/to/your/project', './docs');
 Create automated code review tools:
 
 ```javascript
-import { search, extract } from '@buger/probe';
+import { search, extract } from '@probelabs/probe';
 import { ChatOpenAI } from '@langchain/openai';
 import fs from 'fs/promises';
 
@@ -394,7 +394,7 @@ console.log(`Reviewed ${reviews.length} files. Results saved to code-review.json
 
 ```javascript
 import { generateText } from 'ai';
-import { searchTool, queryTool, extractTool } from '@buger/probe';
+import { searchTool, queryTool, extractTool } from '@probelabs/probe';
 import { randomUUID } from 'crypto';
 
 // Generate a session ID for tool isolation
@@ -433,7 +433,7 @@ async function chatWithAI(userMessage) {
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Create the LangChain tools
 const searchTool = tools.createSearchTool();
@@ -462,7 +462,7 @@ async function chatWithAI(userMessage) {
 ### Batch Processing Multiple Repositories
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -510,7 +510,7 @@ console.log('Search completed and results saved to search-results.json');
 ### Session-Based Caching
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 // First search with empty session string (generates a session ID)
 const results1 = await search({
@@ -558,16 +558,16 @@ console.log(`Found ${results2.matches.length} new matches`);
 
 ```bash
 # Local installation
-npm install @buger/probe@latest
+npm install @probelabs/probe@latest
 
 # Global installation
-npm install -g @buger/probe@latest
+npm install -g @probelabs/probe@latest
 ```
 
 ### Basic Usage
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 
 // Search for code
 const searchResults = await search({

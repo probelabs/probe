@@ -6,4 +6,4 @@ This directory contains guides for contributors to the Probe project, including:
 - Documentation Cross-References
 - Documentation Structure
 
-For general contribution guidelines, please see the [Contributing Guide](https://github.com/buger/probe/blob/main/CONTRIBUTING.md) in the main repository.
+For general contribution guidelines, please see the [Contributing Guide](https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md) in the main repository.

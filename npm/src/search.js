@@ -29,7 +29,8 @@ const SEARCH_FLAG_MAP = {
 	session: '--session',
 	timeout: '--timeout',
 	language: '--language',
-	lsp: '--lsp'
+	lsp: '--lsp',
+	format: '--format'
 };
 
 /**
@@ -54,6 +55,7 @@ const SEARCH_FLAG_MAP = {
  * @param {number} [options.timeout] - Timeout in seconds (default: 30)
  * @param {string} [options.language] - Limit search to files of a specific programming language
  * @param {boolean} [options.lsp] - Use LSP (Language Server Protocol) for enhanced symbol information
+ * @param {string} [options.format] - Output format ('json', 'outline-xml', etc.)
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
@@ -76,9 +78,15 @@ export async function search(options) {
 	// Build CLI arguments from options
 	const cliArgs = buildCliArgs(options, SEARCH_FLAG_MAP);
 
-	// Add JSON format if requested
-	if (options.json) {
+	// Add format if specified, with json option taking precedence for backwards compatibility
+	if (options.json && !options.format) {
 		cliArgs.push('--format', 'json');
+	} else if (options.format) {
+		// Format is already handled by buildCliArgs through SEARCH_FLAG_MAP
+		// but we need to ensure json parsing for json format
+		if (options.format === 'json') {
+			options.json = true;
+		}
 	}
 
 	// Set default maxTokens if not provided
@@ -117,16 +125,18 @@ export async function search(options) {
 	// Add query and path as positional arguments
 	const queries = Array.isArray(options.query) ? options.query : [options.query];
 
-	// Create a single log record with all search parameters (commented out for less verbose output)
-	let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
-	if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
-	logMessage += ` maxTokens=${options.maxTokens}`;
-	logMessage += ` timeout=${options.timeout}`;
-	if (options.allowTests) logMessage += " allowTests=true";
-	if (options.language) logMessage += ` language=${options.language}`;
-	if (options.exact) logMessage += " exact=true";
-	if (options.session) logMessage += ` session=${options.session}`;
-	console.error(logMessage);
+	// Create a single log record with all search parameters (only in debug mode)
+	if (process.env.DEBUG === '1') {
+		let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
+		if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
+		logMessage += ` maxTokens=${options.maxTokens}`;
+		logMessage += ` timeout=${options.timeout}`;
+		if (options.allowTests) logMessage += " allowTests=true";
+		if (options.language) logMessage += ` language=${options.language}`;
+		if (options.exact) logMessage += " exact=true";
+		if (options.session) logMessage += ` session=${options.session}`;
+		console.error(logMessage);
+	}
 	// Create positional arguments array separate from flags
 	const positionalArgs = [];
 
@@ -204,12 +214,14 @@ export async function search(options) {
 			}
 		}
 
-		// Log the results count, token count, and bytes count (commented out for less verbose output)
-		let resultsMessage = `\nSearch results: ${resultCount} matches, ${tokenCount} tokens`;
-		if (bytesCount > 0) {
-			resultsMessage += `, ${bytesCount} bytes`;
+		// Log the results count, token count, and bytes count (only in debug mode)
+		if (process.env.DEBUG === '1') {
+			let resultsMessage = `\nSearch results: ${resultCount} matches, ${tokenCount} tokens`;
+			if (bytesCount > 0) {
+				resultsMessage += `, ${bytesCount} bytes`;
+			}
+			console.error(resultsMessage);
 		}
-		console.error(resultsMessage);
 
 		// Parse JSON if requested
 		if (options.json) {

@@ -8,15 +8,17 @@ AI code editors and assistants are powerful tools, but they often struggle with 
 
 ## Quick Setup
 
-### Installing @buger/probe-mcp with NPX
+### Installing @probelabs/probe with NPX
 
 The easiest way to integrate Probe with your AI code editor is through the MCP (Model Context Protocol) server:
 
 ```bash
 # You don't need to install anything permanently
 # NPX will run the package directly
-npx -y @buger/probe-mcp@latest
+npx -y @probelabs/probe@latest mcp
 ```
+
+**Migrating from @probelabs/probe-mcp?** This is a drop-in replacement - just replace `npx @probelabs/probe-mcp` with `npx @probelabs/probe mcp`.
 
 This command will:
 1. Download the Probe MCP server package
@@ -46,7 +48,8 @@ This command will:
          "command": "npx",
          "args": [
            "-y",
-           "@buger/probe-mcp@latest"
+           "@probelabs/probe@latest",
+           "mcp"
          ]
        }
      }
@@ -96,7 +99,7 @@ If you encounter issues with the integration:
 
 ```bash
 # Run the MCP server with debug logging
-DEBUG=1 npx -y @buger/probe-mcp@latest
+DEBUG=1 npx -y @probelabs/probe@latest mcp
 ```
 
 This will show detailed logs of:
@@ -133,7 +136,8 @@ For more control over the MCP server:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@probelabs/probe@latest",
+        "mcp"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2",

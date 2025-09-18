@@ -24,7 +24,7 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'crypto';
 import { ProbeChat } from './probeChat.js';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
-import { DEFAULT_SYSTEM_MESSAGE } from '@buger/probe';
+import { DEFAULT_SYSTEM_MESSAGE } from '@probelabs/probe';
 
 /**
  * Main function that runs the Probe Chat CLI or web interface
@@ -58,9 +58,10 @@ export function main() {
     .option('-p, --port <port>', 'Port to run web server on (default: 8080)')
     .option('-m, --message <message>', 'Send a single message and exit (non-interactive mode)')
     .option('-s, --session-id <sessionId>', 'Specify a session ID for the chat (optional)')
+    .option('--images <urls>', 'Comma-separated list of image URLs to include in the message')
     .option('--json', 'Output the response as JSON in non-interactive mode')
     .option('--max-iterations <number>', 'Maximum number of tool iterations allowed (default: 30)')
-    .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, support, path to a file, or arbitrary string)')
+    .option('--prompt <value>', 'Use a custom prompt (values: architect, code-review, code-review-template, support, path to a file, or arbitrary string)')
     .option('--allow-edit', 'Enable the implement tool for editing files')
     .option('--implement-tool-backend <backend>', 'Choose implementation tool backend (aider, claude-code)')
     .option('--implement-tool-timeout <ms>', 'Implementation tool timeout in milliseconds')
@@ -75,6 +76,13 @@ export function main() {
 
   const options = program.opts();
   const pathArg = program.args[0];
+
+  // Parse image URLs if provided
+  let imageUrls = [];
+  if (options.images) {
+    imageUrls = options.images.split(',').map(url => url.trim()).filter(url => url.length > 0);
+    console.log(`Using ${imageUrls.length} image(s):`, imageUrls);
+  }
 
   // --- Logging Configuration ---
   const isPipedInput = process.env.PROBE_STDIN_PIPED === '1';
@@ -242,7 +250,7 @@ export function main() {
   let customPrompt = null;
   if (options.prompt) {
     // Check if it's one of the predefined prompts
-    const predefinedPrompts = ['architect', 'code-review', 'support', 'engineer'];
+    const predefinedPrompts = ['architect', 'code-review', 'code-review-template', 'support', 'engineer'];
     if (predefinedPrompts.includes(options.prompt)) {
       process.env.PROMPT_TYPE = options.prompt;
       logInfo(chalk.blue(`Using predefined prompt: ${options.prompt}`));
@@ -315,6 +323,27 @@ export function main() {
   const googleApiKey = process.env.GOOGLE_API_KEY;
   const hasApiKeys = !!(anthropicApiKey || openaiApiKey || googleApiKey);
 
+  // --- Web Mode (check before non-interactive to override) ---
+  if (options.web) {
+    if (!hasApiKeys) {
+      // Use logWarn for web mode warning
+      logWarn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
+    }
+    // Import and start web server
+    import('./webServer.js')
+      .then(async module => {
+        const { startWebServer } = module;
+        logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
+        await startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit });
+      })
+      .catch(error => {
+        logError(chalk.red(`Error starting web server: ${error.message}`));
+        process.exit(1);
+      });
+    return; // Exit main function
+  }
+  // --- End Web Mode ---
+
   // --- Non-Interactive Mode ---
   if (isNonInteractive) {
     if (!hasApiKeys) {
@@ -329,7 +358,7 @@ export function main() {
         sessionId: options.sessionId,
         isNonInteractive: true,
         customPrompt: customPrompt,
-        promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
+        promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
         allowEdit: options.allowEdit
       });
       // Model/Provider info is logged via logInfo above if debug enabled
@@ -370,7 +399,7 @@ export function main() {
         }
 
         logInfo('Sending message...'); // Log only if debug
-        const result = await chat.chat(message, chat.getSessionId()); // Use the chat's current session ID
+        const result = await chat.chat(message, chat.getSessionId(), null, imageUrls); // Use the chat's current session ID and pass images
 
         if (result && typeof result === 'object' && result.response !== undefined) {
           if (options.json) {
@@ -417,28 +446,6 @@ export function main() {
   // --- End Non-Interactive Mode ---
 
 
-  // --- Web Mode ---
-  if (options.web) {
-    if (!hasApiKeys) {
-      // Use logWarn for web mode warning
-      logWarn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
-    }
-    // Import and start web server
-    import('./webServer.js')
-      .then(module => {
-        const { startWebServer } = module;
-        logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
-        startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit });
-      })
-      .catch(error => {
-        logError(chalk.red(`Error starting web server: ${error.message}`));
-        process.exit(1);
-      });
-    return; // Exit main function
-  }
-  // --- End Web Mode ---
-
-
   // --- Interactive CLI Mode ---
   // (This block only runs if not non-interactive and not web mode)
 
@@ -460,7 +467,7 @@ export function main() {
       sessionId: options.sessionId,
       isNonInteractive: false,
       customPrompt: customPrompt,
-      promptType: options.prompt && ['architect', 'code-review', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
+      promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
       allowEdit: options.allowEdit
     });
 
@@ -544,7 +551,7 @@ export function main() {
 
       const spinner = ora('Thinking...').start(); // Spinner is ok for interactive mode
       try {
-        const result = await chat.chat(message); // Uses internal session ID
+        const result = await chat.chat(message, null, null, imageUrls); // Uses internal session ID and pass images
         spinner.stop();
 
         logInfo(chalk.green('Assistant:'));

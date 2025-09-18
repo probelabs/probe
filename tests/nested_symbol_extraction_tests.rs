@@ -19,13 +19,13 @@ impl ProbeAgentServer {
     pub fn setupToolHandlers(&self) {
         // Setup tool handlers
         println!("Setting up tool handlers");
-        
+
         // Register search handler
         self.register_handler("search", |params| {
             // Search implementation
         });
     }
-    
+
     fn register_handler(&self, name: &str, handler: impl Fn(&str)) {
         // Register handler implementation
     }

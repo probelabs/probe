@@ -1,20 +1,56 @@
 {
-  "name": "@buger/probe",
+  "name": "@probelabs/probe",
   "version": "1.0.0",
   "description": "Node.js wrapper for the probe code search tool",
   "main": "src/index.js",
+  "module": "src/index.js",
+  "types": "index.d.ts",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./src/index.js",
+      "require": "./cjs/index.cjs"
+    },
+    "./agent": {
+      "types": "./src/agent/ProbeAgent.d.ts",
+      "import": "./src/agent/ProbeAgent.js",
+      "require": "./cjs/agent/ProbeAgent.cjs"
+    },
+    "./telemetry": {
+      "import": "./src/agent/simpleTelemetry.js",
+      "require": "./cjs/agent/simpleTelemetry.cjs"
+    }
+  },
   "bin": {
     "probe": "bin/probe"
   },
   "files": [
     "src/**/*",
+    "cjs/**/*",
+    "*.d.ts",
+    "src/**/*.d.ts",
     "bin/probe",
+    "bin/probe-binary",
+    "bin/probe.exe",
     "bin/.gitkeep",
-    "scripts/postinstall.js"
+    "scripts/postinstall.js",
+    "build/**/*",
+    "MERMAID_SUPPORT_SUMMARY.md",
+    "GITHUB_MERMAID_COMPATIBILITY.md"
   ],
   "scripts": {
-    "postinstall": "node scripts/postinstall.js"
+    "postinstall": "node scripts/postinstall.js",
+    "build:mcp": "node scripts/build-mcp.cjs",
+    "build:agent": "node scripts/build-agent.cjs",
+    "build:types": "echo 'TypeScript definitions already manually created'",
+    "build:cjs": "node scripts/build-cjs.js",
+    "build": "npm run build:types && npm run build:cjs && npm run build:mcp && npm run build:agent",
+    "prepack": "npm run build",
+    "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
+    "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",
+    "test:coverage": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --coverage",
+    "test:verbose": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --verbose"
   },
   "keywords": [
     "probe",
@@ -26,13 +62,36 @@
     "llm",
     "tools"
   ],
-  "author": "buger",
+  "author": "probelabs",
   "license": "ISC",
   "dependencies": {
+    "@ai-sdk/anthropic": "^1.2.0",
+    "@ai-sdk/google": "^1.2.0",
+    "@ai-sdk/openai": "^1.3.0",
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@opentelemetry/api": "^1.9.0",
+    "@opentelemetry/core": "^1.30.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
+    "@opentelemetry/resources": "^2.0.1",
+    "@opentelemetry/sdk-node": "^0.203.0",
+    "@opentelemetry/sdk-trace-base": "^1.30.0",
+    "@opentelemetry/semantic-conventions": "^1.36.0",
+    "ai": "^4.1.60",
     "axios": "^1.8.3",
     "fs-extra": "^11.1.1",
+    "glob": "^10.3.10",
     "tar": "^6.2.0",
+    "tiktoken": "^1.0.20",
     "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^20.17.19",
+    "cross-env": "^7.0.3",
+    "esbuild": "^0.25.9",
+    "jest": "^29.7.0",
+    "typescript": "^5.9.2"
   },
   "peerDependencies": {
     "ai": "^4.1.60"
@@ -42,10 +101,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/buger/probe.git"
+    "url": "git+https://github.com/probelabs/probe.git"
   },
   "bugs": {
-    "url": "https://github.com/buger/probe/issues"
+    "url": "https://github.com/probelabs/probe/issues"
   },
-  "homepage": "https://github.com/buger/probe#readme"
+  "homepage": "https://github.com/probelabs/probe#readme"
 }

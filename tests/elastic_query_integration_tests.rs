@@ -19,10 +19,10 @@ fn create_test_files(temp_dir: &Path) {
 fn test_function() {
     // This is keywordAlpha
     let x = 1;
-    
+
     // This is keywordBeta
     let y = 2;
-    
+
     println!("Result: {}", x + y);
 }
 "#;
@@ -34,10 +34,10 @@ fn test_function() {
 fn another_function() {
     // This is keywordAlpha
     let x = 1;
-    
+
     // This is keywordGamma
     let z = 3;
-    
+
     println!("Result: {}", x + z);
 }
 "#;
@@ -49,10 +49,10 @@ fn another_function() {
 fn third_function() {
     // This is keywordBeta
     let y = 2;
-    
+
     // This is keywordGamma
     let z = 3;
-    
+
     println!("Result: {}", y + z);
 }
 "#;
@@ -64,13 +64,13 @@ fn third_function() {
 fn all_keywords_function() {
     // This is keywordAlpha
     let x = 1;
-    
+
     // This is keywordBeta
     let y = 2;
-    
+
     // This is keywordGamma
     let z = 3;
-    
+
     println!("Result: {}", x + y + z);
 }
 "#;
@@ -597,10 +597,10 @@ fn test_underscore_handling_integration() {
 fn test_function() {
     // This has key, word, and score
     let x = 1;
-    
+
     // This also has key word score
     let y = 2;
-    
+
     println!("Result: {}", x + y);
 }
 "#;

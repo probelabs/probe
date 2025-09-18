@@ -98,3 +98,5 @@ else
     exit $status
 fi
 
+# Run Vow accountability check at the end
+"$(git config core.hooksPath)/pre-commit-vow"

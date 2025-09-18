@@ -1,4 +1,6 @@
-use probe_code::search::search_runner::{perform_probe, search_with_structured_patterns};
+use probe_code::search::search_runner::{
+    perform_probe, search_with_structured_patterns, SearchConfig,
+};
 use probe_code::search::SearchOptions;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,10 +24,10 @@ fn function_{}_{}() {{
     // Initialize variables
     let search_term_alpha = {};
     let search_term_beta = {};
-    
+
     // Process data
     println!(\"Processing data with search_term_gamma\");
-    
+
     // Return result
     search_term_alpha + search_term_beta
 }}
@@ -135,14 +137,19 @@ fn test_structured_patterns_search() {
 
     // Measure search time
     let start_time = Instant::now();
+    let search_filters = probe_code::search::filters::SearchFilters::new();
+    let search_config = SearchConfig {
+        custom_ignores: &custom_ignores,
+        allow_tests: true,
+        language: None,
+        no_gitignore: false,
+    };
     let result = search_with_structured_patterns(
         base_path,
         &query_plan,
         &patterns,
-        &custom_ignores,
-        true,
-        None,
-        false,
+        &search_config,
+        &search_filters,
     );
     let duration = start_time.elapsed();
 
@@ -265,19 +272,19 @@ fn function_with_blocks_{}() {{
         let search_term_alpha = {};
         println!(\"Block 1\");
     }}
-    
+
     // Block 2
     {{
         let search_term_beta = {};
         println!(\"Block 2\");
     }}
-    
+
     // Block 3
     {{
         let search_term_gamma = {};
         println!(\"Block 3\");
     }}
-    
+
     // Block 4
     if true {{
         let search_term_delta = {};

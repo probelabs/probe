@@ -1,19 +1,19 @@
-# @buger/probe
+# @probelabs/probe
 
-A Node.js wrapper for the [probe](https://github.com/buger/probe) code search tool.
+A Node.js wrapper for the [probe](https://github.com/probelabs/probe) code search tool.
 
 ## Installation
 
 ### Local Installation
 
 ```bash
-npm install @buger/probe
+npm install @probelabs/probe
 ```
 
 ### Global Installation
 
 ```bash
-npm install -g @buger/probe
+npm install -g @probelabs/probe
 ```
 
 During installation, the package will automatically download the appropriate probe binary for your platform.
@@ -28,13 +28,14 @@ During installation, the package will automatically download the appropriate pro
 - **Cross-Platform**: Works on Windows, macOS, and Linux
 - **Automatic Binary Management**: Automatically downloads and manages the probe binary
 - **Direct CLI Access**: Use the probe binary directly from the command line when installed globally
+- **MCP Server**: Built-in Model Context Protocol server for AI assistant integration
 
 ## Usage
 
 ### Using as a Node.js Library
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 
 // Search for code
 const searchResults = await search({
@@ -69,16 +70,99 @@ probe query "function $NAME($$$PARAMS) $$$BODY" /path/to/your/project
 
 # Extract code blocks
 probe extract /path/to/your/project/src/main.js:42
+
+# Run MCP server for AI assistant integration
+probe mcp
 ```
 
 The package installs the actual probe binary, not a JavaScript wrapper, so you get the full native performance and all features of the original probe CLI.
+
+### Using ProbeAgent (AI-Powered Code Assistant)
+
+ProbeAgent provides a high-level AI-powered interface for interacting with your codebase:
+
+```javascript
+import { ProbeAgent } from '@buger/probe';
+
+// Create an AI agent for your project
+const agent = new ProbeAgent({
+  sessionId: 'my-session',  // Optional: for conversation continuity  
+  path: '/path/to/your/project',
+  provider: 'anthropic',   // or 'openai', 'google'
+  model: 'claude-3-5-sonnet-20241022',  // Optional: override model
+  allowEdit: false,        // Optional: enable code modification
+  debug: true             // Optional: enable debug logging
+});
+
+// Ask questions about your codebase
+const answer = await agent.answer("How does authentication work in this codebase?");
+console.log(answer);
+
+// The agent maintains conversation history automatically
+const followUp = await agent.answer("Can you show me the login implementation?");
+console.log(followUp);
+
+// Get token usage statistics
+const usage = agent.getTokenUsage();
+console.log(`Used ${usage.total} tokens total`);
+
+// Clear conversation history if needed
+agent.history = [];
+```
+
+**Environment Variables:**
+```bash
+# Set your API key for the chosen provider
+export ANTHROPIC_API_KEY=your_anthropic_key
+export OPENAI_API_KEY=your_openai_key  
+export GOOGLE_API_KEY=your_google_key
+
+# Optional: Force a specific provider
+export FORCE_PROVIDER=anthropic
+
+# Optional: Override model name
+export MODEL_NAME=claude-3-5-sonnet-20241022
+```
+
+**ProbeAgent Features:**
+- **Multi-turn conversations** with automatic history management
+- **Code search integration** - Uses probe's search capabilities transparently
+- **Multiple AI providers** - Supports Anthropic Claude, OpenAI GPT, Google Gemini
+- **Session management** - Maintain conversation context across calls
+- **Token tracking** - Monitor usage and costs
+- **Configurable personas** - Engineer, architect, code-review, and more
+
+### Using as an MCP Server
+
+Probe includes a built-in MCP (Model Context Protocol) server for integration with AI assistants:
+
+```bash
+# Start the MCP server
+probe mcp
+
+# With custom timeout
+probe mcp --timeout 60
+```
+
+Add to your AI assistant's MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@probelabs/probe", "mcp"]
+    }
+  }
+}
+```
 
 ## API Reference
 
 ### Search
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 const results = await search({
   path: '/path/to/your/project',
@@ -126,7 +210,7 @@ const results = await search({
 ### Query
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 const results = await query({
   path: '/path/to/your/project',
@@ -162,7 +246,7 @@ const results = await query({
 ### Extract
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 const results = await extract({
   files: [
@@ -195,7 +279,7 @@ const results = await extract({
 ### Binary Management
 
 ```javascript
-import { getBinaryPath, setBinaryPath } from '@buger/probe';
+import { getBinaryPath, setBinaryPath } from '@probelabs/probe';
 
 // Get the path to the probe binary
 const binaryPath = await getBinaryPath({
@@ -210,7 +294,7 @@ setBinaryPath('/path/to/probe/binary');
 ### AI Tools
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Vercel AI SDK tools
 const { searchTool, queryTool, extractTool } = tools;
@@ -254,7 +338,7 @@ const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
 ### Basic Search Example
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function basicSearchExample() {
   try {
@@ -275,7 +359,7 @@ async function basicSearchExample() {
 ### Advanced Search with Multiple Options
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function advancedSearchExample() {
   try {
@@ -301,7 +385,7 @@ async function advancedSearchExample() {
 ### Query for Specific Code Structures
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 async function queryExample() {
   try {
@@ -335,7 +419,7 @@ async function queryExample() {
 ### Extract Code Blocks
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 async function extractExample() {
   try {
@@ -375,7 +459,7 @@ The package provides built-in tools for integrating with AI SDKs like Vercel AI 
 
 ```javascript
 import { generateText } from 'ai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the pre-built tools with Vercel AI SDK
 async function chatWithAI(userMessage) {
@@ -400,7 +484,7 @@ async function chatWithAI(userMessage) {
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Create the LangChain tools
 const searchTool = tools.createSearchTool();
@@ -429,7 +513,7 @@ async function chatWithAI(userMessage) {
 The package provides a default system message that you can use with your AI assistants:
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the default system message in your AI application
 const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
@@ -453,7 +537,47 @@ The default system message provides instructions for AI assistants on how to use
 
 ISC
 
+## Migration from @probelabs/probe-mcp
+
+If you're migrating from the standalone `@probelabs/probe-mcp` package, `probe mcp` is a drop-in replacement:
+
+**Old usage:**
+```bash
+npx @probelabs/probe-mcp
+# or
+probe-mcp --timeout 60
+```
+
+**New usage (drop-in replacement):**
+```bash
+probe mcp
+# or  
+probe mcp --timeout 60
+```
+
+**MCP Configuration:**
+```json
+// Old configuration
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@probelabs/probe-mcp"]
+    }
+  }
+}
+
+// New configuration (drop-in replacement)
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx", 
+      "args": ["-y", "@probelabs/probe", "mcp"]
+    }
+  }
+}
+```
+
 ## Related Projects
 
-- [probe](https://github.com/buger/probe) - The core probe code search tool
-- [probe-mcp](https://github.com/buger/probe/tree/main/mcp) - MCP server for probe
+- [probe](https://github.com/probelabs/probe) - The core probe code search tool

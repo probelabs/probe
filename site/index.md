@@ -14,7 +14,7 @@ hero:
       link: /quick-start
     - theme: alt
       text: GitHub Repo
-      link: https://github.com/buger/probe
+      link: https://github.com/probelabs/probe
     - theme: alt
       text: Join Discord
       link: https://discord.gg/t5QmP9EWSS
@@ -26,14 +26,14 @@ hero:
       <div class="quick-start-option">
               <h3>Core Search</h3>
               <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @buger/probe@latest "+stemming -lexer"</code></pre></div>
+                <div class="language-bash"><pre><code>npx -y @probelabs/probe@latest "+stemming -lexer"</code></pre></div>
               </div>
               <p class="option-description">Fast semantic code search with elastic search syntax</p>
             </div>
             <div class="quick-start-option">
               <h3>AI Chat</h3>
               <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @buger/probe-chat@latest --web</code></pre></div>
+                <div class="language-bash"><pre><code>npx -y @probelabs/probe-chat@latest --web</code></pre></div>
               </div>
               <p class="option-description">Built-in AI agent. <small>OpenAI or Anthropic (API key required)</small></p>
             </div>

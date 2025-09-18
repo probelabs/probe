@@ -9,4 +9,4 @@ Binary name should be:
 - `probe` (on Linux/macOS)
 - `probe.exe` (on Windows)
 
-You can download the binary from: https://github.com/buger/probe/releases
+You can download the binary from: https://github.com/probelabs/probe/releases

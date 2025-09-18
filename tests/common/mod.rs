@@ -8,6 +8,43 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+/// Test context for running probe commands
+pub struct TestContext {
+    probe_binary: PathBuf,
+}
+
+impl TestContext {
+    /// Create a new test context
+    pub fn new() -> Self {
+        let probe_binary = env::current_exe()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("probe");
+
+        Self { probe_binary }
+    }
+
+    /// Run a probe command with the given arguments
+    pub fn run_probe(&self, args: &[&str]) -> Result<String> {
+        let output = Command::new(&self.probe_binary)
+            .args(args)
+            .output()
+            .context("Failed to run probe command")?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        if !output.status.success() {
+            anyhow::bail!("Command failed: {}\nStderr: {}", stdout, stderr);
+        }
+
+        Ok(stdout.to_string())
+    }
+}
+
 /// Strip ANSI escape sequences (CSI etc.) so we can parse colored output reliably.
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

@@ -73,20 +73,13 @@ jobs:
           npm --version
           typescript-language-server --version
 
-      - name: Build Rust project
+      - name: Build Rust project (includes LSP daemon library)
         run: cargo build
-
-      - name: Build LSP daemon for tests
-        run: |
-          cd lsp-daemon
-          cargo build
 
       - name: Run multi-workspace LSP tests
         env:
           PROBE_CI: 1
-        run: |
-          cd lsp-daemon
-          cargo test --test integration_multi_workspace
+        run: cargo test -p lsp-daemon --test integration_multi_workspace
 
       - name: Run LSP integration tests
         env:

@@ -3,10 +3,10 @@
 
 // Let's comment it out for now, assuming it's not directly used in the new flow.
 // If specific exports are needed elsewhere (like DEFAULT_SYSTEM_MESSAGE), they
-// should be moved or imported directly from @buger/probe.
+// should be moved or imported directly from @probelabs/probe.
 
 
-// Import tool generators and schemas from @buger/probe package
+// Import tool generators and schemas from @probelabs/probe package
 import {
   searchTool,
   queryTool,
@@ -20,9 +20,9 @@ import {
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
-  // Add the implement tool definition import if it exists in @buger/probe
+  // Add the implement tool definition import if it exists in @probelabs/probe
   // If not, we define it here. Assuming it's not in the package yet:
-} from '@buger/probe';
+} from '@probelabs/probe';
 import { randomUUID } from 'crypto';
 
 // Generate a session ID
@@ -149,8 +149,8 @@ User: Find all markdown files in the docs directory, but only at the top level.
 `;
 
 
-// Import the XML parser function from @buger/probe
-import { parseXmlToolCall } from '@buger/probe';
+// Import the XML parser function from @probelabs/probe
+import { parseXmlToolCall } from '@probelabs/probe';
 
 // Re-export the original parseXmlToolCall
 export { parseXmlToolCall };

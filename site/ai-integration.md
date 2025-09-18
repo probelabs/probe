@@ -1,6 +1,6 @@
 # Probe AI Integration
 
-Probe offers powerful AI integration capabilities that allow you to leverage large language models (LLMs) to understand and navigate your codebase more effectively. This document provides comprehensive information about Probe's AI features, including the AI chat mode, MCP server integration, and Node.js SDK for programmatic access.
+Probe offers powerful AI integration capabilities that allow you to leverage large language models (LLMs) to understand and navigate your codebase more effectively. This document provides comprehensive information about Probe's AI features, including the AI chat mode, ProbeAgent SDK for building AI applications, MCP server integration, and Node.js SDK for programmatic access.
 
 ## Table of Contents
 
@@ -12,6 +12,14 @@ Probe offers powerful AI integration capabilities that allow you to leverage lar
   - [Configuration Options](#configuration-options)
   - [Advanced Usage](#advanced-usage)
   - [Best Practices](#best-practices)
+- [ProbeAgent SDK](#probeagent-sdk)
+  - [Overview](#probeagent-overview)
+  - [Installation](#probeagent-installation)
+  - [Quick Start](#probeagent-quick-start)
+  - [API Reference](#probeagent-api)
+  - [Usage Examples](#probeagent-examples)
+  - [Advanced Features](#probeagent-advanced)
+  - [Comparison with ProbeChat](#probeagent-vs-probechat)
 - [MCP Server Integration](#mcp-server-integration)
   - [Overview](#mcp-overview)
   - [Setting Up the MCP Server](#setting-up-the-mcp-server)
@@ -64,7 +72,7 @@ The AI chat functionality is available as a standalone npm package that can be r
 
 ```bash
 # Run directly with npx (no installation needed)
-npx -y @buger/probe-chat@latest
+npx -y @probelabs/probe-chat@latest
 
 # Set your API key first
 export ANTHROPIC_API_KEY=your_api_key
@@ -74,14 +82,14 @@ export ANTHROPIC_API_KEY=your_api_key
 # export GOOGLE_API_KEY=your_api_key
 
 # Or specify a directory to search
-npx -y @buger/probe-chat@latest /path/to/your/project
+npx -y @probelabs/probe-chat@latest /path/to/your/project
 ```
 
 #### Using the npm package
 
 ```bash
 # Install globally
-npm install -g @buger/probe-chat@latest
+npm install -g @probelabs/probe-chat@latest
 
 # Start the chat interface
 probe-chat
@@ -231,7 +239,7 @@ probe-chat
 You can also use the AI Chat functionality programmatically in your Node.js applications:
 
 ```javascript
-import { ProbeChat } from '@buger/probe-chat';
+import { ProbeChat } from '@probelabs/probe-chat';
 import { StreamingTextResponse } from 'ai';
 
 // Create a chat instance
@@ -307,6 +315,400 @@ const chat = new ProbeChat({
 7. **Use Multiple Queries**: If you don't find what you're looking for, try reformulating your question
 8. **Combine with CLI**: Use the AI chat for exploration and understanding, then switch to the CLI for specific searches
 
+## ProbeAgent SDK {#probeagent-sdk}
+
+### Overview {#probeagent-overview}
+
+The ProbeAgent SDK provides a powerful programmatic interface for building AI-powered code analysis applications. Unlike the basic Node.js SDK which focuses on search/query/extract operations, ProbeAgent offers a complete AI conversation system with persistent sessions, advanced mermaid diagram validation, and intelligent code understanding.
+
+Key Features:
+
+- **Full AI Conversation System**: Multi-turn conversations with persistent history
+- **Session Management**: Isolated conversation sessions with unique IDs
+- **Multiple AI Providers**: Support for Anthropic, OpenAI, and Google models
+- **Code Modification**: Optional edit capabilities with `allowEdit` flag
+- **Structured Output**: JSON schema validation and automatic mermaid diagram fixing
+- **Event System**: Real-time monitoring of tool execution
+- **Custom Personas**: Predefined expert roles (architect, code-review, engineer, support)
+- **Token Usage Tracking**: Monitor API usage and costs
+
+### Installation {#probeagent-installation}
+
+```bash
+npm install @probelabs/probe
+```
+
+### Quick Start {#probeagent-quick-start}
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+// Create agent instance
+const agent = new ProbeAgent({
+  path: '/path/to/your/codebase',
+  provider: 'anthropic', // or 'openai', 'google'
+  promptType: 'code-explorer', // or 'architect', 'code-review', 'engineer', 'support'
+  allowEdit: false, // set to true for code modification
+  debug: true
+});
+
+// Ask questions about your code
+const response = await agent.answer('How does the authentication system work?');
+console.log(response);
+```
+
+### API Reference {#probeagent-api}
+
+#### Constructor Options
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sessionId` | `string` | `randomUUID()` | Unique session identifier |
+| `path` | `string` | `process.cwd()` | Search directory path |
+| `provider` | `string` | auto-detect | AI provider: 'anthropic', 'openai', 'google' |
+| `model` | `string` | provider default | Model name override |
+| `allowEdit` | `boolean` | `false` | Enable code modification capabilities |
+| `promptType` | `string` | `'code-explorer'` | Persona: 'code-explorer', 'architect', 'code-review', 'engineer', 'support', 'code-review-template' |
+| `customPrompt` | `string` | `null` | Custom system prompt (overrides promptType) |
+| `debug` | `boolean` | `false` | Enable debug logging |
+| `maxIterations` | `number` | `30` | Maximum tool iterations (configurable via MAX_TOOL_ITERATIONS env var) |
+
+#### Methods
+
+**`agent.answer(message, images?, schemaOrOptions?)`**
+
+Main method for asking questions about your codebase. Supports automatic schema validation and formatting.
+
+```javascript
+// Basic usage
+const response = await agent.answer('Explain the database connection logic');
+
+// With images (multimodal)
+const response = await agent.answer(
+  'Analyze this architecture diagram', 
+  [imageBase64OrUrl]
+);
+
+// With schema for structured output (string format - backwards compatible)
+const response = await agent.answer(
+  'List all functions',
+  [],
+  '{"functions": [{"name": "string", "file": "string"}]}'
+);
+
+// With schema in options object (recommended)
+const response = await agent.answer(
+  'List all functions', 
+  [], 
+  { 
+    schema: '{"functions": [{"name": "string", "file": "string"}]}',
+    // Other options can be added here
+  }
+);
+```
+
+**Schema Validation Features:**
+- Automatic response formatting according to provided schema
+- JSON schema validation with automatic error correction
+- Mermaid diagram validation and fixing
+- Clean response output (removes code blocks and formatting artifacts)
+- Backwards compatible with string schema parameter
+
+**`agent.getTokenUsage()`**
+
+Get token usage statistics for the current session.
+
+```javascript
+const usage = agent.getTokenUsage();
+console.log(`Total tokens: ${usage.totalTokens}`);
+```
+
+**`agent.cancel()`**
+
+Cancel any ongoing operations.
+
+```javascript
+agent.cancel();
+```
+
+### Usage Examples {#probeagent-examples}
+
+#### Basic Code Analysis
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+const agent = new ProbeAgent({
+  path: './my-project',
+  provider: 'anthropic'
+});
+
+// Ask about architecture
+const architecture = await agent.answer('Describe the overall architecture of this codebase');
+
+// Find specific functionality
+const auth = await agent.answer('How is user authentication implemented?');
+
+// Code review
+const issues = await agent.answer('Are there any potential security issues?');
+```
+
+#### Using Different Personas
+
+```javascript
+// Code review specialist
+const reviewer = new ProbeAgent({
+  path: './my-project',
+  promptType: 'code-review'
+});
+
+const review = await reviewer.answer('Review this codebase for bugs and improvements');
+
+// Software architect
+const architect = new ProbeAgent({
+  path: './my-project', 
+  promptType: 'architect'
+});
+
+const design = await architect.answer('Suggest improvements to the system architecture');
+```
+
+#### Structured Output with Schemas
+
+```javascript
+const agent = new ProbeAgent({ path: './my-project' });
+
+// Get structured JSON response
+const functions = await agent.answer(
+  'List all public functions in the codebase',
+  [],
+  { 
+    schema: JSON.stringify({
+      functions: [
+        {
+          name: 'string',
+          file: 'string', 
+          parameters: ['string'],
+          description: 'string'
+        }
+      ]
+    })
+  }
+);
+
+// Response is automatically validated and corrected if needed
+const functionList = JSON.parse(functions);
+
+// Example with automatic JSON error correction
+const apiEndpoints = await agent.answer(
+  'List all API endpoints with their methods',
+  [],
+  {
+    schema: JSON.stringify({
+      endpoints: [
+        {
+          path: 'string',
+          method: 'string',
+          handler: 'string',
+          file: 'string'
+        }
+      ]
+    })
+  }
+);
+// ProbeAgent will automatically fix any JSON formatting issues
+const endpoints = JSON.parse(apiEndpoints);
+```
+
+#### Multi-turn Conversations
+
+```javascript
+const agent = new ProbeAgent({ path: './my-project' });
+
+// First question
+await agent.answer('What does the User model look like?');
+
+// Follow-up (agent remembers context)
+await agent.answer('How is the User model used in the authentication system?');
+
+// Another follow-up
+await agent.answer('Are there any potential issues with this approach?');
+
+// Check conversation history
+console.log(`Conversation has ${agent.history.length} messages`);
+```
+
+#### Event Monitoring
+
+```javascript
+const agent = new ProbeAgent({ 
+  path: './my-project',
+  debug: true
+});
+
+// Listen to tool call events
+agent.events.on('toolCall', (event) => {
+  console.log(`Tool ${event.name} ${event.status}: ${event.description}`);
+});
+
+await agent.answer('Search for all API endpoints');
+```
+
+#### Code Modification (Advanced)
+
+```javascript
+const agent = new ProbeAgent({
+  path: './my-project',
+  allowEdit: true, // Enable code modification
+  promptType: 'engineer'
+});
+
+// Agent can now modify code files
+await agent.answer('Add input validation to the user registration endpoint');
+await agent.answer('Refactor the database connection code to use connection pooling');
+```
+
+#### Session Management
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+class CodeAnalyzer {
+  constructor(projectPath) {
+    this.agent = new ProbeAgent({
+      sessionId: `analyzer-${Date.now()}`,
+      path: projectPath,
+      promptType: 'architect',
+      debug: process.env.NODE_ENV === 'development'
+    });
+  }
+  
+  async analyzeFeature(featureName) {
+    return await this.agent.answer(`Analyze the ${featureName} feature implementation`);
+  }
+  
+  async suggestImprovements() {
+    return await this.agent.answer('What improvements would you suggest for this codebase?');
+  }
+  
+  getUsage() {
+    return this.agent.getTokenUsage();
+  }
+}
+
+// Usage
+const analyzer = new CodeAnalyzer('./my-project');
+const analysis = await analyzer.analyzeFeature('authentication');
+const improvements = await analyzer.suggestImprovements();
+const usage = analyzer.getUsage();
+```
+
+### Advanced Features {#probeagent-advanced}
+
+#### Mermaid Diagram Generation and Validation
+
+ProbeAgent includes comprehensive Mermaid diagram validation and automatic fixing capabilities:
+
+```javascript
+const agent = new ProbeAgent({ path: './my-project' });
+
+// Generate a Mermaid diagram with automatic validation
+const diagram = await agent.answer(
+  'Create a mermaid diagram showing the system architecture',
+  [],
+  { schema: 'Generate response with mermaid diagram in code blocks' }
+);
+// Automatically validates and fixes mermaid syntax errors!
+
+// Example: Architecture diagram with automatic fixing
+const architectureDiagram = await agent.answer(
+  'Create a detailed mermaid flowchart of the authentication flow',
+  [],
+  {
+    schema: JSON.stringify({
+      diagram: 'string', // Mermaid diagram code
+      description: 'string'
+    })
+  }
+);
+
+// Example: Class diagram with validation
+const classDiagram = await agent.answer(
+  'Generate a mermaid class diagram for the User model and its relationships',
+  [],
+  { schema: 'Provide the response with a valid mermaid class diagram' }
+);
+```
+
+**Mermaid Validation Features:**
+- **Automatic Syntax Validation**: Validates Mermaid diagram syntax using the official Mermaid CLI
+- **Error Detection**: Identifies syntax errors, missing nodes, invalid relationships
+- **Automatic Fixing**: Uses AI to automatically correct syntax errors
+- **Multiple Diagram Support**: Can validate and fix multiple diagrams in a single response
+- **Diagram Types Supported**: flowchart, sequence, class, state, entity-relationship, gantt, pie, git, journey, and more
+- **Preserves Content**: Maintains the original diagram intent while fixing syntax issues
+
+#### Integration with Web Frameworks
+
+```javascript
+// Express.js integration example
+app.post('/analyze', async (req, res) => {
+  const agent = new ProbeAgent({
+    path: req.body.projectPath,
+    sessionId: req.session.id
+  });
+  
+  try {
+    const result = await agent.answer(req.body.question);
+    res.json({ response: result, usage: agent.getTokenUsage() });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+```
+
+#### Environment Variables
+
+Set these environment variables for API access:
+
+```bash
+# Anthropic Claude (recommended)
+export ANTHROPIC_API_KEY="your-key-here"
+
+# OpenAI GPT
+export OPENAI_API_KEY="your-key-here" 
+
+# Google Gemini
+export GOOGLE_API_KEY="your-key-here"
+
+# Force specific provider (optional)
+export FORCE_PROVIDER="anthropic"
+
+# Override model (optional)  
+export MODEL_NAME="claude-3-opus-20240229"
+
+# Enable debug mode (optional)
+export DEBUG=1
+```
+
+### Comparison with ProbeChat {#probeagent-vs-probechat}
+
+| Feature | ProbeAgent | ProbeChat |
+|---------|------------|-----------|
+| **Purpose** | Full SDK for building AI apps | Simple chat interface |
+| **Session Management** | Advanced with persistent history | Basic conversation |
+| **Code Modification** | Supports `allowEdit` flag | Read-only |
+| **Custom Personas** | 6+ predefined personas (including code-review-template) | Limited customization |
+| **Structured Output** | Full JSON schema validation with auto-correction | Basic responses |
+| **Event System** | Real-time tool monitoring | None |
+| **Mermaid Validation** | Advanced validation & automatic fixing | Basic support |
+| **Schema Handling** | Automatic formatting, validation, and error correction | None |
+| **JSON Validation** | Automatic detection and correction of malformed JSON | None |
+| **Max Iterations** | Configurable (default 30, via MAX_TOOL_ITERATIONS env) | Fixed |
+| **Use Case** | Building AI applications with structured outputs | Interactive exploration |
+
+Use **ProbeAgent** when you want to build sophisticated AI-powered code analysis tools with structured outputs, and **ProbeChat** when you need a simple chat interface for code exploration.
+
 ## MCP Server Integration {#mcp-server-integration}
 
 ### Overview {#mcp-overview}
@@ -333,7 +735,7 @@ The easiest way to use Probe's MCP server is through NPX:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@probelabs/probe@latest"
       ]
     }
   }
@@ -351,7 +753,7 @@ If you prefer to install the MCP server manually:
 
 1. Install the NPM package globally:
    ```bash
-   npm install -g @buger/probe-mcp@latest
+   npm install -g @probelabs/probe@latest
    ```
 
 2. Configure your AI editor to use the installed package:
@@ -359,7 +761,7 @@ If you prefer to install the MCP server manually:
    {
      "mcpServers": {
        "probe": {
-         "command": "probe-mcp"
+         "command": "probe", "args": ["mcp"]
        }
      }
    }
@@ -476,7 +878,7 @@ You can configure the MCP server to search specific directories by default:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_DEFAULT_PATHS": "/path/to/project1,/path/to/project2"
@@ -497,7 +899,7 @@ You can set default limits for search results:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_MAX_TOKENS": "20000"
@@ -518,7 +920,7 @@ If you have a custom build of the Probe binary, you can specify its path:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "PROBE_PATH": "/path/to/custom/probe"
@@ -539,7 +941,7 @@ Enable debug mode for detailed logging:
       "command": "npx",
       "args": [
         "-y",
-        "@buger/probe-mcp@latest"
+        "@probelabs/probe@latest"
       ],
       "env": {
         "DEBUG": "1"
@@ -557,8 +959,8 @@ If you encounter issues with the MCP server:
 2. **Verify Configuration**: Double-check your MCP configuration file for errors
 3. **Check Permissions**: Make sure the AI editor has permission to execute the MCP server
 4. **Check Logs**: Look for error messages in your AI editor's logs
-5. **Update Packages**: Ensure you're using the latest version of the `@buger/probe-mcp@latest` package
-6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/buger/probe/releases) and place it in the `node_modules/@buger/probe-mcp/bin` directory
+5. **Update Packages**: Ensure you're using the latest version of the `@probelabs/probe@latest` package
+6. **Manual Binary Download**: If the automatic download failed, you can manually download the binary from [GitHub Releases](https://github.com/probelabs/probe/releases) and place it in the `node_modules/@probelabs/probe/bin` directory
 
 #### Common Issues and Solutions
 
@@ -589,13 +991,13 @@ Key benefits:
 #### Local Installation
 
 ```bash
-npm install @buger/probe@latest
+npm install @probelabs/probe@latest
 ```
 
 #### Global Installation
 
 ```bash
-npm install -g @buger/probe@latest
+npm install -g @probelabs/probe@latest
 ```
 
 During installation, the package will automatically download the appropriate probe binary for your platform.
@@ -609,7 +1011,7 @@ The SDK provides three main functions:
 Search for patterns in your codebase using Elasticsearch-like query syntax.
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 const searchResults = await search({
   path: '/path/to/your/project',
@@ -623,7 +1025,7 @@ const searchResults = await search({
 Find specific code structures using tree-sitter patterns.
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 const queryResults = await query({
   path: '/path/to/your/project',
@@ -637,7 +1039,7 @@ const queryResults = await query({
 Extract code blocks from files based on file paths and line numbers.
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 const extractResults = await extract({
   files: ['/path/to/your/project/src/main.js:42']
@@ -652,7 +1054,7 @@ The SDK provides built-in tools for integrating with AI frameworks:
 
 ```javascript
 import { generateText } from 'ai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the pre-built tools with Vercel AI SDK
 async function chatWithAI(userMessage) {
@@ -677,7 +1079,7 @@ async function chatWithAI(userMessage) {
 
 ```javascript
 import { ChatOpenAI } from '@langchain/openai';
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Create the LangChain tools
 const searchTool = tools.createSearchTool();
@@ -706,7 +1108,7 @@ async function chatWithAI(userMessage) {
 The package provides a default system message that you can use with your AI assistants:
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Use the default system message in your AI application
 const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
@@ -729,7 +1131,7 @@ const result = await generateText({
 #### Basic Search Example
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function basicSearchExample() {
   try {
@@ -750,7 +1152,7 @@ async function basicSearchExample() {
 #### Advanced Search with Multiple Options
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 async function advancedSearchExample() {
   try {
@@ -776,7 +1178,7 @@ async function advancedSearchExample() {
 #### Query for Specific Code Structures
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 async function queryExample() {
   try {
@@ -810,7 +1212,7 @@ async function queryExample() {
 #### Extract Code Blocks
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 async function extractExample() {
   try {
@@ -834,7 +1236,7 @@ async function extractExample() {
 #### Building a Custom AI Assistant
 
 ```javascript
-import { search, query, extract } from '@buger/probe';
+import { search, query, extract } from '@probelabs/probe';
 import { ChatOpenAI } from '@langchain/openai';
 import { PromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -901,7 +1303,7 @@ console.log(answer);
 #### Search
 
 ```javascript
-import { search } from '@buger/probe';
+import { search } from '@probelabs/probe';
 
 const results = await search({
   path: '/path/to/your/project',
@@ -951,7 +1353,7 @@ const results = await search({
 #### Query
 
 ```javascript
-import { query } from '@buger/probe';
+import { query } from '@probelabs/probe';
 
 const results = await query({
   path: '/path/to/your/project',
@@ -987,7 +1389,7 @@ const results = await query({
 #### Extract
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 const results = await extract({
   files: [
@@ -1022,7 +1424,7 @@ const results = await extract({
 #### LLM Integration with Extract
 
 ```javascript
-import { extract } from '@buger/probe';
+import { extract } from '@probelabs/probe';
 
 // Extract code with engineer prompt template
 const results = await extract({
@@ -1054,7 +1456,7 @@ The `prompt` and `instructions` parameters are particularly useful for AI integr
 #### Binary Management
 
 ```javascript
-import { getBinaryPath, setBinaryPath } from '@buger/probe';
+import { getBinaryPath, setBinaryPath } from '@probelabs/probe';
 
 // Get the path to the probe binary
 const binaryPath = await getBinaryPath({
@@ -1069,7 +1471,7 @@ setBinaryPath('/path/to/probe/binary');
 #### AI Tools
 
 ```javascript
-import { tools } from '@buger/probe';
+import { tools } from '@probelabs/probe';
 
 // Vercel AI SDK tools
 const { searchTool, queryTool, extractTool } = tools;

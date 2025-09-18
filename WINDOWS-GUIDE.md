@@ -60,7 +60,7 @@ If you prefer to use WSL for development on Windows:
 
 3. Clone and build Probe in WSL:
    ```bash
-   git clone https://github.com/buger/probe.git
+   git clone https://github.com/probelabs/probe.git
    cd probe
    cargo build --release
    ```
@@ -158,13 +158,13 @@ If you have Claude Code installed in WSL, the Probe chat examples will automatic
 
 2. The probe-chat tool will automatically detect Claude Code in WSL when running from Windows:
    ```
-   npx @buger/probe-chat
+   npx @probelabs/probe-chat
    ```
 
 3. To verify detection, run with debug mode:
    ```
    set DEBUG_CHAT=1
-   npx @buger/probe-chat
+   npx @probelabs/probe-chat
    ```
 
 The tool will attempt to use Claude Code in the following order:

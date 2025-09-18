@@ -21,6 +21,15 @@ pub struct SearchLimits {
     pub total_tokens: usize,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone)]
+pub struct ParentContext {
+    pub node_type: String,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub context_line: String, // The actual line of code for context
+    pub preceding_comments: Vec<(usize, usize, String)>, // Comments that precede this context node: (start_line, end_line, text)
+}
+
 // Structure to hold search results
 #[derive(Debug, Clone)]
 pub struct SearchResult {
@@ -28,6 +37,8 @@ pub struct SearchResult {
     pub lines: (usize, usize),
     pub node_type: String,
     pub code: String,
+    // Symbol signature (when symbols flag is used)
+    pub symbol_signature: Option<String>,
     // Indicates if this result was found by filename matching
     pub matched_by_filename: Option<bool>,
     // Ranking information
@@ -65,11 +76,15 @@ pub struct SearchResult {
     pub block_id: Option<usize>,
     // The actual keywords that matched in this result
     pub matched_keywords: Option<Vec<String>>,
+    // The exact line numbers (relative to result start) that contain matches
+    pub matched_lines: Option<Vec<usize>>,
     /// Tokenized version of the code block with filename prepended
     #[allow(dead_code)]
     pub tokenized_content: Option<Vec<String>>,
     /// LSP-enhanced symbol information (call hierarchy, references, etc.)
     pub lsp_info: Option<serde_json::Value>,
+    // Parent context chain for enhanced outline display
+    pub parent_context: Option<Vec<ParentContext>>,
 }
 
 // Structure to hold node information for merging
@@ -86,4 +101,6 @@ pub struct CodeBlock {
     pub parent_node_type: Option<String>,
     pub parent_start_row: Option<usize>,
     pub parent_end_row: Option<usize>,
+    // Full parent context chain for better outline display
+    pub parent_context: Option<Vec<ParentContext>>,
 }

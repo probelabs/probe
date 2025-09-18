@@ -159,7 +159,7 @@ The built site will be in the `.vitepress/dist` directory.
 
 We welcome contributions to the Probe documentation. If you find errors, omissions, or have suggestions for improvements, please consider contributing:
 
-1. Fork the [Probe repository](https://github.com/buger/probe) on GitHub
+1. Fork the [Probe repository](https://github.com/probelabs/probe) on GitHub
 2. Make your changes to the documentation files in the `site` directory
 3. Ensure that cross-references are maintained and updated as needed
 4. Run the site locally to verify your changes

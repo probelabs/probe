@@ -39,6 +39,8 @@ package-lock.json
 # Build outputs
 /dist/
 /build/
+npm/build/
+npm/cjs/
 /out/
 /.next/
 /.nuxt/
@@ -84,6 +86,13 @@ $RECYCLE.BIN/
 # Testing
 /coverage
 .nyc_output
+npm/coverage/
+**/coverage/
+.jest-cache/
+**/.jest-cache/
+test-results/
+junit.xml
+*.lcov
 
 # Temporary files
 *.tmp
@@ -106,7 +115,6 @@ rust-project.json
 *.pb.h
 *.pb.*
 
-mcp/bin/probe
 
 .vitepress
 .aider*
@@ -119,3 +127,7 @@ examples/reranker/models/*/pytorch_model.bin
 examples/reranker/models/*/model.safetensors
 examples/reranker/models/*/vocab.txt
 examples/reranker/cross_encoder_test_results.json
+*.tgz
+
+# Vow - AI accountability files
+.vow*

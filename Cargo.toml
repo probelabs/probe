@@ -10,10 +10,14 @@ authors = ["Leonid Bugaev <leonsbox@gmail.com>"]
 description = "AI-friendly, fully local, semantic code search tool for large codebases"
 default-run = "probe"
 license = "MIT"
-repository = "https://github.com/buger/probe"
+repository = "https://github.com/probelabs/probe"
 readme = "README.md"
 keywords = ["search", "code", "ast", "grep", "semantic"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
+
+[lints.clippy]
+# Allow uninlined format args for existing code - will be addressed in future cleanup
+uninlined_format_args = "allow"
 
 [dependencies]
 ahash = "0.8.6"  # Fast, non-cryptographic hash function
@@ -36,6 +40,9 @@ tree-sitter-ruby = "0.23.1"
 tree-sitter-php = "0.23.11"
 tree-sitter-swift = { version = "0.7.0" }
 tree-sitter-c-sharp = { version = "0.23.1" }
+tree-sitter-html = "0.23.2"
+tree-sitter-md = "0.3.2"
+tree-sitter-yaml = "0.6.1"
 ast-grep-core = "0.36.1"
 ast-grep-language = "0.36.1"
 clap = { version = "4.3", features = ["derive"] }

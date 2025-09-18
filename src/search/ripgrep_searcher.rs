@@ -6,7 +6,7 @@ use std::time::Instant;
 
 /// High-performance RegexSet-based searcher for fast file pattern matching
 /// This provides optimal performance through:
-/// - Pre-compiled RegexSet for multi-pattern efficiency  
+/// - Pre-compiled RegexSet for multi-pattern efficiency
 /// - Simple file I/O without unnecessary abstraction layers
 /// - Parallel processing capabilities
 /// - Thread-safe design for concurrent access

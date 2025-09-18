@@ -86,7 +86,7 @@ class DataProcessor {
     constructor() {
         this.multiplier = 3; // default multiplier
     }
-    
+
     process(value) {
         return value * this.multiplier; // apply multiplier
     }
@@ -160,7 +160,7 @@ def calculate_score(points):
 class ScoreCalculator:
     def __init__(self):
         self.bonus = 1.5  # default bonus factor
-        
+
     def process(self, data):
         return data * self.bonus  # apply bonus
 "#;
@@ -236,7 +236,7 @@ function processUser(user: User): string {
 
 class UserManager {
     private users: User[] = []; // internal user storage
-    
+
     addUser(user: User): void {
         this.users.push(user); // add to collection
     }
@@ -356,11 +356,11 @@ fn test_java_line_comment_context_extension() -> Result<()> {
     let java_code = r#"
 public class Calculator {
     private double rate = 0.1; // default tax rate
-    
+
     public double calculate(double amount) {
         return amount * (1 + rate); // apply tax rate
     }
-    
+
     public static void main(String[] args) {
         Calculator calc = new Calculator();
         double result = calc.calculate(100.0); // test calculation

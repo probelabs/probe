@@ -35,7 +35,7 @@ async function buildApp() {
         '@ai-sdk/*', 
         'tiktoken',
         // Keep probe as external since it downloads binaries at runtime
-        '@buger/probe',
+        '@probelabs/probe',
         // These have dynamic require issues when bundled
         'dotenv',
         'inquirer',

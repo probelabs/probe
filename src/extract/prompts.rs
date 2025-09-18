@@ -23,9 +23,9 @@ pub const ENGINEER_PROMPT: &str = r#"As a senior software engineer, your task is
 
 3. Structure responses precisely as follows:
 
-   File: path/filename.ext  
-   Change: Concise description of change made  
-   ```language  
+   File: path/filename.ext
+   Change: Concise description of change made
+   ```language
    [Complete code block of the specified change] "#;
 
 /// Built-in architect prompt template
@@ -52,6 +52,66 @@ Brief code snippets may be included for clarity, but do not produce a full imple
 
 Your analysis should strictly cover the technical implementation plan, excluding deployment, testing, or validation unless explicitly tied to architectural impact."#;
 
+/// Built-in code review prompt template
+pub const CODE_REVIEW_PROMPT: &str = r#"You are going to perform code review according to provided user rules. Ensure to review only code provided in diff and latest commit, if provided. However you still need to fully understand how modified code works, and read dependencies if something is not clear.
+
+When reviewing code:
+- Look for bugs, edge cases, and potential issues
+- Identify performance bottlenecks and optimization opportunities
+- Check for security vulnerabilities and best practices
+- Evaluate code style and consistency
+- Assess backward compatibility impacts
+- Provide specific, actionable suggestions with code examples where appropriate
+
+For each issue identified:
+1. Clearly indicate:
+   - File path and name
+   - Line numbers or function names
+   - Severity level (critical, major, minor)
+   - Issue type (bug, security, performance, style)
+
+2. Provide specific recommendations:
+   - Exact code changes needed
+   - Best practice explanations
+   - Security considerations
+   - Performance implications
+
+3. Structure responses precisely as follows:
+
+   File: path/filename.ext
+   Issue: [Severity] - [Type] - Concise description
+   Recommendation: Specific improvement needed
+   ```language
+   [Example of improved code if applicable]
+   ```"#;
+
+/// Built-in code review template for external tools
+pub const CODE_REVIEW_TEMPLATE_PROMPT: &str = r#"You are going to perform code review according to provided user rules. Ensure to review only code provided in diff and latest commit, if provided. However you still need to fully understand how modified code works, and read dependencies if something is not clear.
+
+{CUSTOM_RULES}
+
+For each issue identified:
+1. Clearly indicate:
+   - File path and name
+   - Line numbers or function names
+   - Severity level (critical, major, minor)
+   - Issue type (bug, security, performance, style)
+
+2. Provide specific recommendations:
+   - Exact code changes needed
+   - Best practice explanations
+   - Security considerations
+   - Performance implications
+
+3. Structure responses precisely as follows:
+
+   File: path/filename.ext
+   Issue: [Severity] - [Type] - Concise description
+   Recommendation: Specific improvement needed
+   ```language
+   [Example of improved code if applicable]
+   ```"#;
+
 /// Enum representing different prompt template sources
 #[derive(Debug, Clone)]
 pub enum PromptTemplate {
@@ -59,6 +119,10 @@ pub enum PromptTemplate {
     Engineer,
     /// Built-in architect template
     Architect,
+    /// Built-in code review template
+    CodeReview,
+    /// Built-in code review template for external tools
+    CodeReviewTemplate,
     /// Custom template loaded from a file
     Custom(String),
 }
@@ -70,6 +134,8 @@ impl PromptTemplate {
         match template_str.to_lowercase().as_str() {
             "engineer" => Ok(PromptTemplate::Engineer),
             "architect" => Ok(PromptTemplate::Architect),
+            "code-review" => Ok(PromptTemplate::CodeReview),
+            "code-review-template" => Ok(PromptTemplate::CodeReviewTemplate),
             path => {
                 // Check if the string is a valid file path
                 let path_obj = Path::new(path);
@@ -77,7 +143,7 @@ impl PromptTemplate {
                     Ok(PromptTemplate::Custom(path.to_string()))
                 } else {
                     Err(anyhow::anyhow!(
-                        "Invalid prompt template: '{}'. Use 'engineer', 'architect', or a valid file path.",
+                        "Invalid prompt template: '{}'. Use 'engineer', 'architect', 'code-review', 'code-review-template', or a valid file path.",
                         template_str
                     ))
                 }
@@ -90,8 +156,74 @@ impl PromptTemplate {
         match self {
             PromptTemplate::Engineer => Ok(ENGINEER_PROMPT.to_string()),
             PromptTemplate::Architect => Ok(ARCHITECT_PROMPT.to_string()),
+            PromptTemplate::CodeReview => Ok(CODE_REVIEW_PROMPT.to_string()),
+            PromptTemplate::CodeReviewTemplate => Ok(CODE_REVIEW_TEMPLATE_PROMPT.to_string()),
             PromptTemplate::Custom(path) => fs::read_to_string(path)
                 .with_context(|| format!("Failed to read prompt file: {path}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_code_review_prompt_parsing() {
+        let template = PromptTemplate::from_str("code-review").unwrap();
+        match template {
+            PromptTemplate::CodeReview => {
+                // Test that we can get the content
+                let content = template.get_content().unwrap();
+                assert!(content.contains("code review"));
+                assert!(content.contains("diff and latest commit"));
+                assert!(content.contains("security vulnerabilities"));
+            }
+            _ => panic!("Expected CodeReview template"),
+        }
+    }
+
+    #[test]
+    fn test_all_builtin_prompts_work() {
+        let templates = vec![
+            "engineer",
+            "architect",
+            "code-review",
+            "code-review-template",
+        ];
+
+        for template_name in templates {
+            let template = PromptTemplate::from_str(template_name).unwrap();
+            let content = template.get_content().unwrap();
+            assert!(
+                !content.is_empty(),
+                "Template {template_name} should have non-empty content"
+            );
+        }
+    }
+
+    #[test]
+    fn test_code_review_template_prompt_parsing() {
+        let template = PromptTemplate::from_str("code-review-template").unwrap();
+        match template {
+            PromptTemplate::CodeReviewTemplate => {
+                // Test that we can get the content
+                let content = template.get_content().unwrap();
+                assert!(content.contains("code review"));
+                assert!(content.contains("diff and latest commit"));
+                assert!(content.contains("{CUSTOM_RULES}"));
+            }
+            _ => panic!("Expected CodeReviewTemplate template"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_prompt_template() {
+        let result = PromptTemplate::from_str("invalid-template");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("code-review-template"));
     }
 }

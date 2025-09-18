@@ -19,28 +19,28 @@ mod tests {
 
     fn create_test_directory_structure(dir: &TempDir) -> Vec<PathBuf> {
         let mut created_files = Vec::new();
-        
+
         // Create a few test files with different content
         let js_content = "function searchTest() {\n  return 'This is a test function';\n}\n";
         let rs_content = "fn search_test() -> &'static str {\n    \"This is a test function\"\n}\n";
         let txt_content = "This is a test file with the word search in it.\nIt has multiple lines.\n";
-        
+
         created_files.push(create_test_file(dir, "test.js", js_content));
         created_files.push(create_test_file(dir, "test.rs", rs_content));
         created_files.push(create_test_file(dir, "test.txt", txt_content));
         created_files.push(create_test_file(dir, "search_result.txt", "This file's name contains search"));
-        
+
         // Create a subdirectory with more files
         let subdir_path = dir.path().join("subdir");
         std::fs::create_dir(&subdir_path).expect("Failed to create subdirectory");
-        
+
         let subfile_content = "Another file that mentions search but in a subdirectory";
         created_files.push(create_test_file(
             dir,
             "subdir/nested_file.txt",
             subfile_content
         ));
-        
+
         // Create a file to be ignored
         let ignored_dir = dir.path().join("node_modules");
         std::fs::create_dir(&ignored_dir).expect("Failed to create ignored directory");
@@ -49,7 +49,7 @@ mod tests {
             "node_modules/should_be_ignored.js",
             "This file should be ignored by default"
         );
-        
+
         created_files
     }
 
@@ -64,10 +64,10 @@ mod tests {
 
         assert!(matched);
         assert_eq!(line_matches.len(), 1);
-        
+
         // Check that line 2 contains a match
         assert!(line_matches.contains_key(&2));
-        
+
         // Check that the match content is correct
         let matches = line_matches.get(&2).unwrap();
         assert!(!matches.is_empty());
@@ -99,10 +99,10 @@ mod tests {
 
         assert!(matched);
         assert_eq!(line_matches.len(), 1);
-        
+
         // Check that line 2 contains a match
         assert!(line_matches.contains_key(&2));
-        
+
         // Check that the match content is correct (case-insensitive)
         let matches = line_matches.get(&2).unwrap();
         assert!(!matches.is_empty());
@@ -120,15 +120,15 @@ mod tests {
             .expect("Failed to search file");
 
         assert!(matched);
-        
+
         // Get the line numbers from the keys
         let line_numbers: HashSet<usize> = line_matches.keys().cloned().collect();
-        
+
         assert_eq!(line_numbers.len(), 2);
         assert!(line_numbers.contains(&1));  // Line 1 contains "ip"
         assert!(line_numbers.contains(&3));  // Line 3 contains "ip"
         assert!(!line_numbers.contains(&2)); // Line 2 contains "skipped" but should not match
-        
+
         // Check match content
         assert!(line_matches.get(&1).unwrap().iter().any(|m| m == "ip"));
         assert!(line_matches.get(&3).unwrap().iter().any(|m| m == "ip"));
@@ -145,15 +145,15 @@ mod tests {
             .expect("Failed to search file");
 
         assert!(matched);
-        
+
         // Get the line numbers from the keys
         let line_numbers: HashSet<usize> = line_matches.keys().cloned().collect();
-        
+
         assert_eq!(line_numbers.len(), 3);  // All 3 lines should match
         assert!(line_numbers.contains(&1));  // Line 1 contains "ip"
         assert!(line_numbers.contains(&2));  // Line 2 contains "skipped" which contains "ip"
         assert!(line_numbers.contains(&3));  // Line 3 contains "ip"
-        
+
         // Check match content
         assert!(line_matches.get(&1).unwrap().iter().any(|m| m == "ip"));
         assert!(line_matches.get(&2).unwrap().iter().any(|m| m == "ip"));
@@ -178,7 +178,7 @@ mod tests {
         // Verify specific expected files
         let found_txt = matching_files.iter().any(|p| p.ends_with("test.txt"));
         let found_nested = matching_files.iter().any(|p| p.ends_with("nested_file.txt"));
-        
+
         assert!(found_txt);
         assert!(found_nested);
 
@@ -203,7 +203,7 @@ mod tests {
 
         // Should find files with "search" in the name
         assert!(!matching_files.is_empty());
-        
+
         // Verify the specific expected file is found
         let found_search_result = matching_files.iter().any(|p| p.ends_with("search_result.txt"));
         assert!(found_search_result);

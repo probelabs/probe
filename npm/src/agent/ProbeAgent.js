@@ -1,0 +1,1275 @@
+// Core ProbeAgent class adapted from examples/chat/probeChat.js
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createOpenAI } from '@ai-sdk/openai';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { streamText } from 'ai';
+import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
+import { TokenCounter } from './tokenCounter.js';
+import { 
+  createTools,
+  searchToolDefinition,
+  queryToolDefinition,
+  extractToolDefinition,
+  listFilesToolDefinition,
+  searchFilesToolDefinition,
+  attemptCompletionToolDefinition,
+  implementToolDefinition,
+  attemptCompletionSchema,
+  parseXmlToolCallWithThinking
+} from './tools.js';
+import { createMessagePreview } from '../tools/common.js';
+import { 
+  createWrappedTools, 
+  listFilesToolInstance, 
+  searchFilesToolInstance,
+  clearToolExecutionData 
+} from './probeTool.js';
+import { listFilesByLevel } from '../index.js';
+import { 
+  cleanSchemaResponse,
+  isJsonSchema,
+  validateJsonResponse,
+  createJsonCorrectionPrompt,
+  isJsonSchemaDefinition,
+  createSchemaDefinitionCorrectionPrompt,
+  validateAndFixMermaidResponse
+} from './schemaUtils.js';
+
+// Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
+const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
+const MAX_HISTORY_MESSAGES = 100;
+
+/**
+ * ProbeAgent class to handle AI interactions with code search capabilities
+ */
+export class ProbeAgent {
+  /**
+   * Create a new ProbeAgent instance
+   * @param {Object} options - Configuration options
+   * @param {string} [options.sessionId] - Optional session ID
+   * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
+   * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
+   * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
+   * @param {string} [options.path] - Search directory path
+   * @param {string} [options.provider] - Force specific AI provider
+   * @param {string} [options.model] - Override model name
+   * @param {boolean} [options.debug] - Enable debug mode
+   * @param {boolean} [options.outline] - Enable outline-xml format for search results
+   * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
+   */
+  constructor(options = {}) {
+    // Basic configuration
+    this.sessionId = options.sessionId || randomUUID();
+    this.customPrompt = options.customPrompt || null;
+    this.promptType = options.promptType || 'code-explorer';
+    this.allowEdit = !!options.allowEdit;
+    this.debug = options.debug || process.env.DEBUG === '1';
+    this.cancelled = false;
+    this.tracer = options.tracer || null;
+    this.outline = !!options.outline;
+    this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
+
+    // Search configuration
+    this.allowedFolders = options.path ? [options.path] : [process.cwd()];
+
+    // API configuration
+    this.clientApiProvider = options.provider || null;
+    this.clientApiKey = null; // Will be set from environment
+    this.clientApiUrl = null;
+
+    // Initialize token counter
+    this.tokenCounter = new TokenCounter();
+
+    if (this.debug) {
+      console.log(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
+      console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
+      console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
+    }
+
+    // Initialize tools
+    this.initializeTools();
+
+    // Initialize the AI model
+    this.initializeModel();
+
+    // Initialize chat history
+    this.history = [];
+    
+    // Initialize event emitter for tool execution updates
+    this.events = new EventEmitter();
+  }
+
+  /**
+   * Initialize tools with configuration
+   */
+  initializeTools() {
+    const configOptions = {
+      sessionId: this.sessionId,
+      debug: this.debug,
+      defaultPath: this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd(),
+      allowedFolders: this.allowedFolders,
+      outline: this.outline
+    };
+
+    // Create base tools
+    const baseTools = createTools(configOptions);
+    
+    // Create wrapped tools with event emission
+    const wrappedTools = createWrappedTools(baseTools);
+
+    // Store tool instances for execution
+    this.toolImplementations = {
+      search: wrappedTools.searchToolInstance,
+      query: wrappedTools.queryToolInstance,
+      extract: wrappedTools.extractToolInstance,
+      delegate: wrappedTools.delegateToolInstance,
+      listFiles: listFilesToolInstance,
+      searchFiles: searchFilesToolInstance,
+    };
+    
+    // Store wrapped tools for ACP system
+    this.wrappedTools = wrappedTools;
+  }
+
+  /**
+   * Initialize the AI model based on available API keys and forced provider setting
+   */
+  initializeModel() {
+    // Get API keys from environment variables
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    const openaiApiKey = process.env.OPENAI_API_KEY;
+    const googleApiKey = process.env.GOOGLE_API_KEY;
+
+    // Get custom API URLs if provided
+    const llmBaseUrl = process.env.LLM_BASE_URL;
+    const anthropicApiUrl = process.env.ANTHROPIC_API_URL || llmBaseUrl;
+    const openaiApiUrl = process.env.OPENAI_API_URL || llmBaseUrl;
+    const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;
+
+    // Get model override if provided
+    const modelName = process.env.MODEL_NAME;
+
+    // Use client-forced provider or environment variable
+    const forceProvider = this.clientApiProvider || (process.env.FORCE_PROVIDER ? process.env.FORCE_PROVIDER.toLowerCase() : null);
+
+    if (this.debug) {
+      console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}`);
+      console.log(`[DEBUG] Force provider: ${forceProvider || '(not set)'}`);
+      if (modelName) console.log(`[DEBUG] Model override: ${modelName}`);
+    }
+
+    // Check if a specific provider is forced
+    if (forceProvider) {
+      if (forceProvider === 'anthropic' && anthropicApiKey) {
+        this.initializeAnthropicModel(anthropicApiKey, anthropicApiUrl, modelName);
+        return;
+      } else if (forceProvider === 'openai' && openaiApiKey) {
+        this.initializeOpenAIModel(openaiApiKey, openaiApiUrl, modelName);
+        return;
+      } else if (forceProvider === 'google' && googleApiKey) {
+        this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
+        return;
+      }
+      console.warn(`WARNING: Forced provider "${forceProvider}" selected but required API key is missing or invalid! Falling back to auto-detection.`);
+    }
+
+    // If no provider is forced or forced provider failed, use the first available API key
+    if (anthropicApiKey) {
+      this.initializeAnthropicModel(anthropicApiKey, anthropicApiUrl, modelName);
+    } else if (openaiApiKey) {
+      this.initializeOpenAIModel(openaiApiKey, openaiApiUrl, modelName);
+    } else if (googleApiKey) {
+      this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
+    } else {
+      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
+    }
+  }
+
+  /**
+   * Initialize Anthropic model
+   */
+  initializeAnthropicModel(apiKey, apiUrl, modelName) {
+    this.provider = createAnthropic({
+      apiKey: apiKey,
+      ...(apiUrl && { baseURL: apiUrl }),
+    });
+    this.model = modelName || 'claude-opus-4-1-20250805';
+    this.apiType = 'anthropic';
+    
+    if (this.debug) {
+      console.log(`Using Anthropic API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    }
+  }
+
+  /**
+   * Initialize OpenAI model
+   */
+  initializeOpenAIModel(apiKey, apiUrl, modelName) {
+    this.provider = createOpenAI({
+      compatibility: 'strict',
+      apiKey: apiKey,
+      ...(apiUrl && { baseURL: apiUrl }),
+    });
+    this.model = modelName || 'gpt-5-thinking';
+    this.apiType = 'openai';
+    
+    if (this.debug) {
+      console.log(`Using OpenAI API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    }
+  }
+
+  /**
+   * Initialize Google model
+   */
+  initializeGoogleModel(apiKey, apiUrl, modelName) {
+    this.provider = createGoogleGenerativeAI({
+      apiKey: apiKey,
+      ...(apiUrl && { baseURL: apiUrl }),
+    });
+    this.model = modelName || 'gemini-2.5-pro';
+    this.apiType = 'google';
+    
+    if (this.debug) {
+      console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    }
+  }
+
+  /**
+   * Get the system message with instructions for the AI (XML Tool Format)
+   */
+  async getSystemMessage() {
+    // Build tool definitions
+    let toolDefinitions = `
+${searchToolDefinition}
+${queryToolDefinition}
+${extractToolDefinition}
+${listFilesToolDefinition}
+${searchFilesToolDefinition}
+${attemptCompletionToolDefinition}
+`;
+    if (this.allowEdit) {
+      toolDefinitions += `${implementToolDefinition}\n`;
+    }
+
+    // Build XML tool guidelines
+    let xmlToolGuidelines = `
+# Tool Use Formatting
+
+Tool use MUST be formatted using XML-style tags. Each tool call requires BOTH opening and closing tags with the exact tool name. Each parameter is similarly enclosed within its own set of opening and closing tags. You MUST use exactly ONE tool call per message until you are ready to complete the task.
+
+**CRITICAL: Every XML tag MUST have both opening <tag> and closing </tag> parts.**
+
+Structure (note the closing tags):
+<tool_name>
+<parameter1_name>value1</parameter1_name>
+<parameter2_name>value2</parameter2_name>
+...
+</tool_name>
+
+Examples:
+<search>
+<query>error handling</query>
+<path>src/search</path>
+</search>
+
+<extract>
+<path>src/config.js</path>
+<start_line>15</start_line>
+<end_line>25</end_line>
+</extract>
+
+<attempt_completion>
+<result>The configuration is loaded from src/config.js lines 15-25 which contains the database settings.</result>
+</attempt_completion>
+
+# Special Case: Quick Completion
+If your previous response was already correct and complete, you may respond with just:
+<attempt_complete>
+This signals to use your previous response as the final answer without repeating content.
+
+# Thinking Process
+
+Before using a tool, analyze the situation within <thinking></thinking> tags. This helps you organize your thoughts and make better decisions.
+
+Example:
+<thinking>
+I need to find code related to error handling in the search module. The most appropriate tool for this is the search tool, which requires a query parameter and a path parameter. I have both the query ("error handling") and the path ("src/search"), so I can proceed with the search.
+</thinking>
+
+# Tool Use Guidelines
+
+1. Think step-by-step about how to achieve the user's goal.
+2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool.
+3. Choose **one** tool that helps achieve the current step.
+4. Format the tool call using the specified XML format with BOTH opening and closing tags. Ensure all required parameters are included.
+5. **You MUST respond with exactly one tool call in the specified XML format in each turn.**
+6. Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
+7. Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
+8. If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
+9. If you cannot proceed (e.g., missing information, invalid request), explain the issue clearly before using \`<attempt_completion>\` with an appropriate message in the \`<result>\` tag.
+10. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
+
+Available Tools:
+- search: Search code using keyword queries.
+- query: Search code using structural AST patterns.
+- extract: Extract specific code blocks or lines from files.
+- listFiles: List files and directories in a specified location.
+- searchFiles: Find files matching a glob pattern with recursive search capability.
+${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
+- attempt_completion: Finalize the task and provide the result to the user.
+- attempt_complete: Quick completion using previous response (shorthand).
+`;
+
+    // Common instructions
+    const commonInstructions = `<instructions>
+Follow these instructions carefully:
+1. Analyze the user's request.
+2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
+3. Use the available tools step-by-step to fulfill the request.
+4. You should always prefer the \`search\` tool for code-related questions. Read full files only if really necessary.
+5. Ensure to get really deep and understand the full picture before answering.
+6. You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
+7. Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
+8. Once the task is fully completed, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
+9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.
+</instructions>
+`;
+
+    // Define predefined prompts (without the common instructions)
+    const predefinedPrompts = {
+      'code-explorer': `You are ProbeChat Code Explorer, a specialized AI assistant focused on helping developers, product managers, and QAs understand and navigate codebases. Your primary function is to answer questions based on code, explain how systems work, and provide insights into code functionality using the provided code analysis tools.
+
+When exploring code:
+- Provide clear, concise explanations based on user request
+- Find and highlight the most relevant code snippets, if required
+- Trace function calls and data flow through the system
+- Try to understand the user's intent and provide relevant information
+- Understand high level picture
+- Balance detail with clarity in your explanations`,
+
+      'architect': `You are ProbeChat Architect, a specialized AI assistant focused on software architecture and design. Your primary function is to help users understand, analyze, and design software systems using the provided code analysis tools.
+
+When analyzing code:
+- Focus on high-level design patterns and system organization
+- Identify architectural patterns and component relationships
+- Evaluate system structure and suggest architectural improvements
+- Consider scalability, maintainability, and extensibility in your analysis`,
+
+      'code-review': `You are ProbeChat Code Reviewer, a specialized AI assistant focused on code quality and best practices. Your primary function is to help users identify issues, suggest improvements, and ensure code follows best practices using the provided code analysis tools.
+
+When reviewing code:
+- Look for bugs, edge cases, and potential issues
+- Identify performance bottlenecks and optimization opportunities
+- Check for security vulnerabilities and best practices
+- Evaluate code style and consistency
+- Provide specific, actionable suggestions with code examples where appropriate`,
+
+      'code-review-template': `You are going to perform code review according to provided user rules. Ensure to review only code provided in diff and latest commit, if provided. However you still need to fully understand how modified code works, and read dependencies if something is not clear.`,
+
+      'engineer': `You are senior engineer focused on software architecture and design.
+Before jumping on the task you first, in details analyse user request, and try to provide elegant and concise solution.
+If solution is clear, you can jump to implementation right away, if not, you can ask user a clarification question, by calling attempt_completion tool, with required details.
+
+Before jumping to implementation:
+- Focus on high-level design patterns and system organization
+- Identify architectural patterns and component relationships
+- Evaluate system structure and suggest architectural improvements
+- Focus on backward compatibility.
+- Consider scalability, maintainability, and extensibility in your analysis
+
+During the implementation:
+- Avoid implementing special cases
+- Do not forget to add the tests`,
+
+      'support': `You are ProbeChat Support, a specialized AI assistant focused on helping developers troubleshoot issues and solve problems. Your primary function is to help users diagnose errors, understand unexpected behaviors, and find solutions using the provided code analysis tools.
+
+When troubleshooting:
+- Focus on finding root causes, not just symptoms
+- Explain concepts clearly with appropriate context
+- Provide step-by-step guidance to solve problems
+- Suggest diagnostic steps to verify solutions
+- Consider edge cases and potential complications
+- Be empathetic and patient in your explanations`
+    };
+
+    let systemMessage = '';
+
+    // Use custom prompt if provided
+    if (this.customPrompt) {
+      systemMessage = "<role>" + this.customPrompt + "</role>";
+      if (this.debug) {
+        console.log(`[DEBUG] Using custom prompt`);
+      }
+    }
+    // Use predefined prompt if specified
+    else if (this.promptType && predefinedPrompts[this.promptType]) {
+      systemMessage = "<role>" + predefinedPrompts[this.promptType] + "</role>";
+      if (this.debug) {
+        console.log(`[DEBUG] Using predefined prompt: ${this.promptType}`);
+      }
+      // Add common instructions to predefined prompts
+      systemMessage += commonInstructions;
+    } else {
+      // Use the default prompt (code explorer) if no prompt type is specified
+      systemMessage = "<role>" + predefinedPrompts['code-explorer'] + "</role>";
+      if (this.debug) {
+        console.log(`[DEBUG] Using default prompt: code explorer`);
+      }
+      // Add common instructions to the default prompt
+      systemMessage += commonInstructions;
+    }
+
+    // Add XML Tool Guidelines
+    systemMessage += `\n${xmlToolGuidelines}\n`;
+
+    // Add Tool Definitions
+    systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
+
+    // Add folder information
+    const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
+    if (this.debug) {
+      console.log(`[DEBUG] Generating file list for base directory: ${searchDirectory}...`);
+    }
+
+    try {
+      const files = await listFilesByLevel({
+        directory: searchDirectory,
+        maxFiles: 100,
+        respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
+        cwd: process.cwd()
+      });
+
+      systemMessage += `\n# Repository Structure\n\nYou are working with a repository located at: ${searchDirectory}\n\nHere's an overview of the repository structure (showing up to 100 most relevant files):\n\n\`\`\`\n${files}\n\`\`\`\n\n`;
+    } catch (error) {
+      if (this.debug) {
+        console.log(`[DEBUG] Could not generate file list: ${error.message}`);
+      }
+      systemMessage += `\n# Repository Structure\n\nYou are working with a repository located at: ${searchDirectory}\n\n`;
+    }
+
+    if (this.allowedFolders.length > 0) {
+      systemMessage += `\n**Important**: For security reasons, you can only search within these allowed folders: ${this.allowedFolders.join(', ')}\n\n`;
+    }
+
+    return systemMessage;
+  }
+
+  /**
+   * Answer a question using the agentic flow
+   * @param {string} message - The user's question
+   * @param {Array} [images] - Optional array of image data (base64 strings or URLs)
+   * @param {Object|string} [schemaOrOptions] - Can be either:
+   *   - A string: JSON schema for structured output (backwards compatible)
+   *   - An object: Options object with schema and other options
+   * @param {string} [schemaOrOptions.schema] - JSON schema string for structured output
+   * @returns {Promise<string>} - The final answer
+   */
+  async answer(message, images = [], schemaOrOptions = {}) {
+    if (!message || typeof message !== 'string' || message.trim().length === 0) {
+      throw new Error('Message is required and must be a non-empty string');
+    }
+
+    // Handle backwards compatibility - if third argument is a string, treat it as schema
+    let options = {};
+    if (typeof schemaOrOptions === 'string') {
+      options = { schema: schemaOrOptions };
+    } else {
+      options = schemaOrOptions || {};
+    }
+
+    try {
+      // Generate system message
+      const systemMessage = await this.getSystemMessage();
+
+      // Create user message with optional image support
+      let userMessage = { role: 'user', content: message.trim() };
+      
+      // If images are provided, use multi-modal message format
+      if (images && images.length > 0) {
+        userMessage.content = [
+          { type: 'text', text: message.trim() },
+          ...images.map(image => ({
+            type: 'image',
+            image: image
+          }))
+        ];
+      }
+
+      // Initialize conversation with existing history + new user message
+      let currentMessages = [
+        { role: 'system', content: systemMessage },
+        ...this.history, // Include previous conversation history
+        userMessage
+      ];
+
+      let currentIteration = 0;
+      let completionAttempted = false;
+      let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
+
+      // Adjust max iterations if schema is provided
+      // +1 for schema formatting
+      // +2 for potential Mermaid validation retries (can be multiple diagrams)
+      // +1 for potential JSON correction
+      const maxIterations = options.schema ? MAX_TOOL_ITERATIONS + 4 : MAX_TOOL_ITERATIONS;
+
+      if (this.debug) {
+        console.log(`[DEBUG] Starting agentic flow for question: ${message.substring(0, 100)}...`);
+        if (options.schema) {
+          console.log(`[DEBUG] Schema provided, using extended iteration limit: ${maxIterations} (base: ${MAX_TOOL_ITERATIONS})`);
+        }
+      }
+
+      // Tool iteration loop
+      while (currentIteration < maxIterations && !completionAttempted) {
+        currentIteration++;
+        if (this.cancelled) throw new Error('Request was cancelled by the user');
+
+        if (this.debug) {
+          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${maxIterations} ---`);
+          console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
+          
+          // Log preview of the latest user message (helpful for debugging loops)
+          const lastUserMessage = [...currentMessages].reverse().find(msg => msg.role === 'user');
+          if (lastUserMessage && lastUserMessage.content) {
+            const userPreview = createMessagePreview(lastUserMessage.content);
+            console.log(`[DEBUG] Latest user message (${lastUserMessage.content.length} chars): ${userPreview}`);
+          }
+        }
+
+        // Add iteration tracing event
+        if (this.tracer) {
+          this.tracer.addEvent('iteration.start', {
+            'iteration': currentIteration,
+            'max_iterations': maxIterations,
+            'message_count': currentMessages.length
+          });
+        }
+
+        // Add warning message when reaching the last iteration
+        if (currentIteration === maxIterations) {
+          const warningMessage = `⚠️ WARNING: You have reached the maximum tool iterations limit (${maxIterations}). This is your final message. Please respond with the data you have so far. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`;
+          
+          currentMessages.push({
+            role: 'user',
+            content: warningMessage
+          });
+          
+          if (this.debug) {
+            console.log(`[DEBUG] Added max iterations warning message at iteration ${currentIteration}`);
+          }
+        }
+
+        // Calculate context size
+        this.tokenCounter.calculateContextSize(currentMessages);
+        if (this.debug) {
+          console.log(`[DEBUG] Estimated context tokens BEFORE LLM call (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
+        }
+
+        let maxResponseTokens = this.maxResponseTokens;
+        if (!maxResponseTokens) {
+          // Use model-based defaults if not explicitly configured
+          maxResponseTokens = 4000;
+          if (this.model.includes('opus') || this.model.includes('sonnet') || this.model.startsWith('gpt-4-')) {
+            maxResponseTokens = 8192;
+          } else if (this.model.startsWith('gpt-4o')) {
+            maxResponseTokens = 8192;
+          } else if (this.model.startsWith('gemini')) {
+            maxResponseTokens = 32000;
+          }
+        }
+
+        // Make AI request
+        let assistantResponseContent = '';
+        try {
+          // Wrap AI request with tracing if available
+          const executeAIRequest = async () => {
+            const result = await streamText({
+              model: this.provider(this.model),
+              messages: currentMessages,
+              maxTokens: maxResponseTokens,
+              temperature: 0.3,
+            });
+
+            // Collect the streamed response
+            for await (const delta of result.textStream) {
+              assistantResponseContent += delta;
+            }
+
+            // Record token usage
+            const usage = await result.usage;
+            if (usage) {
+              this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+            }
+
+            return result;
+          };
+
+          if (this.tracer) {
+            await this.tracer.withSpan('ai.request', executeAIRequest, {
+              'ai.model': this.model,
+              'ai.provider': this.clientApiProvider || 'auto',
+              'iteration': currentIteration,
+              'max_tokens': maxResponseTokens,
+              'temperature': 0.3,
+              'message_count': currentMessages.length
+            });
+          } else {
+            await executeAIRequest();
+          }
+
+        } catch (error) {
+          console.error(`Error during streamText (Iter ${currentIteration}):`, error);
+          finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
+          throw new Error(finalResult);
+        }
+
+        // Log preview of assistant response for debugging loops
+        if (this.debug && assistantResponseContent) {
+          const assistantPreview = createMessagePreview(assistantResponseContent);
+          console.log(`[DEBUG] Assistant response (${assistantResponseContent.length} chars): ${assistantPreview}`);
+        }
+
+        // Parse tool call from response with valid tools list
+        const validTools = [
+          'search', 'query', 'extract', 'listFiles', 'searchFiles', 'attempt_completion'
+        ];
+        if (this.allowEdit) {
+          validTools.push('implement');
+        }
+        
+        const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent, validTools);
+        if (parsedTool) {
+          const { toolName, params } = parsedTool;
+          if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
+
+          if (toolName === 'attempt_completion') {
+            completionAttempted = true;
+
+            // Handle attempt_complete shorthand - use previous response
+            if (params.result === '__PREVIOUS_RESPONSE__') {
+              // Find the last assistant message with actual content (not tool calls)
+              const lastAssistantMessage = [...currentMessages].reverse().find(msg =>
+                msg.role === 'assistant' &&
+                msg.content &&
+                !parseXmlToolCallWithThinking(msg.content, validTools)
+              );
+
+              if (lastAssistantMessage) {
+                finalResult = lastAssistantMessage.content;
+                if (this.debug) console.log(`[DEBUG] Using previous response as completion: ${finalResult.substring(0, 100)}...`);
+              } else {
+                finalResult = 'Error: No previous response found to use as completion.';
+                if (this.debug) console.log(`[DEBUG] No suitable previous response found for attempt_complete shorthand`);
+              }
+            } else {
+              // Standard attempt_completion handling
+              const validation = attemptCompletionSchema.safeParse(params);
+              if (validation.success) {
+                finalResult = validation.data.result;
+                if (this.debug) console.log(`[DEBUG] Task completed successfully with result: ${finalResult.substring(0, 100)}...`);
+              } else {
+                console.error(`[ERROR] Invalid attempt_completion parameters:`, validation.error);
+                finalResult = 'Error: Invalid completion attempt. The task could not be completed properly.';
+              }
+            }
+            break;
+          } else {
+            // Execute the tool
+            if (this.toolImplementations[toolName]) {
+              try {
+                // Add sessionId to params for tool execution
+                const toolParams = { ...params, sessionId: this.sessionId };
+                
+                // Emit tool start event
+                this.events.emit('toolCall', {
+                  timestamp: new Date().toISOString(),
+                  name: toolName,
+                  args: toolParams,
+                  status: 'started'
+                });
+                
+                // Execute tool with tracing if available
+                const executeToolCall = async () => {
+                  // For delegate tool, pass current iteration and max iterations
+                  if (toolName === 'delegate') {
+                    const enhancedParams = {
+                      ...toolParams,
+                      currentIteration,
+                      maxIterations,
+                      debug: this.debug,
+                      tracer: this.tracer
+                    };
+                    
+                    if (this.debug) {
+                      console.log(`[DEBUG] Executing delegate tool at iteration ${currentIteration}/${maxIterations}`);
+                      console.log(`[DEBUG] Delegate task: ${toolParams.task?.substring(0, 100)}...`);
+                    }
+                    
+                    // Record delegation start in telemetry
+                    if (this.tracer) {
+                      this.tracer.recordDelegationEvent('tool_started', {
+                        'delegation.iteration': currentIteration,
+                        'delegation.max_iterations': maxIterations,
+                        'delegation.task_preview': toolParams.task?.substring(0, 200) + (toolParams.task?.length > 200 ? '...' : '')
+                      });
+                    }
+                    
+                    return await this.toolImplementations[toolName].execute(enhancedParams);
+                  }
+                  return await this.toolImplementations[toolName].execute(toolParams);
+                };
+
+                let toolResult;
+                try {
+                  if (this.tracer) {
+                    toolResult = await this.tracer.withSpan('tool.call', executeToolCall, {
+                      'tool.name': toolName,
+                      'tool.params': JSON.stringify(toolParams).substring(0, 500),
+                      'iteration': currentIteration
+                    });
+                  } else {
+                    toolResult = await executeToolCall();
+                  }
+                  
+                  // Emit tool success event
+                  this.events.emit('toolCall', {
+                    timestamp: new Date().toISOString(),
+                    name: toolName,
+                    args: toolParams,
+                    resultPreview: typeof toolResult === 'string'
+                      ? (toolResult.length > 200 ? toolResult.substring(0, 200) + '...' : toolResult)
+                      : (toolResult ? JSON.stringify(toolResult).substring(0, 200) + '...' : 'No Result'),
+                    status: 'completed'
+                  });
+                  
+                } catch (toolError) {
+                  // Emit tool error event
+                  this.events.emit('toolCall', {
+                    timestamp: new Date().toISOString(),
+                    name: toolName,
+                    args: toolParams,
+                    error: toolError.message || 'Unknown error',
+                    status: 'error'
+                  });
+                  throw toolError; // Re-throw to be handled by outer catch
+                }
+                
+                // Add assistant response and tool result to conversation
+                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+                currentMessages.push({
+                  role: 'user',
+                  content: `<tool_result>\n${typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2)}\n</tool_result>`
+                });
+
+                if (this.debug) {
+                  console.log(`[DEBUG] Tool ${toolName} executed successfully. Result length: ${typeof toolResult === 'string' ? toolResult.length : JSON.stringify(toolResult).length}`);
+                }
+              } catch (error) {
+                console.error(`[ERROR] Tool execution failed for ${toolName}:`, error);
+                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+                currentMessages.push({
+                  role: 'user', 
+                  content: `<tool_result>\nError: ${error.message}\n</tool_result>`
+                });
+              }
+            } else {
+              console.error(`[ERROR] Unknown tool: ${toolName}`);
+              currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+              currentMessages.push({
+                role: 'user',
+                content: `<tool_result>\nError: Unknown tool '${toolName}'. Available tools: ${Object.keys(this.toolImplementations).join(', ')}\n</tool_result>`
+              });
+            }
+          }
+        } else {
+          // No tool call found, add assistant response and ask for tool usage
+          currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+
+          // Build appropriate reminder message based on whether schema is provided
+          let reminderContent;
+          if (options.schema) {  // Apply for ANY schema, not just JSON schemas
+            // When schema is provided, give specific instructions
+            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
+
+Remember: Use proper XML format with BOTH opening and closing tags:
+
+<tool_name>
+<parameter>value</parameter>
+</tool_name>
+
+IMPORTANT: A schema was provided. You MUST respond with data that matches this schema.
+Use attempt_completion with your response directly inside the tags:
+
+<attempt_completion>
+{"key": "value", "field": "your actual data here matching the schema"}
+</attempt_completion>
+
+Your response must conform to this schema:
+${options.schema}`;
+          } else {
+            // Standard reminder without schema
+            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
+
+Remember: Use proper XML format with BOTH opening and closing tags:
+
+<tool_name>
+<parameter>value</parameter>
+</tool_name>
+
+Or for quick completion if your previous response was already correct:
+<attempt_complete>`;
+          }
+
+          currentMessages.push({
+            role: 'user',
+            content: reminderContent
+          });
+          if (this.debug) {
+            console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
+          }
+        }
+
+        // Keep message history manageable
+        if (currentMessages.length > MAX_HISTORY_MESSAGES) {
+          const messagesBefore = currentMessages.length;
+          const systemMsg = currentMessages[0]; // Keep system message
+          const recentMessages = currentMessages.slice(-MAX_HISTORY_MESSAGES + 1);
+          currentMessages = [systemMsg, ...recentMessages];
+          
+          if (this.debug) {
+            console.log(`[DEBUG] Trimmed message history from ${messagesBefore} to ${currentMessages.length} messages`);
+          }
+        }
+      }
+
+      if (currentIteration >= maxIterations && !completionAttempted) {
+        console.warn(`[WARN] Max tool iterations (${maxIterations}) reached for session ${this.sessionId}. Returning current error state.`);
+      }
+
+      // Store final history
+      this.history = currentMessages.map(msg => ({ ...msg }));
+      if (this.history.length > MAX_HISTORY_MESSAGES) {
+        const messagesBefore = this.history.length;
+        this.history = this.history.slice(-MAX_HISTORY_MESSAGES);
+        if (this.debug) {
+          console.log(`[DEBUG] Trimmed stored history from ${messagesBefore} to ${this.history.length} messages`);
+        }
+      }
+
+      // Update token counter with final history
+      this.tokenCounter.updateHistory(this.history);
+
+      // Schema handling - format response according to provided schema
+      // Skip schema processing if result came from attempt_completion tool
+      // Don't apply schema formatting if we failed due to max iterations
+      const reachedMaxIterations = currentIteration >= maxIterations && !completionAttempted;
+      if (options.schema && !options._schemaFormatted && !completionAttempted && !reachedMaxIterations) {
+        if (this.debug) {
+          console.log('[DEBUG] Schema provided, applying automatic formatting...');
+        }
+        
+        try {
+          // Step 1: Make a follow-up call to format according to schema
+          const schemaPrompt = `CRITICAL: You MUST respond with ONLY valid JSON DATA that conforms to this schema structure. DO NOT return the schema definition itself.
+
+Schema to follow (this is just the structure - provide ACTUAL DATA):
+${options.schema}
+
+REQUIREMENTS:
+- Return ONLY the JSON object/array with REAL DATA that matches the schema structure
+- DO NOT return the schema definition itself (no "$schema", "$id", "type", "properties", etc.)
+- NO additional text, explanations, or markdown formatting
+- NO code blocks or backticks
+- The JSON must be parseable by JSON.parse()
+- Fill in actual values that make sense based on your previous response content
+
+EXAMPLE:
+If schema defines {type: "object", properties: {name: {type: "string"}, age: {type: "number"}}}
+Return: {"name": "John Doe", "age": 25}
+NOT: {"type": "object", "properties": {"name": {"type": "string"}}}
+
+Convert your previous response content into actual JSON data that follows this schema structure.`;
+          
+          // Call answer recursively with _schemaFormatted flag to prevent infinite loop
+          finalResult = await this.answer(schemaPrompt, [], { 
+            ...options, 
+            _schemaFormatted: true 
+          });
+          
+          // Step 2: Clean the response (remove code blocks)
+          finalResult = cleanSchemaResponse(finalResult);
+          
+          // Step 3: Validate and fix Mermaid diagrams if present
+          try {
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: Starting enhanced mermaid validation...`);
+            }
+            
+            // Record mermaid validation start in telemetry
+            if (this.tracer) {
+              this.tracer.recordMermaidValidationEvent('schema_processing_started', {
+                'mermaid_validation.context': 'schema_processing',
+                'mermaid_validation.response_length': finalResult.length
+              });
+            }
+            
+            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+              debug: this.debug,
+              path: this.allowedFolders[0],
+              provider: this.clientApiProvider,
+              model: this.model,
+              tracer: this.tracer
+            });
+            
+            if (mermaidValidation.wasFixed) {
+              finalResult = mermaidValidation.fixedResponse;
+              if (this.debug) {
+                console.log(`[DEBUG] Mermaid validation: Diagrams successfully fixed`);
+                
+                if (mermaidValidation.performanceMetrics) {
+                  const metrics = mermaidValidation.performanceMetrics;
+                  console.log(`[DEBUG] Mermaid validation: Performance - total: ${metrics.totalTimeMs}ms, AI fixing: ${metrics.aiFixingTimeMs}ms`);
+                  console.log(`[DEBUG] Mermaid validation: Results - ${metrics.diagramsFixed}/${metrics.diagramsProcessed} diagrams fixed`);
+                }
+                
+                if (mermaidValidation.fixingResults) {
+                  mermaidValidation.fixingResults.forEach((fixResult, index) => {
+                    if (fixResult.wasFixed) {
+                      const method = fixResult.fixedWithHtmlDecoding ? 'HTML entity decoding' : 'AI correction';
+                      const time = fixResult.aiFixingTimeMs ? ` in ${fixResult.aiFixingTimeMs}ms` : '';
+                      console.log(`[DEBUG] Mermaid validation: Fixed diagram ${fixResult.diagramIndex + 1} with ${method}${time}`);
+                      console.log(`[DEBUG] Mermaid validation: Original error: ${fixResult.originalError}`);
+                    } else {
+                      console.log(`[DEBUG] Mermaid validation: Failed to fix diagram ${fixResult.diagramIndex + 1}: ${fixResult.fixingError}`);
+                    }
+                  });
+                }
+              }
+            } else if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: No fixes needed or fixes unsuccessful`);
+              if (mermaidValidation.diagrams?.length > 0) {
+                console.log(`[DEBUG] Mermaid validation: Found ${mermaidValidation.diagrams.length} diagrams, all valid: ${mermaidValidation.isValid}`);
+              }
+            }
+          } catch (error) {
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: Process failed with error: ${error.message}`);
+              console.log(`[DEBUG] Mermaid validation: Stack trace: ${error.stack}`);
+            }
+          }
+          
+          // Step 4: Validate and potentially correct JSON responses
+          if (isJsonSchema(options.schema)) {
+            if (this.debug) {
+              console.log(`[DEBUG] JSON validation: Starting validation process for schema response`);
+              console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
+            }
+            
+            // Record JSON validation start in telemetry
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('started', {
+                'json_validation.response_length': finalResult.length,
+                'json_validation.schema_type': 'JSON'
+              });
+            }
+            
+            let validation = validateJsonResponse(finalResult, { debug: this.debug });
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            // First check if the response is valid JSON but is actually a schema definition
+            if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
+              if (this.debug) {
+                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, correcting...`);
+              }
+              
+              // Use specialized correction prompt for schema definition confusion
+              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
+                finalResult,
+                options.schema,
+                0
+              );
+              
+              finalResult = await this.answer(schemaDefinitionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              validation = validateJsonResponse(finalResult);
+              retryCount = 1; // Start at 1 since we already did one correction
+            }
+            
+            while (!validation.isValid && retryCount < maxRetries) {
+              if (this.debug) {
+                console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
+                console.log(`[DEBUG] JSON validation: Invalid response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
+              }
+              
+              // Check if the invalid response is actually a schema definition
+              let correctionPrompt;
+              try {
+                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] JSON validation: Response is still a schema definition, using specialized correction`);
+                  }
+                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
+                    finalResult,
+                    options.schema,
+                    retryCount
+                  );
+                } else {
+                  correctionPrompt = createJsonCorrectionPrompt(
+                    finalResult, 
+                    options.schema, 
+                    validation.error,
+                    retryCount
+                  );
+                }
+              } catch (error) {
+                // If we can't parse to check if it's a schema definition, use regular correction
+                correctionPrompt = createJsonCorrectionPrompt(
+                  finalResult, 
+                  options.schema, 
+                  validation.error,
+                  retryCount
+                );
+              }
+              
+              finalResult = await this.answer(correctionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              
+              // Validate the corrected response
+              validation = validateJsonResponse(finalResult, { debug: this.debug });
+              retryCount++;
+              
+              if (this.debug) {
+                if (!validation.isValid && retryCount < maxRetries) {
+                  console.log(`[DEBUG] JSON validation: Still invalid after correction ${retryCount}, retrying...`);
+                  console.log(`[DEBUG] JSON validation: Corrected response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
+                } else if (validation.isValid) {
+                  console.log(`[DEBUG] JSON validation: Successfully corrected after ${retryCount} attempts`);
+                }
+              }
+            }
+            
+            if (!validation.isValid && this.debug) {
+              console.log(`[DEBUG] JSON validation: Still invalid after ${maxRetries} correction attempts:`, validation.error);
+              console.log(`[DEBUG] JSON validation: Final invalid response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+            } else if (validation.isValid && this.debug) {
+              console.log(`[DEBUG] JSON validation: Final validation successful`);
+            }
+            
+            // Record JSON validation completion in telemetry
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('completed', {
+                'json_validation.success': validation.isValid,
+                'json_validation.retry_count': retryCount,
+                'json_validation.max_retries': maxRetries,
+                'json_validation.final_response_length': finalResult.length,
+                'json_validation.error': validation.isValid ? null : validation.error
+              });
+            }
+          }
+        } catch (error) {
+          console.error('[ERROR] Schema formatting failed:', error);
+          // Return the original result if schema formatting fails
+        }
+      } else if (reachedMaxIterations && options.schema && this.debug) {
+        console.log('[DEBUG] Skipping schema formatting due to max iterations reached without completion');
+      } else if (completionAttempted && options.schema) {
+        // For attempt_completion results with schema, still clean markdown if needed
+        try {
+          finalResult = cleanSchemaResponse(finalResult);
+          
+          // Validate and fix Mermaid diagrams if present
+          if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result...`);
+          }
+          
+          const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+            debug: this.debug,
+            path: this.allowedFolders[0],
+            provider: this.clientApiProvider,
+            model: this.model,
+            tracer: this.tracer
+          });
+          
+          if (mermaidValidation.wasFixed) {
+            finalResult = mermaidValidation.fixedResponse;
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: attempt_completion diagrams fixed`);
+              if (mermaidValidation.performanceMetrics) {
+                console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
+              }
+            }
+          } else if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
+          }
+          
+          // Validate and potentially correct JSON for attempt_completion results
+          if (isJsonSchema(options.schema)) {
+            if (this.debug) {
+              console.log(`[DEBUG] JSON validation: Starting validation process for attempt_completion result`);
+              console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
+            }
+            
+            // Record JSON validation start in telemetry
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('attempt_completion_started', {
+                'json_validation.response_length': finalResult.length,
+                'json_validation.schema_type': 'JSON',
+                'json_validation.context': 'attempt_completion'
+              });
+            }
+            
+            let validation = validateJsonResponse(finalResult, { debug: this.debug });
+            let retryCount = 0;
+            const maxRetries = 3;
+            
+            // First check if the response is valid JSON but is actually a schema definition
+            if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
+              if (this.debug) {
+                console.log(`[DEBUG] JSON validation: attempt_completion response is a JSON schema definition instead of data, correcting...`);
+              }
+              
+              // Use specialized correction prompt for schema definition confusion
+              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
+                finalResult,
+                options.schema,
+                0
+              );
+              
+              finalResult = await this.answer(schemaDefinitionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              validation = validateJsonResponse(finalResult);
+              retryCount = 1; // Start at 1 since we already did one correction
+            }
+            
+            while (!validation.isValid && retryCount < maxRetries) {
+              if (this.debug) {
+                console.log(`[DEBUG] JSON validation: attempt_completion validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
+                console.log(`[DEBUG] JSON validation: Invalid response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
+              }
+              
+              // Check if the invalid response is actually a schema definition
+              let correctionPrompt;
+              try {
+                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] JSON validation: attempt_completion response is still a schema definition, using specialized correction`);
+                  }
+                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
+                    finalResult,
+                    options.schema,
+                    retryCount
+                  );
+                } else {
+                  correctionPrompt = createJsonCorrectionPrompt(
+                    finalResult, 
+                    options.schema, 
+                    validation.error,
+                    retryCount
+                  );
+                }
+              } catch (error) {
+                // If we can't parse to check if it's a schema definition, use regular correction
+                correctionPrompt = createJsonCorrectionPrompt(
+                  finalResult, 
+                  options.schema, 
+                  validation.error,
+                  retryCount
+                );
+              }
+              
+              finalResult = await this.answer(correctionPrompt, [], { 
+                ...options, 
+                _schemaFormatted: true 
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+              
+              // Validate the corrected response
+              validation = validateJsonResponse(finalResult, { debug: this.debug });
+              retryCount++;
+              
+              if (this.debug) {
+                if (validation.isValid) {
+                  console.log(`[DEBUG] JSON validation: attempt_completion correction successful on attempt ${retryCount}`);
+                } else {
+                  console.log(`[DEBUG] JSON validation: attempt_completion correction failed on attempt ${retryCount}: ${validation.error}`);
+                }
+              }
+            }
+            
+            // Record final validation result
+            if (this.tracer) {
+              this.tracer.recordJsonValidationEvent('attempt_completion_completed', {
+                'json_validation.success': validation.isValid,
+                'json_validation.retry_count': retryCount,
+                'json_validation.final_response_length': finalResult.length
+              });
+            }
+            
+            if (!validation.isValid && this.debug) {
+              console.log(`[DEBUG] JSON validation: attempt_completion result validation failed after ${maxRetries} attempts: ${validation.error}`);
+              console.log(`[DEBUG] JSON validation: Final attempt_completion response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+            } else if (validation.isValid && this.debug) {
+              console.log(`[DEBUG] JSON validation: attempt_completion result validation successful`);
+            }
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.log(`[DEBUG] attempt_completion result cleanup failed: ${error.message}`);
+          }
+        }
+      }
+
+      return finalResult;
+
+    } catch (error) {
+      console.error(`[ERROR] ProbeAgent.answer failed:`, error);
+      
+      // Clean up tool execution data
+      clearToolExecutionData(this.sessionId);
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Get token usage information
+   * @returns {Object} Token usage data
+   */
+  getTokenUsage() {
+    return this.tokenCounter.getTokenUsage();
+  }
+
+  /**
+   * Clear conversation history and reset counters
+   */
+  clearHistory() {
+    this.history = [];
+    this.tokenCounter.clear();
+    clearToolExecutionData(this.sessionId);
+    
+    if (this.debug) {
+      console.log(`[DEBUG] Cleared conversation history and reset counters for session ${this.sessionId}`);
+    }
+  }
+
+  /**
+   * Cancel the current request
+   */
+  cancel() {
+    this.cancelled = true;
+    if (this.debug) {
+      console.log(`[DEBUG] Agent cancelled for session ${this.sessionId}`);
+    }
+  }
+}

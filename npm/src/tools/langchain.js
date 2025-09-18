@@ -67,9 +67,9 @@ export function createExtractTool() {
 		name: 'extract',
 		description: extractDescription,
 		schema: extractSchema,
-		func: async ({ file_path, line, end_line, allow_tests, context_lines, format }) => {
+		func: async ({ targets, line, end_line, allow_tests, context_lines, format }) => {
 			try {
-				const files = [file_path];
+				const files = [targets];
 
 				const results = await extract({
 					files,

@@ -13,11 +13,12 @@ import tar from 'tar';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { ensureBinDirectory } from './utils.js';
+import { getPackageBinDir } from './directory-resolver.js';
 
 const exec = promisify(execCallback);
 
 // GitHub repository information
-const REPO_OWNER = "buger";
+const REPO_OWNER = "probelabs";
 const REPO_NAME = "probe";
 const BINARY_NAME = "probe";
 
@@ -25,11 +26,8 @@ const BINARY_NAME = "probe";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Local storage directory for downloaded binaries
-const LOCAL_DIR = path.resolve(__dirname, '..', 'bin');
-
-// Version info file path
-const VERSION_INFO_PATH = path.join(LOCAL_DIR, 'version-info.json');
+// Note: LOCAL_DIR and VERSION_INFO_PATH are now resolved dynamically
+// using getPackageBinDir() to handle different installation environments
 
 /**
  * Detects the current OS and architecture
@@ -84,8 +82,58 @@ function detectOsArch() {
 			throw new Error(`Unsupported architecture: ${archType}`);
 	}
 
-	console.log(`Detected OS: ${osInfo.type}, Architecture: ${archInfo.type}`);
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Detected OS: ${osInfo.type}, Architecture: ${archInfo.type}`);
+	}
 	return { os: osInfo, arch: archInfo };
+}
+
+/**
+ * Constructs the asset name and download URL directly based on version and platform
+ * @param {string} version - The version to download (e.g., "0.6.0-rc60")
+ * @param {Object} osInfo - OS information from detectOsArch()
+ * @param {Object} archInfo - Architecture information from detectOsArch()
+ * @returns {Object} Asset information with name and url
+ */
+function constructAssetInfo(version, osInfo, archInfo) {
+	let platform;
+	let extension;
+	
+	// Map OS and arch to the expected format in release names
+	switch (osInfo.type) {
+		case 'linux':
+			platform = `${archInfo.type}-unknown-linux-gnu`;
+			extension = 'tar.gz';
+			break;
+		case 'darwin':
+			platform = `${archInfo.type}-apple-darwin`;
+			extension = 'tar.gz';
+			break;
+		case 'windows':
+			platform = `${archInfo.type}-pc-windows-msvc`;
+			extension = 'zip';
+			break;
+		default:
+			throw new Error(`Unsupported OS type: ${osInfo.type}`);
+	}
+	
+	const assetName = `probe-v${version}-${platform}.${extension}`;
+	const checksumName = `${assetName}.sha256`;
+	
+	const baseUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/v${version}`;
+	const assetUrl = `${baseUrl}/${assetName}`;
+	const checksumUrl = `${baseUrl}/${checksumName}`;
+	
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Constructed asset URL: ${assetUrl}`);
+	}
+	
+	return {
+		name: assetName,
+		url: assetUrl,
+		checksumName: checksumName,
+		checksumUrl: checksumUrl
+	};
 }
 
 /**
@@ -94,7 +142,9 @@ function detectOsArch() {
  * @returns {Promise<Object>} Release information
  */
 async function getLatestRelease(version) {
-	console.log('Fetching release information...');
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log('Fetching release information...');
+	}
 
 	try {
 		let releaseUrl;
@@ -102,8 +152,8 @@ async function getLatestRelease(version) {
 			// Always use the specified version
 			releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/tags/v${version}`;
 		} else {
-			// Use the latest release only if no version is specified
-			releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest`;
+			// Get all releases to find the most recent one (including prereleases)
+			releaseUrl = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`;
 		}
 
 		const response = await axios.get(releaseUrl);
@@ -112,18 +162,34 @@ async function getLatestRelease(version) {
 			throw new Error(`Failed to fetch release information: ${response.statusText}`);
 		}
 
-		const tag = response.data.tag_name;
-		const assets = response.data.assets.map(asset => ({
+		let releaseData;
+		if (version) {
+			// Single release for specific version
+			releaseData = response.data;
+		} else {
+			// Array of releases, pick the most recent one (first in the array)
+			if (!Array.isArray(response.data) || response.data.length === 0) {
+				throw new Error('No releases found');
+			}
+			releaseData = response.data[0];
+		}
+
+		const tag = releaseData.tag_name;
+		const assets = releaseData.assets.map(asset => ({
 			name: asset.name,
 			url: asset.browser_download_url
 		}));
 
-		console.log(`Found release: ${tag} with ${assets.length} assets`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Found release: ${tag} with ${assets.length} assets`);
+		}
 		return { tag, assets };
 	} catch (error) {
 		if (axios.isAxiosError(error) && error.response?.status === 404) {
 			// If the specific version is not found, try to get all releases
-			console.log(`Release v${version} not found, trying to fetch all releases...`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Release v${version} not found, trying to fetch all releases...`);
+			}
 
 			const response = await axios.get(`https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases`);
 
@@ -131,24 +197,51 @@ async function getLatestRelease(version) {
 				throw new Error('No releases found');
 			}
 
-			// Try to find a release that matches the version prefix
-			let bestRelease = response.data[0]; // Default to first release
+			// Try to find a release that matches the version
+			let bestRelease = response.data[0]; // Default to latest release
 
 			if (version && version !== '0.0.0') {
-				// Try to find a release that starts with the same version prefix
-				const versionParts = version.split('.');
-				const versionPrefix = versionParts.slice(0, 2).join('.'); // e.g., "0.2" from "0.2.2-rc7"
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`Looking for releases matching version: ${version}`);
+					console.log(`Available releases: ${response.data.slice(0, 5).map(r => r.tag_name).join(', ')}...`);
+				}
 
-				console.log(`Looking for releases matching prefix: ${versionPrefix}`);
-
+				// Try to find exact match first
 				for (const release of response.data) {
 					const releaseTag = release.tag_name.startsWith('v') ?
 						release.tag_name.substring(1) : release.tag_name;
 
-					if (releaseTag.startsWith(versionPrefix)) {
-						console.log(`Found matching release: ${release.tag_name}`);
+					if (releaseTag === version) {
+						if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+							console.log(`Found exact matching release: ${release.tag_name}`);
+						}
 						bestRelease = release;
 						break;
+					}
+				}
+
+				// If no exact match, try to find a release with matching major.minor version
+				if (bestRelease === response.data[0]) {
+					const versionParts = version.split(/[\.-]/);
+					const majorMinor = versionParts.slice(0, 2).join('.');
+
+					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+						console.log(`Looking for releases matching major.minor: ${majorMinor}`);
+					}
+
+					for (const release of response.data) {
+						const releaseTag = release.tag_name.startsWith('v') ?
+							release.tag_name.substring(1) : release.tag_name;
+						const releaseVersionParts = releaseTag.split(/[\.-]/);
+						const releaseMajorMinor = releaseVersionParts.slice(0, 2).join('.');
+
+						if (releaseMajorMinor === majorMinor) {
+							if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+								console.log(`Found matching major.minor release: ${release.tag_name}`);
+							}
+							bestRelease = release;
+							break;
+						}
 					}
 				}
 			}
@@ -159,7 +252,9 @@ async function getLatestRelease(version) {
 				url: asset.browser_download_url
 			}));
 
-			console.log(`Using release: ${tag} with ${assets.length} assets`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Using release: ${tag} with ${assets.length} assets`);
+			}
 			return { tag, assets };
 		}
 
@@ -175,7 +270,9 @@ async function getLatestRelease(version) {
  * @returns {Object} Best matching asset
  */
 function findBestAsset(assets, osInfo, archInfo) {
-	console.log(`Finding appropriate binary for ${osInfo.type} ${archInfo.type}...`);
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Finding appropriate binary for ${osInfo.type} ${archInfo.type}...`);
+	}
 
 	let bestAsset = null;
 	let bestScore = 0;
@@ -187,18 +284,26 @@ function findBestAsset(assets, osInfo, archInfo) {
 		}
 
 		if (osInfo.type === 'windows' && asset.name.match(/darwin|linux/)) {
-			console.log(`Skipping non-Windows binary: ${asset.name}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Skipping non-Windows binary: ${asset.name}`);
+			}
 			continue;
 		} else if (osInfo.type === 'darwin' && asset.name.match(/windows|msvc|linux/)) {
-			console.log(`Skipping non-macOS binary: ${asset.name}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Skipping non-macOS binary: ${asset.name}`);
+			}
 			continue;
 		} else if (osInfo.type === 'linux' && asset.name.match(/darwin|windows|msvc/)) {
-			console.log(`Skipping non-Linux binary: ${asset.name}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Skipping non-Linux binary: ${asset.name}`);
+			}
 			continue;
 		}
 
 		let score = 0;
-		console.log(`Evaluating asset: ${asset.name}`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Evaluating asset: ${asset.name}`);
+		}
 
 		// Check for OS match - give higher priority to exact OS matches
 		let osMatched = false;
@@ -206,7 +311,9 @@ function findBestAsset(assets, osInfo, archInfo) {
 			if (asset.name.includes(keyword)) {
 				score += 10;
 				osMatched = true;
-				console.log(`  OS match found (${keyword}): +10, score = ${score}`);
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`  OS match found (${keyword}): +10, score = ${score}`);
+				}
 				break;
 			}
 		}
@@ -215,7 +322,9 @@ function findBestAsset(assets, osInfo, archInfo) {
 		for (const keyword of archInfo.keywords) {
 			if (asset.name.includes(keyword)) {
 				score += 5;
-				console.log(`  Arch match found (${keyword}): +5, score = ${score}`);
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`  Arch match found (${keyword}): +5, score = ${score}`);
+				}
 				break;
 			}
 		}
@@ -223,19 +332,27 @@ function findBestAsset(assets, osInfo, archInfo) {
 		// Prefer exact matches for binary name
 		if (asset.name.startsWith(`${BINARY_NAME}-`)) {
 			score += 3;
-			console.log(`  Binary name match: +3, score = ${score}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`  Binary name match: +3, score = ${score}`);
+			}
 		}
 
 		if (osMatched && score >= 15) {
 			score += 5;
-			console.log(`  OS+Arch bonus: +5, score = ${score}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`  OS+Arch bonus: +5, score = ${score}`);
+			}
 		}
 
-		console.log(`  Final score for ${asset.name}: ${score}`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`  Final score for ${asset.name}: ${score}`);
+		}
 
 		// If we have a perfect match, use it immediately
 		if (score === 23) {
-			console.log(`Found perfect match: ${asset.name}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Found perfect match: ${asset.name}`);
+			}
 			return asset;
 		}
 
@@ -243,7 +360,9 @@ function findBestAsset(assets, osInfo, archInfo) {
 		if (score > bestScore) {
 			bestScore = score;
 			bestAsset = asset;
-			console.log(`  New best asset: ${asset.name} (score: ${score})`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`  New best asset: ${asset.name} (score: ${score})`);
+			}
 		}
 	}
 
@@ -251,7 +370,9 @@ function findBestAsset(assets, osInfo, archInfo) {
 		throw new Error(`Could not find a suitable binary for ${osInfo.type} ${archInfo.type}`);
 	}
 
-	console.log(`Selected asset: ${bestAsset.name} (score: ${bestScore})`);
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Selected asset: ${bestAsset.name} (score: ${bestScore})`);
+	}
 	return bestAsset;
 }
 
@@ -265,23 +386,30 @@ async function downloadAsset(asset, outputDir) {
 	await fs.ensureDir(outputDir);
 
 	const assetPath = path.join(outputDir, asset.name);
-	console.log(`Downloading ${asset.name}...`);
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Downloading ${asset.name}...`);
+	}
 
 	// Download the asset
 	const assetResponse = await axios.get(asset.url, { responseType: 'arraybuffer' });
 	await fs.writeFile(assetPath, Buffer.from(assetResponse.data));
 
 	// Try to download the checksum
-	const checksumUrl = `${asset.url}.sha256`;
+	const checksumUrl = asset.checksumUrl || `${asset.url}.sha256`;
+	const checksumFileName = asset.checksumName || `${asset.name}.sha256`;
 	let checksumPath = null;
 
 	try {
-		console.log(`Downloading checksum...`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Downloading checksum...`);
+		}
 		const checksumResponse = await axios.get(checksumUrl);
-		checksumPath = path.join(outputDir, `${asset.name}.sha256`);
+		checksumPath = path.join(outputDir, checksumFileName);
 		await fs.writeFile(checksumPath, checksumResponse.data);
 	} catch (error) {
-		console.log('No checksum file found, skipping verification');
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log('No checksum file found, skipping verification');
+		}
 	}
 
 	return { assetPath, checksumPath };
@@ -298,7 +426,9 @@ async function verifyChecksum(assetPath, checksumPath) {
 		return true;
 	}
 
-	console.log(`Verifying checksum...`);
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Verifying checksum...`);
+	}
 
 	// Read the expected checksum
 	const checksumContent = await fs.readFile(checksumPath, 'utf-8');
@@ -315,7 +445,9 @@ async function verifyChecksum(assetPath, checksumPath) {
 		return false;
 	}
 
-	console.log(`Checksum verified successfully`);
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Checksum verified successfully`);
+	}
 	return true;
 }
 
@@ -326,11 +458,14 @@ async function verifyChecksum(assetPath, checksumPath) {
  * @returns {Promise<string>} Path to the extracted binary
  */
 async function extractBinary(assetPath, outputDir) {
-	console.log(`Extracting ${path.basename(assetPath)}...`);
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Extracting ${path.basename(assetPath)}...`);
+	}
 
 	const assetName = path.basename(assetPath);
 	const isWindows = os.platform() === 'win32';
-	const binaryName = isWindows ? `${BINARY_NAME}.exe` : BINARY_NAME;
+	// Use the correct binary name: probe.exe for Windows, probe-binary for Unix
+	const binaryName = isWindows ? `${BINARY_NAME}.exe` : `${BINARY_NAME}-binary`;
 	const binaryPath = path.join(outputDir, binaryName);
 
 	try {
@@ -340,17 +475,23 @@ async function extractBinary(assetPath, outputDir) {
 
 		// Determine file type and extract accordingly
 		if (assetName.endsWith('.tar.gz') || assetName.endsWith('.tgz')) {
-			console.log(`Extracting tar.gz to ${extractDir}...`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Extracting tar.gz to ${extractDir}...`);
+			}
 			await tar.extract({
 				file: assetPath,
 				cwd: extractDir
 			});
 		} else if (assetName.endsWith('.zip')) {
-			console.log(`Extracting zip to ${extractDir}...`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Extracting zip to ${extractDir}...`);
+			}
 			await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
 		} else {
 			// Assume it's a direct binary
-			console.log(`Copying binary directly to ${binaryPath}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Copying binary directly to ${binaryPath}`);
+			}
 			await fs.copyFile(assetPath, binaryPath);
 
 			// Make the binary executable
@@ -360,12 +501,16 @@ async function extractBinary(assetPath, outputDir) {
 
 			// Clean up the extraction directory
 			await fs.remove(extractDir);
-			console.log(`Binary installed to ${binaryPath}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Binary installed to ${binaryPath}`);
+			}
 			return binaryPath;
 		}
 
 		// Find the binary in the extracted files
-		console.log(`Searching for binary in extracted files...`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Searching for binary in extracted files...`);
+		}
 		const findBinary = async (dir) => {
 			const entries = await fs.readdir(dir, { withFileTypes: true });
 
@@ -398,8 +543,10 @@ async function extractBinary(assetPath, outputDir) {
 		}
 
 		// Copy the binary directly to the final location
-		console.log(`Found binary at ${binaryFilePath}`);
-		console.log(`Copying binary to ${binaryPath}`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Found binary at ${binaryFilePath}`);
+			console.log(`Copying binary to ${binaryPath}`);
+		}
 		await fs.copyFile(binaryFilePath, binaryPath);
 
 		// Make the binary executable
@@ -410,7 +557,9 @@ async function extractBinary(assetPath, outputDir) {
 		// Clean up
 		await fs.remove(extractDir);
 
-		console.log(`Binary successfully installed to ${binaryPath}`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Binary successfully installed to ${binaryPath}`);
+		}
 		return binaryPath;
 	} catch (error) {
 		console.error(`Error extracting binary: ${error instanceof Error ? error.message : String(error)}`);
@@ -422,10 +571,11 @@ async function extractBinary(assetPath, outputDir) {
  * Gets version info from the version file
  * @returns {Promise<Object|null>} Version information
  */
-async function getVersionInfo() {
+async function getVersionInfo(binDir) {
 	try {
-		if (await fs.pathExists(VERSION_INFO_PATH)) {
-			const content = await fs.readFile(VERSION_INFO_PATH, 'utf-8');
+		const versionInfoPath = path.join(binDir, 'version-info.json');
+		if (await fs.pathExists(versionInfoPath)) {
+			const content = await fs.readFile(versionInfoPath, 'utf-8');
 			return JSON.parse(content);
 		}
 		return null;
@@ -438,16 +588,20 @@ async function getVersionInfo() {
 /**
  * Saves version info to the version file
  * @param {string} version - Version to save
+ * @param {string} binDir - Directory where version info should be saved
  * @returns {Promise<void>}
  */
-async function saveVersionInfo(version) {
+async function saveVersionInfo(version, binDir) {
 	const versionInfo = {
 		version,
 		lastUpdated: new Date().toISOString()
 	};
 
-	await fs.writeFile(VERSION_INFO_PATH, JSON.stringify(versionInfo, null, 2));
-	console.log(`Version info saved: ${version}`);
+	const versionInfoPath = path.join(binDir, 'version-info.json');
+	await fs.writeFile(versionInfoPath, JSON.stringify(versionInfo, null, 2));
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Version info saved: ${version} at ${versionInfoPath}`);
+	}
 }
 
 /**
@@ -465,10 +619,14 @@ async function getPackageVersion() {
 		for (const packageJsonPath of possiblePaths) {
 			try {
 				if (fs.existsSync(packageJsonPath)) {
-					console.log(`Found package.json at: ${packageJsonPath}`);
+					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+						console.log(`Found package.json at: ${packageJsonPath}`);
+					}
 					const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
 					if (packageJson.version) {
-						console.log(`Using version from package.json: ${packageJson.version}`);
+						if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+							console.log(`Using version from package.json: ${packageJson.version}`);
+						}
 						return packageJson.version;
 					}
 				}
@@ -492,31 +650,39 @@ async function getPackageVersion() {
  */
 export async function downloadProbeBinary(version) {
 	try {
-		// Create the bin directory if it doesn't exist
-		await ensureBinDirectory();
+		// Get writable directory for binary storage (handles CI, npx, Docker scenarios)
+		const localDir = await getPackageBinDir();
 
 		// If no version is specified, use the package version
 		if (!version || version === '0.0.0') {
 			version = await getPackageVersion();
 		}
 
-		console.log(`Downloading probe binary (version: ${version || 'latest'})...`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Downloading probe binary (version: ${version || 'latest'})...`);
+			console.log(`Using binary directory: ${localDir}`);
+		}
 
 		const isWindows = os.platform() === 'win32';
-		const binaryName = isWindows ? `${BINARY_NAME}.exe` : BINARY_NAME;
-		const binaryPath = path.join(LOCAL_DIR, binaryName);
+		// Use the correct binary name: probe.exe for Windows, probe-binary for Unix
+		const binaryName = isWindows ? `${BINARY_NAME}.exe` : `${BINARY_NAME}-binary`;
+		const binaryPath = path.join(localDir, binaryName);
 
 		// Check if the binary already exists and version matches
 		if (await fs.pathExists(binaryPath)) {
-			const versionInfo = await getVersionInfo();
+			const versionInfo = await getVersionInfo(localDir);
 
 			// If versions match, use existing binary
 			if (versionInfo && versionInfo.version === version) {
-				console.log(`Using existing binary at ${binaryPath} (version: ${versionInfo.version})`);
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`Using existing binary at ${binaryPath} (version: ${versionInfo.version})`);
+				}
 				return binaryPath;
 			}
 
-			console.log(`Existing binary version (${versionInfo?.version || 'unknown'}) doesn't match requested version (${version}). Downloading new version...`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Existing binary version (${versionInfo?.version || 'unknown'}) doesn't match requested version (${version}). Downloading new version...`);
+			}
 		}
 
 		// Get OS and architecture information
@@ -524,21 +690,30 @@ export async function downloadProbeBinary(version) {
 
 		// Determine which version to download
 		let versionToUse = version;
+		let bestAsset;
+		let tagVersion;
+
 		if (!versionToUse || versionToUse === '0.0.0') {
-			console.log('No specific version requested, will use the latest release');
-			versionToUse = undefined;
+			// No specific version - use GitHub API to get the latest release
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log('No specific version requested, will use the latest release');
+			}
+			const { tag, assets } = await getLatestRelease(undefined);
+			tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
+			bestAsset = findBestAsset(assets, osInfo, archInfo);
+			
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Found release version: ${tagVersion}`);
+			}
 		} else {
-			console.log(`Looking for release with version: ${versionToUse}`);
+			// Specific version requested - construct download URL directly
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Direct download for version: ${versionToUse}`);
+			}
+			tagVersion = versionToUse;
+			bestAsset = constructAssetInfo(versionToUse, osInfo, archInfo);
 		}
-
-		// Get release information
-		const { tag, assets } = await getLatestRelease(versionToUse);
-		const tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
-		console.log(`Found release version: ${tagVersion}`);
-
-		// Find and download the appropriate asset
-		const bestAsset = findBestAsset(assets, osInfo, archInfo);
-		const { assetPath, checksumPath } = await downloadAsset(bestAsset, LOCAL_DIR);
+		const { assetPath, checksumPath } = await downloadAsset(bestAsset, localDir);
 
 		// Verify checksum if available
 		const checksumValid = await verifyChecksum(assetPath, checksumPath);
@@ -547,10 +722,10 @@ export async function downloadProbeBinary(version) {
 		}
 
 		// Extract the binary
-		const extractedBinaryPath = await extractBinary(assetPath, LOCAL_DIR);
+		const extractedBinaryPath = await extractBinary(assetPath, localDir);
 
 		// Save the version information
-		await saveVersionInfo(tagVersion);
+		await saveVersionInfo(tagVersion, localDir);
 
 		// Clean up the downloaded archive
 		try {
@@ -559,10 +734,14 @@ export async function downloadProbeBinary(version) {
 				await fs.remove(checksumPath);
 			}
 		} catch (err) {
-			console.log(`Warning: Could not clean up temporary files: ${err}`);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Warning: Could not clean up temporary files: ${err}`);
+			}
 		}
 
-		console.log(`Binary successfully installed at ${extractedBinaryPath} (version: ${tagVersion})`);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Binary successfully installed at ${extractedBinaryPath} (version: ${tagVersion})`);
+		}
 		return extractedBinaryPath;
 	} catch (error) {
 		console.error('Error downloading probe binary:', error);

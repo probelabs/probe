@@ -132,6 +132,14 @@ pub fn merge_ranked_blocks(
                         let merged_score = merge_scores(&current_block, next_block);
                         let merged_term_stats = merge_term_statistics(&current_block, next_block);
 
+                        // Merge matched_lines - adjust line numbers relative to new merged block
+                        let merged_matched_lines =
+                            merge_matched_lines(&current_block, next_block, merged_start);
+
+                        // Merge matched_keywords - combine and deduplicate
+                        let merged_matched_keywords =
+                            merge_matched_keywords(&current_block, next_block);
+
                         // Update the current block
                         current_block.lines = (merged_start, merged_end);
                         current_block.code = merged_code;
@@ -142,6 +150,8 @@ pub fn merge_ranked_blocks(
                         current_block.new_score = merged_score.3;
                         current_block.block_unique_terms = merged_term_stats.0;
                         current_block.block_total_matches = merged_term_stats.1;
+                        current_block.matched_lines = merged_matched_lines;
+                        current_block.matched_keywords = merged_matched_keywords;
 
                         // Merge LSP information (preserve per-symbol data)
                         current_block.lsp_info = merge_lsp_info(
@@ -638,6 +648,74 @@ fn dedup_calls_array(parent: &mut Map<String, Value>, key: &str) {
             }
         }
         *arr = out;
+    }
+}
+
+/// Merge matched_lines from two blocks, adjusting line numbers for the merged block
+fn merge_matched_lines(
+    block1: &SearchResult,
+    block2: &SearchResult,
+    merged_start: usize,
+) -> Option<Vec<usize>> {
+    let mut merged_lines = Vec::new();
+
+    // Add lines from block1, adjusting relative to merged block start
+    if let Some(ref lines) = block1.matched_lines {
+        for &line in lines {
+            // Convert from block1-relative to absolute, then to merged-block-relative
+            let absolute_line = block1.lines.0 + line;
+            let merged_relative = absolute_line - merged_start;
+            merged_lines.push(merged_relative);
+        }
+    }
+
+    // Add lines from block2, adjusting relative to merged block start
+    if let Some(ref lines) = block2.matched_lines {
+        for &line in lines {
+            // Convert from block2-relative to absolute, then to merged-block-relative
+            let absolute_line = block2.lines.0 + line;
+            let merged_relative = absolute_line - merged_start;
+            // Only add if not already present (deduplication)
+            if !merged_lines.contains(&merged_relative) {
+                merged_lines.push(merged_relative);
+            }
+        }
+    }
+
+    if merged_lines.is_empty() {
+        None
+    } else {
+        // Sort the lines for consistent output
+        merged_lines.sort();
+        Some(merged_lines)
+    }
+}
+
+/// Merge matched_keywords from two blocks, combining and deduplicating
+fn merge_matched_keywords(block1: &SearchResult, block2: &SearchResult) -> Option<Vec<String>> {
+    let mut keywords = std::collections::HashSet::new();
+
+    // Add keywords from block1
+    if let Some(ref kw) = block1.matched_keywords {
+        for keyword in kw {
+            keywords.insert(keyword.clone());
+        }
+    }
+
+    // Add keywords from block2
+    if let Some(ref kw) = block2.matched_keywords {
+        for keyword in kw {
+            keywords.insert(keyword.clone());
+        }
+    }
+
+    if keywords.is_empty() {
+        None
+    } else {
+        // Convert to sorted Vec for consistent output
+        let mut keyword_vec: Vec<String> = keywords.into_iter().collect();
+        keyword_vec.sort();
+        Some(keyword_vec)
     }
 }
 

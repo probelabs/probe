@@ -648,8 +648,8 @@ async fn main() -> Result<()> {
             prompt,
             instructions,
             no_gitignore,
-            lsp,
-            include_stdlib,
+            lsp: _,
+            include_stdlib: _,
         }) => handle_extract(ExtractOptions {
             files,
             custom_ignores: ignore,
@@ -673,8 +673,6 @@ async fn main() -> Result<()> {
                 || std::env::var("PROBE_NO_GITIGNORE")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false),
-            lsp,
-            include_stdlib,
         })?,
         Some(Commands::Query {
             pattern,

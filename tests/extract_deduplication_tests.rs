@@ -11,13 +11,13 @@ fn test_deduplication_of_nested_extractions() {
     let content = r#"
 fn outer_function() {
     let x = 10;
-    
+
     // This is a nested function that should be deduplicated
     fn inner_function() {
         let y = 20;
         println!("Inner function: {}", y);
     }
-    
+
     // Call the inner function
     inner_function();
     println!("Outer function: {}", x);
@@ -52,8 +52,6 @@ fn standalone_function() {
         prompt: None,
         instructions: None,
         no_gitignore: false,
-        lsp: false,
-        include_stdlib: true,
     };
 
     // Call handle_extract
@@ -75,13 +73,13 @@ fn test_deduplication_with_command_line_integration() {
     let content = r#"
 fn outer_function() {
     let x = 10;
-    
+
     // This is a nested function that should be deduplicated
     fn inner_function() {
         let y = 20;
         println!("Inner function: {}", y);
     }
-    
+
     // Call the inner function
     inner_function();
     println!("Outer function: {}", x);

@@ -7,7 +7,8 @@ import { tool } from 'ai';
 import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
-import { searchSchema, querySchema, extractSchema, searchDescription, queryDescription, extractDescription } from './common.js';
+import { delegate } from '../delegate.js';
+import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription } from './common.js';
 
 /**
  * Search tool generator
@@ -19,7 +20,7 @@ import { searchSchema, querySchema, extractSchema, searchDescription, queryDescr
  * @returns {Object} Configured search tool
  */
 export const searchTool = (options = {}) => {
-	const { sessionId, maxTokens = 10000, debug = false } = options;
+	const { sessionId, maxTokens = 10000, debug = false, outline = false } = options;
 
 	return tool({
 		name: 'search',
@@ -45,16 +46,23 @@ export const searchTool = (options = {}) => {
 					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", exact: ${exact ? 'true' : 'false'}, language: ${language || 'all'}, session: ${sessionId || 'none'}`);
 				}
 
-				const results = await search({
+				const searchOptions = {
 					query: searchQuery,
 					path: searchPath,
-					allow_tests,
+					allowTests: allow_tests,
 					exact,
 					json: false,
 					maxTokens: effectiveMaxTokens,
 					session: sessionId, // Pass session ID if provided
 					language // Pass language parameter if provided
-				});
+				};
+
+				// Add outline format if enabled
+				if (outline) {
+					searchOptions.format = 'outline-xml';
+				}
+
+				const results = await search(searchOptions);
 
 				return results;
 			} catch (error) {
@@ -121,13 +129,13 @@ export const queryTool = (options = {}) => {
  * @returns {Object} Configured extract tool
  */
 export const extractTool = (options = {}) => {
-	const { debug = false } = options;
+	const { debug = false, outline = false } = options;
 
 	return tool({
 		name: 'extract',
 		description: extractDescription,
 		parameters: extractSchema,
-		execute: async ({ file_path, input_content, line, end_line, allow_tests, context_lines, format }) => {
+		execute: async ({ targets, input_content, line, end_line, allow_tests, context_lines, format }) => {
 			try {
 				// Use the defaultPath from config for context
 				let extractPath = options.defaultPath || '.';
@@ -141,8 +149,8 @@ export const extractTool = (options = {}) => {
 				}
 
 				if (debug) {
-					if (file_path) {
-						console.error(`Executing extract with file: "${file_path}", path: "${extractPath}", context lines: ${context_lines || 10}`);
+					if (targets) {
+						console.error(`Executing extract with targets: "${targets}", path: "${extractPath}", context lines: ${context_lines || 10}`);
 					} else if (input_content) {
 						console.error(`Executing extract with input content, path: "${extractPath}", context lines: ${context_lines || 10}`);
 					}
@@ -167,26 +175,38 @@ export const extractTool = (options = {}) => {
 						console.error(`Created temporary file for input content: ${tempFilePath}`);
 					}
 
+					// Apply format mapping for outline-xml to xml
+					let effectiveFormat = format;
+					if (outline && format === 'outline-xml') {
+						effectiveFormat = 'xml';
+					}
+
 					// Set up extract options with input file
 					extractOptions = {
 						inputFile: tempFilePath,
 						allowTests: allow_tests,
 						contextLines: context_lines,
-						format
+						format: effectiveFormat
 					};
-				} else if (file_path) {
-					// Parse file_path to handle line numbers and symbol names
-					const files = [file_path];
+				} else if (targets) {
+					// Parse targets to handle line numbers and symbol names
+					const files = [targets];
+
+					// Apply format mapping for outline-xml to xml
+					let effectiveFormat = format;
+					if (outline && format === 'outline-xml') {
+						effectiveFormat = 'xml';
+					}
 
 					// Set up extract options with files
 					extractOptions = {
 						files,
 						allowTests: allow_tests,
 						contextLines: context_lines,
-						format
+						format: effectiveFormat
 					};
 				} else {
-					throw new Error('Either file_path or input_content must be provided');
+					throw new Error('Either targets or input_content must be provided');
 				}
 
 				// Execute the extract command
@@ -209,6 +229,42 @@ export const extractTool = (options = {}) => {
 			} catch (error) {
 				console.error('Error executing extract command:', error);
 				return `Error executing extract command: ${error.message}`;
+			}
+		}
+	});
+};
+
+/**
+ * Delegate tool generator
+ * 
+ * @param {Object} [options] - Configuration options
+ * @param {boolean} [options.debug=false] - Enable debug logging
+ * @param {number} [options.timeout=300] - Default timeout in seconds
+ * @returns {Object} Configured delegate tool
+ */
+export const delegateTool = (options = {}) => {
+	const { debug = false, timeout = 300 } = options;
+
+	return tool({
+		name: 'delegate',
+		description: delegateDescription,
+		parameters: delegateSchema,
+		execute: async ({ task }) => {
+			try {
+				if (debug) {
+					console.error(`Executing delegate with task: "${task}"`);
+				}
+
+				const result = await delegate({
+					task,
+					timeout,
+					debug
+				});
+
+				return result;
+			} catch (error) {
+				console.error('Error executing delegate command:', error);
+				return `Error executing delegate command: ${error.message}`;
 			}
 		}
 	});

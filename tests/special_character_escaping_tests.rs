@@ -113,19 +113,19 @@ function testSpecialChars() {
     const str1 = "Double quotes \" inside string";
     const str2 = 'Single quotes \' inside string';
     const str3 = `Backticks \` inside template literal`;
-    
+
     // HTML entities
     const entities = "&lt; &gt; &amp; &quot; &apos;";
-    
+
     // Control characters
     const controls = "\b\f\n\r\t\v\0";
-    
+
     // Unicode characters
     const unicode = "Unicode: \u00A9 \u00AE \u2122 \u20AC \u2603";
-    
+
     // Emoji
     const emoji = "Emoji: 😀 👍 🚀 🌈 🔥";
-    
+
     return {
         str1, str2, str3, entities, controls, unicode, emoji
     };
@@ -139,23 +139,23 @@ function testSpecialChars() {
 function testProblematicSequences() {
     // CDATA-like sequence
     const cdataLike = "<![CDATA[ This looks like CDATA ]]>";
-    
+
     // XML declaration-like sequence
     const xmlLike = "<?xml version=\"1.0\"?>";
-    
+
     // DOCTYPE-like sequence
     const doctypeLike = "<!DOCTYPE html>";
-    
+
     // Comment-like sequences
     const htmlComment = "<!-- HTML comment -->";
     const xmlComment = "<!-- XML comment -->";
-    
+
     // Script tags
     const scriptTag = "<script>alert('XSS');</script>";
-    
+
     // JSON with special sequences
     const jsonSpecial = '{"key": "value with </script> in it"}';
-    
+
     return {
         cdataLike, xmlLike, doctypeLike, htmlComment, xmlComment, scriptTag, jsonSpecial
     };

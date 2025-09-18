@@ -24,7 +24,7 @@ export const querySchema = z.object({
 });
 
 export const extractSchema = z.object({
-	file_path: z.string().optional().describe('Path to the file to extract from. Can include line numbers or symbol names'),
+	targets: z.string().optional().describe('File paths or symbols to extract from. Can include line numbers, symbol names, or multiple space-separated targets'),
 	input_content: z.string().optional().describe('Text content to extract file paths from'),
 	line: z.number().optional().describe('Start line number to extract a specific code block'),
 	end_line: z.number().optional().describe('End line number for extracting a range of lines'),
@@ -33,11 +33,70 @@ export const extractSchema = z.object({
 	format: z.string().optional().default('plain').describe('Output format (plain, markdown, json, color)')
 });
 
-// Schema for the new attempt_completion tool
-export const attemptCompletionSchema = z.object({
-	result: z.string().describe('The final result of the task. Formulate this result in a way that is final and does not require further input from the user. Do not end your result with questions or offers for further assistance.'),
-	command: z.string().optional().describe('A CLI command to execute to show a live demo of the result to the user (e.g., `open index.html`). Do not use commands like `echo` or `cat` that merely print text.')
+export const delegateSchema = z.object({
+	task: z.string().describe('The task to delegate to a subagent. Be specific about what needs to be accomplished.')
 });
+
+// Schema for the attempt_completion tool - flexible validation for direct XML response
+export const attemptCompletionSchema = {
+	// Custom validation that requires result parameter but allows direct XML response
+	safeParse: (params) => {
+		// Validate that params is an object
+		if (!params || typeof params !== 'object') {
+			return {
+				success: false,
+				error: {
+					issues: [{
+						code: 'invalid_type',
+						expected: 'object',
+						received: typeof params,
+						path: [],
+						message: 'Expected object'
+					}]
+				}
+			};
+		}
+
+		// Validate that result parameter exists and is a string
+		if (!('result' in params)) {
+			return {
+				success: false,
+				error: {
+					issues: [{
+						code: 'invalid_type',
+						expected: 'string',
+						received: 'undefined',
+						path: ['result'],
+						message: 'Required'
+					}]
+				}
+			};
+		}
+
+		if (typeof params.result !== 'string') {
+			return {
+				success: false,
+				error: {
+					issues: [{
+						code: 'invalid_type',
+						expected: 'string',
+						received: typeof params.result,
+						path: ['result'],
+						message: 'Expected string'
+					}]
+				}
+			};
+		}
+
+		// Filter out command parameter if present (legacy compatibility)
+		const filteredData = { result: params.result };
+		
+		return {
+			success: true,
+			data: filteredData
+		};
+	}
+};
 
 
 // Tool descriptions for the system prompt (using XML format)
@@ -47,6 +106,12 @@ export const searchToolDefinition = `
 Description: Search code in the repository using Elasticsearch query syntax (except field based queries, e.g. "filename:..." NOT supported).
 
 You need to focus on main keywords when constructing the query, and always use elastic search syntax like OR AND and brackets to group keywords.
+
+**Session Management & Caching:**
+- Ensure not to re-read the same symbols twice - reuse context from previous tool calls
+- Probe returns a session ID on first run - reuse it for subsequent calls to avoid redundant searches
+- Once data is returned, it's cached and won't return on next runs (this is expected behavior)
+
 Parameters:
 - query: (required) Search query with Elasticsearch syntax. You can use + for important terms, and - for negation.
 - path: (required) Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc. YOU SHOULD ALWAYS provide FULL PATH when searching dependencies, including depency name.
@@ -56,10 +121,21 @@ Parameters:
 - maxTokens: (optional, default: 10000) Maximum number of tokens to return (number).
 - language: (optional) Limit search to files of a specific programming language (e.g., 'rust', 'js', 'python', 'go' etc.).
 
+**Workflow:** Always start with search, then use extract for detailed context when needed.
 
 Usage Example:
 
 <examples>
+
+User: Where is the login logic?
+Assistant workflow:
+1. <search>
+<query>login AND auth AND token</query>
+<path>.</path>
+</search>
+2. Now lets look closer: <extract>
+<targets>session.rs#AuthService.login auth.rs:2-100</targets>
+</extract>
 
 User: How to calculate the total amount in the payments module?
 <search>
@@ -83,7 +159,6 @@ User: Find all react imports in the project.
 <exact>true</exact>
 <language>js</language>
 </search>
-
 
 User: Find how decompoud library works?
 <search>
@@ -118,11 +193,16 @@ Usage Example:
 
 export const extractToolDefinition = `
 ## extract
-Description: Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. It can be used to read full files as well. 
+Description: Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. It can be used to read full files as well.
 Full file extraction should be the LAST RESORT! Always prefer search.
 
+**Multiple Extraction:** You can extract multiple symbols/files in one call by providing multiple file paths separated by spaces.
+
+**Session Awareness:** Reuse context from previous tool calls. Don't re-extract the same symbols you already have.
+
 Parameters:
-- file_path: (required) Path to the file to extract from. Can include line numbers or symbol names (e.g., 'src/main.rs:10-20', 'src/utils.js#myFunction').
+- targets: (required) File paths or symbols to extract from. Can include line numbers, symbol names, or multiple space-separated targets (e.g., 'src/main.rs:10-20', 'src/utils.js#myFunction').
+  For multiple extractions: 'session.rs#AuthService.login auth.rs:2-100 config.rs#DatabaseConfig'
 - line: (optional) Start line number to extract a specific code block. Use with end_line for ranges.
 - end_line: (optional) End line number for extracting a range of lines.
 - allow_tests: (optional, default: false) Allow test files and test code blocks (true/false).
@@ -130,95 +210,201 @@ Usage Example:
 
 <examples>
 
+User: Where is the login logic? (After search found relevant files)
+<extract>
+<targets>session.rs#AuthService.login auth.rs:2-100 config.rs#DatabaseConfig</targets>
+</extract>
+
+User: How does error handling work? (After search identified files)
+<extract>
+<targets>error.rs#ErrorType utils.rs#handle_error src/main.rs:50-80</targets>
+</extract>
+
 User: How RankManager works
 <extract>
-<file_path>src/search/ranking.rs#RankManager</file_path>
+<targets>src/search/ranking.rs#RankManager</targets>
 </extract>
 
 User: Lets read the whole file
 <extract>
-<file_path>src/search/ranking.rs</file_path>
+<targets>src/search/ranking.rs</targets>
 </extract>
 
 User: Read the first 10 lines of the file
 <extract>
-<file_path>src/search/ranking.rs</file_path>
+<targets>src/search/ranking.rs</targets>
 <line>1</line>
 <end_line>10</end_line>
 </extract>
 
 User: Read file inside the dependency
 <extract>
-<file_path>/dep/go/github.com/gorilla/mux/router.go</file_path>
+<targets>/dep/go/github.com/gorilla/mux/router.go</targets>
 </extract>
-
 
 </examples>
 `;
 
+export const delegateToolDefinition = `
+## delegate
+Description: Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Use this when you recognize that a user's request involves multiple large, distinct components that would benefit from parallel processing or specialized focus. The AI agent should automatically identify opportunities for task separation and use delegation without explicit user instruction.
+
+Parameters:
+- task: (required) A complete, self-contained task that can be executed independently by a subagent. Should be specific and focused on one area of expertise.
+
+Usage Pattern:
+When the AI agent encounters complex multi-part requests, it should automatically break them down and delegate:
+
+<delegate>
+<task>Analyze all authentication and authorization code in the codebase for security vulnerabilities and provide specific remediation recommendations</task>
+</delegate>
+
+<delegate>
+<task>Review database queries and API endpoints for performance bottlenecks and suggest optimization strategies</task>
+</delegate>
+
+The agent uses this tool automatically when it identifies that work can be separated into distinct, parallel tasks for more efficient processing.
+`;
+
 export const attemptCompletionToolDefinition = `
 ## attempt_completion
-Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user.
+Description: Use this tool ONLY when the task is fully complete and you have received confirmation of success for all previous tool uses. Presents the final result to the user. You can provide your response directly inside the XML tags without any parameter wrapper.
 Parameters:
-- result: (required) The final result of the task. Formulate this result concisely and definitively. Do not end with questions or offers for further assistance. Ensure that answer fully addresses the user's request, and a clear and detailed maneer.
-- command: (optional) A CLI command to demonstrate the result (e.g., 'open index.html'). Avoid simple print commands like 'echo'.
+- No validation required - provide your complete answer directly inside the XML tags.
 Usage Example:
 <attempt_completion>
-<result>I have refactored the search module according to the requirements and verified the tests pass.</result>
-<command>cargo test --lib</command>
+I have refactored the search module according to the requirements and verified the tests pass. The module now uses the new BM25 ranking algorithm and has improved error handling.
 </attempt_completion>
 `;
 
 export const searchDescription = 'Search code in the repository using Elasticsearch-like query syntax. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
+export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
 
-// Simple XML parser helper
-export function parseXmlToolCall(xmlString) {
-	const toolMatch = xmlString.match(/<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/);
-	if (!toolMatch) {
-		return null;
-	}
+// Valid tool names that should be parsed as tool calls
+const DEFAULT_VALID_TOOLS = [
+	'search',
+	'query', 
+	'extract',
+	'delegate',
+	'listFiles',
+	'searchFiles',
+	'implement',
+	'attempt_completion'
+];
 
-	const toolName = toolMatch[1];
-	const innerContent = toolMatch[2];
-	const params = {};
+// Simple XML parser helper - safer string-based approach
+export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
+	// Look for each valid tool name specifically using string search
+	for (const toolName of validTools) {
+		const openTag = `<${toolName}>`;
+		const closeTag = `</${toolName}>`;
+		
+		const openIndex = xmlString.indexOf(openTag);
+		if (openIndex === -1) {
+			continue; // Tool not found, try next tool
+		}
+		
+		const closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
+		if (closeIndex === -1) {
+			continue; // No closing tag found, try next tool
+		}
+		
+		// Extract the content between tags
+		const innerContent = xmlString.substring(
+			openIndex + openTag.length, 
+			closeIndex
+		);
+		
+		const params = {};
 
-	const paramRegex = /<([a-zA-Z0-9_]+)>([\s\S]*?)<\/\1>/g;
-	let paramMatch;
-	while ((paramMatch = paramRegex.exec(innerContent)) !== null) {
-		const paramName = paramMatch[1];
-		let paramValue = paramMatch[2].trim();
-
-		// Basic type inference (can be improved)
-		if (paramValue.toLowerCase() === 'true') {
-			paramValue = true;
-		} else if (paramValue.toLowerCase() === 'false') {
-			paramValue = false;
-		} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
-			// Check if it's potentially a number (handle integers and floats)
-			const num = Number(paramValue);
-			if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
-				paramValue = num;
+		// Parse parameters using string-based approach for better safety
+		// Common parameter names to look for (can be extended as needed)
+		// Note: includes both camelCase and underscore_case variants to handle inconsistencies
+		const commonParams = ['query', 'file_path', 'line', 'end_line', 'path', 'recursive', 'includeHidden', 
+		                      'max_results', 'maxResults', 'result', 'command', 'description', 'task', 'param', 'pattern',
+		                      'allow_tests', 'exact', 'maxTokens', 'language', 'input_content',
+		                      'context_lines', 'format', 'directory', 'autoCommits', 'files', 'targets'];
+		
+		for (const paramName of commonParams) {
+			const paramOpenTag = `<${paramName}>`;
+			const paramCloseTag = `</${paramName}>`;
+			
+			const paramOpenIndex = innerContent.indexOf(paramOpenTag);
+			if (paramOpenIndex === -1) {
+				continue; // Parameter not found
 			}
-			// Keep as string if not a valid finite number
+			
+			const paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
+			if (paramCloseIndex === -1) {
+				continue; // No closing tag found
+			}
+			
+			let paramValue = innerContent.substring(
+				paramOpenIndex + paramOpenTag.length,
+				paramCloseIndex
+			).trim();
+
+			// Basic type inference (can be improved)
+			if (paramValue.toLowerCase() === 'true') {
+				paramValue = true;
+			} else if (paramValue.toLowerCase() === 'false') {
+				paramValue = false;
+			} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
+				// Check if it's potentially a number (handle integers and floats)
+				const num = Number(paramValue);
+				if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
+					paramValue = num;
+				}
+				// Keep as string if not a valid finite number
+			}
+
+			params[paramName] = paramValue;
 		}
 
-		params[paramName] = paramValue;
+		// Special handling for attempt_completion - use entire inner content as result
+		if (toolName === 'attempt_completion') {
+			params['result'] = innerContent.trim();
+			// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
+			if (params.command) {
+				delete params.command;
+			}
+		}
+
+		// Return the first valid tool found
+		return { toolName, params };
 	}
 
-	// Special handling for attempt_completion where result might contain nested XML/code
-	if (toolName === 'attempt_completion') {
-		const resultMatch = innerContent.match(/<result>([\s\S]*?)<\/result>/);
-		if (resultMatch) {
-			params['result'] = resultMatch[1].trim(); // Keep result content as is
-		}
-		const commandMatch = innerContent.match(/<command>([\s\S]*?)<\/command>/);
-		if (commandMatch) {
-			params['command'] = commandMatch[1].trim();
-		}
+	// No valid tool found
+	return null;
+}
+
+/**
+ * Creates an improved preview of a message showing start and end portions
+ * @param {string} message - The message to preview
+ * @param {number} charsPerSide - Number of characters to show from start and end (default: 200)
+ * @returns {string} Formatted preview string
+ */
+export function createMessagePreview(message, charsPerSide = 200) {
+	if (message === null || message === undefined) {
+		return 'null/undefined';
 	}
-
-
-	return { toolName, params };
+	
+	if (typeof message !== 'string') {
+		return 'null/undefined';
+	}
+	
+	const totalChars = charsPerSide * 2;
+	
+	if (message.length <= totalChars) {
+		// Message is short enough to show completely
+		return message;
+	}
+	
+	// Message is longer - show start and end with ... in between
+	const start = message.substring(0, charsPerSide);
+	const end = message.substring(message.length - charsPerSide);
+	
+	return `${start}...${end}`;
 }

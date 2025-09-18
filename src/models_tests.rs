@@ -11,6 +11,7 @@ mod tests {
             lines: (1, 10),
             node_type: "function".to_string(),
             code: "fn test() {}".to_string(),
+            symbol_signature: None,
             matched_by_filename: None,
             rank: None,
             score: None,
@@ -18,11 +19,20 @@ mod tests {
             bm25_score: None,
             tfidf_rank: None,
             bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
             file_unique_terms: None,
             file_total_matches: None,
             file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            tokenized_content: None,
         };
-        
+
         assert_eq!(result.file, "test.rs");
         assert_eq!(result.lines, (1, 10));
         assert_eq!(result.node_type, "function");
@@ -47,8 +57,12 @@ mod tests {
             start_byte: 0,
             end_byte: 100,
             node_type: "function".to_string(),
+            parent_node_type: None,
+            parent_start_row: None,
+            parent_end_row: None,
+            parent_context: None,
         };
-        
+
         assert_eq!(block.start_row, 1);
         assert_eq!(block.end_row, 10);
         assert_eq!(block.start_byte, 0);
@@ -65,6 +79,7 @@ mod tests {
                 lines: (1, 10),
                 node_type: "function".to_string(),
                 code: "fn test1() {}".to_string(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: Some(1),
                 score: Some(0.9),
@@ -72,15 +87,25 @@ mod tests {
                 bm25_score: Some(0.9),
                 tfidf_rank: Some(1),
                 bm25_rank: Some(1),
+                new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
                 file_unique_terms: Some(2),
                 file_total_matches: Some(5),
                 file_match_rank: Some(1),
+                block_unique_terms: None,
+                block_total_matches: None,
+                parent_file_id: None,
+                block_id: None,
+                matched_keywords: None,
+                tokenized_content: None,
             },
             SearchResult {
                 file: "test2.rs".to_string(),
                 lines: (1, 10),
                 node_type: "function".to_string(),
                 code: "fn test2() {}".to_string(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: Some(2),
                 score: Some(0.8),
@@ -88,12 +113,21 @@ mod tests {
                 bm25_score: Some(0.8),
                 tfidf_rank: Some(2),
                 bm25_rank: Some(2),
+                new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
                 file_unique_terms: Some(1),
                 file_total_matches: Some(3),
                 file_match_rank: Some(2),
+                block_unique_terms: None,
+                block_total_matches: None,
+                parent_file_id: None,
+                block_id: None,
+                matched_keywords: None,
+                tokenized_content: None,
             },
         ];
-        
+
         // Create some skipped files
         let skipped_files = vec![
             SearchResult {
@@ -101,6 +135,7 @@ mod tests {
                 lines: (1, 10),
                 node_type: "function".to_string(),
                 code: "fn test3() {}".to_string(),
+                symbol_signature: None,
                 matched_by_filename: None,
                 rank: Some(3),
                 score: Some(0.7),
@@ -108,12 +143,21 @@ mod tests {
                 bm25_score: Some(0.7),
                 tfidf_rank: Some(3),
                 bm25_rank: Some(3),
+                new_score: None,
+                hybrid2_rank: None,
+                combined_score_rank: None,
                 file_unique_terms: Some(1),
                 file_total_matches: Some(2),
                 file_match_rank: Some(3),
+                block_unique_terms: None,
+                block_total_matches: None,
+                parent_file_id: None,
+                block_id: None,
+                matched_keywords: None,
+                tokenized_content: None,
             },
         ];
-        
+
         // Create limits
         let limits = SearchLimits {
             max_results: Some(2),
@@ -122,18 +166,18 @@ mod tests {
             total_bytes: 24,
             total_tokens: 6,
         };
-        
+
         // Create the limited search results
         let limited_results = LimitedSearchResults {
             results: results.clone(),
             skipped_files: skipped_files.clone(),
             limits_applied: Some(limits),
         };
-        
+
         // Check the contents
         assert_eq!(limited_results.results.len(), 2);
         assert_eq!(limited_results.skipped_files.len(), 1);
-        
+
         // Check that the limits are correctly stored
         let limits = limited_results.limits_applied.unwrap();
         assert_eq!(limits.max_results, Some(2));
@@ -152,7 +196,7 @@ mod tests {
             total_bytes: 500,
             total_tokens: 100,
         };
-        
+
         assert_eq!(limits.max_results, Some(10));
         assert_eq!(limits.max_bytes, Some(1000));
         assert_eq!(limits.max_tokens, Some(200));

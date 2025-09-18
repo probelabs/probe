@@ -39,26 +39,26 @@ impl SearchResult {
 
 fn calculate_score(line: &str) -> f64 {
     let mut score = 0.0;
-    
+
     if line.contains("fn ") {
         score += 2.0;
     }
-    
+
     if line.contains("struct ") {
         score += 1.5;
     }
-    
+
     if line.contains("use ") {
         score += 1.0;
     }
-    
+
     score += line.len() as f64 * 0.01;
     score
 }
 
 fn main() {
     let mut results = Vec::new();
-    
+
     for i in 0..100 {
         let content = format!("Line {}: test content", i);
         let result = SearchResult::new(
@@ -68,7 +68,7 @@ fn main() {
         );
         results.push(result);
     }
-    
+
     println!("Found {} results", results.len());
 }
 "#
@@ -82,22 +82,22 @@ class SearchResult {
         this.content = content;
         this.score = this.calculateScore(content);
     }
-    
+
     calculateScore(line) {
         let score = 0;
-        
+
         if (line.includes("function ")) {
             score += 2;
         }
-        
+
         if (line.includes("class ")) {
             score += 1.5;
         }
-        
+
         if (line.includes("const ")) {
             score += 1;
         }
-        
+
         score += line.length * 0.01;
         return score;
     }
@@ -105,13 +105,13 @@ class SearchResult {
 
 function main() {
     const results = [];
-    
+
     for (let i = 0; i < 100; i++) {
         const content = `Line ${i}: test content`;
         const result = new SearchResult("test.js", i, content);
         results.push(result);
     }
-    
+
     console.log(`Found ${results.length} results`);
 }
 
@@ -126,30 +126,30 @@ class SearchResult:
         self.line_number = line_number
         self.content = content
         self.score = self.calculate_score(content)
-    
+
     def calculate_score(self, line):
         score = 0.0
-        
+
         if "def " in line:
             score += 2.0
-        
+
         if "class " in line:
             score += 1.5
-        
+
         if "import " in line:
             score += 1.0
-        
+
         score += len(line) * 0.01
         return score
 
 def main():
     results = []
-    
+
     for i in range(100):
         content = f"Line {i}: test content"
         result = SearchResult("test.py", i, content)
         results.append(result)
-    
+
     print(f"Found {len(results)} results")
 
 if __name__ == "__main__":
@@ -183,32 +183,32 @@ func NewSearchResult(filePath string, lineNumber int, content string) *SearchRes
 
 func calculateScore(line string) float64 {
     score := 0.0
-    
+
     if strings.Contains(line, "func ") {
         score += 2.0
     }
-    
+
     if strings.Contains(line, "type ") {
         score += 1.5
     }
-    
+
     if strings.Contains(line, "import") {
         score += 1.0
     }
-    
+
     score += float64(len(line)) * 0.01
     return score
 }
 
 func main() {
     results := make([]*SearchResult, 0, 100)
-    
+
     for i := 0; i < 100; i++ {
         content := fmt.Sprintf("Line %d: test content", i)
         result := NewSearchResult("test.go", i, content)
         results = append(results, result)
     }
-    
+
     fmt.Printf("Found %d results\n", len(results))
 }
 "#

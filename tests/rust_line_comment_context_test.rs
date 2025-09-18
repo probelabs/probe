@@ -8,7 +8,7 @@ fn test_rust_line_comment_context_extension() -> Result<()> {
     let rust_code = r#"
 pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
     let stemmer = get_stemmer();
-    
+
     if camel_parts.len() > 1 {
         camel_parts
             .into_iter()
@@ -59,7 +59,7 @@ mod tests {
     // Check that line comments are extended to their parent context
     // The first comment at line 9 should be part of the tokenize_and_stem function
     let first_comment_in_function = result.iter().any(|block| {
-        block.node_type == "function_item" 
+        block.node_type == "function_item"
                 && block.start_row <= 8  // Comment is at line 9 (0-indexed = 8)
                 && block.end_row >= 8
     });

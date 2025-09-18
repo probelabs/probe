@@ -20,7 +20,7 @@ mod tests {
         assert!(tokens.contains(&"stem".to_string())); // stemmed "stemming"
         assert!(tokens.contains(&"token".to_string())); // test token
     }
-    
+
     #[test]
     fn test_parsing() {
         let result = parse("test");
@@ -94,7 +94,7 @@ fn test_regular_function_comment_context() -> Result<()> {
 pub fn tokenize_and_stem(keyword: &str) -> Vec<String> {
     let stemmer = get_stemmer();
     let tokens = split_camel_case(keyword);
-    
+
     if tokens.len() > 1 {
         tokens
             .into_iter()
