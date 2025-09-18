@@ -1353,7 +1353,7 @@ impl ProbeConfig {
             },
             indexing: ResolvedIndexingConfig {
                 enabled: indexing.enabled.unwrap_or(true),
-                auto_index: indexing.auto_index.unwrap_or(true),
+                auto_index: indexing.auto_index.unwrap_or(false),
                 watch_files: indexing.watch_files.unwrap_or(true),
                 default_depth: indexing.default_depth.unwrap_or(3),
                 max_workers: indexing.max_workers.unwrap_or(8),
@@ -1979,7 +1979,7 @@ mod tests {
 
         // Test indexing section - should use new defaults
         assert!(resolved.indexing.enabled);
-        assert!(resolved.indexing.auto_index); // Enabled by default for user convenience
+        assert!(!resolved.indexing.auto_index); // Disabled by default to avoid auto-indexing during tests
         assert!(resolved.indexing.watch_files);
         assert_eq!(resolved.indexing.default_depth, 3);
         assert_eq!(resolved.indexing.max_workers, 8);
@@ -2185,7 +2185,7 @@ mod tests {
         assert!(parsed["search"].is_object());
         assert!(parsed["indexing"].is_object());
         assert_eq!(parsed["indexing"]["enabled"], true);
-        assert_eq!(parsed["indexing"]["auto_index"], true); // Enabled by default for user convenience
+        assert_eq!(parsed["indexing"]["auto_index"], false); // Disabled by default to avoid auto-indexing during tests
         assert_eq!(parsed["indexing"]["watch_files"], true);
     }
 
@@ -2268,7 +2268,7 @@ mod tests {
 
         // These should be the resolved defaults, not None
         assert!(resolved.indexing.enabled);
-        assert!(resolved.indexing.auto_index); // Enabled by default for user convenience
+        assert!(!resolved.indexing.auto_index); // Disabled by default to avoid auto-indexing during tests
         assert!(resolved.indexing.watch_files);
         assert_eq!(resolved.indexing.default_depth, 3);
         assert_eq!(resolved.indexing.max_workers, 8);
