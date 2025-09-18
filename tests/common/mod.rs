@@ -884,7 +884,7 @@ pub fn wait_for_lsp_servers_ready_with_config(
             Ok(false) => {
                 consecutive_failures = 0; // successful check, just not ready yet
                                           // Log every ~5 seconds
-                if elapsed.as_secs() % 5 == 0
+                if elapsed.as_secs().is_multiple_of(5)
                     && elapsed.as_millis() % 1000 < poll_interval.as_millis()
                 {
                     println!(
@@ -898,7 +898,7 @@ pub fn wait_for_lsp_servers_ready_with_config(
             Err(e) => {
                 // Status check failed, but don't fail immediately in case it's transient
                 consecutive_failures += 1;
-                if elapsed.as_secs() % 10 == 0
+                if elapsed.as_secs().is_multiple_of(10)
                     && elapsed.as_millis() % 1000 < poll_interval.as_millis()
                 {
                     println!("LSP status check failed (will retry): {e} (#{consecutive_failures})");
