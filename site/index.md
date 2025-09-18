@@ -26,9 +26,9 @@ hero:
       <div class="quick-start-option">
               <h3>Core Search</h3>
               <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @probelabs/probe@latest "+stemming -lexer"</code></pre></div>
+                <div class="language-bash"><pre><code>npx -y @probelabs/probe@latest "function AND ext:rs"</code></pre></div>
               </div>
-              <p class="option-description">Fast semantic code search with elastic search syntax</p>
+              <p class="option-description">Fast semantic code search with elastic search syntax and file filtering</p>
             </div>
             <div class="quick-start-option">
               <h3>AI Chat</h3>
@@ -40,7 +40,7 @@ hero:
             <div class="quick-start-option">
               <h3>Docker</h3>
               <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>docker run --rm -v $(pwd):/workspace buger/probe search "function"</code></pre></div>
+                <div class="language-bash"><pre><code>docker run --rm -v $(pwd):/workspace buger/probe search "function AND ext:rs"</code></pre></div>
               </div>
               <p class="option-description">Containerized deployment with multi-platform support</p>
             </div>

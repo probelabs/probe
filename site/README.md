@@ -102,7 +102,7 @@ function handleError(error) {
 The `CommandExample` component displays command-line examples:
 
 ```markdown
-<CommandExample>probe search "error handling" ./src</CommandExample>
+<CommandExample>probe search "error handling AND ext:rs" ./src</CommandExample>
 ```
 
 With output:
