@@ -881,8 +881,8 @@ fn test_config_show_json_format() {
         "Indexing should be enabled by default"
     );
     assert_eq!(
-        json_value["indexing"]["auto_index"], true,
-        "Auto-index should be enabled by default"
+        json_value["indexing"]["auto_index"], false,
+        "Auto-index should be disabled by default to avoid interference"
     );
     assert_eq!(
         json_value["indexing"]["watch_files"], true,
@@ -927,8 +927,8 @@ fn test_config_show_env_format() {
         "Should export indexing enabled"
     );
     assert!(
-        stdout.contains("export PROBE_INDEXING_AUTO_INDEX=true"),
-        "Should export auto index"
+        stdout.contains("export PROBE_INDEXING_AUTO_INDEX=false"),
+        "Should export auto index as false"
     );
     assert!(
         stdout.contains("export PROBE_INDEXING_WATCH_FILES=true"),
@@ -1145,8 +1145,8 @@ fn test_config_validation() {
         "Should use default indexing enabled"
     );
     assert_eq!(
-        json["indexing"]["auto_index"], true,
-        "Should use default auto_index"
+        json["indexing"]["auto_index"], false,
+        "Should use default auto_index (false to avoid interference)"
     );
     assert_eq!(
         json["indexing"]["watch_files"], true,
