@@ -129,6 +129,9 @@ fn create_test_search_result() -> SearchResult {
         block_id: None,
         matched_by_filename: Some(false),
         tokenized_content: None,
+        symbol_signature: None,
+        parent_context: None,
+        matched_lines: None,
     }
 }
 
