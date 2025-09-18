@@ -304,5 +304,64 @@ flowchart TD
       
       expect(result.isValid).toBe(true);
     });
+
+    test('should auto-fix complex node labels with HTML and parentheses formatting', async () => {
+      // Test case based on real output that contains unquoted labels with parentheses and HTML
+      const response = `Here's the workflow diagram:
+
+\`\`\`mermaid
+graph LR
+    subgraph "1. Execution"
+        A[Check 1 (security)] --> B{ReviewSummary};
+        C[Check 2 (overview)] --> B;
+        D[Check 3 (performance)] --> B;
+    end
+
+    subgraph "2. Rendering & Grouping"
+        B -- Renders --> E[CheckResult 1 <br><i>content (details) <br> group (review)</i>];
+        B -- Renders --> F[CheckResult 2 <br><i>content (details) <br> group (overview)</i>];
+        B -- Renders --> G[CheckResult 3 <br><i>content (details) <br> group (review)</i>];
+    end
+
+    subgraph "3. Final Output"
+        H[GroupedCheckResults <br><i>{ review (CR1, CR3), overview (CR2) }</i>]
+        I[PR Comment 1 (review)]
+        J[PR Comment 2 (overview)]
+        K[GitHub Annotations]
+    end
+
+    E --> H;
+    F --> H;
+    G --> H;
+    H --> I;
+    H --> J;
+    H --> K;
+\`\`\``;
+
+      const result = await validateAndFixMermaidResponse(response, mockOptions);
+      
+      expect(result.wasFixed).toBe(true);
+      expect(result.fixingResults).toHaveLength(1);
+      expect(result.fixingResults[0].fixMethod).toBe('node_label_quote_wrapping');
+      expect(result.fixingResults[0].wasFixed).toBe(true);
+      
+      // Check that complex node labels with HTML and parentheses are properly quoted
+      expect(result.fixedResponse).toContain('A["Check 1 (security)"]');
+      expect(result.fixedResponse).toContain('C["Check 2 (overview)"]');
+      expect(result.fixedResponse).toContain('D["Check 3 (performance)"]');
+      expect(result.fixedResponse).toContain('E["CheckResult 1 <br><i>content (details) <br> group (review)</i>"]');
+      expect(result.fixedResponse).toContain('F["CheckResult 2 <br><i>content (details) <br> group (overview)</i>"]');
+      expect(result.fixedResponse).toContain('G["CheckResult 3 <br><i>content (details) <br> group (review)</i>"]');
+      expect(result.fixedResponse).toContain('H["GroupedCheckResults <br><i>{" review (CR1, CR3), overview (CR2) "}</i>"]');
+      expect(result.fixedResponse).toContain('I["PR Comment 1 (review)"]');
+      expect(result.fixedResponse).toContain('J["PR Comment 2 (overview)"]');
+      
+      // Verify that simple labels without parentheses remain unchanged
+      expect(result.fixedResponse).toContain('K[GitHub Annotations]');
+      
+      // Should be valid after auto-fix
+      expect(result.isValid).toBe(true);
+    });
+
   });
 });
