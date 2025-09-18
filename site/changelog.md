@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🚀 Major Features
 
+#### Search Hints for Enhanced File Filtering
+- **New search hints syntax**: Filter search results by file properties using intuitive syntax like `ext:rs`, `file:src/*, `dir:tests`, `type:javascript`, `lang:python`
+- **Early pipeline filtering**: Filters are applied at the file discovery level for improved performance and precision
+- **Multiple filter support**: Combine multiple hints like `ext:rs,js AND dir:src AND type:javascript`
+- **Glob pattern support**: Use patterns like `file:src/**/*.rs` for complex path matching
+- **AST integration**: Filters are extracted from queries and applied without affecting content search logic
+- **Comprehensive testing**: 13+ unit tests covering all filter types and combinations
+- **Full documentation**: Updated CLI help, README, and site documentation with examples and reference tables
+
 #### Enhanced Extract Command Markdown Robustness
 - **Markdown formatting support**: Extract command now handles markdown bold (`**text**`), italic (`*text*`), strikethrough (`~~text~~`), and code blocks (```text```)
 - **Flexible file path detection**: Improved regex patterns recognize file paths after punctuation and markdown symbols

@@ -42,8 +42,24 @@ This means:
 - **Boolean Operators**: AND, OR, NOT for complex queries
 - **Grouping**: Parentheses for logical term grouping
 - **Term Modifiers**: +/- prefixes for required/excluded terms
+- **Search Hints**: Filter by file properties (`ext:rs`, `dir:src`, `type:javascript`, `lang:python`, `file:path/*`)
 - **Field Specifiers**: Target specific code elements
 - **Smart Token Matching**: Stemming and compound word handling
+
+### Search Hints
+
+Search hints allow you to filter search results by file properties, improving precision and performance:
+
+- **File Extensions**: `ext:rs,js,ts` - Search only in files with specific extensions
+- **Directory Filtering**: `dir:src` - Limit search to specific directories  
+- **File Type Filtering**: `type:javascript` - Search by programming language type
+- **Language Filtering**: `lang:python` - Filter by programming language
+- **Path Patterns**: `file:src/**/*.rs` - Use glob patterns for complex file matching
+
+Examples:
+- `probe search "async function AND ext:rs"` - Find async functions only in Rust files
+- `probe search "database AND dir:src AND type:javascript"` - Search for database code in JavaScript files within src/
+- `probe search "error handling AND ext:rs,js,ts"` - Find error handling across multiple languages
 
 ### Privacy
 

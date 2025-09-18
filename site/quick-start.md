@@ -36,6 +36,31 @@ This will search for the terms "llm" and "pricing" in your codebase and return t
 
 For more advanced search techniques and options, see the [Search Functionality](/search-functionality) documentation.
 
+## Search Hints for Precise Results
+
+Use search hints to filter results by file properties:
+
+```bash
+# Search only in Rust files
+probe search "async function AND ext:rs"
+
+# Search in specific directories and file types
+probe search "database connection AND dir:src AND type:javascript"
+
+# Multiple file extensions
+probe search "error handling AND ext:rs,js,ts"
+
+# Complex file patterns
+probe search "authentication AND file:src/**/*.py AND dir:auth"
+```
+
+Available search hints:
+- `ext:rs,js` - Filter by file extensions  
+- `file:path/pattern` - Filter by file path (supports glob patterns)
+- `dir:dirname` - Filter by directory
+- `type:javascript` - Filter by language/file type
+- `lang:python` - Filter by programming language
+
 ## Advanced Search (with Token Limiting)
 
 Search for "prompt injection" in the current directory but limit the total tokens to 10000 (useful for AI tools with context window constraints):
