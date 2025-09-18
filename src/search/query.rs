@@ -732,7 +732,10 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 } // Re-added function closing brace
 
 /// Create a query plan from an already parsed AST
-pub fn create_query_plan_from_ast(ast: elastic_query::Expr, exact: bool) -> Result<QueryPlan, elastic_query::ParseError> {
+pub fn create_query_plan_from_ast(
+    ast: elastic_query::Expr,
+    exact: bool,
+) -> Result<QueryPlan, elastic_query::ParseError> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 

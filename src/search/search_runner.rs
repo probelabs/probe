@@ -377,7 +377,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     }
 
     let initial_ast = initial_ast_result.unwrap();
-    
+
     // Extract filters and simplify AST
     let (search_filters, simplified_ast) = SearchFilters::extract_and_simplify(initial_ast);
 
@@ -1712,7 +1712,7 @@ pub fn search_with_structured_patterns(
                 initial_file_list.files.len()
             );
         }
-        
+
         let filtered: Vec<PathBuf> = initial_file_list
             .files
             .iter()
@@ -1733,11 +1733,14 @@ pub fn search_with_structured_patterns(
                 initial_file_list.files.len()
             );
         }
-        
+
         filtered
     } else {
         if debug_mode {
-            println!("DEBUG: No search filters active, using all {} files", initial_file_list.files.len());
+            println!(
+                "DEBUG: No search filters active, using all {} files",
+                initial_file_list.files.len()
+            );
         }
         initial_file_list.files.clone()
     };
