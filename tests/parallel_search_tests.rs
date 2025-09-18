@@ -1,4 +1,6 @@
-use probe_code::search::search_runner::{perform_probe, search_with_structured_patterns, SearchConfig};
+use probe_code::search::search_runner::{
+    perform_probe, search_with_structured_patterns, SearchConfig,
+};
 use probe_code::search::SearchOptions;
 use std::fs;
 use std::path::{Path, PathBuf};
