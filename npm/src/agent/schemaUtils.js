@@ -1242,7 +1242,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       }
     }
     
-    // Third pass: Try auto-fixing node labels with parentheses
+    // Third pass: Try auto-fixing node labels with parentheses or single quotes
     let nodeLabelFixesApplied = false;
     
     // Re-extract diagrams and re-validate after previous fixes
@@ -1255,7 +1255,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       .reverse();
 
     for (const invalidDiagram of stillInvalidAfterSubgraph) {
-      // Check if this is a node label parentheses error that we can auto-fix
+      // Check if this is a node label error that we can auto-fix
       if (invalidDiagram.error && 
           (invalidDiagram.error.includes('Parentheses in node label') || 
            invalidDiagram.error.includes('Complex expression in diamond node'))) {
@@ -1263,7 +1263,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
         const lines = originalContent.split('\n');
         let wasFixed = false;
         
-        // Find and fix node labels with unquoted parentheses
+        // Find and fix node labels with unquoted parentheses  
         const fixedLines = lines.map(line => {
           const trimmedLine = line.trim();
           let modifiedLine = line;
@@ -1275,7 +1275,9 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // Only fix if it's not already quoted
               if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
                 wasFixed = true;
-                return `["${content}"]`;
+                // Replace internal double quotes with single quotes to avoid nesting
+                const safeContent = content.replace(/"/g, "'");
+                return `["${safeContent}"]`;
               }
               return match;
             });
@@ -1288,11 +1290,14 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // Only fix if it's not already quoted
               if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
                 wasFixed = true;
-                return `{"${content}"}`;
+                // Replace internal double quotes with single quotes to avoid nesting
+                const safeContent = content.replace(/"/g, "'");
+                return `{"${safeContent}"}`;
               }
               return match;
             });
           }
+          
           
           return modifiedLine;
         });
@@ -1374,6 +1379,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       }
     }
     
+    // Re-extract diagrams and re-validate after HTML entity fixes
+    const { diagrams: updatedDiagrams } = extractMermaidFromMarkdown(fixedResponse);
+    const updatedValidation = await validateMermaidResponse(fixedResponse);
+    
     // Still have invalid diagrams after all auto-fixes, proceed with AI fixing
     if (debug) {
       const stillInvalidAfterHtml = updatedValidation?.diagrams?.filter(d => !d.isValid)?.length || invalidCount;
@@ -1389,10 +1398,6 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     const mermaidFixer = new MermaidFixingAgent({
       path, provider, model, debug, tracer
     });
-    
-    // Re-extract diagrams and re-validate after HTML entity fixes
-    const { diagrams: updatedDiagrams } = extractMermaidFromMarkdown(fixedResponse);
-    const updatedValidation = await validateMermaidResponse(fixedResponse);
     
     const stillInvalidDiagrams = updatedValidation.diagrams
       .map((result, index) => ({ ...result, originalIndex: index }))
