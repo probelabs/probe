@@ -1001,7 +1001,7 @@ async fn test_indexing_progress_monitoring() -> Result<()> {
 
     while start.elapsed() < Duration::from_secs(10) {
         let progress = manager.get_progress().await;
-        if start.elapsed().as_millis() % 1000 == 0 {
+        if start.elapsed().as_millis().is_multiple_of(1000) {
             println!(
                 "Checking progress at {}s: {} files processed",
                 start.elapsed().as_secs(),
