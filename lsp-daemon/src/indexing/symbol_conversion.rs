@@ -299,10 +299,19 @@ impl FieldValidator {
     /// Validate file path
     pub fn validate_file_path(path: &str) -> Result<()> {
         if path.trim().is_empty() {
-            return Err(anyhow::anyhow!("File path cannot be empty"));
+            return Err(anyhow::anyhow!(
+                "File path cannot be empty. This indicates a bug in AST extraction or symbol conversion."
+            ));
         }
         if path.len() > 4096 {
             return Err(anyhow::anyhow!("File path too long (max 4096 characters)"));
+        }
+        // Additional check for common placeholder paths that indicate bugs
+        if path == "unknown" || path == "" {
+            return Err(anyhow::anyhow!(
+                "File path is placeholder '{}'. This indicates a bug in AST extraction.",
+                path
+            ));
         }
         Ok(())
     }

@@ -103,7 +103,7 @@ cp settings.example.json ./.probe/settings.local.json
 | Setting | Type | Default | Environment Variable | Description |
 |---------|------|---------|---------------------|-------------|
 | `enabled` | boolean | `true` | `PROBE_INDEXING_ENABLED` | Enable indexing subsystem (file-based indexing is default) |
-| `auto_index` | boolean | `true` | `PROBE_INDEXING_AUTO_INDEX` | Auto-index workspaces when initialized |
+| `auto_index` | boolean | `false` | `PROBE_INDEXING_AUTO_INDEX` | Auto-index workspaces when initialized |
 | `watch_files` | boolean | `true` | `PROBE_INDEXING_WATCH_FILES` | Enable file watching for incremental indexing (auto-updates index on file changes) |
 | `default_depth` | number | `3` | `PROBE_INDEXING_DEFAULT_DEPTH` | Default indexing depth for nested projects |
 | `max_workers` | number | `8` | `PROBE_INDEXING_MAX_WORKERS` | Number of worker threads for indexing |
@@ -147,6 +147,8 @@ cp settings.example.json ./.probe/settings.local.json
 
 | Setting | Type | Default | Environment Variable | Description |
 |---------|------|---------|---------------------|-------------|
+| `enabled` | boolean | `true` | `PROBE_LSP_INDEXING_ENABLED` | Enable LSP indexing and enrichment features |
+| | | `true` | `PROBE_LSP_ENRICHMENT_ENABLED` | Enable LSP enrichment workers during indexing |
 | `cache_call_hierarchy` | boolean | `true` | `PROBE_INDEXING_LSP_CACHE_CALL_HIERARCHY` | Cache call hierarchy operations |
 | `cache_definitions` | boolean | `false` | `PROBE_INDEXING_LSP_CACHE_DEFINITIONS` | Cache definition lookups |
 | `cache_references` | boolean | `true` | `PROBE_INDEXING_LSP_CACHE_REFERENCES` | Cache reference lookups |

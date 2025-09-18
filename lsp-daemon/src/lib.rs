@@ -99,7 +99,9 @@ pub use watchdog::{ProcessHealth, ProcessMonitor, ProcessStats, Watchdog};
 
 pub use git_service::GitService;
 pub use path_resolver::PathResolver;
-pub use workspace_utils::{find_workspace_root, find_workspace_root_with_fallback, is_workspace_root};
+pub use workspace_utils::{
+    find_workspace_root, find_workspace_root_with_fallback, is_workspace_root,
+};
 
 // Re-export indexing types for external use
 pub use indexing::{

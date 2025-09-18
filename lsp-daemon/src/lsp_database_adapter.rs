@@ -733,7 +733,9 @@ impl LspDatabaseAdapter {
 
         if let Some(identifier) = identifier_node {
             if identifier.end_byte() > content.len() {
-                return Err(anyhow::anyhow!("Tree-sitter node bounds exceed content length"));
+                return Err(anyhow::anyhow!(
+                    "Tree-sitter node bounds exceed content length"
+                ));
             }
             let name = identifier
                 .utf8_text(content)
@@ -1415,7 +1417,8 @@ impl LspDatabaseAdapter {
 
         for extracted in extracted_symbols {
             // Read file content for UID generation
-            let file_content = match tokio::fs::read_to_string(&extracted.location.file_path).await {
+            let file_content = match tokio::fs::read_to_string(&extracted.location.file_path).await
+            {
                 Ok(content) => content,
                 Err(e) => {
                     warn!(
@@ -3502,7 +3505,7 @@ impl Drawable for Circle {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_store_extracted_symbols_integration() {
-        use crate::database::{DatabaseConfig, SQLiteBackend, DatabaseBackend};
+        use crate::database::{DatabaseBackend, DatabaseConfig, SQLiteBackend};
         use crate::indexing::ast_extractor::AstSymbolExtractor;
         use crate::language_detector::Language;
         use tempfile::TempDir;
@@ -3549,22 +3552,24 @@ impl Calculator {
             .extract_symbols_from_file(&temp_file, rust_code, Language::Rust)
             .unwrap();
 
-        println!("Extracted {} symbols from test code", extracted_symbols.len());
+        println!(
+            "Extracted {} symbols from test code",
+            extracted_symbols.len()
+        );
 
         // Test the database adapter's store_extracted_symbols method
         let mut database_adapter = LspDatabaseAdapter::new();
         let workspace_root = temp_dir.path();
 
         let result = database_adapter
-            .store_extracted_symbols(
-                &database,
-                extracted_symbols.clone(),
-                workspace_root,
-                "rust",
-            )
+            .store_extracted_symbols(&database, extracted_symbols.clone(), workspace_root, "rust")
             .await;
 
-        assert!(result.is_ok(), "Should successfully store extracted symbols: {:?}", result);
+        assert!(
+            result.is_ok(),
+            "Should successfully store extracted symbols: {:?}",
+            result
+        );
 
         println!(
             "INTEGRATION TEST SUCCESS: Stored {} symbols to database using LspDatabaseAdapter",

@@ -426,13 +426,7 @@ mod tests {
     fn create_test_ast_symbol(name: &str, line: u32) -> AstExtractedSymbol {
         use crate::symbol::{SymbolKind, SymbolLocation, Visibility};
 
-        let location = SymbolLocation::new(
-            PathBuf::from("test.rs"),
-            line,
-            0,
-            line,
-            10,
-        );
+        let location = SymbolLocation::new(PathBuf::from("test.rs"), line, 0, line, 10);
 
         AstExtractedSymbol {
             uid: format!("test:{}:{}", name, line),

@@ -1979,7 +1979,7 @@ mod tests {
 
         // Test indexing section - should use new defaults
         assert!(resolved.indexing.enabled);
-        assert!(resolved.indexing.auto_index);
+        assert!(!resolved.indexing.auto_index); // Changed to false by default
         assert!(resolved.indexing.watch_files);
         assert_eq!(resolved.indexing.default_depth, 3);
         assert_eq!(resolved.indexing.max_workers, 8);
@@ -2185,7 +2185,7 @@ mod tests {
         assert!(parsed["search"].is_object());
         assert!(parsed["indexing"].is_object());
         assert_eq!(parsed["indexing"]["enabled"], true);
-        assert_eq!(parsed["indexing"]["auto_index"], true);
+        assert_eq!(parsed["indexing"]["auto_index"], false); // Changed to false by default
         assert_eq!(parsed["indexing"]["watch_files"], true);
     }
 
@@ -2268,7 +2268,7 @@ mod tests {
 
         // These should be the resolved defaults, not None
         assert!(resolved.indexing.enabled);
-        assert!(resolved.indexing.auto_index);
+        assert!(!resolved.indexing.auto_index); // Changed to false by default
         assert!(resolved.indexing.watch_files);
         assert_eq!(resolved.indexing.default_depth, 3);
         assert_eq!(resolved.indexing.max_workers, 8);

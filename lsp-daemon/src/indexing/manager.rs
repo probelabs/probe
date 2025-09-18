@@ -8,18 +8,19 @@
 //! - Progress reporting and status monitoring
 
 use crate::cache_types::DefinitionInfo;
+use crate::database::DatabaseBackend;
 use crate::indexing::{
-    pipelines::SymbolInfo, IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue,
-    LanguageStrategyFactory, Priority, QueueItem,
     lsp_enrichment_queue::{LspEnrichmentQueue, QueueItem as EnrichmentQueueItem},
     lsp_enrichment_worker::{EnrichmentWorkerConfig, LspEnrichmentWorkerPool},
+    pipelines::SymbolInfo,
+    IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue, LanguageStrategyFactory,
+    Priority, QueueItem,
 };
 use crate::language_detector::{Language, LanguageDetector};
 use crate::lsp_cache::LspCache;
 use crate::lsp_database_adapter::LspDatabaseAdapter;
-use crate::server_manager::SingleServerManager;
 use crate::path_resolver::PathResolver;
-use crate::database::DatabaseBackend;
+use crate::server_manager::SingleServerManager;
 // Database imports removed - no longer needed for IndexingManager
 
 /// Dummy cache stats structure to replace universal cache stats
@@ -286,7 +287,8 @@ pub struct IndexingManager {
     lsp_enrichment_queue: Arc<crate::indexing::lsp_enrichment_queue::LspEnrichmentQueue>,
 
     /// Phase 2 LSP enrichment worker pool
-    lsp_enrichment_worker_pool: Option<Arc<crate::indexing::lsp_enrichment_worker::LspEnrichmentWorkerPool>>,
+    lsp_enrichment_worker_pool:
+        Option<Arc<crate::indexing::lsp_enrichment_worker::LspEnrichmentWorkerPool>>,
 
     /// Phase 2 enrichment worker handles
     enrichment_worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
@@ -2328,7 +2330,8 @@ impl IndexingManager {
         );
 
         // Step 2: Queue orphan symbols for processing
-        self.queue_orphan_symbols_for_enrichment(orphan_symbols).await?;
+        self.queue_orphan_symbols_for_enrichment(orphan_symbols)
+            .await?;
 
         // Step 3: Start worker pool for LSP enrichment
         if let Some(worker_pool) = &self.lsp_enrichment_worker_pool {
@@ -2352,7 +2355,9 @@ impl IndexingManager {
     }
 
     /// Find orphan symbols (symbols without edges) that need LSP enrichment
-    async fn find_orphan_symbols_for_enrichment(&self) -> Result<Vec<crate::database::SymbolState>> {
+    async fn find_orphan_symbols_for_enrichment(
+        &self,
+    ) -> Result<Vec<crate::database::SymbolState>> {
         // Get the batch size from environment variable
         let batch_size = std::env::var("PROBE_LSP_ENRICHMENT_BATCH_SIZE")
             .ok()
@@ -2397,7 +2402,10 @@ impl IndexingManager {
                 "cpp" | "c++" => Language::Cpp,
                 "java" => Language::Java,
                 _ => {
-                    debug!("Skipping symbol with unsupported language: {}", symbol.language);
+                    debug!(
+                        "Skipping symbol with unsupported language: {}",
+                        symbol.language
+                    );
                     continue;
                 }
             };
@@ -2530,11 +2538,21 @@ impl IndexingManager {
                     if let Some(worker_pool) = &lsp_enrichment_worker_pool {
                         match std::env::current_dir() {
                             Ok(current_dir) => {
-                                match workspace_cache_router.cache_for_workspace(current_dir).await {
+                                match workspace_cache_router
+                                    .cache_for_workspace(current_dir)
+                                    .await
+                                {
                                     Ok(cache_adapter) => {
-                                        match worker_pool.start_processing(lsp_enrichment_queue.clone(), cache_adapter).await {
+                                        match worker_pool
+                                            .start_processing(
+                                                lsp_enrichment_queue.clone(),
+                                                cache_adapter,
+                                            )
+                                            .await
+                                        {
                                             Ok(worker_handles_vec) => {
-                                                let mut handles = enrichment_worker_handles.write().await;
+                                                let mut handles =
+                                                    enrichment_worker_handles.write().await;
                                                 handles.extend(worker_handles_vec);
                                                 workers_started = true;
                                                 info!("Phase 2 enrichment workers started successfully in parallel monitor");
@@ -2567,16 +2585,24 @@ impl IndexingManager {
                     // Get cache adapter for database access
                     match std::env::current_dir() {
                         Ok(current_dir) => {
-                            match workspace_cache_router.cache_for_workspace(current_dir).await {
+                            match workspace_cache_router
+                                .cache_for_workspace(current_dir)
+                                .await
+                            {
                                 Ok(cache_adapter) => {
                                     // Get the backend and find orphan symbols
                                     let backend = cache_adapter.backend();
-                                    let crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) = backend;
+                                    let crate::database_cache_adapter::BackendType::SQLite(
+                                        sqlite_backend,
+                                    ) = backend;
 
                                     match sqlite_backend.find_orphan_symbols(batch_size).await {
                                         Ok(orphan_symbols) => {
                                             if !orphan_symbols.is_empty() {
-                                                debug!("Found {} orphan symbols for enrichment", orphan_symbols.len());
+                                                debug!(
+                                                    "Found {} orphan symbols for enrichment",
+                                                    orphan_symbols.len()
+                                                );
 
                                                 // Queue orphan symbols for processing
                                                 for symbol in orphan_symbols {
@@ -2602,7 +2628,10 @@ impl IndexingManager {
                                                         language,
                                                         symbol.kind.clone(),
                                                     );
-                                                    lsp_enrichment_queue.add_symbol(queue_item).await.ok();
+                                                    lsp_enrichment_queue
+                                                        .add_symbol(queue_item)
+                                                        .await
+                                                        .ok();
                                                 }
                                             }
                                         }
@@ -2629,7 +2658,10 @@ impl IndexingManager {
                         info!("Phase 1 complete and Phase 2 queue empty, Phase 2 monitor exiting");
                         break;
                     } else {
-                        debug!("Phase 1 complete but {} symbols still in Phase 2 queue", queue_size);
+                        debug!(
+                            "Phase 1 complete but {} symbols still in Phase 2 queue",
+                            queue_size
+                        );
                     }
                 }
             }
@@ -2718,7 +2750,9 @@ impl IndexingManager {
     }
 
     /// Get Phase 2 enrichment statistics
-    pub async fn get_enrichment_stats(&self) -> Option<crate::indexing::lsp_enrichment_worker::EnrichmentWorkerStatsSnapshot> {
+    pub async fn get_enrichment_stats(
+        &self,
+    ) -> Option<crate::indexing::lsp_enrichment_worker::EnrichmentWorkerStatsSnapshot> {
         self.lsp_enrichment_worker_pool
             .as_ref()
             .map(|pool| pool.get_stats().snapshot())
@@ -2742,7 +2776,8 @@ impl IndexingManager {
 
         // For now, use worker stats symbols as a proxy for edges created
         // This gives us meaningful data until we can access the database properly
-        let edges_created = worker_stats.as_ref()
+        let edges_created = worker_stats
+            .as_ref()
             .map(|stats| stats.symbols_enriched)
             .unwrap_or(0);
 
@@ -3680,7 +3715,10 @@ pub fn validate_input(input: &str) -> Result<i32, String> {
 
         // Verify final state
         let final_progress = manager.get_progress().await;
-        println!("Final progress after parallel execution: {:?}", final_progress);
+        println!(
+            "Final progress after parallel execution: {:?}",
+            final_progress
+        );
 
         // Verify that symbols were extracted
         assert!(
@@ -3701,7 +3739,10 @@ pub fn validate_input(input: &str) -> Result<i32, String> {
         );
 
         println!("✅ Parallel Phase 1 + Phase 2 execution test passed:");
-        println!("   - Extracted {} symbols", final_progress.symbols_extracted);
+        println!(
+            "   - Extracted {} symbols",
+            final_progress.symbols_extracted
+        );
         println!("   - Phase 1 and Phase 2 ran in parallel");
         println!("   - Both phases completed successfully");
         println!("   - Proper coordination between phases verified");

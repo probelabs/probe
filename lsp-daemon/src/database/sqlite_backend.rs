@@ -115,18 +115,29 @@ where
     loop {
         match safe_execute(conn, sql, params.clone(), context).await {
             Ok(result) => return Ok(result),
-            Err(DatabaseError::OperationFailed { message }) if message.contains("database is locked") => {
+            Err(DatabaseError::OperationFailed { message })
+                if message.contains("database is locked") =>
+            {
                 attempt += 1;
                 if attempt > max_retries {
-                    error!("Database lock retry exhausted after {} attempts for: {}", max_retries, context);
+                    error!(
+                        "Database lock retry exhausted after {} attempts for: {}",
+                        max_retries, context
+                    );
                     return Err(DatabaseError::OperationFailed {
-                        message: format!("Database locked after {} retry attempts: {}", max_retries, message),
+                        message: format!(
+                            "Database locked after {} retry attempts: {}",
+                            max_retries, message
+                        ),
                     });
                 }
 
                 // Exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms (max)
                 let delay_ms = 50 * (1 << (attempt - 1)).min(800);
-                warn!("Database locked, retrying in {}ms (attempt {}/{}): {}", delay_ms, attempt, max_retries, context);
+                warn!(
+                    "Database locked, retrying in {}ms (attempt {}/{}): {}",
+                    delay_ms, attempt, max_retries, context
+                );
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
             }
             Err(e) => return Err(e), // Non-lock errors fail immediately
@@ -347,8 +358,14 @@ impl ConnectionPool {
 
         // Try cache size optimization if supported
         if config.cache_size > 0 {
-            if let Err(e) = conn.execute(&format!("PRAGMA cache_size={}", config.cache_size), ()).await {
-                warn!("Failed to set cache size (may not be supported by Turso): {}", e);
+            if let Err(e) = conn
+                .execute(&format!("PRAGMA cache_size={}", config.cache_size), ())
+                .await
+            {
+                warn!(
+                    "Failed to set cache size (may not be supported by Turso): {}",
+                    e
+                );
             } else {
                 debug!("Set cache size to {} pages", config.cache_size);
             }
@@ -2596,7 +2613,15 @@ impl DatabaseBackend for SQLiteBackend {
                     chunk.len()
                 );
 
-                match safe_execute_with_retry(&conn, &batch_sql, params, "store_edges batch insert", 3).await {
+                match safe_execute_with_retry(
+                    &conn,
+                    &batch_sql,
+                    params,
+                    "store_edges batch insert",
+                    3,
+                )
+                .await
+                {
                     Ok(_) => {}
                     Err(e) => {
                         error!("[DEBUG] store_edges: Failed to insert edges: {}", e);
@@ -3935,14 +3960,8 @@ impl DatabaseBackend for SQLiteBackend {
     // LSP Enrichment Support
     // ===================
 
-    async fn find_orphan_symbols(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<SymbolState>, DatabaseError> {
-        info!(
-            "[DEBUG] find_orphan_symbols ENTRY: limit={}",
-            limit
-        );
+    async fn find_orphan_symbols(&self, limit: usize) -> Result<Vec<SymbolState>, DatabaseError> {
+        info!("[DEBUG] find_orphan_symbols ENTRY: limit={}", limit);
 
         let mut pool = self.pool.lock().await;
         let conn = pool.get_connection().await?;

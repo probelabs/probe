@@ -9,9 +9,11 @@ repository = "https://github.com/buger/probe"
 keywords = ["lsp", "language-server", "daemon", "pool", "code-intelligence"]
 categories = ["development-tools", "command-line-utilities"]
 
-[[bin]]
-name = "lsp-daemon"
-path = "src/main.rs"
+# LSP daemon binary target removed - LSP functionality is now integrated directly into the main probe binary
+# The daemon code is still available as a library and can be accessed via `probe lsp start`
+# [[bin]]
+# name = "lsp-daemon"
+# path = "src/main.rs"
 
 [[bin]]
 name = "test-tree-sitter"

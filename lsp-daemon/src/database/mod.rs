@@ -618,6 +618,14 @@ pub trait DatabaseBackend: Send + Sync {
         workspace_id: i64,
         symbol_uid: &str,
     ) -> Result<Vec<Location>, DatabaseError>;
+
+    // ===================
+    // LSP Enrichment Support
+    // ===================
+
+    /// Find orphan symbols (symbols without outgoing edges) that need LSP enrichment
+    /// Returns symbols ordered by priority (functions first, then classes, etc.)
+    async fn find_orphan_symbols(&self, limit: usize) -> Result<Vec<SymbolState>, DatabaseError>;
 }
 
 /// Convenience functions for serializable types
