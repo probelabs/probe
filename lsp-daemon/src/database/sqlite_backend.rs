@@ -99,6 +99,41 @@ where
     }
 }
 
+/// Database lock retry function with exponential backoff
+/// Specifically handles "database is locked" errors that occur during concurrent writes
+async fn safe_execute_with_retry<P>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+    context: &str,
+    max_retries: u32,
+) -> Result<u64, DatabaseError>
+where
+    P: turso::params::IntoParams + Send + 'static + std::panic::UnwindSafe + Clone,
+{
+    let mut attempt = 0;
+    loop {
+        match safe_execute(conn, sql, params.clone(), context).await {
+            Ok(result) => return Ok(result),
+            Err(DatabaseError::OperationFailed { message }) if message.contains("database is locked") => {
+                attempt += 1;
+                if attempt > max_retries {
+                    error!("Database lock retry exhausted after {} attempts for: {}", max_retries, context);
+                    return Err(DatabaseError::OperationFailed {
+                        message: format!("Database locked after {} retry attempts: {}", max_retries, message),
+                    });
+                }
+
+                // Exponential backoff: 50ms, 100ms, 200ms, 400ms, 800ms (max)
+                let delay_ms = 50 * (1 << (attempt - 1)).min(800);
+                warn!("Database locked, retrying in {}ms (attempt {}/{}): {}", delay_ms, attempt, max_retries, context);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
+            Err(e) => return Err(e), // Non-lock errors fail immediately
+        }
+    }
+}
+
 /// Extract panic message from panic payload
 fn extract_panic_message(panic_err: Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = panic_err.downcast_ref::<String>() {
@@ -301,22 +336,27 @@ impl ConnectionPool {
 
     /// Configure a connection with optimal settings
     async fn configure_connection(
-        _conn: &Connection,
-        _config: &SQLiteConfig,
+        conn: &Connection,
+        config: &SQLiteConfig,
     ) -> Result<(), DatabaseError> {
-        debug!("Configuring database connection with pragmas");
+        debug!("Configuring database connection for concurrent access");
 
-        // Performance PRAGMA statements removed - not supported by turso/libSQL
-        debug!("Skipping PRAGMA synchronous and temp_store (not supported by turso/libSQL)");
-        debug!("Turso/libSQL handles performance optimizations server-side");
+        // Skip PRAGMA busy_timeout and read_uncommitted for Turso compatibility
+        // These optimizations are not needed for cloud SQLite implementations
+        debug!("Skipping SQLite PRAGMA optimizations for cloud database compatibility");
 
-        // WAL mode configuration removed - PRAGMA journal_mode not supported by turso/libSQL
-        debug!(
-            "Skipping WAL mode configuration (PRAGMA journal_mode not supported by turso/libSQL)"
-        );
+        // Try cache size optimization if supported
+        if config.cache_size > 0 {
+            if let Err(e) = conn.execute(&format!("PRAGMA cache_size={}", config.cache_size), ()).await {
+                warn!("Failed to set cache size (may not be supported by Turso): {}", e);
+            } else {
+                debug!("Set cache size to {} pages", config.cache_size);
+            }
+        }
 
-        // Foreign keys PRAGMA removed - not supported by turso/libSQL
-        debug!("Skipping foreign keys configuration (PRAGMA foreign_keys not supported by turso/libSQL)");
+        // Note: WAL mode, synchronous, and foreign keys are intentionally skipped
+        // as they are not supported by turso/libSQL which handles these optimizations server-side
+        debug!("Turso/libSQL handles WAL mode and performance optimizations automatically");
 
         Ok(())
     }
@@ -2491,11 +2531,12 @@ impl DatabaseBackend for SQLiteBackend {
         let conn = pool.get_connection().await?;
 
         // Use transaction for batch operations with rollback on error
-        safe_execute(
+        safe_execute_with_retry(
             &conn,
             "BEGIN TRANSACTION",
             (),
             "store_edges begin transaction",
+            3,
         )
         .await?;
 
@@ -2555,7 +2596,7 @@ impl DatabaseBackend for SQLiteBackend {
                     chunk.len()
                 );
 
-                match safe_execute(&conn, &batch_sql, params, "store_edges batch insert").await {
+                match safe_execute_with_retry(&conn, &batch_sql, params, "store_edges batch insert", 3).await {
                     Ok(_) => {}
                     Err(e) => {
                         error!("[DEBUG] store_edges: Failed to insert edges: {}", e);
@@ -2578,7 +2619,7 @@ impl DatabaseBackend for SQLiteBackend {
         }
 
         // Commit transaction
-        safe_execute(&conn, "COMMIT", (), "store_edges commit").await?;
+        safe_execute_with_retry(&conn, "COMMIT", (), "store_edges commit", 3).await?;
 
         pool.return_connection(conn);
         Ok(())
@@ -3889,6 +3930,165 @@ impl DatabaseBackend for SQLiteBackend {
         info!("[DEBUG] get_implementations_for_symbol SUCCESS: returning {} locations with resolved file paths", locations.len());
         Ok(locations)
     }
+
+    // ===================
+    // LSP Enrichment Support
+    // ===================
+
+    async fn find_orphan_symbols(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<SymbolState>, DatabaseError> {
+        info!(
+            "[DEBUG] find_orphan_symbols ENTRY: limit={}",
+            limit
+        );
+
+        let mut pool = self.pool.lock().await;
+        let conn = pool.get_connection().await?;
+
+        // Query to find symbols without outgoing edges, prioritized by symbol kind
+        let query = r#"
+            SELECT s.symbol_uid, s.file_path, s.language, s.name, s.fqn, s.kind,
+                   s.signature, s.visibility, s.def_start_line, s.def_start_char,
+                   s.def_end_line, s.def_end_char, s.is_definition, s.documentation,
+                   s.metadata
+            FROM symbol_state s
+            LEFT JOIN edge e ON s.symbol_uid = e.source_symbol_uid
+            WHERE e.source_symbol_uid IS NULL
+            AND s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
+            AND s.file_path IS NOT NULL
+            AND trim(s.file_path) != ''
+            ORDER BY
+              CASE s.kind
+                WHEN 'function' THEN 1
+                WHEN 'method' THEN 2
+                WHEN 'class' THEN 3
+                WHEN 'struct' THEN 3
+                WHEN 'enum' THEN 3
+                WHEN 'interface' THEN 3
+                WHEN 'trait' THEN 3
+                ELSE 4
+              END,
+              s.name
+            LIMIT ?
+        "#;
+
+        debug!(
+            "[DEBUG] Executing orphan symbols query with limit: {}",
+            limit
+        );
+
+        let mut rows = safe_query(
+            &conn,
+            query,
+            [turso::Value::Integer(limit as i64)],
+            "find orphan symbols",
+        )
+        .await?;
+
+        let mut symbols = Vec::new();
+
+        while let Some(row) = rows.next().await.map_err(|e| {
+            error!("[DEBUG] Failed to read orphan symbol row: {}", e);
+            DatabaseError::OperationFailed {
+                message: format!("Failed to read orphan symbol row: {}", e),
+            }
+        })? {
+            let symbol = SymbolState {
+                symbol_uid: match row.get_value(0) {
+                    Ok(turso::Value::Text(uid)) => uid,
+                    _ => continue, // Skip invalid rows
+                },
+                file_path: match row.get_value(1) {
+                    Ok(turso::Value::Text(path)) => path,
+                    _ => continue,
+                },
+                language: match row.get_value(2) {
+                    Ok(turso::Value::Text(lang)) => lang,
+                    _ => continue,
+                },
+                name: match row.get_value(3) {
+                    Ok(turso::Value::Text(name)) => name,
+                    _ => continue,
+                },
+                fqn: match row.get_value(4) {
+                    Ok(turso::Value::Text(fqn)) => Some(fqn),
+                    Ok(turso::Value::Null) => None,
+                    _ => None,
+                },
+                kind: match row.get_value(5) {
+                    Ok(turso::Value::Text(kind)) => kind,
+                    _ => continue,
+                },
+                signature: match row.get_value(6) {
+                    Ok(turso::Value::Text(sig)) => Some(sig),
+                    Ok(turso::Value::Null) => None,
+                    _ => None,
+                },
+                visibility: match row.get_value(7) {
+                    Ok(turso::Value::Text(vis)) => Some(vis),
+                    Ok(turso::Value::Null) => None,
+                    _ => None,
+                },
+                def_start_line: match row.get_value(8) {
+                    Ok(turso::Value::Integer(line)) => line as u32,
+                    _ => 0,
+                },
+                def_start_char: match row.get_value(9) {
+                    Ok(turso::Value::Integer(char)) => char as u32,
+                    _ => 0,
+                },
+                def_end_line: match row.get_value(10) {
+                    Ok(turso::Value::Integer(line)) => line as u32,
+                    _ => 0,
+                },
+                def_end_char: match row.get_value(11) {
+                    Ok(turso::Value::Integer(char)) => char as u32,
+                    _ => 0,
+                },
+                is_definition: match row.get_value(12) {
+                    Ok(turso::Value::Integer(val)) => val != 0,
+                    _ => false,
+                },
+                documentation: match row.get_value(13) {
+                    Ok(turso::Value::Text(doc)) => Some(doc),
+                    Ok(turso::Value::Null) => None,
+                    _ => None,
+                },
+                metadata: match row.get_value(14) {
+                    Ok(turso::Value::Text(attrs)) => Some(attrs),
+                    Ok(turso::Value::Null) => None,
+                    _ => None,
+                },
+            };
+
+            // Skip symbols with empty file paths to prevent empty workspace registration issues
+            if symbol.file_path.trim().is_empty() {
+                debug!(
+                    "[DEBUG] Skipping orphan symbol with empty file path: {} ({})",
+                    symbol.name, symbol.kind
+                );
+                continue;
+            }
+
+            debug!(
+                "[DEBUG] Found orphan symbol: {} ({}) at {}:{}",
+                symbol.name, symbol.kind, symbol.file_path, symbol.def_start_line
+            );
+
+            symbols.push(symbol);
+        }
+
+        pool.return_connection(conn);
+
+        info!(
+            "[DEBUG] find_orphan_symbols SUCCESS: found {} orphan symbols",
+            symbols.len()
+        );
+
+        Ok(symbols)
+    }
 }
 
 impl SQLiteBackend {
@@ -3962,6 +4162,14 @@ impl SQLiteBackend {
 
         // Insert directly into symbol_state table with the correct schema
         for symbol in symbols {
+            // CRITICAL: Reject symbols with empty/null file paths to prevent workspace resolution issues
+            if symbol.file_path.trim().is_empty() {
+                warn!(
+                    "[VALIDATION] Rejecting symbol '{}' ({}) with empty file path - this would cause empty workspace registration!",
+                    symbol.name, symbol.kind
+                );
+                continue;
+            }
             // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
             let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
             let mut check_rows = safe_query(

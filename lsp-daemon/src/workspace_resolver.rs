@@ -1,6 +1,5 @@
 use crate::language_detector::Language;
-use crate::path_safety;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -146,48 +145,23 @@ impl WorkspaceResolver {
     }
 
     /// Detect the most appropriate workspace root for a file (now public)
-    /// Uses the consolidated workspace marker priority list for consistency
+    /// Uses the reliable workspace detection logic from workspace_utils
     pub fn detect_workspace(&self, file_path: &Path) -> Result<PathBuf> {
-        let file_dir = file_path.parent().unwrap_or(file_path);
+        debug!(
+            "WORKSPACE_RESOLVER: Detecting workspace for file_path: {:?}",
+            file_path
+        );
 
-        // Look for workspace markers using the consolidated priority list
-        let mut current = Some(file_dir);
-        let mut best_match: Option<(PathBuf, usize)> = None; // (path, priority)
+        // Use the reliable workspace detection from workspace_utils
+        // This finds the authoritative root workspace instead of using "best match" logic
+        let workspace_root = crate::workspace_utils::find_workspace_root_with_fallback(file_path)
+            .context("Failed to detect workspace root using workspace_utils")?;
 
-        while let Some(current_dir) = current {
-            // Use the consolidated workspace marker priority list
-            let markers_with_priority = Self::get_workspace_markers_with_priority();
-
-            for (marker, priority) in markers_with_priority {
-                let marker_path = current_dir.join(marker);
-                if path_safety::exists_no_follow(&marker_path) {
-                    match &best_match {
-                        None => {
-                            best_match = Some((current_dir.to_path_buf(), *priority));
-                        }
-                        Some((_, current_priority)) => {
-                            if *priority > *current_priority {
-                                best_match = Some((current_dir.to_path_buf(), *priority));
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Don't go too far up the tree
-            if current_dir.ancestors().count() > 10 {
-                break;
-            }
-
-            current = current_dir.parent();
-        }
-
-        // Return best match or file's directory as fallback
-        let result = best_match
-            .map(|(path, _)| path)
-            .unwrap_or_else(|| file_dir.to_path_buf());
-
-        Ok(result)
+        debug!(
+            "WORKSPACE_RESOLVER: Found workspace root: {:?}",
+            workspace_root
+        );
+        Ok(workspace_root)
     }
 
     /// Check if a workspace hint is valid for the given file

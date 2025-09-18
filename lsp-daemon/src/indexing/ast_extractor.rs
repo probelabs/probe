@@ -5,10 +5,10 @@
 //! infrastructure while providing symbol extraction capabilities for the LSP daemon's
 //! indexing pipeline.
 
-use anyhow::{Result};
 use crate::symbol::{SymbolKind, SymbolLocation, SymbolUIDGenerator, Visibility};
-use tree_sitter::{Language as TSLanguage, Node};
+use anyhow::Result;
 use std::collections::HashMap;
+use tree_sitter::{Language as TSLanguage, Node};
 
 // Re-export for other modules
 pub use crate::analyzer::types::ExtractedSymbol;
@@ -24,11 +24,12 @@ pub enum IndexingPriority {
 
 /// Trait for language-specific symbol extraction
 pub trait LanguageExtractor: Send + Sync {
-    /// Extract symbols from an AST node
+    /// Extract symbols from an AST node with file path context
     fn extract_symbols(
         &self,
         node: Node,
         content: &[u8],
+        file_path: &std::path::Path,
         language: TSLanguage,
     ) -> Result<Vec<ExtractedSymbol>>;
 
@@ -63,7 +64,12 @@ impl GenericLanguageExtractor {
         Self
     }
 
-    fn calculate_priority(&self, _node: Node, symbol_kind: &str, is_test: bool) -> IndexingPriority {
+    fn calculate_priority(
+        &self,
+        _node: Node,
+        symbol_kind: &str,
+        is_test: bool,
+    ) -> IndexingPriority {
         if is_test {
             return IndexingPriority::Critical;
         }
@@ -82,12 +88,11 @@ impl LanguageExtractor for GenericLanguageExtractor {
         &self,
         node: Node,
         content: &[u8],
+        file_path: &std::path::Path,
         _language: TSLanguage,
     ) -> Result<Vec<ExtractedSymbol>> {
-        // This method needs file path context, use placeholder for now
         let mut symbols = Vec::new();
-        let placeholder_path = std::path::Path::new("unknown");
-        self.extract_symbols_recursive(node, content, placeholder_path, &mut symbols)?;
+        self.extract_symbols_recursive(node, content, file_path, &mut symbols)?;
         Ok(symbols)
     }
 
@@ -166,13 +171,25 @@ impl GenericLanguageExtractor {
         file_path: &std::path::Path,
         symbols: &mut Vec<ExtractedSymbol>,
     ) -> Result<()> {
+        // Validate file path is not empty - this should never happen during AST parsing
+        if file_path.as_os_str().is_empty() {
+            return Err(anyhow::anyhow!(
+                "AST extraction error: file_path is empty in GenericLanguageExtractor. This indicates a bug."
+            ));
+        }
+
         if self.is_symbol_node(node) {
             if let Some(name) = self.extract_symbol_name(node, content) {
                 let symbol_kind = self.determine_symbol_kind(node);
                 let is_test = self.is_test_symbol(node, content);
 
                 // Generate a temporary UID for now
-                let uid = format!("{}:{}:{}", name, node.start_position().row, node.start_position().column);
+                let uid = format!(
+                    "{}:{}:{}",
+                    name,
+                    node.start_position().row,
+                    node.start_position().column
+                );
 
                 let location = SymbolLocation {
                     file_path: file_path.to_path_buf(), // Now properly set from parameter
@@ -195,12 +212,14 @@ impl GenericLanguageExtractor {
                 let mut symbol = ExtractedSymbol::new(uid, name, symbol_kind_enum, location);
 
                 // Set optional fields
-                symbol.visibility = self.extract_visibility(node, content).map(|v| match v.as_str() {
-                    "public" => Visibility::Public,
-                    "private" => Visibility::Private,
-                    "protected" => Visibility::Protected,
-                    _ => Visibility::Public,
-                });
+                symbol.visibility =
+                    self.extract_visibility(node, content)
+                        .map(|v| match v.as_str() {
+                            "public" => Visibility::Public,
+                            "private" => Visibility::Private,
+                            "protected" => Visibility::Protected,
+                            _ => Visibility::Public,
+                        });
                 symbol.signature = self.extract_function_signature(node, content);
                 symbol.documentation = self.extract_documentation(node, content);
 
@@ -249,12 +268,11 @@ impl LanguageExtractor for RustLanguageExtractor {
         &self,
         node: Node,
         content: &[u8],
+        file_path: &std::path::Path,
         _language: TSLanguage,
     ) -> Result<Vec<ExtractedSymbol>> {
-        // This method needs file path context, use placeholder for now
         let mut symbols = Vec::new();
-        let placeholder_path = std::path::Path::new("unknown");
-        self.extract_symbols_recursive(node, content, placeholder_path, &mut symbols)?;
+        self.extract_symbols_recursive(node, content, file_path, &mut symbols)?;
         Ok(symbols)
     }
 
@@ -371,6 +389,13 @@ impl RustLanguageExtractor {
         file_path: &std::path::Path,
         symbols: &mut Vec<ExtractedSymbol>,
     ) -> Result<()> {
+        // Validate file path is not empty - this should never happen during AST parsing
+        if file_path.as_os_str().is_empty() {
+            return Err(anyhow::anyhow!(
+                "AST extraction error: file_path is empty in RustLanguageExtractor. This indicates a bug."
+            ));
+        }
+
         if self.is_symbol_node(node) {
             if let Some(name) = self.extract_symbol_name(node, content) {
                 let symbol_kind = self.determine_symbol_kind(node);
@@ -387,7 +412,12 @@ impl RustLanguageExtractor {
                 };
 
                 // Generate a temporary UID for now
-                let uid = format!("{}:{}:{}", name, node.start_position().row, node.start_position().column);
+                let uid = format!(
+                    "{}:{}:{}",
+                    name,
+                    node.start_position().row,
+                    node.start_position().column
+                );
 
                 let location = SymbolLocation {
                     file_path: file_path.to_path_buf(), // Now properly set from parameter
@@ -409,10 +439,12 @@ impl RustLanguageExtractor {
                 let mut symbol = ExtractedSymbol::new(uid, name, symbol_kind_enum, location);
 
                 // Set optional fields
-                symbol.visibility = self.extract_visibility(node, content).map(|v| match v.as_str() {
-                    "pub" => Visibility::Public,
-                    _ => Visibility::Private,
-                });
+                symbol.visibility =
+                    self.extract_visibility(node, content)
+                        .map(|v| match v.as_str() {
+                            "pub" => Visibility::Public,
+                            _ => Visibility::Private,
+                        });
                 symbol.signature = self.extract_function_signature(node, content);
                 symbol.documentation = self.extract_documentation(node, content);
 
@@ -451,12 +483,11 @@ macro_rules! impl_language_extractor {
                 &self,
                 node: Node,
                 content: &[u8],
+                file_path: &std::path::Path,
                 _language: TSLanguage,
             ) -> Result<Vec<ExtractedSymbol>> {
-                // This method needs file path context, use placeholder for now
                 let mut symbols = Vec::new();
-                let placeholder_path = std::path::Path::new("unknown");
-                self.extract_symbols_recursive(node, content, placeholder_path, &mut symbols)?;
+                self.extract_symbols_recursive(node, content, file_path, &mut symbols)?;
                 Ok(symbols)
             }
 
@@ -516,6 +547,14 @@ macro_rules! impl_language_extractor {
                 file_path: &std::path::Path,
                 symbols: &mut Vec<ExtractedSymbol>,
             ) -> Result<()> {
+                // Validate file path is not empty - this should never happen during AST parsing
+                if file_path.as_os_str().is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "AST extraction error: file_path is empty in {}, This indicates a bug.",
+                        stringify!($name)
+                    ));
+                }
+
                 if self.is_symbol_node(node) {
                     if let Some(name) = self.extract_symbol_name(node, content) {
                         let symbol_kind = self.determine_symbol_kind(node);
@@ -528,7 +567,12 @@ macro_rules! impl_language_extractor {
                         };
 
                         // Generate a temporary UID for now
-                        let uid = format!("{}:{}:{}", name, node.start_position().row, node.start_position().column);
+                        let uid = format!(
+                            "{}:{}:{}",
+                            name,
+                            node.start_position().row,
+                            node.start_position().column
+                        );
 
                         let location = SymbolLocation {
                             file_path: file_path.to_path_buf(), // Now properly set from parameter
@@ -547,7 +591,8 @@ macro_rules! impl_language_extractor {
                             _ => SymbolKind::Function,
                         };
 
-                        let mut symbol = ExtractedSymbol::new(uid, name, symbol_kind_enum, location);
+                        let mut symbol =
+                            ExtractedSymbol::new(uid, name, symbol_kind_enum, location);
 
                         // Set optional fields
                         symbol.signature = self.extract_function_signature(node, content);
@@ -580,17 +625,29 @@ impl_language_extractor!(
 
 impl_language_extractor!(
     TypeScriptLanguageExtractor,
-    &["function_declaration", "class_declaration", "interface_declaration"]
+    &[
+        "function_declaration",
+        "class_declaration",
+        "interface_declaration"
+    ]
 );
 
 impl_language_extractor!(
     GoLanguageExtractor,
-    &["function_declaration", "method_declaration", "type_declaration"]
+    &[
+        "function_declaration",
+        "method_declaration",
+        "type_declaration"
+    ]
 );
 
 impl_language_extractor!(
     JavaLanguageExtractor,
-    &["method_declaration", "class_declaration", "interface_declaration"]
+    &[
+        "method_declaration",
+        "class_declaration",
+        "interface_declaration"
+    ]
 );
 
 /// Main AST symbol extractor that orchestrates language-specific extraction
@@ -623,11 +680,18 @@ impl AstSymbolExtractor {
     }
 
     /// Get tree-sitter language for a given language enum
-    fn get_tree_sitter_language(&self, language: crate::language_detector::Language) -> Result<TSLanguage> {
+    fn get_tree_sitter_language(
+        &self,
+        language: crate::language_detector::Language,
+    ) -> Result<TSLanguage> {
         match language {
             crate::language_detector::Language::Rust => Ok(tree_sitter_rust::LANGUAGE.into()),
-            crate::language_detector::Language::TypeScript => Ok(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
-            crate::language_detector::Language::JavaScript => Ok(tree_sitter_javascript::LANGUAGE.into()),
+            crate::language_detector::Language::TypeScript => {
+                Ok(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            }
+            crate::language_detector::Language::JavaScript => {
+                Ok(tree_sitter_javascript::LANGUAGE.into())
+            }
             crate::language_detector::Language::Python => Ok(tree_sitter_python::LANGUAGE.into()),
             crate::language_detector::Language::Go => Ok(tree_sitter_go::LANGUAGE.into()),
             crate::language_detector::Language::Java => Ok(tree_sitter_java::LANGUAGE.into()),
@@ -638,7 +702,11 @@ impl AstSymbolExtractor {
     }
 
     /// Extract symbols from source code using appropriate language extractor
-    pub fn extract_symbols(&mut self, _content: &[u8], language_name: &str) -> Result<Vec<ExtractedSymbol>> {
+    pub fn extract_symbols(
+        &mut self,
+        _content: &[u8],
+        language_name: &str,
+    ) -> Result<Vec<ExtractedSymbol>> {
         let _extractor = create_extractor(language_name);
 
         // For now, return empty results since we need proper tree-sitter integration
@@ -647,7 +715,12 @@ impl AstSymbolExtractor {
     }
 
     /// Extract symbols from file using appropriate language extractor
-    pub fn extract_symbols_from_file<P: AsRef<std::path::Path>>(&mut self, file_path: P, content: &str, language: crate::language_detector::Language) -> Result<Vec<ExtractedSymbol>> {
+    pub fn extract_symbols_from_file<P: AsRef<std::path::Path>>(
+        &mut self,
+        file_path: P,
+        content: &str,
+        language: crate::language_detector::Language,
+    ) -> Result<Vec<ExtractedSymbol>> {
         let file_path = file_path.as_ref();
 
         // Get tree-sitter language for parsing
@@ -681,8 +754,14 @@ impl AstSymbolExtractor {
     }
 
     /// Recursively traverse tree-sitter nodes to find symbols
-    fn traverse_node(&self, node: tree_sitter::Node, content: &[u8], file_path: &std::path::Path, symbols: &mut Vec<ExtractedSymbol>, language: crate::language_detector::Language) -> Result<()> {
-
+    fn traverse_node(
+        &self,
+        node: tree_sitter::Node,
+        content: &[u8],
+        file_path: &std::path::Path,
+        symbols: &mut Vec<ExtractedSymbol>,
+        language: crate::language_detector::Language,
+    ) -> Result<()> {
         // Check if this node represents a symbol we want to extract
         if let Some(symbol) = self.node_to_symbol(node, content, file_path, language)? {
             symbols.push(symbol);
@@ -698,7 +777,19 @@ impl AstSymbolExtractor {
     }
 
     /// Convert a tree-sitter node to an ExtractedSymbol if it represents a symbol
-    fn node_to_symbol(&self, node: tree_sitter::Node, content: &[u8], file_path: &std::path::Path, language: crate::language_detector::Language) -> Result<Option<ExtractedSymbol>> {
+    fn node_to_symbol(
+        &self,
+        node: tree_sitter::Node,
+        content: &[u8],
+        file_path: &std::path::Path,
+        language: crate::language_detector::Language,
+    ) -> Result<Option<ExtractedSymbol>> {
+        // Validate file path is not empty - this should never happen during AST parsing
+        if file_path.as_os_str().is_empty() {
+            return Err(anyhow::anyhow!(
+                "AST extraction error: file_path is empty. This indicates a bug in the AST extractor."
+            ));
+        }
 
         let node_kind = node.kind();
 
@@ -714,44 +805,41 @@ impl AstSymbolExtractor {
                     "type_item" => (SymbolKind::Type, true),
                     _ => (SymbolKind::Function, false),
                 }
-            },
-            crate::language_detector::Language::JavaScript | crate::language_detector::Language::TypeScript => {
-                match node_kind {
-                    "function_declaration" | "method_definition" | "arrow_function" => (SymbolKind::Function, true),
-                    "class_declaration" => (SymbolKind::Class, true),
-                    "interface_declaration" => (SymbolKind::Interface, true),
-                    "variable_declaration" => (SymbolKind::Variable, true),
-                    "const_declaration" => (SymbolKind::Constant, true),
-                    _ => (SymbolKind::Function, false),
+            }
+            crate::language_detector::Language::JavaScript
+            | crate::language_detector::Language::TypeScript => match node_kind {
+                "function_declaration" | "method_definition" | "arrow_function" => {
+                    (SymbolKind::Function, true)
                 }
+                "class_declaration" => (SymbolKind::Class, true),
+                "interface_declaration" => (SymbolKind::Interface, true),
+                "variable_declaration" => (SymbolKind::Variable, true),
+                "const_declaration" => (SymbolKind::Constant, true),
+                _ => (SymbolKind::Function, false),
             },
-            crate::language_detector::Language::Python => {
-                match node_kind {
-                    "function_definition" => (SymbolKind::Function, true),
-                    "class_definition" => (SymbolKind::Class, true),
-                    _ => (SymbolKind::Function, false),
-                }
+            crate::language_detector::Language::Python => match node_kind {
+                "function_definition" => (SymbolKind::Function, true),
+                "class_definition" => (SymbolKind::Class, true),
+                _ => (SymbolKind::Function, false),
             },
-            crate::language_detector::Language::Go => {
-                match node_kind {
-                    "function_declaration" | "method_declaration" => (SymbolKind::Function, true),
-                    "type_declaration" => (SymbolKind::Type, true),
-                    _ => (SymbolKind::Function, false),
-                }
+            crate::language_detector::Language::Go => match node_kind {
+                "function_declaration" | "method_declaration" => (SymbolKind::Function, true),
+                "type_declaration" => (SymbolKind::Type, true),
+                _ => (SymbolKind::Function, false),
             },
-            crate::language_detector::Language::Java => {
-                match node_kind {
-                    "method_declaration" | "constructor_declaration" => (SymbolKind::Function, true),
-                    "class_declaration" => (SymbolKind::Class, true),
-                    "interface_declaration" => (SymbolKind::Interface, true),
-                    "field_declaration" => (SymbolKind::Variable, true),
-                    _ => (SymbolKind::Function, false),
-                }
+            crate::language_detector::Language::Java => match node_kind {
+                "method_declaration" | "constructor_declaration" => (SymbolKind::Function, true),
+                "class_declaration" => (SymbolKind::Class, true),
+                "interface_declaration" => (SymbolKind::Interface, true),
+                "field_declaration" => (SymbolKind::Variable, true),
+                _ => (SymbolKind::Function, false),
             },
             _ => {
                 // For other languages, try some common patterns
                 match node_kind {
-                    "function_declaration" | "method_declaration" | "function_definition" => (SymbolKind::Function, true),
+                    "function_declaration" | "method_declaration" | "function_definition" => {
+                        (SymbolKind::Function, true)
+                    }
                     "class_declaration" | "class_definition" => (SymbolKind::Class, true),
                     _ => (SymbolKind::Function, false),
                 }
@@ -763,7 +851,9 @@ impl AstSymbolExtractor {
         }
 
         // Extract the symbol name
-        let name = self.extract_symbol_name(node, content).unwrap_or_else(|| "unknown".to_string());
+        let name = self
+            .extract_symbol_name(node, content)
+            .unwrap_or_else(|| "unknown".to_string());
         if name.is_empty() || name == "unknown" {
             return Ok(None);
         }
@@ -802,16 +892,13 @@ impl AstSymbolExtractor {
             location.clone(),
         );
         let context = crate::symbol::SymbolContext::new(0, language.as_str().to_string());
-        let uid = self.uid_generator.generate_uid(&symbol_info, &context)
+        let uid = self
+            .uid_generator
+            .generate_uid(&symbol_info, &context)
             .unwrap_or_else(|_| format!("{}:{}:{}", name, start_point.row, start_point.column));
 
         // Create the symbol
-        let symbol = ExtractedSymbol::new(
-            uid,
-            name.clone(),
-            symbol_kind,
-            location,
-        );
+        let symbol = ExtractedSymbol::new(uid, name.clone(), symbol_kind, location);
 
         Ok(Some(symbol))
     }

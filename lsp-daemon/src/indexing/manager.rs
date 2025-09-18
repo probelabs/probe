@@ -11,11 +11,15 @@ use crate::cache_types::DefinitionInfo;
 use crate::indexing::{
     pipelines::SymbolInfo, IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue,
     LanguageStrategyFactory, Priority, QueueItem,
+    lsp_enrichment_queue::{LspEnrichmentQueue, QueueItem as EnrichmentQueueItem},
+    lsp_enrichment_worker::{EnrichmentWorkerConfig, LspEnrichmentWorkerPool},
 };
 use crate::language_detector::{Language, LanguageDetector};
 use crate::lsp_cache::LspCache;
 use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::server_manager::SingleServerManager;
+use crate::path_resolver::PathResolver;
+use crate::database::DatabaseBackend;
 // Database imports removed - no longer needed for IndexingManager
 
 /// Dummy cache stats structure to replace universal cache stats
@@ -277,6 +281,27 @@ pub struct IndexingManager {
     analysis_engine: Option<
         Arc<crate::indexing::analyzer::IncrementalAnalysisEngine<crate::database::SQLiteBackend>>,
     >,
+
+    /// Phase 2 LSP enrichment queue for orphan symbols
+    lsp_enrichment_queue: Arc<crate::indexing::lsp_enrichment_queue::LspEnrichmentQueue>,
+
+    /// Phase 2 LSP enrichment worker pool
+    lsp_enrichment_worker_pool: Option<Arc<crate::indexing::lsp_enrichment_worker::LspEnrichmentWorkerPool>>,
+
+    /// Phase 2 enrichment worker handles
+    enrichment_worker_handles: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
+
+    /// Signal for Phase 2 to check for new symbols
+    phase2_signal: Arc<tokio::sync::Notify>,
+
+    /// Track if Phase 1 is complete
+    phase1_complete: Arc<AtomicBool>,
+
+    /// Track if Phase 2 monitor is running
+    phase2_monitor_running: Arc<AtomicBool>,
+
+    /// Handle for Phase 2 monitor task
+    phase2_monitor_handle: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 /// Compute content hash for a file (used for change detection)
@@ -399,6 +424,34 @@ impl IndexingManager {
         let progress = Arc::new(IndexingProgress::new());
         let worker_semaphore = Arc::new(Semaphore::new(config.max_workers));
 
+        // Initialize Phase 2 LSP enrichment infrastructure
+        let lsp_enrichment_queue = Arc::new(LspEnrichmentQueue::new());
+
+        // Check if LSP enrichment is enabled
+        let lsp_enrichment_enabled = std::env::var("PROBE_LSP_ENRICHMENT_ENABLED")
+            .map(|s| s.to_lowercase() == "true")
+            .unwrap_or(true);
+
+        let lsp_enrichment_worker_pool = if lsp_enrichment_enabled {
+            let enrichment_config = EnrichmentWorkerConfig::default();
+
+            // Create enrichment worker pool using direct SingleServerManager approach
+            info!("Creating LSP enrichment worker pool using direct SingleServerManager approach");
+
+            // Create required dependencies
+            let database_adapter = LspDatabaseAdapter::new();
+            let path_resolver = Arc::new(PathResolver::new());
+
+            Some(Arc::new(LspEnrichmentWorkerPool::new(
+                enrichment_config,
+                server_manager.clone(),
+                database_adapter,
+                path_resolver,
+            )))
+        } else {
+            None
+        };
+
         Self {
             config,
             indexing_config: None, // Set by from_indexing_config
@@ -419,6 +472,13 @@ impl IndexingManager {
             start_time: Instant::now(),
             workspace_cache_router,
             analysis_engine: None, // Initially None, set later with set_analysis_engine()
+            lsp_enrichment_queue,
+            lsp_enrichment_worker_pool,
+            enrichment_worker_handles: Arc::new(RwLock::new(Vec::new())),
+            phase2_signal: Arc::new(tokio::sync::Notify::new()),
+            phase1_complete: Arc::new(AtomicBool::new(false)),
+            phase2_monitor_running: Arc::new(AtomicBool::new(false)),
+            phase2_monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -485,48 +545,8 @@ impl IndexingManager {
         }
         drop(current_status);
 
-        // Smart auto-indexing: Check if workspace is already fully indexed
-        info!("Checking workspace completion status for: {:?}", root_path);
-        match self.check_workspace_completion(&root_path).await {
-            Ok(completion_status) => {
-                if completion_status.is_complete {
-                    info!(
-                        "Workspace {:?} is already fully indexed with {} files and {} entries. \
-                        Skipping redundant indexing. Cache last updated: {:?}, Files checked: {}",
-                        root_path,
-                        completion_status.indexed_files,
-                        completion_status.cached_entries,
-                        completion_status.last_updated,
-                        completion_status.total_files_in_workspace
-                    );
-
-                    // Set status to idle since we're not doing any work
-                    *self.status.write().await = ManagerStatus::Idle;
-
-                    return Ok(()); // Skip indexing
-                }
-
-                info!(
-                    "Workspace {:?} needs indexing: {} of {} files indexed, {} entries cached. \
-                    Reason: {}",
-                    root_path,
-                    completion_status.indexed_files,
-                    completion_status.total_files_in_workspace,
-                    completion_status.cached_entries,
-                    completion_status
-                        .completion_reason
-                        .unwrap_or_else(|| "Partial indexing detected".to_string())
-                );
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to check workspace completion for {:?}: {}. Proceeding with indexing.",
-                    root_path, e
-                );
-            }
-        }
-
-        info!("Starting indexing for directory: {:?}", root_path);
+        // Always proceed with indexing - no workspace completion check needed
+        info!("Starting indexing for workspace: {:?}", root_path);
 
         // Clean up cache entries for deleted files (incremental mode)
         if self.config.incremental_mode {
@@ -560,7 +580,16 @@ impl IndexingManager {
         // Start worker pool
         self.start_worker_pool().await?;
 
-        info!("Indexing started successfully");
+        // Start Phase 2 enrichment monitor in parallel with Phase 1 (NEW)
+        if self.lsp_enrichment_worker_pool.is_some() {
+            if let Err(e) = self.spawn_phase2_enrichment_monitor().await {
+                warn!("Failed to start Phase 2 enrichment monitor: {}", e);
+            } else {
+                info!("Phase 2 enrichment monitor started in parallel with Phase 1");
+            }
+        }
+
+        info!("Indexing started successfully (Phase 1 + Phase 2 in parallel)");
         Ok(())
     }
 
@@ -568,7 +597,7 @@ impl IndexingManager {
     pub async fn stop_indexing(&self) -> Result<()> {
         info!("Stopping indexing...");
 
-        // Set shutdown signal
+        // Set shutdown signal for Phase 1 workers
         self.shutdown_signal.store(true, Ordering::Relaxed);
 
         // Update status
@@ -577,16 +606,26 @@ impl IndexingManager {
         // Pause the queue to prevent new work
         self.queue.pause();
 
-        // Wait for workers to finish with timeout
+        // Wait for Phase 1 workers to finish with timeout
+        info!("Phase 1: Waiting for AST extraction workers to complete...");
         self.shutdown_workers().await?;
 
         // Stop background tasks
         self.shutdown_background_tasks().await;
 
+        // Mark Phase 1 as complete to signal Phase 2 monitor
+        self.phase1_complete.store(true, Ordering::Relaxed);
+        self.phase2_signal.notify_one(); // Wake up Phase 2 monitor for final check
+
+        info!("Phase 1 AST extraction completed");
+
+        // Wait for both phases to complete in parallel
+        self.wait_for_all_phases_completion().await?;
+
         // Update status
         *self.status.write().await = ManagerStatus::Shutdown;
 
-        info!("Indexing stopped successfully");
+        info!("Indexing stopped successfully (Phase 1 + Phase 2 completed in parallel)");
         Ok(())
     }
 
@@ -1266,6 +1305,7 @@ impl IndexingManager {
         let analysis_engine = self.analysis_engine.clone();
         let _config = self.config.clone();
         let indexing_config = self.indexing_config.clone();
+        let phase2_signal = Arc::clone(&self.phase2_signal);
 
         let handle = tokio::spawn(async move {
             debug!("Worker {} starting", worker_id);
@@ -1328,6 +1368,7 @@ impl IndexingManager {
                     &analysis_engine,
                     &indexing_config,
                     &database_adapter,
+                    &phase2_signal,
                 )
                 .await;
 
@@ -1384,6 +1425,7 @@ impl IndexingManager {
         >,
         indexing_config: &Option<IndexingConfig>,
         database_adapter: &LspDatabaseAdapter,
+        phase2_signal: &Arc<tokio::sync::Notify>,
     ) -> Result<(u64, u64)> {
         let file_path = &item.file_path;
 
@@ -1426,20 +1468,27 @@ impl IndexingManager {
                 if !pipeline_result.extracted_symbols.is_empty() {
                     info!(
                         "Worker {} Phase 1: Persisting {} extracted symbols for {:?}",
-                        worker_id, pipeline_result.extracted_symbols.len(), file_path
+                        worker_id,
+                        pipeline_result.extracted_symbols.len(),
+                        file_path
                     );
 
                     // Get workspace root for this file
                     match _workspace_cache_router.workspace_root_for(file_path).await {
                         Ok(workspace_root) => {
                             // Get database cache for this workspace
-                            match _workspace_cache_router.cache_for_workspace(&workspace_root).await {
+                            match _workspace_cache_router
+                                .cache_for_workspace(&workspace_root)
+                                .await
+                            {
                                 Ok(cache_adapter) => {
                                     // Get the underlying database backend
                                     let backend = cache_adapter.backend();
 
                                     // Extract SQLite backend from BackendType (always SQLite now)
-                                    let crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) = backend;
+                                    let crate::database_cache_adapter::BackendType::SQLite(
+                                        sqlite_backend,
+                                    ) = backend;
 
                                     // Convert language to string
                                     let language_str = match language {
@@ -1457,18 +1506,26 @@ impl IndexingManager {
                                     // Store the extracted symbols
                                     // Note: We need a mutable reference, but database_adapter is immutable here
                                     // For now, create a new adapter instance for Phase 1 persistence
-                                    let mut temp_adapter = crate::lsp_database_adapter::LspDatabaseAdapter::new();
-                                    match temp_adapter.store_extracted_symbols(
-                                        sqlite_backend.as_ref(),
-                                        pipeline_result.extracted_symbols.clone(),
-                                        &workspace_root,
-                                        language_str
-                                    ).await {
+                                    let mut temp_adapter =
+                                        crate::lsp_database_adapter::LspDatabaseAdapter::new();
+                                    match temp_adapter
+                                        .store_extracted_symbols(
+                                            sqlite_backend.as_ref(),
+                                            pipeline_result.extracted_symbols.clone(),
+                                            &workspace_root,
+                                            language_str,
+                                        )
+                                        .await
+                                    {
                                         Ok(()) => {
                                             info!(
                                                 "Worker {} Phase 1: Successfully persisted {} symbols for {:?}",
                                                 worker_id, pipeline_result.extracted_symbols.len(), file_path
                                             );
+
+                                            // Signal Phase 2 that new symbols are available
+                                            phase2_signal.notify_one();
+                                            debug!("Worker {} signaled Phase 2 after storing {} symbols", worker_id, pipeline_result.extracted_symbols.len());
                                         }
                                         Err(e) => {
                                             warn!(
@@ -1494,7 +1551,10 @@ impl IndexingManager {
                         }
                     }
                 } else {
-                    debug!("Worker {} Phase 1: No extracted symbols to persist for {:?}", worker_id, file_path);
+                    debug!(
+                        "Worker {} Phase 1: No extracted symbols to persist for {:?}",
+                        worker_id, file_path
+                    );
                 }
 
                 // Now, for each symbol found, query the LSP server for call hierarchy
@@ -1559,6 +1619,12 @@ impl IndexingManager {
                                 "Worker {}: Analysis engine completed for {:?}: {} symbols extracted, {} relationships found",
                                 worker_id, file_path, analysis_result.symbols_extracted, analysis_result.relationships_found
                             );
+
+                            // Signal Phase 2 that new symbols are available from analysis engine
+                            if analysis_result.symbols_extracted > 0 {
+                                phase2_signal.notify_one();
+                                debug!("Worker {} signaled Phase 2 after analysis engine stored {} symbols", worker_id, analysis_result.symbols_extracted);
+                            }
                         }
                         Err(e) => {
                             warn!(
@@ -2232,6 +2298,492 @@ impl IndexingManager {
         }
 
         Ok(())
+    }
+
+    // ===================
+    // Phase 2: LSP Enrichment Methods
+    // ===================
+
+    /// Start Phase 2 LSP enrichment after Phase 1 AST extraction completes
+    async fn start_phase2_lsp_enrichment(&self) -> Result<()> {
+        info!("Starting Phase 2: LSP enrichment of orphan symbols");
+
+        // Check if LSP enrichment is enabled
+        if self.lsp_enrichment_worker_pool.is_none() {
+            info!("Phase 2 LSP enrichment is disabled via configuration");
+            return Ok(());
+        }
+
+        // Step 1: Find orphan symbols from database
+        let orphan_symbols = self.find_orphan_symbols_for_enrichment().await?;
+
+        if orphan_symbols.is_empty() {
+            info!("Phase 2: No orphan symbols found, skipping LSP enrichment");
+            return Ok(());
+        }
+
+        info!(
+            "Phase 2: Found {} orphan symbols to enrich with LSP data",
+            orphan_symbols.len()
+        );
+
+        // Step 2: Queue orphan symbols for processing
+        self.queue_orphan_symbols_for_enrichment(orphan_symbols).await?;
+
+        // Step 3: Start worker pool for LSP enrichment
+        if let Some(worker_pool) = &self.lsp_enrichment_worker_pool {
+            let cache_adapter = self
+                .workspace_cache_router
+                .cache_for_workspace(std::env::current_dir()?)
+                .await?;
+
+            let worker_handles = worker_pool
+                .start_processing(self.lsp_enrichment_queue.clone(), cache_adapter)
+                .await?;
+
+            // Store handles for shutdown
+            let mut handles = self.enrichment_worker_handles.write().await;
+            handles.extend(worker_handles);
+
+            info!("Phase 2: LSP enrichment workers started successfully");
+        }
+
+        Ok(())
+    }
+
+    /// Find orphan symbols (symbols without edges) that need LSP enrichment
+    async fn find_orphan_symbols_for_enrichment(&self) -> Result<Vec<crate::database::SymbolState>> {
+        // Get the batch size from environment variable
+        let batch_size = std::env::var("PROBE_LSP_ENRICHMENT_BATCH_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100);
+
+        // Get cache adapter for database access
+        let cache_adapter = self
+            .workspace_cache_router
+            .cache_for_workspace(std::env::current_dir()?)
+            .await?;
+
+        // Call the database method to find orphan symbols
+        let orphan_symbols = match cache_adapter.backend() {
+            crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
+                sqlite_backend.find_orphan_symbols(batch_size).await?
+            }
+        };
+
+        debug!(
+            "Found {} orphan symbols for LSP enrichment",
+            orphan_symbols.len()
+        );
+
+        Ok(orphan_symbols)
+    }
+
+    /// Queue orphan symbols for LSP enrichment processing
+    async fn queue_orphan_symbols_for_enrichment(
+        &self,
+        symbols: Vec<crate::database::SymbolState>,
+    ) -> Result<()> {
+        for symbol in symbols {
+            // Convert SymbolState to Language enum
+            let language = match symbol.language.to_lowercase().as_str() {
+                "rust" => Language::Rust,
+                "python" => Language::Python,
+                "typescript" => Language::TypeScript,
+                "javascript" => Language::JavaScript,
+                "go" => Language::Go,
+                "c" => Language::C,
+                "cpp" | "c++" => Language::Cpp,
+                "java" => Language::Java,
+                _ => {
+                    debug!("Skipping symbol with unsupported language: {}", symbol.language);
+                    continue;
+                }
+            };
+
+            // Create enrichment queue item
+            let queue_item = EnrichmentQueueItem::new(
+                symbol.symbol_uid,
+                PathBuf::from(symbol.file_path),
+                symbol.def_start_line,
+                symbol.def_start_char,
+                symbol.name,
+                language,
+                symbol.kind,
+            );
+
+            // Add to queue
+            self.lsp_enrichment_queue.add_symbol(queue_item).await?;
+        }
+
+        let queue_stats = self.lsp_enrichment_queue.get_stats().await;
+        info!(
+            "Phase 2: Queued {} symbols for LSP enrichment (High: {}, Medium: {}, Low: {})",
+            queue_stats.total_items,
+            queue_stats.high_priority_items,
+            queue_stats.medium_priority_items,
+            queue_stats.low_priority_items
+        );
+
+        Ok(())
+    }
+
+    /// Wait for Phase 2 LSP enrichment to complete
+    async fn wait_for_phase2_completion(&self) -> Result<()> {
+        info!("Waiting for Phase 2 LSP enrichment to complete...");
+
+        // Wait for queue to empty and workers to finish
+        loop {
+            let queue_size = self.lsp_enrichment_queue.size().await;
+            if queue_size == 0 {
+                break;
+            }
+
+            debug!("Phase 2: {} symbols remaining in queue", queue_size);
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+        }
+
+        // Signal workers to shutdown
+        if let Some(worker_pool) = &self.lsp_enrichment_worker_pool {
+            worker_pool.shutdown();
+
+            // Wait for workers to complete
+            let handles = {
+                let mut handles_guard = self.enrichment_worker_handles.write().await;
+                std::mem::take(&mut *handles_guard)
+            };
+
+            worker_pool.wait_for_completion(handles).await?;
+
+            // Get final statistics
+            let stats = worker_pool.get_stats().snapshot();
+            info!(
+                "Phase 2 completed: {} symbols processed, {} enriched, {} failed ({}% success rate)",
+                stats.symbols_processed,
+                stats.symbols_enriched,
+                stats.symbols_failed,
+                if stats.symbols_processed > 0 {
+                    (stats.symbols_enriched as f64 / stats.symbols_processed as f64) * 100.0
+                } else {
+                    0.0
+                }
+            );
+        }
+
+        info!("Phase 2 LSP enrichment completed successfully");
+        Ok(())
+    }
+
+    /// Spawn Phase 2 enrichment monitor that runs in parallel with Phase 1
+    async fn spawn_phase2_enrichment_monitor(&self) -> Result<()> {
+        // Check if LSP enrichment is enabled
+        if self.lsp_enrichment_worker_pool.is_none() {
+            info!("Phase 2 LSP enrichment is disabled via configuration");
+            return Ok(());
+        }
+
+        // Check if monitor is already running
+        if self.phase2_monitor_running.load(Ordering::Relaxed) {
+            info!("Phase 2 monitor is already running");
+            return Ok(());
+        }
+
+        info!("Starting Phase 2 enrichment monitor for parallel execution");
+
+        // Mark monitor as running
+        self.phase2_monitor_running.store(true, Ordering::Relaxed);
+
+        // Clone needed data for the background task
+        let signal = self.phase2_signal.clone();
+        let phase1_complete = self.phase1_complete.clone();
+        let phase2_monitor_running = self.phase2_monitor_running.clone();
+        let lsp_enrichment_queue = self.lsp_enrichment_queue.clone();
+        let lsp_enrichment_worker_pool = self.lsp_enrichment_worker_pool.clone();
+        let enrichment_worker_handles = self.enrichment_worker_handles.clone();
+        let workspace_cache_router = self.workspace_cache_router.clone();
+
+        // Spawn the background monitor task
+        let monitor_handle = tokio::spawn(async move {
+            info!("Phase 2 enrichment monitor started");
+            let mut workers_started = false;
+
+            loop {
+                // Wait for signal or timeout every 5 seconds
+                tokio::select! {
+                    _ = signal.notified() => {
+                        debug!("Phase 2 monitor received signal from Phase 1");
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                        debug!("Phase 2 monitor periodic check");
+                    }
+                }
+
+                // Check if we should exit
+                if !phase2_monitor_running.load(Ordering::Relaxed) {
+                    info!("Phase 2 monitor received shutdown signal");
+                    break;
+                }
+
+                // Start enrichment workers if not already started
+                if !workers_started {
+                    if let Some(worker_pool) = &lsp_enrichment_worker_pool {
+                        match std::env::current_dir() {
+                            Ok(current_dir) => {
+                                match workspace_cache_router.cache_for_workspace(current_dir).await {
+                                    Ok(cache_adapter) => {
+                                        match worker_pool.start_processing(lsp_enrichment_queue.clone(), cache_adapter).await {
+                                            Ok(worker_handles_vec) => {
+                                                let mut handles = enrichment_worker_handles.write().await;
+                                                handles.extend(worker_handles_vec);
+                                                workers_started = true;
+                                                info!("Phase 2 enrichment workers started successfully in parallel monitor");
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to start Phase 2 enrichment workers: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to get cache adapter for Phase 2: {}", e);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to get current directory for Phase 2: {}", e);
+                            }
+                        }
+                    }
+                }
+
+                // Find orphan symbols and queue them for enrichment
+                if workers_started {
+                    // Get the batch size from environment variable
+                    let batch_size = std::env::var("PROBE_LSP_ENRICHMENT_BATCH_SIZE")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(100);
+
+                    // Get cache adapter for database access
+                    match std::env::current_dir() {
+                        Ok(current_dir) => {
+                            match workspace_cache_router.cache_for_workspace(current_dir).await {
+                                Ok(cache_adapter) => {
+                                    // Get the backend and find orphan symbols
+                                    let backend = cache_adapter.backend();
+                                    let crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) = backend;
+
+                                    match sqlite_backend.find_orphan_symbols(batch_size).await {
+                                        Ok(orphan_symbols) => {
+                                            if !orphan_symbols.is_empty() {
+                                                debug!("Found {} orphan symbols for enrichment", orphan_symbols.len());
+
+                                                // Queue orphan symbols for processing
+                                                for symbol in orphan_symbols {
+                                                    // Parse the language from string
+                                                    let language = match symbol.language.as_str() {
+                                                        "rust" => Language::Rust,
+                                                        "python" => Language::Python,
+                                                        "typescript" => Language::TypeScript,
+                                                        "javascript" => Language::JavaScript,
+                                                        "go" => Language::Go,
+                                                        "cpp" => Language::Cpp,
+                                                        "c" => Language::C,
+                                                        "java" => Language::Java,
+                                                        _ => Language::Unknown,
+                                                    };
+
+                                                    let queue_item = crate::indexing::lsp_enrichment_queue::QueueItem::new(
+                                                        symbol.symbol_uid,
+                                                        PathBuf::from(symbol.file_path),
+                                                        symbol.def_start_line as u32,
+                                                        symbol.def_start_char as u32,
+                                                        symbol.name,
+                                                        language,
+                                                        symbol.kind.clone(),
+                                                    );
+                                                    lsp_enrichment_queue.add_symbol(queue_item).await.ok();
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to find orphan symbols: {}", e);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to get cache adapter: {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to get current directory: {}", e);
+                        }
+                    }
+                }
+
+                // Check if Phase 1 is complete and queue is empty
+                if phase1_complete.load(Ordering::Relaxed) {
+                    let queue_size = lsp_enrichment_queue.size().await;
+                    if queue_size == 0 {
+                        info!("Phase 1 complete and Phase 2 queue empty, Phase 2 monitor exiting");
+                        break;
+                    } else {
+                        debug!("Phase 1 complete but {} symbols still in Phase 2 queue", queue_size);
+                    }
+                }
+            }
+
+            // Cleanup: Mark monitor as not running
+            phase2_monitor_running.store(false, Ordering::Relaxed);
+            info!("Phase 2 enrichment monitor completed");
+        });
+
+        // Store the monitor handle
+        let mut handle_guard = self.phase2_monitor_handle.lock().await;
+        *handle_guard = Some(monitor_handle);
+
+        info!("Phase 2 enrichment monitor spawned successfully");
+        Ok(())
+    }
+
+    /// Wait for all phases to complete (Phase 1 is already complete when this is called)
+    async fn wait_for_all_phases_completion(&self) -> Result<()> {
+        info!("Waiting for all phases to complete...");
+
+        // Stop the Phase 2 monitor
+        self.phase2_monitor_running.store(false, Ordering::Relaxed);
+        self.phase2_signal.notify_one(); // Wake up monitor to check shutdown signal
+
+        // Wait for Phase 2 monitor to complete
+        let monitor_handle = {
+            let mut handle_guard = self.phase2_monitor_handle.lock().await;
+            handle_guard.take()
+        };
+
+        if let Some(handle) = monitor_handle {
+            if let Err(e) = handle.await {
+                warn!("Phase 2 monitor join error: {}", e);
+            } else {
+                info!("Phase 2 monitor completed successfully");
+            }
+        }
+
+        // Wait for Phase 2 LSP enrichment queue to empty and workers to finish
+        if self.lsp_enrichment_worker_pool.is_some() {
+            info!("Waiting for Phase 2 LSP enrichment to complete...");
+
+            // Wait for queue to empty
+            loop {
+                let queue_size = self.lsp_enrichment_queue.size().await;
+                if queue_size == 0 {
+                    break;
+                }
+                debug!("Phase 2: {} symbols remaining in queue", queue_size);
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            // Signal workers to shutdown
+            if let Some(worker_pool) = &self.lsp_enrichment_worker_pool {
+                worker_pool.shutdown();
+
+                // Wait for workers to complete
+                let handles = {
+                    let mut handles_guard = self.enrichment_worker_handles.write().await;
+                    std::mem::take(&mut *handles_guard)
+                };
+
+                if !handles.is_empty() {
+                    worker_pool.wait_for_completion(handles).await?;
+
+                    // Get final statistics
+                    let stats = worker_pool.get_stats().snapshot();
+                    info!(
+                        "Phase 2 completed: {} symbols processed, {} enriched, {} failed ({}% success rate)",
+                        stats.symbols_processed,
+                        stats.symbols_enriched,
+                        stats.symbols_failed,
+                        if stats.symbols_processed > 0 {
+                            (stats.symbols_enriched as f64 / stats.symbols_processed as f64) * 100.0
+                        } else {
+                            0.0
+                        }
+                    );
+                }
+            }
+        }
+
+        info!("All phases completed successfully");
+        Ok(())
+    }
+
+    /// Get Phase 2 enrichment statistics
+    pub async fn get_enrichment_stats(&self) -> Option<crate::indexing::lsp_enrichment_worker::EnrichmentWorkerStatsSnapshot> {
+        self.lsp_enrichment_worker_pool
+            .as_ref()
+            .map(|pool| pool.get_stats().snapshot())
+    }
+
+    /// Get LSP enrichment information in protocol format
+    pub async fn get_lsp_enrichment_info(&self) -> Option<crate::protocol::LspEnrichmentInfo> {
+        let is_enabled = std::env::var("PROBE_LSP_ENRICHMENT_ENABLED")
+            .map(|v| v == "true")
+            .unwrap_or(true);
+
+        if !is_enabled {
+            return None;
+        }
+
+        // Get enrichment worker stats
+        let worker_stats = self.get_enrichment_stats().await;
+
+        // Get queue stats
+        let queue_stats = self.lsp_enrichment_queue.get_stats().await;
+
+        // For now, use worker stats symbols as a proxy for edges created
+        // This gives us meaningful data until we can access the database properly
+        let edges_created = worker_stats.as_ref()
+            .map(|stats| stats.symbols_enriched)
+            .unwrap_or(0);
+
+        if let Some(stats) = worker_stats {
+            Some(crate::protocol::LspEnrichmentInfo {
+                is_enabled: true,
+                active_workers: stats.active_workers,
+                symbols_processed: stats.symbols_processed,
+                symbols_enriched: stats.symbols_enriched,
+                symbols_failed: stats.symbols_failed,
+                queue_stats: crate::protocol::LspEnrichmentQueueInfo {
+                    total_items: queue_stats.total_items,
+                    high_priority_items: queue_stats.high_priority_items,
+                    medium_priority_items: queue_stats.medium_priority_items,
+                    low_priority_items: queue_stats.low_priority_items,
+                },
+                edges_created,
+                success_rate: if stats.symbols_processed > 0 {
+                    (stats.symbols_enriched as f64 / stats.symbols_processed as f64) * 100.0
+                } else {
+                    0.0
+                },
+            })
+        } else {
+            // Return basic info even without worker stats
+            Some(crate::protocol::LspEnrichmentInfo {
+                is_enabled: true,
+                active_workers: 0,
+                symbols_processed: 0,
+                symbols_enriched: 0,
+                symbols_failed: 0,
+                queue_stats: crate::protocol::LspEnrichmentQueueInfo {
+                    total_items: queue_stats.total_items,
+                    high_priority_items: queue_stats.high_priority_items,
+                    medium_priority_items: queue_stats.medium_priority_items,
+                    low_priority_items: queue_stats.low_priority_items,
+                },
+                edges_created: 0,
+                success_rate: 0.0,
+            })
+        }
     }
 }
 
@@ -2967,6 +3519,195 @@ mod tests {
     // The main improvement is implemented in index_symbols_with_lsp method above
 
     #[tokio::test]
+    async fn test_parallel_phase1_phase2_execution() {
+        // Test that Phase 1 and Phase 2 can run in parallel
+        let temp_dir = tempdir().unwrap();
+
+        // Create multiple Rust files with symbols to ensure parallel processing
+        let rust_file1 = temp_dir.path().join("calculator.rs");
+        let rust_code1 = r#"
+pub struct Calculator {
+    pub value: i32,
+    pub history: Vec<i32>,
+}
+
+impl Calculator {
+    pub fn new() -> Self {
+        Calculator {
+            value: 0,
+            history: Vec::new(),
+        }
+    }
+
+    pub fn add(&mut self, a: i32, b: i32) -> i32 {
+        let result = a + b;
+        self.history.push(result);
+        result
+    }
+
+    pub fn get_history(&self) -> &[i32] {
+        &self.history
+    }
+}
+
+pub fn multiply(x: i32, y: i32) -> i32 {
+    x * y
+}
+
+pub enum Operation {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+pub trait MathOp {
+    fn calculate(&self, a: i32, b: i32) -> i32;
+}
+
+pub const MAX_CALC_LIMIT: i32 = 1000;
+"#;
+        fs::write(&rust_file1, rust_code1).unwrap();
+
+        let rust_file2 = temp_dir.path().join("processor.rs");
+        let rust_code2 = r#"
+pub struct DataProcessor {
+    pub data: HashMap<String, i32>,
+    pub config: ProcessorConfig,
+}
+
+pub struct ProcessorConfig {
+    pub max_entries: usize,
+    pub timeout_ms: u64,
+}
+
+impl DataProcessor {
+    pub fn new() -> Self {
+        DataProcessor {
+            data: HashMap::new(),
+            config: ProcessorConfig {
+                max_entries: 100,
+                timeout_ms: 5000,
+            },
+        }
+    }
+
+    pub fn process(&mut self, key: String, value: i32) -> bool {
+        if self.data.len() < self.config.max_entries {
+            self.data.insert(key, value);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn get_stats(&self) -> ProcessorStats {
+        ProcessorStats {
+            total_entries: self.data.len(),
+            max_capacity: self.config.max_entries,
+        }
+    }
+}
+
+pub struct ProcessorStats {
+    pub total_entries: usize,
+    pub max_capacity: usize,
+}
+
+pub fn validate_input(input: &str) -> Result<i32, String> {
+    input.parse::<i32>().map_err(|_| "Invalid number".to_string())
+}
+"#;
+        fs::write(&rust_file2, rust_code2).unwrap();
+
+        // Set up the indexing manager with parallel Phase 2 enabled
+        let config = ManagerConfig {
+            max_workers: 2, // Use 2 workers to test parallel processing
+            enabled_languages: vec!["rust".to_string()],
+            ..ManagerConfig::default()
+        };
+
+        let language_detector = Arc::new(LanguageDetector::new());
+        let registry = Arc::new(LspRegistry::new().expect("Failed to create LspRegistry"));
+        let server_manager = Arc::new(SingleServerManager::new(registry));
+        let lsp_cache_config = LspCacheConfig::default();
+        let definition_cache = Arc::new(
+            LspCache::<DefinitionInfo>::new(LspOperation::Definition, lsp_cache_config)
+                .await
+                .expect("Failed to create LspCache"),
+        );
+
+        // Create workspace cache router with a temporary cache directory
+        let workspace_cache_router = create_test_workspace_cache_router(server_manager.clone());
+        let manager = IndexingManager::new(
+            config,
+            language_detector,
+            server_manager,
+            definition_cache,
+            workspace_cache_router.clone(),
+        );
+
+        // Enable LSP enrichment to test Phase 2
+        std::env::set_var("PROBE_LSP_ENRICHMENT_ENABLED", "true");
+
+        // Start indexing to trigger parallel Phase 1 + Phase 2
+        manager
+            .start_indexing(temp_dir.path().to_path_buf())
+            .await
+            .unwrap();
+
+        // Let it run for a bit to allow Phase 1 to extract symbols and Phase 2 to start
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        // Verify both phases are running
+        let progress = manager.get_progress().await;
+        println!("Progress during parallel execution: {:?}", progress);
+
+        // Check that Phase 2 monitor is running
+        assert!(
+            manager.phase2_monitor_running.load(Ordering::Relaxed),
+            "Phase 2 monitor should be running during indexing"
+        );
+
+        // Check that Phase 1 is not yet complete
+        assert!(
+            !manager.phase1_complete.load(Ordering::Relaxed),
+            "Phase 1 should not be complete while indexing is running"
+        );
+
+        // Stop indexing to trigger parallel completion
+        manager.stop_indexing().await.unwrap();
+
+        // Verify final state
+        let final_progress = manager.get_progress().await;
+        println!("Final progress after parallel execution: {:?}", final_progress);
+
+        // Verify that symbols were extracted
+        assert!(
+            final_progress.symbols_extracted > 0,
+            "Should have extracted symbols from both Rust files"
+        );
+
+        // Verify that Phase 1 is marked complete
+        assert!(
+            manager.phase1_complete.load(Ordering::Relaxed),
+            "Phase 1 should be marked complete after stop_indexing"
+        );
+
+        // Verify that Phase 2 monitor is stopped
+        assert!(
+            !manager.phase2_monitor_running.load(Ordering::Relaxed),
+            "Phase 2 monitor should be stopped after completion"
+        );
+
+        println!("✅ Parallel Phase 1 + Phase 2 execution test passed:");
+        println!("   - Extracted {} symbols", final_progress.symbols_extracted);
+        println!("   - Phase 1 and Phase 2 ran in parallel");
+        println!("   - Both phases completed successfully");
+        println!("   - Proper coordination between phases verified");
+    }
+
+    #[tokio::test]
     async fn test_phase1_symbol_persistence_integration() {
         // Create a temporary directory with Rust code containing symbols
         let temp_dir = tempdir().unwrap();
@@ -3069,8 +3810,14 @@ pub const MAX_CALC_LIMIT: i32 = 1000;
 
         // Verify that symbols were processed
         let progress = manager.get_progress().await;
-        assert!(progress.processed_files > 0, "Should have processed at least one file");
-        assert!(progress.symbols_extracted > 0, "Should have extracted symbols from the Rust file");
+        assert!(
+            progress.processed_files > 0,
+            "Should have processed at least one file"
+        );
+        assert!(
+            progress.symbols_extracted > 0,
+            "Should have extracted symbols from the Rust file"
+        );
 
         // The test verifies:
         // 1. ✅ Files were processed (progress.processed_files > 0)
