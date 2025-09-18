@@ -3797,9 +3797,61 @@ impl LspDaemon {
         // Canonicalize the workspace root to ensure it's an absolute path
         let canonical_root = safe_canonicalize(&workspace_root);
 
-        // Discover workspaces
-        let detector = crate::language_detector::LanguageDetector::new();
-        let discovered_workspaces = detector.discover_workspaces(&canonical_root, recursive)?;
+        // Discover workspaces - use WorkspaceResolver for single authoritative workspace
+        // instead of recursive discovery which creates multiple separate workspaces
+        let discovered_workspaces = if recursive {
+            // Only use recursive discovery when explicitly requested
+            let detector = crate::language_detector::LanguageDetector::new();
+            detector.discover_workspaces(&canonical_root, recursive)?
+        } else {
+            // For non-recursive mode, check if current directory is a workspace root first
+            let workspace_root = if crate::workspace_utils::is_workspace_root(&canonical_root) {
+                tracing::info!(
+                    "Current directory is workspace root: {}",
+                    canonical_root.display()
+                );
+                canonical_root.clone()
+            } else {
+                // Create a dummy file path in the directory to use with find_workspace_root_with_fallback
+                let dummy_file = canonical_root.join("dummy");
+                let found_root =
+                    crate::workspace_utils::find_workspace_root_with_fallback(&dummy_file)?;
+                tracing::info!("Found workspace root: {}", found_root.display());
+                found_root
+            };
+
+            let detector = crate::language_detector::LanguageDetector::new();
+
+            // First try to detect workspace languages from markers (Cargo.toml, package.json, etc)
+            let detected_languages = if let Some(languages) =
+                detector.detect_workspace_languages(&workspace_root)?
+            {
+                tracing::info!("Detected workspace languages from markers: {:?}", languages);
+                languages
+            } else if let Some(languages) = detector.detect_languages_from_files(&workspace_root)? {
+                tracing::info!("Detected languages from files: {:?}", languages);
+                // Fall back to file extension detection if no workspace markers found
+                languages
+            } else {
+                tracing::warn!("No languages detected from workspace markers or files");
+                // No languages detected
+                std::collections::HashSet::new()
+            };
+
+            if !detected_languages.is_empty() {
+                tracing::info!(
+                    "Creating workspace entry for {} with languages {:?}",
+                    workspace_root.display(),
+                    detected_languages
+                );
+                let mut result = std::collections::HashMap::new();
+                result.insert(workspace_root, detected_languages);
+                result
+            } else {
+                tracing::warn!("No detected languages, returning empty workspace map");
+                std::collections::HashMap::new()
+            }
+        };
 
         if discovered_workspaces.is_empty() {
             return Ok((vec![], vec!["No workspaces found".to_string()]));
@@ -4398,6 +4450,7 @@ impl LspDaemon {
                         .saturating_sub(progress.elapsed_seconds),
                 ),
                 elapsed_seconds: progress.elapsed_seconds,
+                lsp_enrichment: manager.get_lsp_enrichment_info().await,
             };
 
             Ok(status_info)
@@ -4430,6 +4483,7 @@ impl LspDaemon {
                 session_id: None,
                 started_at: None,
                 elapsed_seconds: 0,
+                lsp_enrichment: None,
             };
 
             Ok(status_info)

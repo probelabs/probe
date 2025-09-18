@@ -2622,6 +2622,59 @@ impl LspManager {
                     println!("  {}: {}", "Memory Pressure".bold(), "⚠️  HIGH".red());
                 }
 
+                // Display LSP enrichment stats
+                if let Some(ref lsp_enrichment) = status.lsp_enrichment {
+                    println!("\n{}", "LSP Enrichment".bold().cyan());
+
+                    let enrichment_status = if lsp_enrichment.is_enabled {
+                        if lsp_enrichment.active_workers > 0 {
+                            format!("✅ Active ({} workers)", lsp_enrichment.active_workers)
+                        } else {
+                            "✅ Enabled (idle)".to_string()
+                        }
+                    } else {
+                        "❌ Disabled".to_string()
+                    };
+
+                    println!("  {}: {}", "Status".bold(), enrichment_status);
+
+                    if lsp_enrichment.is_enabled {
+                        println!(
+                            "  {}: {}/{} ({:.1}%)",
+                            "Symbols".bold(),
+                            lsp_enrichment.symbols_enriched,
+                            lsp_enrichment.symbols_processed,
+                            lsp_enrichment.success_rate
+                        );
+
+                        if lsp_enrichment.symbols_failed > 0 {
+                            println!(
+                                "  {}: {}",
+                                "Failed".bold().red(),
+                                lsp_enrichment.symbols_failed
+                            );
+                        }
+
+                        println!(
+                            "  {}: {}",
+                            "Edges Created".bold(),
+                            lsp_enrichment.edges_created
+                        );
+
+                        let queue = &lsp_enrichment.queue_stats;
+                        if queue.total_items > 0 {
+                            println!(
+                                "  {}: {} (H:{} M:{} L:{})",
+                                "Queue".bold(),
+                                queue.total_items,
+                                queue.high_priority_items,
+                                queue.medium_priority_items,
+                                queue.low_priority_items
+                            );
+                        }
+                    }
+                }
+
                 if detailed && !status.workers.is_empty() {
                     println!("\n{}", "Workers".bold().cyan());
                     for worker in &status.workers {

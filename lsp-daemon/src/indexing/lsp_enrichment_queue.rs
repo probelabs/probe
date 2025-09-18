@@ -123,7 +123,7 @@ impl Ord for PriorityQueueItem {
         // Higher priority first, then earlier timestamp (FIFO within same priority)
         match self.item.priority.cmp(&other.item.priority) {
             Ordering::Equal => other.timestamp.cmp(&self.timestamp), // Earlier timestamp first
-            other => other, // Higher priority first
+            other => other,                                          // Higher priority first
         }
     }
 }
@@ -150,7 +150,10 @@ impl LspEnrichmentQueue {
     pub async fn add_symbol(&self, item: QueueItem) -> Result<()> {
         debug!(
             "Adding symbol to enrichment queue: {} ({}:{}) - priority: {:?}",
-            item.name, item.file_path.display(), item.def_start_line, item.priority
+            item.name,
+            item.file_path.display(),
+            item.def_start_line,
+            item.priority
         );
 
         let mut queue = self.queue.lock().await;
@@ -352,39 +355,48 @@ mod tests {
 
         // Add items of different priorities
         for i in 0..5 {
-            queue.add_symbol(QueueItem::new(
-                format!("high_{}", i),
-                PathBuf::from("test.rs"),
-                i as u32,
-                0,
-                format!("func_{}", i),
-                Language::Rust,
-                "function".to_string(),
-            )).await.unwrap();
+            queue
+                .add_symbol(QueueItem::new(
+                    format!("high_{}", i),
+                    PathBuf::from("test.rs"),
+                    i as u32,
+                    0,
+                    format!("func_{}", i),
+                    Language::Rust,
+                    "function".to_string(),
+                ))
+                .await
+                .unwrap();
         }
 
         for i in 0..3 {
-            queue.add_symbol(QueueItem::new(
-                format!("medium_{}", i),
-                PathBuf::from("test.rs"),
-                i as u32,
-                0,
-                format!("class_{}", i),
-                Language::Rust,
-                "class".to_string(),
-            )).await.unwrap();
+            queue
+                .add_symbol(QueueItem::new(
+                    format!("medium_{}", i),
+                    PathBuf::from("test.rs"),
+                    i as u32,
+                    0,
+                    format!("class_{}", i),
+                    Language::Rust,
+                    "class".to_string(),
+                ))
+                .await
+                .unwrap();
         }
 
         for i in 0..2 {
-            queue.add_symbol(QueueItem::new(
-                format!("low_{}", i),
-                PathBuf::from("test.rs"),
-                i as u32,
-                0,
-                format!("var_{}", i),
-                Language::Rust,
-                "variable".to_string(),
-            )).await.unwrap();
+            queue
+                .add_symbol(QueueItem::new(
+                    format!("low_{}", i),
+                    PathBuf::from("test.rs"),
+                    i as u32,
+                    0,
+                    format!("var_{}", i),
+                    Language::Rust,
+                    "variable".to_string(),
+                ))
+                .await
+                .unwrap();
         }
 
         let stats = queue.get_stats().await;
@@ -398,13 +410,34 @@ mod tests {
 
     #[tokio::test]
     async fn test_priority_from_symbol_kind() {
-        assert_eq!(EnrichmentPriority::from_symbol_kind("function"), EnrichmentPriority::High);
-        assert_eq!(EnrichmentPriority::from_symbol_kind("method"), EnrichmentPriority::High);
-        assert_eq!(EnrichmentPriority::from_symbol_kind("class"), EnrichmentPriority::Medium);
-        assert_eq!(EnrichmentPriority::from_symbol_kind("struct"), EnrichmentPriority::Medium);
-        assert_eq!(EnrichmentPriority::from_symbol_kind("enum"), EnrichmentPriority::Medium);
-        assert_eq!(EnrichmentPriority::from_symbol_kind("variable"), EnrichmentPriority::Low);
-        assert_eq!(EnrichmentPriority::from_symbol_kind("unknown"), EnrichmentPriority::Low);
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("function"),
+            EnrichmentPriority::High
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("method"),
+            EnrichmentPriority::High
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("class"),
+            EnrichmentPriority::Medium
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("struct"),
+            EnrichmentPriority::Medium
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("enum"),
+            EnrichmentPriority::Medium
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("variable"),
+            EnrichmentPriority::Low
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("unknown"),
+            EnrichmentPriority::Low
+        );
     }
 
     #[tokio::test]
@@ -413,15 +446,18 @@ mod tests {
 
         // Add some items
         for i in 0..3 {
-            queue.add_symbol(QueueItem::new(
-                format!("test_{}", i),
-                PathBuf::from("test.rs"),
-                i as u32,
-                0,
-                format!("item_{}", i),
-                Language::Rust,
-                "function".to_string(),
-            )).await.unwrap();
+            queue
+                .add_symbol(QueueItem::new(
+                    format!("test_{}", i),
+                    PathBuf::from("test.rs"),
+                    i as u32,
+                    0,
+                    format!("item_{}", i),
+                    Language::Rust,
+                    "function".to_string(),
+                ))
+                .await
+                .unwrap();
         }
 
         assert_eq!(queue.size().await, 3);

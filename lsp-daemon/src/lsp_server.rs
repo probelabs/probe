@@ -4,6 +4,7 @@ use crate::socket_path::normalize_executable;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -98,6 +99,59 @@ impl LspServer {
         Self::spawn_internal(config, None)
     }
 
+    /// Generate helpful installation instructions for common LSP servers
+    fn get_installation_instructions(command: &str) -> String {
+        match command {
+            "rust-analyzer" => "Please install rust-analyzer:\n\
+                 • Via rustup: rustup component add rust-analyzer\n\
+                 • Via VS Code: Install the rust-analyzer extension\n\
+                 • Manually: https://rust-analyzer.github.io/manual.html#installation"
+                .to_string(),
+            "gopls" => "Please install gopls:\n\
+                 • Via go install: go install golang.org/x/tools/gopls@latest\n\
+                 • Ensure $GOPATH/bin is in your PATH"
+                .to_string(),
+            "pylsp" => "Please install Python LSP Server:\n\
+                 • Via pip: pip install python-lsp-server\n\
+                 • Via conda: conda install python-lsp-server\n\
+                 • With optional plugins: pip install 'python-lsp-server[all]'"
+                .to_string(),
+            "typescript-language-server" => "Please install TypeScript Language Server:\n\
+                 • Via npm: npm install -g typescript-language-server typescript\n\
+                 • Via yarn: yarn global add typescript-language-server typescript"
+                .to_string(),
+            "clangd" => "Please install clangd:\n\
+                 • Ubuntu/Debian: apt install clangd\n\
+                 • macOS: brew install llvm\n\
+                 • Windows: Install LLVM from https://llvm.org/"
+                .to_string(),
+            "jdtls" => "Please install Eclipse JDT Language Server:\n\
+                 • Download from: https://download.eclipse.org/jdtls/snapshots/\n\
+                 • Or use your IDE's built-in installation"
+                .to_string(),
+            "omnisharp" => "Please install OmniSharp:\n\
+                 • Download from: https://github.com/OmniSharp/omnisharp-roslyn/releases\n\
+                 • Or install via dotnet: dotnet tool install -g omnisharp"
+                .to_string(),
+            "haskell-language-server-wrapper" => "Please install Haskell Language Server:\n\
+                 • Via GHCup: ghcup install hls\n\
+                 • Via Stack: stack install haskell-language-server\n\
+                 • Via Cabal: cabal install haskell-language-server"
+                .to_string(),
+            "lua-language-server" => "Please install Lua Language Server:\n\
+                 • Download from: https://github.com/LuaLS/lua-language-server/releases\n\
+                 • Via package manager or manual installation"
+                .to_string(),
+            _ => {
+                format!(
+                    "Please install the '{}' language server.\n\
+                        Check the language server's documentation for installation instructions.",
+                    command
+                )
+            }
+        }
+    }
+
     fn spawn_internal(config: &LspServerConfig, workspace_root: Option<&Path>) -> Result<Self> {
         let command = normalize_executable(&config.command);
         info!("Spawning LSP server: {} {:?}", command, config.args);
@@ -122,7 +176,19 @@ impl LspServer {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped()) // Capture stderr for debugging
             .spawn()
-            .map_err(|e| anyhow!("Failed to spawn {}: {}", command, e))?;
+            .map_err(|e| {
+                if e.kind() == ErrorKind::NotFound {
+                    let instructions = Self::get_installation_instructions(&command);
+                    anyhow!(
+                        "LSP server '{}' not found. {}\n\nOriginal error: {}",
+                        command,
+                        instructions,
+                        e
+                    )
+                } else {
+                    anyhow!("Failed to spawn LSP server '{}': {}", command, e)
+                }
+            })?;
 
         let stdin = child
             .stdin

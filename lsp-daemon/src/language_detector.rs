@@ -318,7 +318,7 @@ impl LanguageDetector {
     }
 
     /// Detect workspace languages based on marker files
-    fn detect_workspace_languages(&self, dir: &Path) -> Result<Option<HashSet<Language>>> {
+    pub fn detect_workspace_languages(&self, dir: &Path) -> Result<Option<HashSet<Language>>> {
         let mut languages = HashSet::new();
 
         // Check for language-specific workspace markers
@@ -387,7 +387,7 @@ impl LanguageDetector {
     }
 
     /// Detect languages from files in a directory (fallback when no workspace markers)
-    fn detect_languages_from_files(&self, dir: &Path) -> Result<Option<HashSet<Language>>> {
+    pub fn detect_languages_from_files(&self, dir: &Path) -> Result<Option<HashSet<Language>>> {
         let mut languages = HashSet::new();
         let mut checked_extensions = HashSet::new();
 

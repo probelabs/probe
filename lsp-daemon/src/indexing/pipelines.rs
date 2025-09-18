@@ -254,7 +254,9 @@ impl PipelineResult {
                     symbol.line.saturating_sub(1), // Convert from 1-indexed to 0-indexed
                     symbol.column,
                     symbol.end_line.unwrap_or(symbol.line).saturating_sub(1),
-                    symbol.end_column.unwrap_or(symbol.column + symbol.name.len() as u32),
+                    symbol
+                        .end_column
+                        .unwrap_or(symbol.column + symbol.name.len() as u32),
                 );
 
                 let extracted_symbol = ExtractedSymbol {
@@ -263,7 +265,10 @@ impl PipelineResult {
                     kind: SymbolKind::from(symbol.kind.as_str()),
                     qualified_name: None, // This could be enhanced if we parse FQN from signature
                     signature: symbol.signature.clone(),
-                    visibility: symbol.visibility.as_ref().map(|v| Visibility::from(v.as_str())),
+                    visibility: symbol
+                        .visibility
+                        .as_ref()
+                        .map(|v| Visibility::from(v.as_str())),
                     location,
                     parent_scope: None,
                     documentation: symbol.documentation.clone(),
@@ -272,7 +277,11 @@ impl PipelineResult {
                     } else {
                         vec![]
                     },
-                    metadata: symbol.attributes.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect(),
+                    metadata: symbol
+                        .attributes
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect(),
                 };
                 extracted.push(extracted_symbol);
             }
@@ -413,13 +422,17 @@ impl LanguagePipeline {
                 Some(Visibility::Public) | Some(Visibility::Export) => true,
                 _ => false,
             },
-            attributes: extracted.metadata.iter().filter_map(|(k, v)| {
-                if let serde_json::Value::String(s) = v {
-                    Some((k.clone(), s.clone()))
-                } else {
-                    None
-                }
-            }).collect(),
+            attributes: extracted
+                .metadata
+                .iter()
+                .filter_map(|(k, v)| {
+                    if let serde_json::Value::String(s) = v {
+                        Some((k.clone(), s.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
         }
     }
     /// Create a new language pipeline
@@ -459,7 +472,11 @@ impl LanguagePipeline {
     }
 
     /// Process a file and extract symbols
-    pub async fn process_file(&mut self, file_path: &Path, _database_adapter: &LspDatabaseAdapter) -> Result<PipelineResult> {
+    pub async fn process_file(
+        &mut self,
+        file_path: &Path,
+        _database_adapter: &LspDatabaseAdapter,
+    ) -> Result<PipelineResult> {
         let start_time = Instant::now();
 
         // Check if we should process this file
@@ -541,7 +558,12 @@ impl LanguagePipeline {
     }
 
     /// Process file content and extract symbols
-    async fn process_content(&mut self, file_path: &Path, content: &str, _database_adapter: &LspDatabaseAdapter) -> Result<PipelineResult> {
+    async fn process_content(
+        &mut self,
+        file_path: &Path,
+        content: &str,
+        _database_adapter: &LspDatabaseAdapter,
+    ) -> Result<PipelineResult> {
         let mut result = PipelineResult {
             file_path: file_path.to_path_buf(),
             language: self.config.language,
@@ -556,7 +578,10 @@ impl LanguagePipeline {
         };
 
         // Use AST-based extraction as the primary method
-        match self.extract_all_symbols_ast(file_path, content, _database_adapter).await {
+        match self
+            .extract_all_symbols_ast(file_path, content, _database_adapter)
+            .await
+        {
             Ok((extracted_symbols, symbols_by_category)) => {
                 // PHASE 1: Store extracted symbols for persistence by caller
                 if !extracted_symbols.is_empty() {
@@ -1253,13 +1278,21 @@ impl IndexingPipeline {
     }
 
     /// Process a file using this pipeline
-    pub async fn process_file(&mut self, file_path: &Path, database_adapter: &LspDatabaseAdapter) -> Result<PipelineResult> {
+    pub async fn process_file(
+        &mut self,
+        file_path: &Path,
+        database_adapter: &LspDatabaseAdapter,
+    ) -> Result<PipelineResult> {
         debug!(
             "Processing {:?} with {:?} pipeline",
             file_path, self.language
         );
 
-        match self.processor.process_file(file_path, database_adapter).await {
+        match self
+            .processor
+            .process_file(file_path, database_adapter)
+            .await
+        {
             Ok(result) => {
                 debug!(
                     "Successfully processed {:?}: {} symbols",
@@ -1326,7 +1359,10 @@ fn test_person_creation() {
 
         let mut pipeline = IndexingPipeline::new(Language::Rust).unwrap();
         let database_adapter = LspDatabaseAdapter::new();
-        let result = pipeline.process_file(temp_file.path(), &database_adapter).await.unwrap();
+        let result = pipeline
+            .process_file(temp_file.path(), &database_adapter)
+            .await
+            .unwrap();
 
         assert_eq!(result.language, Language::Rust);
         assert!(result.symbols_found > 0);
@@ -1374,7 +1410,10 @@ def version():
 
         let mut pipeline = IndexingPipeline::new(Language::Python).unwrap();
         let database_adapter = LspDatabaseAdapter::new();
-        let result = pipeline.process_file(temp_file.path(), &database_adapter).await.unwrap();
+        let result = pipeline
+            .process_file(temp_file.path(), &database_adapter)
+            .await
+            .unwrap();
 
         assert_eq!(result.language, Language::Python);
         assert!(result.symbols_found > 0);
@@ -1504,7 +1543,10 @@ fn test_person_creation() {
 
         let mut pipeline = IndexingPipeline::new(Language::Rust).unwrap();
         let database_adapter = LspDatabaseAdapter::new();
-        let result = pipeline.process_file(temp_file.path(), &database_adapter).await.unwrap();
+        let result = pipeline
+            .process_file(temp_file.path(), &database_adapter)
+            .await
+            .unwrap();
 
         assert_eq!(result.language, Language::Rust);
         assert!(result.symbols_found > 0);
@@ -1550,7 +1592,9 @@ fn test_person_creation() {
         let database_adapter = LspDatabaseAdapter::new();
 
         // This should not panic and should accept the database adapter parameter
-        let result = pipeline.process_file(temp_file.path(), &database_adapter).await;
+        let result = pipeline
+            .process_file(temp_file.path(), &database_adapter)
+            .await;
 
         // Verify the result is successful (meaning the adapter was passed correctly)
         assert!(result.is_ok());
@@ -1650,7 +1694,9 @@ fn test_person() {
 
         let mut pipeline = IndexingPipeline::new(Language::Rust).unwrap();
         let database_adapter = LspDatabaseAdapter::new();
-        let result = pipeline.process_file(temp_file.path(), &database_adapter).await;
+        let result = pipeline
+            .process_file(temp_file.path(), &database_adapter)
+            .await;
 
         assert!(result.is_ok(), "Pipeline processing should succeed");
         let pipeline_result = result.unwrap();

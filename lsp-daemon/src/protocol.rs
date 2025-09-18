@@ -698,6 +698,7 @@ pub struct IndexingStatusInfo {
     pub session_id: Option<String>,
     pub started_at: Option<u64>, // Unix timestamp
     pub elapsed_seconds: u64,
+    pub lsp_enrichment: Option<LspEnrichmentInfo>, // LSP enrichment progress
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -735,6 +736,26 @@ pub struct IndexingWorkerInfo {
     pub symbols_extracted: u64,
     pub errors_encountered: u64,
     pub last_activity: Option<u64>, // Unix timestamp
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspEnrichmentInfo {
+    pub is_enabled: bool,
+    pub active_workers: u64,
+    pub symbols_processed: u64,
+    pub symbols_enriched: u64,
+    pub symbols_failed: u64,
+    pub queue_stats: LspEnrichmentQueueInfo,
+    pub edges_created: u64,
+    pub success_rate: f64, // Percentage of successfully enriched symbols
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspEnrichmentQueueInfo {
+    pub total_items: usize,
+    pub high_priority_items: usize,
+    pub medium_priority_items: usize,
+    pub low_priority_items: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

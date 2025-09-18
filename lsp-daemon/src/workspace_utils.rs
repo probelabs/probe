@@ -20,17 +20,17 @@ pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
 
     // Look for common project root markers in priority order
     let markers = [
-        "Cargo.toml",      // Rust
-        "package.json",    // JavaScript/TypeScript
-        "go.mod",          // Go
-        "pyproject.toml",  // Python
-        "setup.py",        // Python
-        ".git",            // Generic VCS
-        "tsconfig.json",   // TypeScript
-        "composer.json",   // PHP
-        "pom.xml",         // Java
-        "build.gradle",    // Java/Gradle
-        "CMakeLists.txt",  // C/C++
+        "Cargo.toml",     // Rust
+        "package.json",   // JavaScript/TypeScript
+        "go.mod",         // Go
+        "pyproject.toml", // Python
+        "setup.py",       // Python
+        ".git",           // Generic VCS
+        "tsconfig.json",  // TypeScript
+        "composer.json",  // PHP
+        "pom.xml",        // Java
+        "build.gradle",   // Java/Gradle
+        "CMakeLists.txt", // C/C++
     ];
 
     let mut found_workspace: Option<PathBuf> = None;
@@ -41,7 +41,11 @@ pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
         for marker in &markers {
             let marker_path = current.join(marker);
             if marker_path.exists() {
-                debug!("Found workspace marker '{}' at: {}", marker, current.display());
+                debug!(
+                    "Found workspace marker '{}' at: {}",
+                    marker,
+                    current.display()
+                );
 
                 // Special handling for Cargo.toml: check if it's a workspace root
                 if *marker == "Cargo.toml" {
@@ -63,7 +67,10 @@ pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
     if let Some(ref workspace) = found_workspace {
         debug!("Using topmost workspace root: {}", workspace.display());
     } else {
-        debug!("No workspace markers found for file: {}", file_path.display());
+        debug!(
+            "No workspace markers found for file: {}",
+            file_path.display()
+        );
     }
 
     found_workspace
@@ -92,9 +99,7 @@ pub fn find_workspace_root_with_fallback(file_path: &Path) -> Result<PathBuf> {
     }
 
     // Fall back to the parent directory of the file
-    let fallback = file_path.parent()
-        .unwrap_or(file_path)
-        .to_path_buf();
+    let fallback = file_path.parent().unwrap_or(file_path).to_path_buf();
 
     debug!("Using fallback workspace root: {}", fallback.display());
     Ok(fallback)
@@ -103,9 +108,17 @@ pub fn find_workspace_root_with_fallback(file_path: &Path) -> Result<PathBuf> {
 /// Check if a path looks like a workspace root by checking for common markers
 pub fn is_workspace_root(path: &Path) -> bool {
     let markers = [
-        "Cargo.toml", "package.json", "go.mod", "pyproject.toml",
-        "setup.py", ".git", "tsconfig.json", "composer.json",
-        "pom.xml", "build.gradle", "CMakeLists.txt"
+        "Cargo.toml",
+        "package.json",
+        "go.mod",
+        "pyproject.toml",
+        "setup.py",
+        ".git",
+        "tsconfig.json",
+        "composer.json",
+        "pom.xml",
+        "build.gradle",
+        "CMakeLists.txt",
     ];
 
     markers.iter().any(|marker| path.join(marker).exists())
@@ -124,7 +137,11 @@ mod tests {
         let src_dir = project_root.join("src");
 
         fs::create_dir_all(&src_dir).unwrap();
-        fs::write(project_root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+        fs::write(
+            project_root.join("Cargo.toml"),
+            "[package]\nname = \"test\"",
+        )
+        .unwrap();
 
         let file_path = src_dir.join("main.rs");
         let workspace = find_workspace_root(&file_path).unwrap();
@@ -165,7 +182,11 @@ mod tests {
     #[test]
     fn test_find_workspace_root_no_markers() {
         let temp_dir = TempDir::new().unwrap();
-        let deep_dir = temp_dir.path().join("isolated").join("no-workspace").join("deep");
+        let deep_dir = temp_dir
+            .path()
+            .join("isolated")
+            .join("no-workspace")
+            .join("deep");
         fs::create_dir_all(&deep_dir).unwrap();
 
         // Make sure no workspace markers exist in the path
@@ -183,7 +204,11 @@ mod tests {
     #[test]
     fn test_find_workspace_root_with_fallback() {
         let temp_dir = TempDir::new().unwrap();
-        let deep_dir = temp_dir.path().join("isolated").join("no-workspace").join("deep");
+        let deep_dir = temp_dir
+            .path()
+            .join("isolated")
+            .join("no-workspace")
+            .join("deep");
         fs::create_dir_all(&deep_dir).unwrap();
 
         let file_path = deep_dir.join("orphan.txt");
@@ -205,7 +230,11 @@ mod tests {
         // Create a directory with Cargo.toml
         let rust_project = temp_dir.path().join("rust_project");
         fs::create_dir_all(&rust_project).unwrap();
-        fs::write(rust_project.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+        fs::write(
+            rust_project.join("Cargo.toml"),
+            "[package]\nname = \"test\"",
+        )
+        .unwrap();
 
         assert!(is_workspace_root(&rust_project));
 
@@ -257,13 +286,15 @@ mod tests {
         fs::write(
             workspace_root.join("Cargo.toml"),
             "[workspace]\nmembers = [\"member\"]\n",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Write member crate Cargo.toml
         fs::write(
             member_crate.join("Cargo.toml"),
             "[package]\nname = \"member\"",
-        ).unwrap();
+        )
+        .unwrap();
 
         let file_path = src.join("main.rs");
         let workspace = find_workspace_root(&file_path).unwrap();

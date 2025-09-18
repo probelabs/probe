@@ -16,11 +16,11 @@ use tracing::{debug, error, info, warn};
 use crate::database::DatabaseBackend;
 use crate::database_cache_adapter::{BackendType, DatabaseCacheAdapter};
 use crate::indexing::lsp_enrichment_queue::{LspEnrichmentQueue, QueueItem};
-use crate::server_manager::SingleServerManager;
-use crate::lsp_database_adapter::LspDatabaseAdapter;
-use crate::workspace_utils;
-use crate::path_resolver::PathResolver;
 use crate::language_detector::Language;
+use crate::lsp_database_adapter::LspDatabaseAdapter;
+use crate::path_resolver::PathResolver;
+use crate::server_manager::SingleServerManager;
+use crate::workspace_utils;
 
 /// Configuration for LSP enrichment workers
 #[derive(Debug, Clone)]
@@ -157,11 +157,9 @@ impl LspEnrichmentWorkerPool {
         let mut handles = Vec::new();
 
         for worker_id in 0..self.config.parallelism {
-            let handle = self.spawn_worker(
-                worker_id,
-                queue.clone(),
-                cache_adapter.clone(),
-            ).await?;
+            let handle = self
+                .spawn_worker(worker_id, queue.clone(), cache_adapter.clone())
+                .await?;
             handles.push(handle);
         }
 
@@ -183,7 +181,10 @@ impl LspEnrichmentWorkerPool {
         let path_resolver = self.path_resolver.clone();
 
         let handle = tokio::spawn(async move {
-            info!("LSP enrichment worker {} started (using direct SingleServerManager)", worker_id);
+            info!(
+                "LSP enrichment worker {} started (using direct SingleServerManager)",
+                worker_id
+            );
             stats.active_workers.fetch_add(1, Ordering::Relaxed);
 
             while !shutdown.load(Ordering::Relaxed) {
@@ -201,7 +202,10 @@ impl LspEnrichmentWorkerPool {
                     Some(queue_item) => {
                         debug!(
                             "Worker {} processing symbol: {} ({}:{}) using SingleServerManager",
-                            worker_id, queue_item.name, queue_item.file_path.display(), queue_item.def_start_line
+                            worker_id,
+                            queue_item.name,
+                            queue_item.file_path.display(),
+                            queue_item.def_start_line
                         );
 
                         // Process the symbol using SingleServerManager directly
@@ -211,10 +215,15 @@ impl LspEnrichmentWorkerPool {
                             &path_resolver,
                             &cache_adapter,
                             &config,
-                        ).await {
+                        )
+                        .await
+                        {
                             Ok(_) => {
                                 stats.symbols_enriched.fetch_add(1, Ordering::Relaxed);
-                                debug!("Worker {} successfully enriched symbol: {}", worker_id, queue_item.name);
+                                debug!(
+                                    "Worker {} successfully enriched symbol: {}",
+                                    worker_id, queue_item.name
+                                );
                             }
                             Err(e) => {
                                 stats.symbols_failed.fetch_add(1, Ordering::Relaxed);
@@ -267,21 +276,23 @@ impl LspEnrichmentWorkerPool {
                 path_resolver,
                 cache_adapter,
                 config,
-            ).await {
+            )
+            .await
+            {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     last_error = Some(e);
                     warn!(
                         "Attempt {} failed for symbol {}: {}",
-                        attempt + 1, queue_item.name, last_error.as_ref().unwrap()
+                        attempt + 1,
+                        queue_item.name,
+                        last_error.as_ref().unwrap()
                     );
                 }
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            anyhow::anyhow!("Unknown error during symbol processing")
-        }))
+        Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Unknown error during symbol processing")))
     }
 
     /// Process a single symbol using SingleServerManager directly
@@ -293,8 +304,9 @@ impl LspEnrichmentWorkerPool {
         config: &EnrichmentWorkerConfig,
     ) -> Result<()> {
         // Step 1: Resolve workspace root using simple workspace detection
-        let workspace_root = workspace_utils::find_workspace_root_with_fallback(&queue_item.file_path)
-            .context("Failed to resolve workspace root")?;
+        let workspace_root =
+            workspace_utils::find_workspace_root_with_fallback(&queue_item.file_path)
+                .context("Failed to resolve workspace root")?;
 
         debug!(
             "Processing symbol {} in workspace: {} (using SingleServerManager)",
@@ -306,7 +318,11 @@ impl LspEnrichmentWorkerPool {
         let language = Self::detect_language_from_path(&queue_item.file_path)
             .context("Failed to detect language from file path")?;
 
-        debug!("Detected language: {:?} for file: {}", language, queue_item.file_path.display());
+        debug!(
+            "Detected language: {:?} for file: {}",
+            language,
+            queue_item.file_path.display()
+        );
 
         // Step 3: Get call hierarchy using SingleServerManager directly
         let call_hierarchy_result = timeout(
@@ -350,13 +366,15 @@ impl LspEnrichmentWorkerPool {
         let database_adapter = LspDatabaseAdapter::new();
 
         // Convert call hierarchy result to database format
-        let (symbols, edges) = database_adapter.convert_call_hierarchy_to_database(
-            &call_hierarchy_result,
-            &queue_item.file_path,
-            &language.as_str(),
-            1, // file_version_id - placeholder
-            &workspace_root,
-        ).context("Failed to convert call hierarchy result to database format")?;
+        let (symbols, edges) = database_adapter
+            .convert_call_hierarchy_to_database(
+                &call_hierarchy_result,
+                &queue_item.file_path,
+                &language.as_str(),
+                1, // file_version_id - placeholder
+                &workspace_root,
+            )
+            .context("Failed to convert call hierarchy result to database format")?;
 
         let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
 
@@ -440,10 +458,9 @@ impl LspEnrichmentWorkerPool {
 
         if let Some(array) = json_result.as_array() {
             for item in array {
-                if let (Some(uri), Some(range)) = (
-                    item.get("uri").and_then(|v| v.as_str()),
-                    item.get("range"),
-                ) {
+                if let (Some(uri), Some(range)) =
+                    (item.get("uri").and_then(|v| v.as_str()), item.get("range"))
+                {
                     let range = Self::parse_lsp_range(range)?;
                     locations.push(crate::protocol::Location {
                         uri: uri.to_string(),
@@ -487,7 +504,10 @@ impl LspEnrichmentWorkerPool {
     }
 
     /// Wait for all workers to complete
-    pub async fn wait_for_completion(&self, handles: Vec<tokio::task::JoinHandle<()>>) -> Result<()> {
+    pub async fn wait_for_completion(
+        &self,
+        handles: Vec<tokio::task::JoinHandle<()>>,
+    ) -> Result<()> {
         info!("Waiting for LSP enrichment workers to complete");
 
         for handle in handles {
