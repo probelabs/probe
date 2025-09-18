@@ -134,6 +134,7 @@ fn test_structured_patterns_search() {
 
     // Measure search time
     let start_time = Instant::now();
+    let search_filters = probe_code::search::filters::SearchFilters::new();
     let result = search_with_structured_patterns(
         base_path,
         &query_plan,
@@ -142,6 +143,7 @@ fn test_structured_patterns_search() {
         true,
         None,
         false,
+        &search_filters,
     );
     let duration = start_time.elapsed();
 

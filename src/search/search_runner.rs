@@ -14,7 +14,8 @@ use probe_code::search::{
     early_ranker,
     // file_list_cache, // Add the new file_list_cache module (unused)
     file_processing::{process_file_with_results, FileProcessingParams},
-    query::{create_query_plan, create_structured_patterns, QueryPlan},
+    filters::SearchFilters,
+    query::{create_structured_patterns, QueryPlan},
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
@@ -355,12 +356,46 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: Starting query preprocessing...");
     }
 
-    let parse_res = if queries.len() > 1 {
-        // Join multiple queries with AND
-        let combined_query = queries.join(" AND ");
-        create_query_plan(&combined_query, *exact)
+    // First, parse the query to extract filters
+    let combined_query = if queries.len() > 1 {
+        queries.join(" AND ")
     } else {
-        create_query_plan(&queries[0], *exact)
+        queries[0].clone()
+    };
+
+    // Parse the combined query into an AST
+    let initial_ast_result = crate::search::elastic_query::parse_query(&combined_query, *exact);
+    if initial_ast_result.is_err() {
+        println!("Failed to parse query as AST expression");
+        return Ok(LimitedSearchResults {
+            results: Vec::new(),
+            skipped_files: Vec::new(),
+            limits_applied: None,
+            cached_blocks_skipped: None,
+            files_skipped_early_termination: None,
+        });
+    }
+
+    let initial_ast = initial_ast_result.unwrap();
+    
+    // Extract filters and simplify AST
+    let (search_filters, simplified_ast) = SearchFilters::extract_and_simplify(initial_ast);
+
+    if debug_mode && !search_filters.is_empty() {
+        println!("DEBUG: Extracted search filters: {:?}", search_filters);
+    }
+
+    // If we have a simplified AST, create a query plan from it
+    // Otherwise, if all terms were filters, we'll search all content
+    let plan = if let Some(simplified_ast) = simplified_ast {
+        // Create query plan from simplified AST that contains only content search terms
+        crate::search::query::create_query_plan_from_ast(simplified_ast, *exact)?
+    } else {
+        // All terms were filters - create a universal query plan that matches everything
+        if debug_mode {
+            println!("DEBUG: All query terms were filters - creating universal search plan");
+        }
+        crate::search::query::create_universal_query_plan()
     };
 
     let qp_duration = qp_start.elapsed();
@@ -372,21 +407,6 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             format_duration(qp_duration)
         );
     }
-
-    // If the query fails to parse, return empty results
-    if parse_res.is_err() {
-        println!("Failed to parse query as AST expression");
-        return Ok(LimitedSearchResults {
-            results: Vec::new(),
-            skipped_files: Vec::new(),
-            limits_applied: None,
-            cached_blocks_skipped: None,
-            files_skipped_early_termination: None,
-        });
-    }
-
-    // All queries go through the AST path
-    let plan = parse_res.unwrap();
 
     // Pattern generation timing
     let pg_start = Instant::now();
@@ -444,6 +464,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         *allow_tests,
         lang_param,
         *no_gitignore,
+        &search_filters,
     )?;
 
     let fs_duration = fs_start.elapsed();
@@ -1581,6 +1602,7 @@ pub fn search_with_structured_patterns(
     allow_tests: bool,
     language: Option<&str>,
     no_gitignore: bool,
+    search_filters: &SearchFilters,
 ) -> Result<HashMap<PathBuf, HashMap<usize, HashSet<usize>>>> {
     // Resolve the path if it's a special format (e.g., "go:github.com/user/repo")
     let root_path = if let Some(path_str) = root_path_str.to_str() {
@@ -1674,7 +1696,7 @@ pub fn search_with_structured_patterns(
     }
 
     // Use file_list_cache to get a filtered list of files, with language filtering if specified
-    let file_list = crate::search::file_list_cache::get_file_list_by_language(
+    let initial_file_list = crate::search::file_list_cache::get_file_list_by_language(
         &root_path,
         allow_tests,
         custom_ignores,
@@ -1682,8 +1704,52 @@ pub fn search_with_structured_patterns(
         no_gitignore,
     )?;
 
+    // Apply search filters to further filter the file list
+    let filtered_files = if !search_filters.is_empty() {
+        if debug_mode {
+            println!(
+                "DEBUG: Applying search filters to {} files",
+                initial_file_list.files.len()
+            );
+        }
+        
+        let filtered: Vec<PathBuf> = initial_file_list
+            .files
+            .iter()
+            .filter(|file_path| {
+                let matches = search_filters.matches_file(file_path);
+                if debug_mode && !matches {
+                    println!("DEBUG: Filter excluded file: {:?}", file_path);
+                }
+                matches
+            })
+            .cloned()
+            .collect();
+
+        if debug_mode {
+            println!(
+                "DEBUG: Search filters kept {} out of {} files",
+                filtered.len(),
+                initial_file_list.files.len()
+            );
+        }
+        
+        filtered
+    } else {
+        if debug_mode {
+            println!("DEBUG: No search filters active, using all {} files", initial_file_list.files.len());
+        }
+        initial_file_list.files.clone()
+    };
+
+    // Create a new file list structure with the filtered files
+    let file_list = probe_code::search::file_list_cache::FileList {
+        files: filtered_files,
+        created_at: initial_file_list.created_at,
+    };
+
     if debug_mode {
-        println!("DEBUG: Got {} files from cache", file_list.files.len());
+        println!("DEBUG: Got {} files after filtering", file_list.files.len());
         if use_simd {
             println!("DEBUG: Starting parallel file processing with SIMD");
         } else {

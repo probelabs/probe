@@ -99,6 +99,42 @@ probe search "\"handle error\""  # Exact phrase
 probe search "function:authenticate"  # Search in function names
 ```
 
+### SEARCH HINTS
+
+Search hints allow you to filter results by file properties. These filters are applied at the file discovery stage and removed from the query before content searching:
+
+```bash
+probe search "error AND ext:rs"              # Only search in .rs files
+probe search "class AND file:src/**/*.py"    # Only search in Python files under src/
+probe search "function AND dir:tests"        # Only search in files under tests/ directory
+probe search "struct AND type:rust"          # Only search in Rust files
+probe search "component AND lang:javascript" # Only search in JavaScript files
+```
+
+**Available Search Hints:**
+
+| Hint | Description | Examples |
+|------|-------------|----------|
+| `ext:<extension>` | Filter by file extension | `ext:rs`, `ext:py,js,ts` |
+| `file:<pattern>` | Filter by file path pattern (supports globs) | `file:src/**/*.rs`, `file:*test*` |
+| `path:<pattern>` | Alias for `file:` | `path:src/main.rs` |
+| `dir:<pattern>` | Filter by directory pattern | `dir:src`, `dir:tests` |
+| `type:<filetype>` | Filter by ripgrep file type | `type:rust`, `type:javascript` |
+| `lang:<language>` | Filter by programming language | `lang:rust`, `lang:python` |
+
+**Combining Search Hints:**
+
+```bash
+# Multiple filters (all must match)
+probe search "config AND ext:rs AND dir:src"
+
+# Multiple extensions (any can match)
+probe search "import AND ext:js,ts,jsx,tsx"
+
+# Complex combinations
+probe search "(error OR exception) AND ext:rs AND file:src/**/*"
+```
+
 ### WILDCARDS
 
 ```bash

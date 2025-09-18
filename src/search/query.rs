@@ -730,3 +730,106 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
     limited_results
 } // Re-added function closing brace
+
+/// Create a query plan from an already parsed AST
+pub fn create_query_plan_from_ast(ast: elastic_query::Expr, exact: bool) -> Result<QueryPlan, elastic_query::ParseError> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let start_time = Instant::now();
+
+    if debug_mode {
+        println!("DEBUG: Creating query plan from existing AST");
+    }
+
+    // Update AST for exact search if needed
+    let mut final_ast = ast;
+    if exact {
+        update_ast_exact(&mut final_ast);
+    }
+
+    // Extract terms from the AST
+    let mut all_terms = Vec::new();
+    let mut excluded_terms = HashSet::new();
+    collect_all_terms(&final_ast, &mut all_terms, &mut excluded_terms);
+
+    // Remove duplicates from all_terms
+    all_terms.sort();
+    all_terms.dedup();
+
+    // Build term index map
+    let mut term_indices = HashMap::new();
+    for (i, term) in all_terms.iter().enumerate() {
+        term_indices.insert(term.clone(), i);
+    }
+
+    // Collect required terms for optimization
+    let mut required_terms = HashSet::new();
+    collect_required_terms(&final_ast, &mut required_terms);
+
+    // Determine if this is a simple query for optimization
+    let is_simple_query = match &final_ast {
+        elastic_query::Expr::Term { excluded, .. } => !excluded && all_terms.len() == 1,
+        _ => false,
+    };
+
+    // Pre-compute AST metadata
+    let has_required_anywhere = final_ast.has_required_term();
+    let has_only_excluded_terms = final_ast.is_only_excluded_terms();
+
+    // Pre-compute required term indices
+    let required_terms_indices: HashSet<usize> = required_terms
+        .iter()
+        .filter_map(|term| term_indices.get(term).cloned())
+        .collect();
+
+    // Create evaluation cache
+    let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
+
+    let total_duration = start_time.elapsed();
+    if debug_mode {
+        println!(
+            "DEBUG: Query plan from AST completed in {}",
+            format_duration(total_duration)
+        );
+    }
+
+    Ok(QueryPlan {
+        ast: final_ast,
+        term_indices,
+        excluded_terms,
+        exact,
+        is_simple_query,
+        required_terms,
+        has_required_anywhere,
+        required_terms_indices,
+        has_only_excluded_terms,
+        evaluation_cache,
+    })
+}
+
+/// Create a universal query plan that matches everything (used when all terms are filters)
+pub fn create_universal_query_plan() -> QueryPlan {
+    // Create a simple term that will match anything in the content
+    let universal_ast = elastic_query::Expr::Term {
+        keywords: vec![".*".to_string()], // This will be converted to a regex that matches anything
+        field: None,
+        required: false,
+        excluded: false,
+        exact: false,
+    };
+
+    let mut term_indices = HashMap::new();
+    term_indices.insert(".*".to_string(), 0);
+
+    QueryPlan {
+        ast: universal_ast,
+        term_indices,
+        excluded_terms: HashSet::new(),
+        exact: false,
+        is_simple_query: true,
+        required_terms: HashSet::new(),
+        has_required_anywhere: false,
+        required_terms_indices: HashSet::new(),
+        has_only_excluded_terms: false,
+        evaluation_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap()))),
+    }
+}
