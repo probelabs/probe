@@ -73,6 +73,13 @@ probe search "auth* connect*" ./
 
 # Exclude terms with NOT operator
 probe search "database NOT sqlite" ./
+
+# Use search hints to filter results by file properties
+probe search "function AND ext:rs" ./          # Only search in .rs files
+probe search "class AND file:src/**/*.py" ./   # Only search in Python files under src/
+probe search "error AND dir:tests" ./          # Only search in files under tests/ directory
+probe search "struct AND type:rust" ./         # Only search in Rust files
+probe search "component AND lang:javascript" ./ # Only search in JavaScript files
 ~~~
 
 **Extract Code Blocks**
@@ -404,6 +411,44 @@ probe search <SEARCH_PATTERN> [OPTIONS]
 - `--any-term`: Match files containing **any** query terms (default behavior)
 - `--no-merge`: Disable merging of adjacent code blocks after ranking (merging enabled by default)
 - `--merge-threshold`: Max lines between code blocks to consider them adjacent for merging (default: 5)
+
+##### Search Hints
+
+You can filter search results by file properties using search hints. These filters are applied at the file discovery stage and removed from the query before content searching:
+
+| Hint | Description | Example |
+|------|-------------|---------|
+| `ext:<extension>` | Filter by file extension | `ext:rs`, `ext:py,js,ts` |
+| `file:<pattern>` | Filter by file path pattern (supports globs) | `file:src/**/*.rs`, `file:*test*` |
+| `path:<pattern>` | Alias for `file:` | `path:src/main.rs` |
+| `dir:<pattern>` | Filter by directory pattern | `dir:src`, `dir:tests` |
+| `type:<filetype>` | Filter by ripgrep file type | `type:rust`, `type:javascript` |
+| `lang:<language>` | Filter by programming language | `lang:rust`, `lang:python` |
+
+**Search Hint Examples:**
+
+~~~bash
+# Search for "function" only in Rust files
+probe search "function AND ext:rs" ./
+
+# Search for "error" only in test directories
+probe search "error AND dir:tests" ./
+
+# Search for "class" in Python files under src/
+probe search "class AND file:src/**/*.py" ./
+
+# Search for "component" in JavaScript/TypeScript files
+probe search "component AND type:javascript" ./
+
+# Search for "struct" in Rust language files
+probe search "struct AND lang:rust" ./
+
+# Combine multiple filters
+probe search "config AND ext:rs AND dir:src" ./
+
+# Use multiple extensions
+probe search "import AND ext:js,ts,jsx,tsx" ./
+~~~
 
 ##### Examples
 

@@ -104,6 +104,15 @@ pub enum Commands {
     /// It uses frequency-based search with stemming and stopword removal by default,
     /// and ranks results using the BM25 algorithm.
     /// Results are presented as code blocks with relevant context.
+    ///
+    /// Search hints can be used to filter results by file properties:
+    /// - ext:<extension>: Filter by file extension (e.g., "ext:rs")
+    /// - file:<pattern>: Filter by file path pattern (e.g., "file:src/**/*.py")
+    /// - dir:<pattern>: Filter by directory pattern (e.g., "dir:tests")
+    /// - type:<filetype>: Filter by ripgrep file type (e.g., "type:rust")
+    /// - lang:<language>: Filter by programming language (e.g., "lang:javascript")
+    ///
+    /// Example: probe search "function AND ext:rs" ./
     Search {
         /// Search pattern (regex supported)
         #[arg(value_name = "PATTERN")]

@@ -1,4 +1,6 @@
-use probe_code::search::search_runner::{perform_probe, search_with_structured_patterns};
+use probe_code::search::search_runner::{
+    perform_probe, search_with_structured_patterns, SearchConfig,
+};
 use probe_code::search::SearchOptions;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -134,14 +136,19 @@ fn test_structured_patterns_search() {
 
     // Measure search time
     let start_time = Instant::now();
+    let search_filters = probe_code::search::filters::SearchFilters::new();
+    let search_config = SearchConfig {
+        custom_ignores: &custom_ignores,
+        allow_tests: true,
+        language: None,
+        no_gitignore: false,
+    };
     let result = search_with_structured_patterns(
         base_path,
         &query_plan,
         &patterns,
-        &custom_ignores,
-        true,
-        None,
-        false,
+        &search_config,
+        &search_filters,
     );
     let duration = start_time.elapsed();
 
