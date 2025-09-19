@@ -1233,6 +1233,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
           originalContent: originalContent,
           fixedContent: fixedContent,
           originalError: 'Proactive node label quoting',
+          fixMethod: 'node_label_quote_wrapping',
           fixedWithProactiveQuoting: true
         });
         
@@ -1260,7 +1261,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
         if (tracer) {
           tracer.recordMermaidValidationEvent('proactive_fix_completed', {
             'mermaid_validation.success': true,
-            'mermaid_validation.fix_method': 'proactive_quoting',
+            'mermaid_validation.fix_method': 'node_label_quote_wrapping',
             'mermaid_validation.diagrams_fixed': fixingResults.length,
             'mermaid_validation.duration_ms': totalTime
           });
