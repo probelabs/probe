@@ -1126,6 +1126,159 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       }
     }
     
+    // Proactive pass: Fix common node label issues in ALL diagrams (not just invalid ones)
+    let proactiveFixesApplied = false;
+    
+    // Re-extract diagrams after HTML entity fixes
+    const { diagrams: currentDiagrams } = extractMermaidFromMarkdown(fixedResponse);
+    
+    for (let diagramIndex = currentDiagrams.length - 1; diagramIndex >= 0; diagramIndex--) {
+      const diagram = currentDiagrams[diagramIndex];
+      const originalContent = diagram.content;
+      const lines = originalContent.split('\n');
+      let wasFixed = false;
+      
+      // Proactively fix node labels that contain special characters
+      const fixedLines = lines.map(line => {
+        const trimmedLine = line.trim();
+        let modifiedLine = line;
+        
+        // Enhanced auto-fixing for square bracket nodes [...]
+        if (trimmedLine.match(/\[[^\]]*\]/)) {
+          modifiedLine = modifiedLine.replace(/\[([^\]]*)\]/g, (match, content) => {
+            // Skip if already properly quoted
+            if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+              return match;
+            }
+            
+            // Check if content needs quoting (contains problematic patterns)
+            const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
+                                content.includes('e.g.') ||
+                                content.includes('i.e.') ||
+                                content.includes('src/') ||
+                                content.includes('defaults/') ||
+                                content.includes('.ts') ||
+                                content.includes('.js') ||
+                                content.includes('.yaml') ||
+                                content.includes('.json') ||
+                                content.includes('.md') ||
+                                content.includes('.html') ||
+                                content.includes('.css');
+            
+            if (needsQuoting) {
+              wasFixed = true;
+              // Replace internal double quotes with single quotes to avoid nesting
+              const safeContent = content.replace(/"/g, "'");
+              return `["${safeContent}"]`;
+            }
+            
+            return match;
+          });
+        }
+        
+        // Enhanced auto-fixing for diamond nodes {...}
+        if (trimmedLine.match(/\{[^{}]*\}/)) {
+          modifiedLine = modifiedLine.replace(/\{([^{}]*)\}/g, (match, content) => {
+            // Skip if already properly quoted
+            if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+              return match;
+            }
+            
+            // Check if content needs quoting (contains problematic patterns)
+            const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
+                                content.includes('e.g.') ||
+                                content.includes('i.e.') ||
+                                content.includes('src/') ||
+                                content.includes('defaults/') ||
+                                content.includes('.ts') ||
+                                content.includes('.js') ||
+                                content.includes('.yaml') ||
+                                content.includes('.json') ||
+                                content.includes('.md') ||
+                                content.includes('.html') ||
+                                content.includes('.css');
+            
+            if (needsQuoting) {
+              wasFixed = true;
+              // Replace internal double quotes with single quotes to avoid nesting
+              const safeContent = content.replace(/"/g, "'");
+              return `{"${safeContent}"}`;
+            }
+            
+            return match;
+          });
+        }
+        
+        return modifiedLine;
+      });
+      
+      if (wasFixed) {
+        const fixedContent = fixedLines.join('\n');
+        
+        // Replace the diagram in the response
+        const attributesStr = diagram.attributes ? ` ${diagram.attributes}` : '';
+        const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${fixedContent}\n\`\`\``;
+        
+        fixedResponse = fixedResponse.slice(0, diagram.startIndex) + 
+                       newCodeBlock + 
+                       fixedResponse.slice(diagram.endIndex);
+        
+        fixingResults.push({
+          diagramIndex: diagramIndex,
+          wasFixed: true,
+          originalContent: originalContent,
+          fixedContent: fixedContent,
+          originalError: 'Proactive node label quoting',
+          fixMethod: 'node_label_quote_wrapping',
+          fixedWithProactiveQuoting: true
+        });
+        
+        proactiveFixesApplied = true;
+        
+        if (debug) {
+          console.log(`[DEBUG] Mermaid validation: Proactively fixed diagram ${diagramIndex + 1} with node label quoting`);
+          console.log(`[DEBUG] Mermaid validation: Applied automatic quoting to special characters`);
+        }
+      }
+    }
+    
+    // If proactive fixes were applied, re-validate the entire response
+    if (proactiveFixesApplied) {
+      const revalidation = await validateMermaidResponse(fixedResponse);
+      if (revalidation.isValid) {
+        // All diagrams are now valid, return without AI fixing
+        const totalTime = Date.now() - startTime;
+        if (debug) {
+          console.log(`[DEBUG] Mermaid validation: All diagrams fixed with proactive quoting in ${totalTime}ms, no AI needed`);
+          console.log(`[DEBUG] Mermaid validation: Applied ${fixingResults.length} proactive fixes`);
+        }
+        
+        // Record proactive fix success in telemetry
+        if (tracer) {
+          tracer.recordMermaidValidationEvent('proactive_fix_completed', {
+            'mermaid_validation.success': true,
+            'mermaid_validation.fix_method': 'node_label_quote_wrapping',
+            'mermaid_validation.diagrams_fixed': fixingResults.length,
+            'mermaid_validation.duration_ms': totalTime
+          });
+        }
+        return {
+          ...revalidation,
+          wasFixed: true,
+          originalResponse: response,
+          fixedResponse: fixedResponse,
+          fixingResults: fixingResults,
+          performanceMetrics: {
+            totalTimeMs: totalTime,
+            aiFixingTimeMs: 0,
+            finalValidationTimeMs: 0,
+            diagramsProcessed: fixingResults.length,
+            diagramsFixed: fixingResults.length
+          }
+        };
+      }
+    }
+    
     // Second pass: Try auto-fixing unquoted subgraph names with parentheses
     let subgraphFixesApplied = false;
     
@@ -1258,46 +1411,77 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       // Check if this is a node label error that we can auto-fix
       if (invalidDiagram.error && 
           (invalidDiagram.error.includes('Parentheses in node label') || 
-           invalidDiagram.error.includes('Complex expression in diamond node'))) {
+           invalidDiagram.error.includes('Complex expression in diamond node') ||
+           invalidDiagram.error.includes('Single quotes in node label'))) {
         const originalContent = invalidDiagram.content;
         const lines = originalContent.split('\n');
         let wasFixed = false;
         
-        // Find and fix node labels with unquoted parentheses  
+        // Find and fix node labels with special characters that need quoting
         const fixedLines = lines.map(line => {
           const trimmedLine = line.trim();
           let modifiedLine = line;
           
-          // Look for node definitions with unquoted parentheses in square brackets
-          // Pattern: [some text (with parens) more text]
-          if (trimmedLine.match(/\[[^\]"]*\([^\]"]*\]/)) {
-            modifiedLine = modifiedLine.replace(/\[([^\]"]*\([^\]"]*)\]/g, (match, content) => {
-              // Only fix if it's not already quoted
-              if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
+          // Enhanced auto-fixing for square bracket nodes [...]
+          // Look for any node labels that contain special characters and aren't already quoted
+          if (trimmedLine.match(/\[[^\]]*\]/)) {
+            modifiedLine = modifiedLine.replace(/\[([^\]]*)\]/g, (match, content) => {
+              // Skip if already properly quoted
+              if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+                return match;
+              }
+              
+              // Check if content needs quoting (contains problematic patterns)
+              const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
+                                  content.includes('e.g.') ||
+                                  content.includes('i.e.') ||
+                                  content.includes('src/') ||
+                                  content.includes('defaults/') ||
+                                  content.includes('.ts') ||
+                                  content.includes('.js') ||
+                                  content.includes('.yaml') ||
+                                  content.includes('.json');
+              
+              if (needsQuoting) {
                 wasFixed = true;
                 // Replace internal double quotes with single quotes to avoid nesting
                 const safeContent = content.replace(/"/g, "'");
                 return `["${safeContent}"]`;
               }
+              
               return match;
             });
           }
           
-          // Look for diamond node definitions with unquoted parentheses
-          // Pattern: {some text (with parens) more text}
-          if (trimmedLine.match(/\{[^{}"]*\([^{}"]*\}/)) {
-            modifiedLine = modifiedLine.replace(/\{([^{}"]*\([^{}"]*)\}/g, (match, content) => {
-              // Only fix if it's not already quoted
-              if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
+          // Enhanced auto-fixing for diamond nodes {...}
+          if (trimmedLine.match(/\{[^{}]*\}/)) {
+            modifiedLine = modifiedLine.replace(/\{([^{}]*)\}/g, (match, content) => {
+              // Skip if already properly quoted
+              if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+                return match;
+              }
+              
+              // Check if content needs quoting (contains problematic patterns)
+              const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
+                                  content.includes('e.g.') ||
+                                  content.includes('i.e.') ||
+                                  content.includes('src/') ||
+                                  content.includes('defaults/') ||
+                                  content.includes('.ts') ||
+                                  content.includes('.js') ||
+                                  content.includes('.yaml') ||
+                                  content.includes('.json');
+              
+              if (needsQuoting) {
                 wasFixed = true;
                 // Replace internal double quotes with single quotes to avoid nesting
                 const safeContent = content.replace(/"/g, "'");
                 return `{"${safeContent}"}`;
               }
+              
               return match;
             });
           }
-          
           
           return modifiedLine;
         });
