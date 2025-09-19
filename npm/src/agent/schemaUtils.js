@@ -1151,8 +1151,8 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               return match;
             }
             
-            // Check if content needs quoting (contains special characters)
-            const needsQuoting = /[()'"<>&/.,:;!@#$%^*+=|\\]/.test(content) || 
+            // Check if content needs quoting (contains problematic patterns)
+            const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
                                 content.includes(' and ') ||
                                 content.includes(' or ') ||
                                 content.includes('e.g.') ||
@@ -1186,8 +1186,8 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               return match;
             }
             
-            // Check if content needs quoting (contains special characters)
-            const needsQuoting = /[()'"<>&/.,:;!@#$%^*+=|\\]/.test(content) || 
+            // Check if content needs quoting (contains problematic patterns)
+            const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
                                 content.includes(' and ') ||
                                 content.includes(' or ') ||
                                 content.includes('e.g.') ||
@@ -1435,8 +1435,8 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
                 return match;
               }
               
-              // Check if content needs quoting (contains special characters)
-              const needsQuoting = /[()'"<>&/.,:;!@#$%^*+=|\\]/.test(content) || 
+              // Check if content needs quoting (contains problematic patterns)
+              const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
                                   content.includes(' and ') ||
                                   content.includes(' or ') ||
                                   content.includes('e.g.') ||
@@ -1467,8 +1467,8 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
                 return match;
               }
               
-              // Check if content needs quoting (contains special characters)
-              const needsQuoting = /[()'"<>&/.,:;!@#$%^*+=|\\]/.test(content) || 
+              // Check if content needs quoting (contains problematic patterns)
+              const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
                                   content.includes(' and ') ||
                                   content.includes(' or ') ||
                                   content.includes('e.g.') ||
