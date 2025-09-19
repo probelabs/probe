@@ -1153,8 +1153,6 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             
             // Check if content needs quoting (contains problematic patterns)
             const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                content.includes(' and ') ||
-                                content.includes(' or ') ||
                                 content.includes('e.g.') ||
                                 content.includes('i.e.') ||
                                 content.includes('src/') ||
@@ -1188,8 +1186,6 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             
             // Check if content needs quoting (contains problematic patterns)
             const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                content.includes(' and ') ||
-                                content.includes(' or ') ||
                                 content.includes('e.g.') ||
                                 content.includes('i.e.') ||
                                 content.includes('src/') ||
@@ -1437,8 +1433,6 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               
               // Check if content needs quoting (contains problematic patterns)
               const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                  content.includes(' and ') ||
-                                  content.includes(' or ') ||
                                   content.includes('e.g.') ||
                                   content.includes('i.e.') ||
                                   content.includes('src/') ||
@@ -1469,8 +1463,6 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               
               // Check if content needs quoting (contains problematic patterns)
               const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                  content.includes(' and ') ||
-                                  content.includes(' or ') ||
                                   content.includes('e.g.') ||
                                   content.includes('i.e.') ||
                                   content.includes('src/') ||
