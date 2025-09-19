@@ -57,6 +57,7 @@ export class ProbeAgent {
    * @param {boolean} [options.debug] - Enable debug mode
    * @param {boolean} [options.outline] - Enable outline-xml format for search results
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
+   * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
    */
   constructor(options = {}) {
     // Basic configuration
@@ -69,6 +70,7 @@ export class ProbeAgent {
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
+    this.disableMermaidValidation = !!options.disableMermaidValidation;
 
     // Search configuration
     this.allowedFolders = options.path ? [options.path] : [process.cwd()];
@@ -901,62 +903,66 @@ Convert your previous response content into actual JSON data that follows this s
           finalResult = cleanSchemaResponse(finalResult);
           
           // Step 3: Validate and fix Mermaid diagrams if present
-          try {
-            if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: Starting enhanced mermaid validation...`);
-            }
-            
-            // Record mermaid validation start in telemetry
-            if (this.tracer) {
-              this.tracer.recordMermaidValidationEvent('schema_processing_started', {
-                'mermaid_validation.context': 'schema_processing',
-                'mermaid_validation.response_length': finalResult.length
-              });
-            }
-            
-            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
-              debug: this.debug,
-              path: this.allowedFolders[0],
-              provider: this.clientApiProvider,
-              model: this.model,
-              tracer: this.tracer
-            });
-            
-            if (mermaidValidation.wasFixed) {
-              finalResult = mermaidValidation.fixedResponse;
+          if (!this.disableMermaidValidation) {
+            try {
               if (this.debug) {
-                console.log(`[DEBUG] Mermaid validation: Diagrams successfully fixed`);
-                
-                if (mermaidValidation.performanceMetrics) {
-                  const metrics = mermaidValidation.performanceMetrics;
-                  console.log(`[DEBUG] Mermaid validation: Performance - total: ${metrics.totalTimeMs}ms, AI fixing: ${metrics.aiFixingTimeMs}ms`);
-                  console.log(`[DEBUG] Mermaid validation: Results - ${metrics.diagramsFixed}/${metrics.diagramsProcessed} diagrams fixed`);
+                console.log(`[DEBUG] Mermaid validation: Starting enhanced mermaid validation...`);
+              }
+              
+              // Record mermaid validation start in telemetry
+              if (this.tracer) {
+                this.tracer.recordMermaidValidationEvent('schema_processing_started', {
+                  'mermaid_validation.context': 'schema_processing',
+                  'mermaid_validation.response_length': finalResult.length
+                });
+              }
+              
+              const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+                debug: this.debug,
+                path: this.allowedFolders[0],
+                provider: this.clientApiProvider,
+                model: this.model,
+                tracer: this.tracer
+              });
+              
+              if (mermaidValidation.wasFixed) {
+                finalResult = mermaidValidation.fixedResponse;
+                if (this.debug) {
+                  console.log(`[DEBUG] Mermaid validation: Diagrams successfully fixed`);
+                  
+                  if (mermaidValidation.performanceMetrics) {
+                    const metrics = mermaidValidation.performanceMetrics;
+                    console.log(`[DEBUG] Mermaid validation: Performance - total: ${metrics.totalTimeMs}ms, AI fixing: ${metrics.aiFixingTimeMs}ms`);
+                    console.log(`[DEBUG] Mermaid validation: Results - ${metrics.diagramsFixed}/${metrics.diagramsProcessed} diagrams fixed`);
+                  }
+                  
+                  if (mermaidValidation.fixingResults) {
+                    mermaidValidation.fixingResults.forEach((fixResult, index) => {
+                      if (fixResult.wasFixed) {
+                        const method = fixResult.fixedWithHtmlDecoding ? 'HTML entity decoding' : 'AI correction';
+                        const time = fixResult.aiFixingTimeMs ? ` in ${fixResult.aiFixingTimeMs}ms` : '';
+                        console.log(`[DEBUG] Mermaid validation: Fixed diagram ${fixResult.diagramIndex + 1} with ${method}${time}`);
+                        console.log(`[DEBUG] Mermaid validation: Original error: ${fixResult.originalError}`);
+                      } else {
+                        console.log(`[DEBUG] Mermaid validation: Failed to fix diagram ${fixResult.diagramIndex + 1}: ${fixResult.fixingError}`);
+                      }
+                    });
+                  }
                 }
-                
-                if (mermaidValidation.fixingResults) {
-                  mermaidValidation.fixingResults.forEach((fixResult, index) => {
-                    if (fixResult.wasFixed) {
-                      const method = fixResult.fixedWithHtmlDecoding ? 'HTML entity decoding' : 'AI correction';
-                      const time = fixResult.aiFixingTimeMs ? ` in ${fixResult.aiFixingTimeMs}ms` : '';
-                      console.log(`[DEBUG] Mermaid validation: Fixed diagram ${fixResult.diagramIndex + 1} with ${method}${time}`);
-                      console.log(`[DEBUG] Mermaid validation: Original error: ${fixResult.originalError}`);
-                    } else {
-                      console.log(`[DEBUG] Mermaid validation: Failed to fix diagram ${fixResult.diagramIndex + 1}: ${fixResult.fixingError}`);
-                    }
-                  });
+              } else if (this.debug) {
+                console.log(`[DEBUG] Mermaid validation: No fixes needed or fixes unsuccessful`);
+                if (mermaidValidation.diagrams?.length > 0) {
+                  console.log(`[DEBUG] Mermaid validation: Found ${mermaidValidation.diagrams.length} diagrams, all valid: ${mermaidValidation.isValid}`);
                 }
               }
-            } else if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: No fixes needed or fixes unsuccessful`);
-              if (mermaidValidation.diagrams?.length > 0) {
-                console.log(`[DEBUG] Mermaid validation: Found ${mermaidValidation.diagrams.length} diagrams, all valid: ${mermaidValidation.isValid}`);
+            } catch (error) {
+              if (this.debug) {
+                console.log(`[DEBUG] Mermaid validation: Process failed with error: ${error.message}`);
+                console.log(`[DEBUG] Mermaid validation: Stack trace: ${error.stack}`);
               }
             }
-          } catch (error) {
-            if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: Process failed with error: ${error.message}`);
-              console.log(`[DEBUG] Mermaid validation: Stack trace: ${error.stack}`);
-            }
+          } else if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Skipped due to disableMermaidValidation option`);
           }
           
           // Step 4: Validate and potentially correct JSON responses
@@ -1086,28 +1092,32 @@ Convert your previous response content into actual JSON data that follows this s
           finalResult = cleanSchemaResponse(finalResult);
           
           // Validate and fix Mermaid diagrams if present
-          if (this.debug) {
-            console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result...`);
-          }
-          
-          const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
-            debug: this.debug,
-            path: this.allowedFolders[0],
-            provider: this.clientApiProvider,
-            model: this.model,
-            tracer: this.tracer
-          });
-          
-          if (mermaidValidation.wasFixed) {
-            finalResult = mermaidValidation.fixedResponse;
+          if (!this.disableMermaidValidation) {
             if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: attempt_completion diagrams fixed`);
-              if (mermaidValidation.performanceMetrics) {
-                console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
+              console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result...`);
+            }
+            
+            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+              debug: this.debug,
+              path: this.allowedFolders[0],
+              provider: this.clientApiProvider,
+              model: this.model,
+              tracer: this.tracer
+            });
+            
+            if (mermaidValidation.wasFixed) {
+              finalResult = mermaidValidation.fixedResponse;
+              if (this.debug) {
+                console.log(`[DEBUG] Mermaid validation: attempt_completion diagrams fixed`);
+                if (mermaidValidation.performanceMetrics) {
+                  console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
+                }
               }
+            } else if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
             }
           } else if (this.debug) {
-            console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
+            console.log(`[DEBUG] Mermaid validation: Skipped for attempt_completion result due to disableMermaidValidation option`);
           }
           
           // Validate and potentially correct JSON for attempt_completion results

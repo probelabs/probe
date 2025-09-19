@@ -125,7 +125,8 @@ function parseArgs() {
     traceRemote: undefined,
     traceConsole: false,
     useStdin: false, // New flag to indicate stdin should be used
-    outline: false // New flag to enable outline format
+    outline: false, // New flag to enable outline format
+    noMermaidValidation: false // New flag to disable mermaid validation
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -165,6 +166,8 @@ function parseArgs() {
       config.traceConsole = true;
     } else if (arg === '--outline') {
       config.outline = true;
+    } else if (arg === '--no-mermaid-validation') {
+      config.noMermaidValidation = true;
     } else if (!arg.startsWith('--') && !config.question) {
       // First non-flag argument is the question
       config.question = arg;
@@ -212,6 +215,7 @@ Options:
   --trace-file <path>              Enable tracing to file (JSONL format)
   --trace-remote <endpoint>        Enable tracing to remote OTLP endpoint
   --trace-console                  Enable tracing to console output
+  --no-mermaid-validation          Disable automatic mermaid diagram validation and fixing
   --help, -h                      Show this help message
 
 Environment Variables:
@@ -317,6 +321,10 @@ class ProbeAgentMcpServer {
               schema: {
                 type: 'string',
                 description: 'Optional output schema (JSON, XML, or any format - text or file path).',
+              },
+              no_mermaid_validation: {
+                type: 'boolean',
+                description: 'Disable automatic mermaid diagram validation and fixing.',
               }
             },
             required: ['query']
@@ -379,7 +387,8 @@ class ProbeAgentMcpServer {
           model: args.model,
           allowEdit: !!args.allow_edit,
           debug: process.env.DEBUG === '1',
-          maxResponseTokens: args.max_response_tokens
+          maxResponseTokens: args.max_response_tokens,
+          disableMermaidValidation: !!args.no_mermaid_validation
         };
 
         const agent = new ProbeAgent(agentConfig);
@@ -395,31 +404,35 @@ class ProbeAgentMcpServer {
             result = cleanSchemaResponse(result);
 
             // Check for mermaid diagrams in response and validate/fix them regardless of schema
-            try {
-              const mermaidValidation = await validateAndFixMermaidResponse(result, {
-                debug: args.debug,
-                path: agentConfig.path,
-                provider: args.provider,
-                model: args.model
-              });
+            if (!args.no_mermaid_validation) {
+              try {
+                const mermaidValidation = await validateAndFixMermaidResponse(result, {
+                  debug: args.debug,
+                  path: agentConfig.path,
+                  provider: args.provider,
+                  model: args.model
+                });
 
-              if (mermaidValidation.wasFixed) {
-                result = mermaidValidation.fixedResponse;
-                if (args.debug) {
-                  console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
-                  mermaidValidation.fixingResults.forEach((fixResult, index) => {
-                    if (fixResult.wasFixed) {
-                      console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
-                    }
-                  });
+                if (mermaidValidation.wasFixed) {
+                  result = mermaidValidation.fixedResponse;
+                  if (args.debug) {
+                    console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
+                    mermaidValidation.fixingResults.forEach((fixResult, index) => {
+                      if (fixResult.wasFixed) {
+                        console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
+                      }
+                    });
+                  }
+                } else if (!mermaidValidation.isValid && mermaidValidation.diagrams && mermaidValidation.diagrams.length > 0 && args.debug) {
+                  console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidation.errors?.join(', ')}`);
                 }
-              } else if (!mermaidValidation.isValid && mermaidValidation.diagrams && mermaidValidation.diagrams.length > 0 && args.debug) {
-                console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidation.errors?.join(', ')}`);
+              } catch (error) {
+                if (args.debug) {
+                  console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
+                }
               }
-            } catch (error) {
-              if (args.debug) {
-                console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
-              }
+            } else if (args.debug) {
+              console.error(`[DEBUG] Mermaid validation skipped due to --no-mermaid-validation flag`);
             }
 
             // Then, if schema expects JSON, validate and retry if invalid
@@ -609,7 +622,8 @@ async function main() {
       debug: config.verbose,
       tracer: appTracer,
       outline: config.outline,
-      maxResponseTokens: config.maxResponseTokens
+      maxResponseTokens: config.maxResponseTokens,
+      disableMermaidValidation: config.noMermaidValidation
     };
 
     const agent = new ProbeAgent(agentConfig);
@@ -668,32 +682,36 @@ async function main() {
         }
 
         // Check for mermaid diagrams in response and validate/fix them regardless of schema
-        try {
-          const mermaidValidationResult = await validateAndFixMermaidResponse(result, {
-            debug: config.verbose,
-            path: config.path,
-            provider: config.provider,
-            model: config.model,
-            tracer: appTracer
-          });
+        if (!config.noMermaidValidation) {
+          try {
+            const mermaidValidationResult = await validateAndFixMermaidResponse(result, {
+              debug: config.verbose,
+              path: config.path,
+              provider: config.provider,
+              model: config.model,
+              tracer: appTracer
+            });
 
-          if (mermaidValidationResult.wasFixed) {
-            result = mermaidValidationResult.fixedResponse;
-            if (config.verbose) {
-              console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
-              mermaidValidationResult.fixingResults.forEach((fixResult, index) => {
-                if (fixResult.wasFixed) {
-                  console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
-                }
-              });
+            if (mermaidValidationResult.wasFixed) {
+              result = mermaidValidationResult.fixedResponse;
+              if (config.verbose) {
+                console.error(`[DEBUG] Mermaid diagrams fixed using specialized agent`);
+                mermaidValidationResult.fixingResults.forEach((fixResult, index) => {
+                  if (fixResult.wasFixed) {
+                    console.error(`[DEBUG] Fixed diagram ${index + 1}: ${fixResult.originalError}`);
+                  }
+                });
+              }
+            } else if (!mermaidValidationResult.isValid && mermaidValidationResult.diagrams && mermaidValidationResult.diagrams.length > 0 && config.verbose) {
+              console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidationResult.errors?.join(', ')}`);
             }
-          } else if (!mermaidValidationResult.isValid && mermaidValidationResult.diagrams && mermaidValidationResult.diagrams.length > 0 && config.verbose) {
-            console.error(`[DEBUG] Mermaid validation failed: ${mermaidValidationResult.errors?.join(', ')}`);
+          } catch (error) {
+            if (config.verbose) {
+              console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
+            }
           }
-        } catch (error) {
-          if (config.verbose) {
-            console.error(`[DEBUG] Enhanced mermaid validation failed: ${error.message}`);
-          }
+        } else if (config.verbose) {
+          console.error(`[DEBUG] Mermaid validation skipped due to --no-mermaid-validation flag`);
         }
 
         // Then, if schema expects JSON, validate and retry if invalid
