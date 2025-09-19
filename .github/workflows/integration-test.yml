@@ -71,11 +71,12 @@ jobs:
         mkdir -p npm/bin
         
         # Copy the built binary to npm package bin directory with correct naming
+        # On Unix, we need to preserve the Node.js wrapper script (probe) and put the binary as probe-binary
         if [[ "${{ runner.os }}" == "Windows" ]]; then
           cp target/debug/probe.exe npm/bin/probe.exe
         else
-          cp target/debug/probe npm/bin/probe
-          chmod +x npm/bin/probe
+          cp target/debug/probe npm/bin/probe-binary
+          chmod +x npm/bin/probe-binary
         fi
         
         # Debug: Check what files are actually in npm/bin before npm link
