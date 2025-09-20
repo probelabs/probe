@@ -1145,9 +1145,61 @@ fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool>
             }
         }
 
-        // Prefer explicit server counts when available; otherwise fall back to the header.
+        // Before checking server counts, look for comprehensive readiness information
+        let mut comprehensive_readiness: Option<bool> = None;
+        let mut found_readiness_line = false;
+
+        // Search for "Readiness:" line which has comprehensive readiness detection
+        for &next in lines.iter().skip(i + 1) {
+            let t = next.trim();
+            let t_lc = t.to_ascii_lowercase();
+
+            // Stop if we hit the start of another section.
+            if !next.starts_with(' ')
+                && t.ends_with(':')
+                && !(t_lc.starts_with("readiness")
+                    || t_lc.starts_with("status")
+                    || t_lc.starts_with("servers")
+                    || t_lc.starts_with("server")
+                    || t_lc.starts_with("instances"))
+            {
+                break;
+            }
+
+            if t_lc.starts_with("readiness:") {
+                found_readiness_line = true;
+                // Check if readiness line says "Ready" vs "Initializing"/"Waiting"
+                comprehensive_readiness = Some(
+                    t_lc.contains("ready")
+                        && !t_lc.contains("waiting")
+                        && !t_lc.contains("initializing"),
+                );
+                break;
+            }
+
+            if t_lc.starts_with("status:") {
+                // Check status line - should not contain "waiting for readiness"
+                if t_lc.contains("waiting for readiness") {
+                    comprehensive_readiness = Some(false);
+                    break;
+                }
+            }
+        }
+
+        // If we found comprehensive readiness information, use that (most authoritative)
+        if let Some(is_ready) = comprehensive_readiness {
+            return Ok(is_ready);
+        }
+
+        // If no comprehensive readiness but we found the readiness line, server is probably not ready
+        if found_readiness_line {
+            return Ok(false);
+        }
+
+        // Only then fall back to server counts (less reliable but better than nothing)
         if let Some(n) = ready_count {
-            // Authoritative: any Ready > 0 means the language is usable even if header still says "(Indexing)".
+            // Note: Ready > 0 only means servers are in pool, not that they're fully indexed
+            // This is a fallback for when comprehensive readiness isn't available
             return Ok(n > 0);
         }
 
