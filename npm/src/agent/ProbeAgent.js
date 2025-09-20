@@ -1240,6 +1240,42 @@ Convert your previous response content into actual JSON data that follows this s
         }
       }
 
+      // Final mermaid validation for all responses (regardless of schema or attempt_completion)
+      if (!this.disableMermaidValidation) {
+        try {
+          if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Performing final mermaid validation on result...`);
+          }
+          
+          const finalMermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+            debug: this.debug,
+            path: this.allowedFolders[0],
+            provider: this.clientApiProvider,
+            model: this.model,
+            tracer: this.tracer
+          });
+          
+          if (finalMermaidValidation.wasFixed) {
+            finalResult = finalMermaidValidation.fixedResponse;
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: Final result diagrams fixed`);
+              if (finalMermaidValidation.performanceMetrics) {
+                console.log(`[DEBUG] Mermaid validation: Final validation took ${finalMermaidValidation.performanceMetrics.totalTimeMs}ms`);
+              }
+            }
+          } else if (this.debug && finalMermaidValidation.diagrams?.length > 0) {
+            console.log(`[DEBUG] Mermaid validation: Final result validation completed (${finalMermaidValidation.diagrams.length} diagrams found, no fixes needed)`);
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Final validation failed with error: ${error.message}`);
+          }
+          // Don't fail the entire request if final mermaid validation fails
+        }
+      } else if (this.debug) {
+        console.log(`[DEBUG] Mermaid validation: Skipped final validation due to disableMermaidValidation option`);
+      }
+
       return finalResult;
 
     } catch (error) {
