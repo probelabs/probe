@@ -169,7 +169,7 @@ impl TokenCountCache {
         self.cache.insert(hash, entry);
 
         // Perform cleanup periodically (every 100 insertions approximately)
-        if self.cache.len().is_multiple_of(100) {
+        if self.cache.len() % 100 == 0 {
             self.cleanup();
         }
 
@@ -297,7 +297,7 @@ impl BlockTokenCache {
         self.cache.insert(content_hash, entry);
 
         // Perform cleanup periodically (every 50 insertions for blocks since they're larger)
-        if self.cache.len().is_multiple_of(50) {
+        if self.cache.len() % 50 == 0 {
             self.cleanup();
         }
 
