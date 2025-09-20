@@ -1,5 +1,6 @@
 use crate::lsp_registry::LspServerConfig;
 use crate::path_safety;
+use crate::readiness_tracker::{ReadinessTracker, ServerType};
 use crate::socket_path::normalize_executable;
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
@@ -28,6 +29,8 @@ pub struct LspServer {
     // Track server type and opened documents for smart management
     server_name: String,
     opened_documents: Arc<Mutex<HashSet<PathBuf>>>,
+    // Readiness tracking
+    readiness_tracker: Arc<ReadinessTracker>,
 }
 
 impl std::fmt::Debug for LspServer {
@@ -69,6 +72,16 @@ impl LspServer {
         // This needs to be sync since we're calling from async context but Child is not Send
         let child_opt = self.child.try_lock().ok()?;
         child_opt.as_ref().and_then(|child| child.id())
+    }
+
+    /// Get the readiness tracker for this server
+    pub fn get_readiness_tracker(&self) -> Arc<ReadinessTracker> {
+        self.readiness_tracker.clone()
+    }
+
+    /// Check if the server is ready for requests
+    pub async fn is_ready(&self) -> bool {
+        self.readiness_tracker.is_ready().await
     }
 
     pub fn spawn_with_workspace(config: &LspServerConfig, workspace_root: &Path) -> Result<Self> {
@@ -155,6 +168,10 @@ impl LspServer {
     fn spawn_internal(config: &LspServerConfig, workspace_root: Option<&Path>) -> Result<Self> {
         let command = normalize_executable(&config.command);
         info!("Spawning LSP server: {} {:?}", command, config.args);
+
+        // Determine server type for readiness tracking
+        let server_type = ServerType::from_language_and_command(config.language, &command);
+        let readiness_tracker = Arc::new(ReadinessTracker::new(server_type));
 
         // Set working directory - use workspace root if provided
         // This is critical for gopls which needs to run in the Go module root
@@ -258,6 +275,7 @@ impl LspServer {
             stderr_shutdown,
             server_name: config.command.clone(),
             opened_documents: Arc::new(Mutex::new(HashSet::new())),
+            readiness_tracker,
         })
     }
 
@@ -358,6 +376,10 @@ impl LspServer {
 
         self.initialized = true;
         self.project_root = Some(canonical_root.clone());
+
+        // Mark readiness tracker as initialized
+        self.readiness_tracker.mark_initialized().await;
+
         info!(
             "LSP server initialized for {:?} with workspace {:?}",
             config.language, canonical_root
@@ -477,6 +499,10 @@ impl LspServer {
         debug!("Initialized notification sent!");
 
         self.initialized = true;
+
+        // Mark readiness tracker as initialized
+        self.readiness_tracker.mark_initialized().await;
+
         info!(
             "LSP server initialized for {:?} with empty workspace folders",
             config.language
@@ -614,6 +640,10 @@ impl LspServer {
         debug!("Initialized notification sent!");
 
         self.initialized = true;
+
+        // Mark readiness tracker as initialized
+        self.readiness_tracker.mark_initialized().await;
+
         info!("LSP server initialized for {:?}", config.language);
 
         Ok(())
@@ -642,9 +672,27 @@ impl LspServer {
                     silence_start = None;
 
                     if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
+                        // Handle custom notifications (e.g., $/typescriptVersion)
+                        if method.starts_with("$/") && method != "$/progress" {
+                            if let Some(params) = msg.get("params") {
+                                if let Err(e) = self
+                                    .readiness_tracker
+                                    .handle_custom_notification(method, params)
+                                    .await
+                                {
+                                    warn!("Failed to handle custom notification {} in readiness tracker: {}", method, e);
+                                }
+                            }
+                        }
+
                         // Handle progress notifications
                         if method == "$/progress" {
                             if let Some(params) = msg.get("params") {
+                                // Handle with readiness tracker
+                                if let Err(e) = self.readiness_tracker.handle_progress(params).await
+                                {
+                                    warn!("Failed to handle progress in readiness tracker: {}", e);
+                                }
                                 // Handle both string and numeric tokens (gopls uses numeric tokens)
                                 let token_str = if let Some(token) = params.get("token") {
                                     if let Some(s) = token.as_str() {
@@ -773,6 +821,15 @@ impl LspServer {
                         // Respond to window/workDoneProgress/create requests
                         if method == "window/workDoneProgress/create" {
                             if let Some(id_value) = msg.get("id") {
+                                // Handle with readiness tracker
+                                if let Some(params) = msg.get("params") {
+                                    if let Err(e) =
+                                        self.readiness_tracker.handle_progress_create(params).await
+                                    {
+                                        warn!("Failed to handle progress create in readiness tracker: {}", e);
+                                    }
+                                }
+
                                 // Handle various ID types (integer, string, null)
                                 let response_id = if let Some(id_num) = id_value.as_i64() {
                                     id_num
@@ -987,10 +1044,47 @@ impl LspServer {
                     // Handle server-initiated requests (like window/workDoneProgress/create)
                     // A message with both 'id' and 'method' is a request, not a response
                     if let Some(method) = msg.get("method").and_then(|m| m.as_str()) {
+                        // Handle notifications (messages without id) for readiness tracking
+                        if msg.get("id").is_none() {
+                            if method == "$/progress" {
+                                if let Some(params) = msg.get("params") {
+                                    if let Err(e) =
+                                        self.readiness_tracker.handle_progress(params).await
+                                    {
+                                        warn!(
+                                            "Failed to handle progress in readiness tracker: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            } else if method.starts_with("$/") {
+                                if let Some(params) = msg.get("params") {
+                                    if let Err(e) = self
+                                        .readiness_tracker
+                                        .handle_custom_notification(method, params)
+                                        .await
+                                    {
+                                        warn!("Failed to handle custom notification {} in readiness tracker: {}", method, e);
+                                    }
+                                }
+                            }
+                            continue; // This was a notification, continue waiting for our response
+                        }
+
                         // This is a request FROM the server (has both id and method)
                         if method == "window/workDoneProgress/create" {
                             if let Some(server_request_id) = msg_id {
                                 debug!("Received window/workDoneProgress/create request from server with id: {}", server_request_id);
+
+                                // Handle with readiness tracker
+                                if let Some(params) = msg.get("params") {
+                                    if let Err(e) =
+                                        self.readiness_tracker.handle_progress_create(params).await
+                                    {
+                                        warn!("Failed to handle progress create in readiness tracker: {}", e);
+                                    }
+                                }
+
                                 // Send acknowledgment response
                                 let response = json!({
                                     "jsonrpc": "2.0",

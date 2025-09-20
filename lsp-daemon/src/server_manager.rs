@@ -1,7 +1,8 @@
 use crate::language_detector::Language;
 use crate::lsp_registry::LspServerConfig;
 use crate::lsp_server::LspServer;
-use crate::protocol::WorkspaceInfo;
+use crate::protocol::{ServerReadinessInfo, WorkspaceInfo};
+// Removed unused imports - readiness types are used in method implementations
 use crate::watchdog::ProcessMonitor;
 use anyhow::{anyhow, Context, Result};
 use dashmap::DashMap;
@@ -1035,8 +1036,10 @@ impl SingleServerManager {
                 Ok(server) => {
                     let status = if !server.initialized {
                         ServerStatus::Initializing
-                    } else {
+                    } else if server.server.is_ready().await {
                         ServerStatus::Ready
+                    } else {
+                        ServerStatus::Initializing
                     };
 
                     stats.push(ServerStats {
@@ -1083,7 +1086,9 @@ impl SingleServerManager {
 
             match server_instance.try_lock() {
                 Ok(server) => {
-                    let status = if server.initialized {
+                    let status = if !server.initialized {
+                        crate::protocol::ServerStatus::Initializing
+                    } else if server.server.is_ready().await {
                         crate::protocol::ServerStatus::Ready
                     } else {
                         crate::protocol::ServerStatus::Initializing
@@ -1333,6 +1338,106 @@ impl SingleServerManager {
                     column
                 )
             })
+    }
+
+    /// Check readiness of a specific server for a workspace
+    pub async fn check_server_readiness(
+        &self,
+        workspace_path: &Path,
+        language: Option<Language>,
+    ) -> Result<ServerReadinessInfo> {
+        let detected_language = if let Some(lang) = language {
+            lang
+        } else {
+            // Use a LanguageDetector instance to detect language from workspace
+            let detector = crate::language_detector::LanguageDetector::new();
+            if let Some(languages) = detector.detect_workspace_languages(workspace_path)? {
+                // Take the first detected language
+                languages
+                    .into_iter()
+                    .next()
+                    .unwrap_or(crate::language_detector::Language::Unknown)
+            } else {
+                crate::language_detector::Language::Unknown
+            }
+        };
+
+        if let Some(server_instance) = self.servers.get(&detected_language) {
+            let server = server_instance.lock().await;
+            let readiness_status = server.server.get_readiness_tracker().get_status().await;
+
+            Ok(ServerReadinessInfo {
+                workspace_root: workspace_path.to_path_buf(),
+                language: detected_language,
+                server_type: format!("{:?}", readiness_status.server_type),
+                is_initialized: readiness_status.is_initialized,
+                is_ready: readiness_status.is_ready,
+                elapsed_secs: readiness_status.elapsed.as_secs_f64(),
+                active_progress_count: readiness_status.active_progress_count,
+                recent_messages: readiness_status.recent_messages.clone(),
+                queued_requests: readiness_status.queued_requests,
+                expected_timeout_secs: readiness_status.expected_timeout.as_secs_f64(),
+                status_description: readiness_status.status_description(),
+                is_stalled: readiness_status.is_stalled(),
+            })
+        } else {
+            Err(anyhow!(
+                "No server found for language {:?}",
+                detected_language
+            ))
+        }
+    }
+
+    /// Get readiness status for all active servers
+    pub async fn get_all_readiness_status(&self) -> Vec<ServerReadinessInfo> {
+        let mut readiness_info = Vec::new();
+
+        for entry in self.servers.iter() {
+            let language = *entry.key();
+            let server_instance = entry.value();
+
+            if let Ok(server) = server_instance.try_lock() {
+                let readiness_status = server.server.get_readiness_tracker().get_status().await;
+
+                // For each registered workspace
+                for workspace_root in &server.registered_workspaces {
+                    readiness_info.push(ServerReadinessInfo {
+                        workspace_root: workspace_root.clone(),
+                        language,
+                        server_type: format!("{:?}", readiness_status.server_type),
+                        is_initialized: readiness_status.is_initialized,
+                        is_ready: readiness_status.is_ready,
+                        elapsed_secs: readiness_status.elapsed.as_secs_f64(),
+                        active_progress_count: readiness_status.active_progress_count,
+                        recent_messages: readiness_status.recent_messages.clone(),
+                        queued_requests: readiness_status.queued_requests,
+                        expected_timeout_secs: readiness_status.expected_timeout.as_secs_f64(),
+                        status_description: readiness_status.status_description(),
+                        is_stalled: readiness_status.is_stalled(),
+                    });
+                }
+
+                // If no workspaces are registered, still show the server status
+                if server.registered_workspaces.is_empty() {
+                    readiness_info.push(ServerReadinessInfo {
+                        workspace_root: PathBuf::from("<no-workspace>"),
+                        language,
+                        server_type: format!("{:?}", readiness_status.server_type),
+                        is_initialized: readiness_status.is_initialized,
+                        is_ready: readiness_status.is_ready,
+                        elapsed_secs: readiness_status.elapsed.as_secs_f64(),
+                        active_progress_count: readiness_status.active_progress_count,
+                        recent_messages: readiness_status.recent_messages.clone(),
+                        queued_requests: readiness_status.queued_requests,
+                        expected_timeout_secs: readiness_status.expected_timeout.as_secs_f64(),
+                        status_description: readiness_status.status_description(),
+                        is_stalled: readiness_status.is_stalled(),
+                    });
+                }
+            }
+        }
+
+        readiness_info
     }
 }
 

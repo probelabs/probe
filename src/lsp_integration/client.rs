@@ -1568,6 +1568,7 @@ fn convert_daemon_status(status: DaemonStatus) -> LspDaemonStatus {
                 workspaces: pool.workspaces,
                 uptime_secs: pool.uptime_secs,
                 status: pool.status,
+                readiness_info: pool.readiness_info,
             };
             (format!("{:?}", pool.language), pool_status)
         })
@@ -1858,6 +1859,64 @@ impl LspClient {
             }
             DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
             _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
+    /// Get readiness status for LSP servers
+    pub async fn get_readiness_status(
+        &mut self,
+        file_path: &Path,
+    ) -> Result<crate::lsp_integration::readiness::ReadinessCheckResult> {
+        // Determine language from file extension to get the right server type
+        let language = self.detect_language(file_path);
+        let server_type = language.clone().unwrap_or_else(|| "unknown".to_string());
+
+        // Try to get server status from daemon
+        match self.get_status().await {
+            Ok(status) => {
+                // Look for the appropriate language pool
+                if let Some(pool) = status.language_pools.get(&server_type) {
+                    let is_ready = pool.ready_servers > 0;
+                    let expected_timeout = if is_ready {
+                        Some(0)
+                    } else {
+                        Some(30) // Default timeout for initialization
+                    };
+
+                    Ok(crate::lsp_integration::readiness::ReadinessCheckResult {
+                        is_ready,
+                        server_type: Some(server_type),
+                        expected_timeout_secs: expected_timeout,
+                        elapsed_secs: pool.uptime_secs,
+                        status_message: if is_ready {
+                            "Ready".to_string()
+                        } else if pool.busy_servers > 0 {
+                            "Initializing".to_string()
+                        } else {
+                            "Starting".to_string()
+                        },
+                    })
+                } else {
+                    // Language not found in pools - may not be supported or daemon not ready
+                    Ok(crate::lsp_integration::readiness::ReadinessCheckResult {
+                        is_ready: false,
+                        server_type: Some(server_type),
+                        expected_timeout_secs: Some(30),
+                        elapsed_secs: 0,
+                        status_message: "Language not supported or daemon not ready".to_string(),
+                    })
+                }
+            }
+            Err(e) => {
+                // Can't reach daemon - assume not ready
+                Ok(crate::lsp_integration::readiness::ReadinessCheckResult {
+                    is_ready: false,
+                    server_type: Some(server_type),
+                    expected_timeout_secs: Some(30),
+                    elapsed_secs: 0,
+                    status_message: format!("Failed to connect to LSP daemon: {}", e),
+                })
+            }
         }
     }
 

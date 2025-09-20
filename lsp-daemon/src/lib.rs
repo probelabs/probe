@@ -31,6 +31,7 @@ pub mod lsp_database_adapter;
 // Internal modules - exposed for direct client use
 pub mod lsp_registry;
 pub mod lsp_server;
+pub mod readiness_tracker;
 
 // Internal modules - exposed for embedded daemon use
 pub mod daemon;

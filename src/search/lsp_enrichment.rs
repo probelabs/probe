@@ -102,6 +102,50 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                     }
                 };
 
+                // Check LSP server readiness before proceeding with enrichment
+                if debug_mode {
+                    println!("[DEBUG] Checking LSP server readiness before enrichment...");
+                }
+
+                // Use the first result to determine file type for readiness check
+                if let Some(first_result) = results.first() {
+                    let file_path = std::path::Path::new(&first_result.file);
+
+                    // Check readiness with a shorter timeout for enrichment
+                    let readiness_config = crate::lsp_integration::readiness::ReadinessConfig {
+                        max_wait_secs: 15, // Shorter wait for search enrichment
+                        poll_interval_ms: 1000,
+                        show_progress: debug_mode,
+                        auto_start_daemon: false, // Don't auto-start during enrichment
+                    };
+
+                    match crate::lsp_integration::readiness::check_lsp_readiness_for_file(file_path, readiness_config).await {
+                        Ok(readiness_result) => {
+                            if !readiness_result.is_ready {
+                                if debug_mode {
+                                    println!("[DEBUG] LSP server not ready for enrichment: {}", readiness_result.status_message);
+                                    println!("[DEBUG] Proceeding without LSP enrichment");
+                                }
+                                return;
+                            } else if debug_mode {
+                                println!("[DEBUG] LSP server ready for enrichment");
+                            }
+                        }
+                        Err(e) => {
+                            if debug_mode {
+                                println!("[DEBUG] Failed to check LSP readiness: {}", e);
+                                println!("[DEBUG] Proceeding without LSP enrichment");
+                            }
+                            return;
+                        }
+                    }
+                } else {
+                    if debug_mode {
+                        println!("[DEBUG] No results to enrich");
+                    }
+                    return;
+                }
+
                 for (idx, result) in results[..lsp_range].iter().enumerate() {
                     if result.lsp_info.is_some() {
                         continue;

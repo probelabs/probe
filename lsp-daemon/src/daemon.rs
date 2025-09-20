@@ -1172,12 +1172,19 @@ impl LspDaemon {
 
             DaemonRequest::Status { request_id } => {
                 let server_stats = self.server_manager.get_stats().await;
+                let all_readiness = self.server_manager.get_all_readiness_status().await;
 
                 let pool_status: Vec<PoolStatus> = server_stats
                     .into_iter()
                     .map(|s| {
                         // Consider a server "ready" if it's initialized (simplified without health monitoring)
                         let is_ready = s.initialized;
+
+                        // Find readiness information for this language
+                        let readiness_info = all_readiness
+                            .iter()
+                            .find(|r| r.language == s.language)
+                            .cloned();
 
                         PoolStatus {
                             language: s.language,
@@ -1198,6 +1205,7 @@ impl LspDaemon {
                             },
                             consecutive_failures: 0, // No failure tracking without health monitor
                             circuit_breaker_open: false, // No circuit breaker
+                            readiness_info,
                         }
                     })
                     .collect();
