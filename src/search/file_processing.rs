@@ -74,6 +74,7 @@ pub struct FileProcessingParams<'a> {
 
     #[allow(dead_code)]
     pub no_merge: bool,
+    pub lsp: bool,
 }
 
 /// Evaluate whether a block of lines satisfies a complex AST query
@@ -993,6 +994,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                     Some(lines_vec)
                 },
                 tokenized_content: Some(context_terms),
+                lsp_info: None,
                 parent_context: None,
             };
 
@@ -1098,7 +1100,7 @@ pub fn process_file_with_results(
         .unwrap_or("");
 
     // Get debug mode setting
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Filter out lines longer than 500 characters
     let lines: Vec<&str> = content
@@ -1528,6 +1530,8 @@ pub fn process_file_with_results(
                         None
                     };
 
+                    // For now, we'll leave LSP info as None during initial processing
+                    // LSP info will be added in a post-processing step if enabled
                     let result = SearchResult {
                         file: params.path.to_string_lossy().to_string(),
                         lines: (final_start_line, final_end_line),
@@ -1571,6 +1575,7 @@ pub fn process_file_with_results(
                             Some(lines_vec)
                         },
                         tokenized_content: Some(block_terms),
+                        lsp_info: None,
                         parent_context: None,
                     };
 

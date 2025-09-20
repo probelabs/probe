@@ -177,6 +177,7 @@ fn test_format_and_print_extraction_results() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+        lsp_info: None,
         parent_context: None,
         matched_lines: None,
     };

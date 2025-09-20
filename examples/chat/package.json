@@ -32,12 +32,12 @@
     "@ai-sdk/anthropic": "^1.2.0",
     "@ai-sdk/google": "^1.2.1",
     "@ai-sdk/openai": "^1.3.0",
-    "@probelabs/probe": "*",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
     "@opentelemetry/resources": "^2.0.1",
     "@opentelemetry/sdk-node": "^0.203.0",
     "@opentelemetry/semantic-conventions": "^1.36.0",
+    "@probelabs/probe": "*",
     "ai": "^4.2.0",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
@@ -46,6 +46,8 @@
     "inquirer": "^9.2.12",
     "ora": "^7.0.1",
     "tiktoken": "^1.0.20",
+    "typescript": "^5.9.2",
+    "typescript-language-server": "^5.0.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
