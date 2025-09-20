@@ -842,7 +842,9 @@ pub fn wait_for_lsp_servers_ready_with_config(
     // Always respect the caller-provided timeout — never override it in CI.
     // Give CI a sane floor to account for slower machines.
     let is_ci = performance::is_ci_environment();
-    let min_ci_timeout = Duration::from_secs(120);
+    // Increased timeout for CI environments where LSP servers can take longer
+    // gopls can take 180+ seconds in some CI environments
+    let min_ci_timeout = Duration::from_secs(300);
     let effective_timeout = if is_ci && max_timeout < min_ci_timeout {
         min_ci_timeout
     } else {
