@@ -38,7 +38,6 @@ fn test_parallel_file_extraction() {
         prompt: None,
         no_gitignore: false,
         lsp: false,
-        include_stdlib: true,
     };
 
     // Run the extraction
@@ -103,7 +102,6 @@ fn function_four() {
         prompt: None,
         no_gitignore: false,
         lsp: false,
-        include_stdlib: true,
     };
 
     // Run the extraction
@@ -172,7 +170,6 @@ fn test_parallel_extraction_performance() {
         prompt: None,
         no_gitignore: false,
         lsp: false,
-        include_stdlib: true,
     };
 
     // Run the extraction

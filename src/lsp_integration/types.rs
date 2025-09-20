@@ -34,6 +34,9 @@ pub struct LanguagePoolStatus {
     pub uptime_secs: u64,
     #[serde(default)]
     pub status: String,
+    /// Readiness information for the language server
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness_info: Option<lsp_daemon::protocol::ServerReadinessInfo>,
 }
 
 /// Call hierarchy information for a symbol

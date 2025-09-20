@@ -2,6 +2,7 @@ pub mod call_graph_cache;
 pub mod client;
 pub mod management;
 pub mod position_analyzer;
+pub mod readiness;
 pub mod stdlib_filter;
 pub mod symbol_resolver;
 pub mod types;
@@ -9,11 +10,20 @@ pub mod types;
 pub use client::LspClient;
 pub use management::LspManager;
 pub use position_analyzer::{LspOperation, PositionAnalyzer, PositionOffset, PositionPattern};
+pub use readiness::{
+    check_lsp_readiness_for_file, wait_for_lsp_readiness, ReadinessCheckResult, ReadinessConfig,
+};
 pub use stdlib_filter::{is_stdlib_path, is_stdlib_path_cached};
 pub use symbol_resolver::{resolve_location, ResolvedLocation};
 pub use types::*;
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+
+#[derive(ValueEnum, Debug, Clone)]
+pub enum OutputFormat {
+    Terminal,
+    Json,
+}
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum LspSubcommands {
@@ -26,6 +36,10 @@ pub enum LspSubcommands {
         /// Workspace hint for LSP server initialization
         #[clap(long = "workspace-hint")]
         workspace_hint: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(long, value_enum, default_value = "terminal")]
+        format: OutputFormat,
     },
 
     /// List available LSP servers and their installation status

@@ -138,7 +138,15 @@ impl LspManager {
             LspSubcommands::Status {
                 daemon,
                 workspace_hint,
-            } => Self::show_status(*daemon, workspace_hint.clone(), format).await,
+                format: status_format,
+            } => {
+                Self::show_status(
+                    *daemon,
+                    workspace_hint.clone(),
+                    &format!("{:?}", status_format).to_lowercase(),
+                )
+                .await
+            }
             LspSubcommands::Languages => Self::list_languages(format).await,
             LspSubcommands::Ping {
                 daemon,
@@ -453,6 +461,56 @@ impl LspManager {
                             pool.busy_servers.to_string().yellow(),
                             pool.total_servers.to_string().cyan()
                         );
+
+                        // Display readiness information if available
+                        if let Some(ref readiness) = pool.readiness_info {
+                            let readiness_status = if readiness.is_ready {
+                                "Ready".green()
+                            } else if readiness.is_initialized {
+                                "Initializing".yellow()
+                            } else {
+                                "Starting".red()
+                            };
+
+                            println!(
+                                "    {} {} ({}s elapsed)",
+                                "Readiness:".bold(),
+                                readiness_status,
+                                (readiness.elapsed_secs as u64).to_string().cyan()
+                            );
+
+                            if !readiness.is_ready {
+                                println!(
+                                    "    {} {}",
+                                    "Status:".bold(),
+                                    readiness.status_description.dimmed()
+                                );
+
+                                if readiness.active_progress_count > 0 {
+                                    println!(
+                                        "    {} {} operations in progress",
+                                        "Progress:".bold(),
+                                        readiness.active_progress_count.to_string().yellow()
+                                    );
+                                }
+
+                                if readiness.queued_requests > 0 {
+                                    println!(
+                                        "    {} {} requests queued",
+                                        "Queue:".bold(),
+                                        readiness.queued_requests.to_string().yellow()
+                                    );
+                                }
+
+                                if readiness.is_stalled {
+                                    println!(
+                                        "    {} {}",
+                                        "Warning:".bold().red(),
+                                        "Server initialization appears stalled".red()
+                                    );
+                                }
+                            }
+                        }
 
                         if !pool.workspaces.is_empty() {
                             println!(
@@ -4037,6 +4095,31 @@ fn format_bytes(bytes: usize) -> String {
         format!("{} {}", bytes, UNITS[unit_index])
     } else {
         format!("{:.1} {}", size, UNITS[unit_index])
+    }
+}
+
+impl LspManager {
+    /// Parse language string to Language enum
+    fn parse_language(lang_str: &str) -> Result<lsp_daemon::Language> {
+        use lsp_daemon::Language;
+
+        match lang_str.to_lowercase().as_str() {
+            "rust" | "rs" => Ok(Language::Rust),
+            "typescript" | "ts" => Ok(Language::TypeScript),
+            "javascript" | "js" => Ok(Language::JavaScript),
+            "python" | "py" => Ok(Language::Python),
+            "go" | "golang" => Ok(Language::Go),
+            "java" => Ok(Language::Java),
+            "cpp" | "c++" | "cxx" => Ok(Language::Cpp),
+            "c" => Ok(Language::C),
+            "csharp" | "c#" | "cs" => Ok(Language::CSharp),
+            "php" => Ok(Language::Php),
+            "ruby" | "rb" => Ok(Language::Ruby),
+            "swift" => Ok(Language::Swift),
+            "kotlin" | "kt" => Ok(Language::Kotlin),
+            "scala" => Ok(Language::Scala),
+            _ => Err(anyhow!("Unsupported language: {}", lang_str)),
+        }
     }
 }
 

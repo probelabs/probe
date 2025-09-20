@@ -894,6 +894,9 @@ pub struct PoolStatus {
     pub consecutive_failures: u32,
     #[serde(default)]
     pub circuit_breaker_open: bool,
+    /// Readiness information for the language server
+    #[serde(default)]
+    pub readiness_info: Option<ServerReadinessInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -925,6 +928,23 @@ pub enum ServerStatus {
     Ready,
     Busy,
     Error(String),
+}
+
+/// Information about a server's readiness status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerReadinessInfo {
+    pub workspace_root: PathBuf,
+    pub language: Language,
+    pub server_type: String,
+    pub is_initialized: bool,
+    pub is_ready: bool,
+    pub elapsed_secs: f64,
+    pub active_progress_count: usize,
+    pub recent_messages: Vec<String>,
+    pub queued_requests: usize,
+    pub expected_timeout_secs: f64,
+    pub status_description: String,
+    pub is_stalled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
