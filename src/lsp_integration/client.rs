@@ -1876,25 +1876,40 @@ impl LspClient {
             Ok(status) => {
                 // Look for the appropriate language pool
                 if let Some(pool) = status.language_pools.get(&server_type) {
-                    let is_ready = pool.ready_servers > 0;
-                    let expected_timeout = if is_ready {
-                        Some(0)
-                    } else {
-                        Some(30) // Default timeout for initialization
-                    };
+                    // Use comprehensive readiness information if available
+                    let (is_ready, status_message, expected_timeout) =
+                        if let Some(readiness_info) = &pool.readiness_info {
+                            // Use the comprehensive readiness detection from ReadinessTracker
+                            let timeout_secs = readiness_info.expected_timeout_secs as u64;
+                            (
+                                readiness_info.is_ready,
+                                readiness_info.status_description.clone(),
+                                Some(timeout_secs),
+                            )
+                        } else {
+                            // Fallback to basic pool status (less reliable)
+                            let basic_ready = pool.ready_servers > 0;
+                            let expected_timeout = if basic_ready {
+                                Some(0)
+                            } else {
+                                Some(30) // Default timeout for initialization
+                            };
+                            let message = if basic_ready {
+                                "Ready (basic check)".to_string()
+                            } else if pool.busy_servers > 0 {
+                                "Initializing (basic check)".to_string()
+                            } else {
+                                "Starting (basic check)".to_string()
+                            };
+                            (basic_ready, message, expected_timeout)
+                        };
 
                     Ok(crate::lsp_integration::readiness::ReadinessCheckResult {
                         is_ready,
                         server_type: Some(server_type),
                         expected_timeout_secs: expected_timeout,
                         elapsed_secs: pool.uptime_secs,
-                        status_message: if is_ready {
-                            "Ready".to_string()
-                        } else if pool.busy_servers > 0 {
-                            "Initializing".to_string()
-                        } else {
-                            "Starting".to_string()
-                        },
+                        status_message,
                     })
                 } else {
                     // Language not found in pools - may not be supported or daemon not ready
