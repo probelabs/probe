@@ -373,4 +373,23 @@ export class TokenCounter {
 
     return usageData;
   }
+
+  /**
+   * Get a summary of token usage for display
+   * @returns {Object} Usage summary
+   */
+  getUsageSummary() {
+    const totalTokens = this.requestTokens + this.responseTokens;
+    const cacheRead = this.cacheReadTokens + this.cachedPromptTokens;
+    const cacheWrite = this.cacheCreationTokens;
+
+    return {
+      totalTokens,
+      requestTokens: this.requestTokens,
+      responseTokens: this.responseTokens,
+      cacheRead,
+      cacheWrite,
+      contextSize: this.contextSize
+    };
+  }
 }
