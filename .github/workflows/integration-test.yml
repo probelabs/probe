@@ -410,6 +410,12 @@ jobs:
     - name: Build Rust binary
       run: cargo build --release
 
+    - name: Build npm package
+      run: |
+        cd npm
+        npm install
+        npm run build
+
     - name: Install chat example dependencies
       run: |
         cd examples/chat
