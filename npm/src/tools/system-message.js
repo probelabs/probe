@@ -82,10 +82,40 @@ For GitHub-compatible mermaid diagrams, avoid single quotes and parentheses in n
 - ❌ [Load (config)] [Run 'command'] {isValid('x')}
 
 **Diagram Type Selection:**
+
+*Process & Flow:*
 - **flowchart**: processes, workflows, decision trees (flowchart TD/LR)
-- **sequenceDiagram**: interactions between entities over time
-- **gantt**: project timelines, schedules, milestones
-- **graph**: simple relationships, data structures
-- **classDiagram**: object-oriented design, class relationships
+- **graph**: simple relationships, network structures
+- **gitgraph**: git branching, version control flows
+
+*Interactions & Time:*
+- **sequenceDiagram**: API calls, system interactions over time
+- **timeline**: chronological events, project phases
+- **userJourney**: user experience flows, customer journeys
+
+*Structure & Design:*
+- **classDiagram**: OOP design, class relationships
 - **erDiagram**: database schemas, entity relationships
+- **c4**: system architecture, component views
+- **architecture**: system topology, infrastructure
+- **block**: system components, data flow
+
+*Data & Analytics:*
+- **pie**: percentage breakdowns, categorical data
+- **xyChart**: trend analysis, scatter plots
+- **quadrant**: 2x2 matrices, decision frameworks
+- **sankey**: flow analysis, resource allocation
+- **radar**: multi-dimensional comparisons
+- **treemap**: hierarchical data, size relationships
+
+*Project Management:*
+- **gantt**: project timelines, task scheduling
+- **kanban**: workflow states, task boards
+
+*Specialized:*
+- **stateDiagram**: state machines, system states
+- **mindmap**: brainstorming, concept mapping
+- **requirement**: system requirements, traceability
+- **packet**: network protocols, data packets
+- **zenuml**: UML sequence diagrams
 </mermaid-instructions>`
