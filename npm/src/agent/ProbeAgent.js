@@ -26,7 +26,7 @@ import {
   clearToolExecutionData 
 } from './probeTool.js';
 import { listFilesByLevel } from '../index.js';
-import { 
+import {
   cleanSchemaResponse,
   isJsonSchema,
   validateJsonResponse,
@@ -35,6 +35,10 @@ import {
   createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse
 } from './schemaUtils.js';
+import {
+  MCPXmlBridge,
+  parseHybridXmlToolCall
+} from './mcp/index.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
@@ -58,6 +62,8 @@ export class ProbeAgent {
    * @param {boolean} [options.outline] - Enable outline-xml format for search results
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
+   * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
+   * @param {Array} [options.mcpServers] - MCP server configurations
    */
   constructor(options = {}) {
     // Basic configuration
@@ -100,6 +106,19 @@ export class ProbeAgent {
     
     // Initialize event emitter for tool execution updates
     this.events = new EventEmitter();
+
+    // MCP configuration
+    this.enableMcp = !!options.enableMcp || process.env.ENABLE_MCP === '1';
+    this.mcpServers = options.mcpServers || null;
+    this.mcpBridge = null;
+
+    // Initialize MCP if enabled
+    if (this.enableMcp) {
+      this.initializeMCP().catch(error => {
+        console.error('[MCP] Failed to initialize MCP:', error);
+        this.mcpBridge = null;
+      });
+    }
   }
 
   /**
@@ -234,6 +253,29 @@ export class ProbeAgent {
     
     if (this.debug) {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    }
+  }
+
+  /**
+   * Initialize MCP bridge and load tools
+   */
+  async initializeMCP() {
+    if (!this.enableMcp) return;
+
+    try {
+      // Initialize the MCP XML bridge
+      this.mcpBridge = new MCPXmlBridge({ debug: this.debug });
+      await this.mcpBridge.initialize(this.mcpServers);
+
+      const mcpToolCount = this.mcpBridge.getToolNames().length;
+      if (mcpToolCount > 0) {
+        if (this.debug) {
+          console.log(`[DEBUG] Loaded ${mcpToolCount} MCP tools`);
+        }
+      }
+    } catch (error) {
+      console.error('[MCP] Error initializing MCP:', error);
+      this.mcpBridge = null;
     }
   }
 
@@ -427,6 +469,13 @@ When troubleshooting:
 
     // Add Tool Definitions
     systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
+
+    // Add MCP tools if available
+    if (this.mcpBridge && this.mcpBridge.getToolNames().length > 0) {
+      systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
+      systemMessage += this.mcpBridge.getXmlToolDefinitions();
+      systemMessage += `\n\nFor MCP tools, use JSON format within the params tag, e.g.:\n<mcp_tool>\n<params>\n{"key": "value"}\n</params>\n</mcp_tool>\n`;
+    }
 
     // Add folder information
     const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
@@ -640,7 +689,11 @@ When troubleshooting:
           validTools.push('implement');
         }
         
-        const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent, validTools);
+        // Try parsing with hybrid parser that supports both native and MCP tools
+        const nativeTools = validTools;
+        const parsedTool = this.mcpBridge
+          ? parseHybridXmlToolCall(assistantResponseContent, nativeTools, this.mcpBridge)
+          : parseXmlToolCallWithThinking(assistantResponseContent, validTools);
         if (parsedTool) {
           const { toolName, params } = parsedTool;
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
@@ -654,7 +707,9 @@ When troubleshooting:
               const lastAssistantMessage = [...currentMessages].reverse().find(msg =>
                 msg.role === 'assistant' &&
                 msg.content &&
-                !parseXmlToolCallWithThinking(msg.content, validTools)
+                !(this.mcpBridge
+                  ? parseHybridXmlToolCall(msg.content, validTools, this.mcpBridge)
+                  : parseXmlToolCallWithThinking(msg.content, validTools))
               );
 
               if (lastAssistantMessage) {
@@ -677,8 +732,32 @@ When troubleshooting:
             }
             break;
           } else {
-            // Execute the tool
-            if (this.toolImplementations[toolName]) {
+            // Check tool type and execute accordingly
+            const { type } = parsedTool;
+
+            if (type === 'mcp' && this.mcpBridge && this.mcpBridge.isMcpTool(toolName)) {
+              // Execute MCP tool
+              try {
+                if (this.debug) console.log(`[DEBUG] Executing MCP tool '${toolName}' with params:`, params);
+
+                // Execute MCP tool through the bridge
+                const executionResult = await this.mcpBridge.mcpTools[toolName].execute(params);
+
+                const toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
+                const preview = createMessagePreview(toolResultContent);
+                if (this.debug) {
+                  console.log(`[DEBUG] MCP tool '${toolName}' executed successfully. Result preview: ${preview}`);
+                }
+
+                currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
+              } catch (error) {
+                console.error(`Error executing MCP tool ${toolName}:`, error);
+                const toolResultContent = `Error executing MCP tool ${toolName}: ${error.message}`;
+                if (this.debug) console.log(`[DEBUG] MCP tool '${toolName}' execution FAILED.`);
+                currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
+              }
+            } else if (this.toolImplementations[toolName]) {
+              // Execute native tool
               try {
                 // Add sessionId to params for tool execution
                 const toolParams = { ...params, sessionId: this.sessionId };
@@ -778,9 +857,15 @@ When troubleshooting:
             } else {
               console.error(`[ERROR] Unknown tool: ${toolName}`);
               currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+
+              // Build list of available tools including MCP tools
+              const nativeTools = Object.keys(this.toolImplementations);
+              const mcpTools = this.mcpBridge ? this.mcpBridge.getToolNames() : [];
+              const allAvailableTools = [...nativeTools, ...mcpTools];
+
               currentMessages.push({
                 role: 'user',
-                content: `<tool_result>\nError: Unknown tool '${toolName}'. Available tools: ${Object.keys(this.toolImplementations).join(', ')}\n</tool_result>`
+                content: `<tool_result>\nError: Unknown tool '${toolName}'. Available tools: ${allAvailableTools.join(', ')}\n</tool_result>`
               });
             }
           }
@@ -1307,6 +1392,26 @@ Convert your previous response content into actual JSON data that follows this s
     if (this.debug) {
       console.log(`[DEBUG] Cleared conversation history and reset counters for session ${this.sessionId}`);
     }
+  }
+
+  /**
+   * Clean up resources (including MCP connections)
+   */
+  async cleanup() {
+    // Clean up MCP bridge
+    if (this.mcpBridge) {
+      try {
+        await this.mcpBridge.cleanup();
+        if (this.debug) {
+          console.log('[DEBUG] MCP bridge cleaned up');
+        }
+      } catch (error) {
+        console.error('Error cleaning up MCP bridge:', error);
+      }
+    }
+
+    // Clear history and other resources
+    this.clearHistory();
   }
 
   /**

@@ -242,7 +242,7 @@ const pluggableImplementTool = createImplementTool(implementToolConfig);
 const baseImplementTool = {
 	name: "implement",
 	description: pluggableImplementTool.description,
-	parameters: pluggableImplementTool.parameters,
+	inputSchema: pluggableImplementTool.inputSchema,
 	execute: async ({ task, autoCommits = false, prompt, sessionId }) => {
 		const debug = process.env.DEBUG_CHAT === '1';
 		
@@ -299,7 +299,7 @@ const baseImplementTool = {
 const baseListFilesTool = {
 	name: "listFiles",
 	description: 'List files in a specified directory',
-	parameters: {
+	inputSchema: {
 		type: 'object',
 		properties: {
 			directory: {
@@ -398,7 +398,7 @@ const baseListFilesTool = {
 const baseSearchFilesTool = {
 	name: "searchFiles",
 	description: 'Search for files using a glob pattern, recursively by default',
-	parameters: {
+	inputSchema: {
 		type: 'object',
 		properties: {
 			pattern: {
