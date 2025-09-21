@@ -1018,9 +1018,20 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     }
   }
   
-  if (validation.isValid) {
+  // Always check for HTML entities, even if diagrams are technically valid
+  let needsHtmlEntityCheck = false;
+  if (validation.diagrams && validation.diagrams.length > 0) {
+    for (const diagram of validation.diagrams) {
+      if (diagram.content && (diagram.content.includes('&lt;') || diagram.content.includes('&gt;') || diagram.content.includes('&amp;') || diagram.content.includes('&quot;') || diagram.content.includes('&#39;'))) {
+        needsHtmlEntityCheck = true;
+        break;
+      }
+    }
+  }
+
+  if (validation.isValid && !needsHtmlEntityCheck) {
     if (debug) {
-      console.log(`[DEBUG] Mermaid validation: All diagrams valid, no fixing needed`);
+      console.log(`[DEBUG] Mermaid validation: All diagrams valid and no HTML entities found, no fixing needed`);
     }
     
     // Record successful validation in telemetry
@@ -1033,7 +1044,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       });
     }
     
-    // All diagrams are valid, no fixing needed
+    // All diagrams are valid and no HTML entities found, no fixing needed
     return {
       ...validation,
       wasFixed: false,
@@ -1055,10 +1066,14 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     };
   }
 
-  // Some diagrams are invalid, first try HTML entity decoding auto-fix
+  // Try HTML entity decoding auto-fix (for both invalid diagrams and valid diagrams with HTML entities)
   const invalidCount = validation.diagrams.filter(d => !d.isValid).length;
   if (debug) {
-    console.log(`[DEBUG] Mermaid validation: ${invalidCount} invalid diagrams detected, trying HTML entity auto-fix first...`);
+    if (invalidCount > 0) {
+      console.log(`[DEBUG] Mermaid validation: ${invalidCount} invalid diagrams detected, trying HTML entity auto-fix first...`);
+    } else {
+      console.log(`[DEBUG] Mermaid validation: Diagrams are valid but HTML entities detected, applying HTML entity auto-fix...`);
+    }
   }
 
   try {
@@ -1069,14 +1084,14 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     // Extract diagrams with position information for replacement
     const { diagrams } = extractMermaidFromMarkdown(response);
     
-    // First pass: Try HTML entity decoding on invalid diagrams
-    const invalidDiagrams = validation.diagrams
+    // First pass: Try HTML entity decoding on ALL diagrams (not just invalid ones)
+    // HTML entities in mermaid diagrams are almost always unintended, even if the diagram is technically valid
+    const allDiagrams = validation.diagrams
       .map((result, index) => ({ ...result, originalIndex: index }))
-      .filter(result => !result.isValid)
       .reverse();
 
-    for (const invalidDiagram of invalidDiagrams) {
-      const originalContent = invalidDiagram.content;
+    for (const diagram of allDiagrams) {
+      const originalContent = diagram.content;
       const decodedContent = decodeHtmlEntities(originalContent);
       
       if (decodedContent !== originalContent) {
@@ -1084,8 +1099,8 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
         try {
           const quickValidation = await validateMermaidDiagram(decodedContent);
           if (quickValidation.isValid) {
-            // HTML entity decoding fixed this diagram!
-            const originalDiagram = diagrams[invalidDiagram.originalIndex];
+            // HTML entity decoding improved this diagram!
+            const originalDiagram = diagrams[diagram.originalIndex];
             const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
             const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${decodedContent}\n\`\`\``;
             
@@ -1094,25 +1109,25 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
                            fixedResponse.slice(originalDiagram.endIndex);
             
             fixingResults.push({
-              diagramIndex: invalidDiagram.originalIndex,
+              diagramIndex: diagram.originalIndex,
               wasFixed: true,
               originalContent: originalContent,
               fixedContent: decodedContent,
-              originalError: invalidDiagram.error,
+              originalError: diagram.error || 'HTML entity cleanup',
               fixedWithHtmlDecoding: true
             });
             
             htmlEntityFixesApplied = true;
             
             if (debug) {
-              console.log(`[DEBUG] Mermaid validation: Fixed diagram ${invalidDiagram.originalIndex + 1} with HTML entity decoding`);
-              console.log(`[DEBUG] Mermaid validation: Original error: ${invalidDiagram.error}`);
-              console.log(`[DEBUG] Mermaid validation: Decoded ${originalContent.length - decodedContent.length} HTML entities`);
+              console.log(`[DEBUG] Mermaid validation: Fixed diagram ${diagram.originalIndex + 1} with HTML entity decoding`);
+              console.log(`[DEBUG] Mermaid validation: Original status: ${diagram.isValid ? 'valid' : 'invalid'} - ${diagram.error || 'no error'}`);
+              console.log(`[DEBUG] Mermaid validation: Decoded HTML entities`);
             }
           }
         } catch (error) {
           if (debug) {
-            console.log(`[DEBUG] Mermaid validation: HTML entity decoding didn't fix diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+            console.log(`[DEBUG] Mermaid validation: HTML entity decoding didn't improve diagram ${diagram.originalIndex + 1}: ${error.message}`);
           }
         }
       }
