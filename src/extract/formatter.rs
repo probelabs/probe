@@ -427,6 +427,118 @@ fn format_extraction_internal(
                         }
                     }
 
+                    // Display LSP information if available
+                    if let Some(lsp_info) = &result.lsp_info {
+                        writeln!(output)?;
+                        writeln!(output, "{}", "LSP Information:".blue().bold())?;
+
+                        // Display call hierarchy if available
+                        if let Some(call_hierarchy) =
+                            lsp_info.get("call_hierarchy").and_then(|v| v.as_object())
+                        {
+                            writeln!(output, "  {}:", "Call Hierarchy".cyan())?;
+                            // Incoming calls
+                            if let Some(incoming) = call_hierarchy
+                                .get("incoming_calls")
+                                .and_then(|v| v.as_array())
+                            {
+                                if !incoming.is_empty() {
+                                    writeln!(output, "    Incoming Calls:")?;
+                                    for call in incoming {
+                                        if let Some(call_obj) = call.as_object() {
+                                            let name = call_obj
+                                                .get("name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+                                            let file_path = call_obj
+                                                .get("file_path")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let line = call_obj
+                                                .get("line")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
+                                            let file_path = file_path
+                                                .strip_prefix("file://")
+                                                .unwrap_or(file_path);
+                                            writeln!(
+                                                output,
+                                                "      - {} ({}:{})",
+                                                name, file_path, line
+                                            )?;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Outgoing calls
+                            if let Some(outgoing) = call_hierarchy
+                                .get("outgoing_calls")
+                                .and_then(|v| v.as_array())
+                            {
+                                if !outgoing.is_empty() {
+                                    writeln!(output, "    Outgoing Calls:")?;
+                                    for call in outgoing {
+                                        if let Some(call_obj) = call.as_object() {
+                                            let name = call_obj
+                                                .get("name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+                                            let file_path = call_obj
+                                                .get("file_path")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let line = call_obj
+                                                .get("line")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
+                                            let file_path = file_path
+                                                .strip_prefix("file://")
+                                                .unwrap_or(file_path);
+                                            writeln!(
+                                                output,
+                                                "      - {} ({}:{})",
+                                                name, file_path, line
+                                            )?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Display references if available
+                        if let Some(references) =
+                            lsp_info.get("references").and_then(|v| v.as_array())
+                        {
+                            if !references.is_empty() {
+                                writeln!(output, "  References:")?;
+                                for reference in references {
+                                    if let Some(ref_obj) = reference.as_object() {
+                                        let file_path = ref_obj
+                                            .get("file_path")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let line = ref_obj
+                                            .get("line")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0);
+                                        let context = ref_obj
+                                            .get("context")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("reference");
+                                        let file_path =
+                                            file_path.strip_prefix("file://").unwrap_or(file_path);
+                                        writeln!(
+                                            output,
+                                            "    - {} ({}:{})",
+                                            context, file_path, line
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     writeln!(output)?;
                 }
             }

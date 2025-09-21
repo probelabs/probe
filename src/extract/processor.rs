@@ -3,13 +3,121 @@
 //! This module provides functions for processing files and extracting code blocks
 //! based on file paths and optional line numbers.
 use anyhow::{Context, Result};
-use probe_code::extract::symbol_finder::find_symbol_in_file;
 use probe_code::language::factory::get_language_impl;
 use probe_code::language::parser::parse_file_for_code_blocks;
+use probe_code::lsp_integration::client::LspClient;
+use probe_code::lsp_integration::types::LspConfig;
 use probe_code::models::SearchResult;
+use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+
+/// Get LSP information for a symbol at a specific position (async)
+async fn get_lsp_info_for_extract_async(
+    file_path: &Path,
+    line: u32,
+    column: u32,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    if debug_mode {
+        eprintln!(
+            "[DEBUG] Getting LSP info for position {}:{} in {:?}",
+            line, column, file_path
+        );
+    }
+
+    // Create LSP client
+    let mut client = match LspClient::new(LspConfig::default()).await {
+        Ok(client) => client,
+        Err(e) => {
+            if debug_mode {
+                eprintln!("[DEBUG] Failed to create LSP client: {}", e);
+            }
+            return None;
+        }
+    };
+
+    // Get symbol info from LSP
+    match client.get_symbol_info(file_path, "", line, column).await {
+        Ok(Some(symbol_info)) => {
+            if debug_mode {
+                eprintln!(
+                    "[DEBUG] Got LSP symbol info: incoming_calls={}, outgoing_calls={}",
+                    symbol_info
+                        .call_hierarchy
+                        .as_ref()
+                        .map_or(0, |ch| ch.incoming_calls.len()),
+                    symbol_info
+                        .call_hierarchy
+                        .as_ref()
+                        .map_or(0, |ch| ch.outgoing_calls.len())
+                );
+            }
+
+            // Convert to JSON format expected by search output
+            let result = json!({
+                "call_hierarchy": symbol_info.call_hierarchy,
+                "references": symbol_info.references,
+                "type_info": symbol_info.type_info
+            });
+
+            if debug_mode {
+                eprintln!("[DEBUG] LSP result JSON: {}", result);
+            }
+
+            Some(result)
+        }
+        Ok(None) => {
+            if debug_mode {
+                eprintln!("[DEBUG] No LSP symbol info available for position");
+            }
+            None
+        }
+        Err(e) => {
+            if debug_mode {
+                eprintln!("[DEBUG] LSP query failed: {}", e);
+            }
+            None
+        }
+    }
+}
+
+/// Get LSP information for a symbol at a specific position (blocking wrapper)
+fn get_lsp_info_for_extract(
+    file_path: &Path,
+    line: u32,
+    column: u32,
+    debug_mode: bool,
+    lsp_enabled: bool,
+) -> Option<serde_json::Value> {
+    if !lsp_enabled {
+        return None;
+    }
+
+    // Handle runtime context properly
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        // Already in a runtime: use block_in_place
+        tokio::task::block_in_place(|| {
+            handle.block_on(get_lsp_info_for_extract_async(
+                file_path, line, column, debug_mode,
+            ))
+        })
+    } else {
+        // No runtime: create one
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(get_lsp_info_for_extract_async(
+                file_path, line, column, debug_mode,
+            )),
+            Err(e) => {
+                if debug_mode {
+                    eprintln!("[DEBUG] Failed to create tokio runtime for LSP: {}", e);
+                }
+                None
+            }
+        }
+    }
+}
 
 /// Process a single file and extract code blocks
 ///
@@ -32,6 +140,7 @@ pub fn process_file_for_extraction(
     context_lines: usize,
     specific_lines: Option<&HashSet<usize>>,
     symbols: bool,
+    lsp: bool,
 ) -> Result<SearchResult> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -70,8 +179,38 @@ pub fn process_file_for_extraction(
         if debug_mode {
             eprintln!("[DEBUG] Looking for symbol: {symbol_name}");
         }
-        // Find the symbol in the file
-        return find_symbol_in_file(path, symbol_name, &content, allow_tests, context_lines);
+
+        // Import the function that returns position information
+        use probe_code::extract::symbol_finder::find_symbol_in_file_with_position;
+
+        // Find the symbol in the file and get its position
+        let (mut result, position) = find_symbol_in_file_with_position(
+            path,
+            symbol_name,
+            &content,
+            allow_tests,
+            context_lines
+        )?;
+
+        // If LSP is enabled and we have a position, get LSP information
+        if lsp {
+            if let Some((line, column)) = position {
+                if debug_mode {
+                    eprintln!("[DEBUG] Symbol found at position {}:{}, getting LSP info", line, column);
+                }
+                result.lsp_info = get_lsp_info_for_extract(
+                    path,
+                    line,
+                    column,
+                    debug_mode,
+                    lsp,
+                );
+            } else if debug_mode {
+                eprintln!("[DEBUG] No position information available for symbol, skipping LSP info");
+            }
+        }
+
+        return Ok(result);
     }
 
     // If we have a line range (start_line, end_line), gather AST blocks overlapping that range.
@@ -196,7 +335,13 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    lsp_info: None,
+                    lsp_info: get_lsp_info_for_extract(
+                        path,
+                        merged_start as u32,
+                        16, // column position of function name (approximate)
+                        debug_mode,
+                        lsp,
+                    ),
                     parent_context: None,
                 })
             }
@@ -353,7 +498,13 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
-                    lsp_info: None,
+                    lsp_info: get_lsp_info_for_extract(
+                        path,
+                        merged_start as u32,
+                        16, // column position of function name (approximate)
+                        debug_mode,
+                        lsp,
+                    ),
                     parent_context: None,
                 })
             }
