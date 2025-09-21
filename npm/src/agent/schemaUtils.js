@@ -616,13 +616,15 @@ export async function validateMermaidDiagram(diagram) {
           };
         }
         
-        // GitHub-strict: Check for single quotes inside node labels (causes PS token error)
-        const nodeWithQuotes = line.match(/\{[^{}]*'[^{}]*\}|\[[^[\]]*'[^[\]]*\]/);
+        // GitHub-strict: Check for single quotes and backticks inside node labels (causes PS token error)
+        const nodeWithQuotes = line.match(/\{[^{}]*['`][^{}]*\}|\[[^[\]]*['`][^[\]]*\]/);
         if (nodeWithQuotes) {
+          const hasBacktick = line.includes('`');
+          const quoteType = hasBacktick ? 'backticks' : 'single quotes';
           return {
             isValid: false,
-            error: `Single quotes in node label on line ${i + 1} (GitHub incompatible)`,
-            detailedError: `Line "${line}" contains single quotes inside node label. GitHub mermaid renderer fails with 'got PS' error. Use double quotes or escape characters instead.`
+            error: `${hasBacktick ? 'Backticks' : 'Single quotes'} in node label on line ${i + 1} (GitHub incompatible)`,
+            detailedError: `Line "${line}" contains ${quoteType} inside node label. GitHub mermaid renderer fails with 'got PS' error. Use double quotes or escape characters instead.`
           };
         }
         
@@ -968,6 +970,26 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     console.log(`[DEBUG] Mermaid validation: Starting enhanced validation for response (${response.length} chars)`);
     console.log(`[DEBUG] Mermaid validation: Options - path: ${path}, provider: ${provider}, model: ${model}`);
   }
+
+  /**
+   * Helper function to determine if node content needs quoting due to problematic characters
+   * @param {string} content - The node content to check
+   * @returns {boolean} - True if content needs to be quoted
+   */
+  const needsQuoting = (content) => {
+    return /[()'"<>&`]/.test(content) ||  // Core problematic characters
+           content.includes('e.g.') ||
+           content.includes('i.e.') ||
+           content.includes('src/') ||
+           content.includes('defaults/') ||
+           content.includes('.ts') ||
+           content.includes('.js') ||
+           content.includes('.yaml') ||
+           content.includes('.json') ||
+           content.includes('.md') ||
+           content.includes('.html') ||
+           content.includes('.css');
+  };
   
   // Record mermaid validation start in telemetry
   if (tracer) {
@@ -1152,20 +1174,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             }
             
             // Check if content needs quoting (contains problematic patterns)
-            const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                content.includes('e.g.') ||
-                                content.includes('i.e.') ||
-                                content.includes('src/') ||
-                                content.includes('defaults/') ||
-                                content.includes('.ts') ||
-                                content.includes('.js') ||
-                                content.includes('.yaml') ||
-                                content.includes('.json') ||
-                                content.includes('.md') ||
-                                content.includes('.html') ||
-                                content.includes('.css');
-            
-            if (needsQuoting) {
+            if (needsQuoting(content)) {
               wasFixed = true;
               // Replace internal double quotes with single quotes to avoid nesting
               const safeContent = content.replace(/"/g, "'");
@@ -1185,20 +1194,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             }
             
             // Check if content needs quoting (contains problematic patterns)
-            const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                content.includes('e.g.') ||
-                                content.includes('i.e.') ||
-                                content.includes('src/') ||
-                                content.includes('defaults/') ||
-                                content.includes('.ts') ||
-                                content.includes('.js') ||
-                                content.includes('.yaml') ||
-                                content.includes('.json') ||
-                                content.includes('.md') ||
-                                content.includes('.html') ||
-                                content.includes('.css');
-            
-            if (needsQuoting) {
+            if (needsQuoting(content)) {
               wasFixed = true;
               // Replace internal double quotes with single quotes to avoid nesting
               const safeContent = content.replace(/"/g, "'");
@@ -1412,7 +1408,8 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       if (invalidDiagram.error && 
           (invalidDiagram.error.includes('Parentheses in node label') || 
            invalidDiagram.error.includes('Complex expression in diamond node') ||
-           invalidDiagram.error.includes('Single quotes in node label'))) {
+           invalidDiagram.error.includes('Single quotes in node label') ||
+           invalidDiagram.error.includes('Backticks in node label'))) {
         const originalContent = invalidDiagram.content;
         const lines = originalContent.split('\n');
         let wasFixed = false;
@@ -1432,17 +1429,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               }
               
               // Check if content needs quoting (contains problematic patterns)
-              const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                  content.includes('e.g.') ||
-                                  content.includes('i.e.') ||
-                                  content.includes('src/') ||
-                                  content.includes('defaults/') ||
-                                  content.includes('.ts') ||
-                                  content.includes('.js') ||
-                                  content.includes('.yaml') ||
-                                  content.includes('.json');
-              
-              if (needsQuoting) {
+              if (needsQuoting(content)) {
                 wasFixed = true;
                 // Replace internal double quotes with single quotes to avoid nesting
                 const safeContent = content.replace(/"/g, "'");
@@ -1462,17 +1449,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               }
               
               // Check if content needs quoting (contains problematic patterns)
-              const needsQuoting = /[()'"<>&]/.test(content) ||  // Core problematic characters
-                                  content.includes('e.g.') ||
-                                  content.includes('i.e.') ||
-                                  content.includes('src/') ||
-                                  content.includes('defaults/') ||
-                                  content.includes('.ts') ||
-                                  content.includes('.js') ||
-                                  content.includes('.yaml') ||
-                                  content.includes('.json');
-              
-              if (needsQuoting) {
+              if (needsQuoting(content)) {
                 wasFixed = true;
                 // Replace internal double quotes with single quotes to avoid nesting
                 const safeContent = content.replace(/"/g, "'");
