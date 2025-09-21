@@ -12,10 +12,10 @@
     "start": "node index.js",
     "web": "node index.js --web",
     "build": "node build.js",
-    "build:prod": "NODE_ENV=production node build.js",
-    "test": "NODE_ENV=test node --test test/integration/chatFlows.test.js test/integration/toolCalling.test.js",
-    "test:chat": "NODE_ENV=test node --test test/integration/chatFlows.test.js",
-    "test:tools": "NODE_ENV=test node --test test/integration/toolCalling.test.js",
+    "build:prod": "cross-env NODE_ENV=production node build.js",
+    "test": "cross-env NODE_ENV=test node --test test/integration/chatFlows.test.js test/integration/toolCalling.test.js",
+    "test:chat": "cross-env NODE_ENV=test node --test test/integration/chatFlows.test.js",
+    "test:tools": "cross-env NODE_ENV=test node --test test/integration/toolCalling.test.js",
     "prepublishOnly": "chmod +x ./bin/probe-chat.js"
   },
   "keywords": [
@@ -50,6 +50,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "esbuild": "^0.21.5"
   },
   "peerDependencies": {
