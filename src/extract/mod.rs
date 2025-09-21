@@ -692,8 +692,8 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.allow_tests,
             params.context_lines,
             params.specific_lines.as_ref(),
-            params.lsp,
-            params.include_stdlib,
+            false,       // symbols functionality removed
+            options.lsp, // Pass LSP flag
         ) {
             Ok(result_vec) => {
                 if params.debug_mode {
