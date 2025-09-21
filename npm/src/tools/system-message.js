@@ -75,8 +75,17 @@ For GitHub-compatible mermaid diagrams, avoid single quotes and parentheses in n
 - NO single quotes in any node labels: 'text' → "text" or text
 - NO parentheses in square brackets: [Text (detail)] → [Text - detail]
 - NO complex expressions in diamonds: {a && b} → {condition}
+- USE single quotes for styles and classes: classDef highlight fill:'#ff9999'
 
 **Examples:**
 - ✅ [Load Config] ["Run command"] {Valid?}
 - ❌ [Load (config)] [Run 'command'] {isValid('x')}
+
+**Diagram Type Selection:**
+- **flowchart**: processes, workflows, decision trees (flowchart TD/LR)
+- **sequenceDiagram**: interactions between entities over time
+- **gantt**: project timelines, schedules, milestones
+- **graph**: simple relationships, data structures
+- **classDiagram**: object-oriented design, class relationships
+- **erDiagram**: database schemas, entity relationships
 </mermaid-instructions>`
