@@ -20,6 +20,9 @@
     "./telemetry": {
       "import": "./src/agent/simpleTelemetry.js",
       "require": "./cjs/agent/simpleTelemetry.cjs"
+    },
+    "./agent/mcp": {
+      "import": "./src/agent/mcp/index.js"
     }
   },
   "bin": {

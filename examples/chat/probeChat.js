@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { ProbeAgent } from '../../npm/src/agent/ProbeAgent.js';
+import { ProbeAgent } from '@probelabs/probe/agent';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { writeFileSync, existsSync } from 'fs';
 import { join } from 'path';

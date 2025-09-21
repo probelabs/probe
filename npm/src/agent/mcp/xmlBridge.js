@@ -133,10 +133,21 @@ export class MCPXmlBridge {
 
   /**
    * Initialize MCP connections and load tools
-   * @param {Array<Object>} configs - MCP server configurations
+   * @param {Object|Array<Object>} config - MCP configuration object or server configurations (deprecated)
    */
-  async initialize(configs = null) {
-    const mcpConfigs = configs || loadMCPConfiguration();
+  async initialize(config = null) {
+    let mcpConfigs = null;
+
+    if (!config) {
+      // No config provided - fall back to auto-discovery for backward compatibility
+      mcpConfigs = loadMCPConfiguration();
+    } else if (Array.isArray(config)) {
+      // Deprecated: Array of server configs (backward compatibility)
+      mcpConfigs = { mcpServers: config };
+    } else {
+      // New: Full config object provided directly
+      mcpConfigs = config;
+    }
 
     if (!mcpConfigs || !mcpConfigs.mcpServers || Object.keys(mcpConfigs.mcpServers).length === 0) {
       if (this.debug) {

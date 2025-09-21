@@ -11,7 +11,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { MCPClientManager } from '../../npm/src/agent/mcp/index.js';
+import { MCPClientManager } from '@probelabs/probe/agent/mcp';
 import { writeFileSync } from 'fs';
 
 // Check for API keys

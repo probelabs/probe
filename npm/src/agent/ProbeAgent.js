@@ -38,7 +38,8 @@ import {
 } from './schemaUtils.js';
 import {
   MCPXmlBridge,
-  parseHybridXmlToolCall
+  parseHybridXmlToolCall,
+  loadMCPConfigurationFromPath
 } from './mcp/index.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
@@ -64,7 +65,9 @@ export class ProbeAgent {
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
    * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
-   * @param {Array} [options.mcpServers] - MCP server configurations
+   * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
+   * @param {Object} [options.mcpConfig] - MCP configuration object (overrides mcpConfigPath)
+   * @param {Array} [options.mcpServers] - Deprecated, use mcpConfig instead
    */
   constructor(options = {}) {
     // Basic configuration
@@ -99,19 +102,21 @@ export class ProbeAgent {
     // Initialize tools
     this.initializeTools();
 
-    // Initialize the AI model
-    this.initializeModel();
-
     // Initialize chat history
     this.history = [];
-    
+
     // Initialize event emitter for tool execution updates
     this.events = new EventEmitter();
 
     // MCP configuration
     this.enableMcp = !!options.enableMcp || process.env.ENABLE_MCP === '1';
-    this.mcpServers = options.mcpServers || null;
+    this.mcpConfigPath = options.mcpConfigPath || null;
+    this.mcpConfig = options.mcpConfig || null;
+    this.mcpServers = options.mcpServers || null; // Deprecated, keep for backward compatibility
     this.mcpBridge = null;
+
+    // Initialize the AI model
+    this.initializeModel();
 
     // Initialize MCP if enabled
     if (this.enableMcp) {
@@ -283,15 +288,50 @@ export class ProbeAgent {
     if (!this.enableMcp) return;
 
     try {
+      let mcpConfig = null;
+
+      // Priority order: mcpConfig > mcpConfigPath > mcpServers (deprecated) > auto-discovery
+      if (this.mcpConfig) {
+        // Direct config object provided (SDK usage)
+        mcpConfig = this.mcpConfig;
+        if (this.debug) {
+          console.log('[DEBUG] Using provided MCP config object');
+        }
+      } else if (this.mcpConfigPath) {
+        // Explicit config path provided
+        try {
+          mcpConfig = loadMCPConfigurationFromPath(this.mcpConfigPath);
+          if (this.debug) {
+            console.log(`[DEBUG] Loaded MCP config from: ${this.mcpConfigPath}`);
+          }
+        } catch (error) {
+          throw new Error(`Failed to load MCP config from ${this.mcpConfigPath}: ${error.message}`);
+        }
+      } else if (this.mcpServers) {
+        // Backward compatibility: convert old mcpServers format
+        mcpConfig = { mcpServers: this.mcpServers };
+        if (this.debug) {
+          console.warn('[DEBUG] Using deprecated mcpServers option. Consider using mcpConfig instead.');
+        }
+      }
+      // Note: auto-discovery fallback is removed - user must explicitly provide config
+
       // Initialize the MCP XML bridge
       this.mcpBridge = new MCPXmlBridge({ debug: this.debug });
-      await this.mcpBridge.initialize(this.mcpServers);
+      await this.mcpBridge.initialize(mcpConfig);
 
       const mcpToolCount = this.mcpBridge.getToolNames().length;
       if (mcpToolCount > 0) {
         if (this.debug) {
           console.log(`[DEBUG] Loaded ${mcpToolCount} MCP tools`);
         }
+      } else {
+        // For backward compatibility: if no tools were loaded, set bridge to null
+        // This maintains the behavior expected by existing tests
+        if (this.debug) {
+          console.log('[DEBUG] No MCP tools loaded, setting bridge to null');
+        }
+        this.mcpBridge = null;
       }
     } catch (error) {
       console.error('[MCP] Error initializing MCP:', error);

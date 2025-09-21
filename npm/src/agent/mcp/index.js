@@ -11,6 +11,7 @@
 export { MCPClientManager, createMCPManager, createTransport } from './client.js';
 export {
   loadMCPConfiguration,
+  loadMCPConfigurationFromPath,
   parseEnabledServers,
   createSampleConfig,
   saveConfig
@@ -27,6 +28,7 @@ export {
 import { MCPClientManager, createMCPManager, createTransport } from './client.js';
 import {
   loadMCPConfiguration,
+  loadMCPConfigurationFromPath,
   parseEnabledServers,
   createSampleConfig,
   saveConfig
@@ -48,6 +50,7 @@ export default {
 
   // Config
   loadMCPConfiguration,
+  loadMCPConfigurationFromPath,
   parseEnabledServers,
   createSampleConfig,
   saveConfig,

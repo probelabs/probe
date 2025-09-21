@@ -32,7 +32,7 @@
     "@ai-sdk/anthropic": "^2.0.8",
     "@ai-sdk/google": "^2.0.14",
     "@ai-sdk/openai": "^2.0.10",
-    "@probelabs/probe": "*",
+    "@probelabs/probe": "file:../../npm",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
     "@opentelemetry/resources": "^2.0.1",

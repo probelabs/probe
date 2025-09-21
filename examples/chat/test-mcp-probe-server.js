@@ -5,7 +5,7 @@
  * This tests the MCP server without requiring AI API keys
  */
 
-import { MCPClientManager } from '../../npm/src/agent/mcp/index.js';
+import { MCPClientManager } from '@probelabs/probe/agent/mcp';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 

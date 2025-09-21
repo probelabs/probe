@@ -33,13 +33,44 @@ const DEFAULT_CONFIG = {
 };
 
 /**
- * Load MCP configuration from various sources
+ * Load MCP configuration from a specific file path
+ * @param {string} configPath - Path to MCP configuration file
+ * @returns {Object} Configuration object
+ * @throws {Error} If file doesn't exist or is invalid
+ */
+export function loadMCPConfigurationFromPath(configPath) {
+  if (!configPath) {
+    throw new Error('Config path is required');
+  }
+
+  if (!existsSync(configPath)) {
+    throw new Error(`MCP configuration file not found: ${configPath}`);
+  }
+
+  try {
+    const content = readFileSync(configPath, 'utf8');
+    const config = JSON.parse(content);
+
+    if (process.env.DEBUG === '1') {
+      console.error(`[MCP] Loaded configuration from: ${configPath}`);
+    }
+
+    // Merge with environment variable overrides
+    return mergeWithEnvironment(config);
+  } catch (error) {
+    throw new Error(`Failed to parse MCP config from ${configPath}: ${error.message}`);
+  }
+}
+
+/**
+ * Load MCP configuration from various sources (DEPRECATED - use loadMCPConfigurationFromPath for explicit paths)
  * Priority order:
  * 1. Environment variable MCP_CONFIG_PATH
  * 2. Local project .mcp/config.json
  * 3. Home directory ~/.config/probe/mcp.json
  * 4. Home directory ~/.mcp/config.json (Claude compatible)
  * 5. Default configuration
+ * @deprecated Use loadMCPConfigurationFromPath for explicit path loading or pass config directly
  */
 export function loadMCPConfiguration() {
   const configPaths = [
@@ -275,6 +306,7 @@ export function saveConfig(config, path) {
 
 export default {
   loadMCPConfiguration,
+  loadMCPConfigurationFromPath,
   parseEnabledServers,
   createSampleConfig,
   saveConfig
