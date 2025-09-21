@@ -11,7 +11,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText, tool } from 'ai';
 import { z } from 'zod';
-import { MCPClientManager } from './mcpClientV2.js';
+import { MCPClientManager } from '../../npm/src/agent/mcp/index.js';
 import { writeFileSync } from 'fs';
 
 // Check for API keys
@@ -154,7 +154,7 @@ async function testMCPWithAI() {
               - probe_extract_code: Extract specific code blocks
 
               Always use the appropriate tool to answer questions about code.
-              Set the path parameter to "/home/buger/projects/probe/examples/chat" for searches.`
+              Set the path parameter to "${process.cwd()}" for searches.`
           },
           {
             role: 'user',
@@ -214,7 +214,7 @@ async function testMCPWithAI() {
         {
           role: 'system',
           content: `You are a code analysis expert. Use the MCP tools to thoroughly analyze code.
-            The codebase is located at: /home/buger/projects/probe/examples/chat
+            The codebase is located at: ${process.cwd()}
             Be systematic and use multiple tools to gather comprehensive information.`
         },
         {

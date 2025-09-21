@@ -52,7 +52,7 @@ async function testProbeMcpServer() {
       name: 'search_code',
       arguments: {
         query: 'function',
-        path: '/home/buger/projects/probe/examples/chat',
+        path: process.cwd(),
         max_results: 3
       }
     });
@@ -69,7 +69,7 @@ async function testProbeMcpServer() {
       name: 'query_code',
       arguments: {
         pattern: 'function $NAME($$$PARAMS) { $$$BODY }',
-        path: '/home/buger/projects/probe/examples/chat',
+        path: process.cwd(),
         language: 'javascript',
         max_results: 2
       }
@@ -86,7 +86,7 @@ async function testProbeMcpServer() {
     const extractResult = await client.callTool({
       name: 'extract_code',
       arguments: {
-        files: ['/home/buger/projects/probe/examples/chat/probeChat.js:230-250']
+        files: [`${process.cwd()}/probeChat.js:230-250`]
       }
     });
 

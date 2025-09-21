@@ -5,7 +5,9 @@
  * This tests the MCP server without requiring AI API keys
  */
 
-import { MCPClientManager } from './mcpClientV2.js';
+import { MCPClientManager } from '../../npm/src/agent/mcp/index.js';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 async function testProbeMCP() {
   console.log('=== Testing Probe MCP Server Connection ===\n');
@@ -65,7 +67,7 @@ async function testProbeMCP() {
     try {
       const searchResult = await manager.callTool('probe_search_code', {
         query: 'MCP',
-        path: '/home/buger/projects/probe/examples/chat',
+        path: process.cwd(),
         max_results: 2
       });
 
@@ -84,7 +86,7 @@ async function testProbeMCP() {
     try {
       const queryResult = await manager.callTool('probe_query_code', {
         pattern: 'class $NAME',
-        path: '/home/buger/projects/probe/examples/chat',
+        path: process.cwd(),
         language: 'javascript',
         max_results: 2
       });
@@ -103,7 +105,7 @@ async function testProbeMCP() {
     console.log('\n3. Testing probe_extract_code...');
     try {
       const extractResult = await manager.callTool('probe_extract_code', {
-        files: ['/home/buger/projects/probe/examples/chat/mcpConfig.js:1-20']
+        files: [`${join(dirname(fileURLToPath(import.meta.url)), 'probeChat.js')}:1-20`]
       });
 
       if (extractResult.content && extractResult.content[0]) {
@@ -128,7 +130,7 @@ async function testProbeMCP() {
       try {
         const result = await searchTool.execute({
           query: 'export',
-          path: '/home/buger/projects/probe/examples/chat',
+          path: process.cwd(),
           max_results: 1
         });
 

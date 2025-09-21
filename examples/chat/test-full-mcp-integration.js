@@ -90,7 +90,7 @@ async function testFullMCPIntegration() {
 <params>
 {
   "query": "MCP",
-  "path": "/home/buger/projects/probe/examples/chat",
+  "path": process.cwd(),
   "max_results": 2
 }
 </params>
@@ -103,7 +103,7 @@ async function testFullMCPIntegration() {
 <params>
 {
   "pattern": "function $NAME",
-  "path": "/home/buger/projects/probe/examples/chat",
+  "path": process.cwd(),
   "language": "javascript"
 }
 </params>
@@ -251,7 +251,7 @@ The MCP integration is ${hasMCPSection && hasProbeSearch ? 'fully functional' : 
 }
 
 // Import functions we need
-import { parseHybridXmlToolCall } from './mcpXmlBridge.js';
+import { parseHybridXmlToolCall } from '../../npm/src/agent/mcp/index.js';
 import { parseXmlToolCallWithThinking } from './tools.js';
 
 // Run the test

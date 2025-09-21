@@ -4,7 +4,7 @@
  * Test script to verify MCP integration with XML syntax
  */
 
-import MCPXmlBridge, { parseXmlMcpToolCall, parseHybridXmlToolCall } from './mcpXmlBridge.js';
+import { MCPXmlBridge, parseXmlMcpToolCall, parseHybridXmlToolCall } from '../../npm/src/agent/mcp/index.js';
 
 console.log('Testing MCP XML Integration...\n');
 

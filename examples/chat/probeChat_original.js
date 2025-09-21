@@ -23,8 +23,8 @@ import {
 // Import tool *instances* for execution
 import { searchToolInstance, queryToolInstance, extractToolInstance, implementToolInstance, listFilesToolInstance, searchFilesToolInstance } from './probeTool.js'; // Added new tool instances
 // Import MCP bridge for external tool integration
-import MCPXmlBridge, { parseHybridXmlToolCall, createHybridSystemMessage, mcpToolToXmlDefinition } from './mcpXmlBridge.js';
-import { MCPClientManager } from './mcpClientV2.js';
+import { MCPXmlBridge, parseHybridXmlToolCall, createHybridSystemMessage, mcpToolToXmlDefinition } from '../../npm/src/agent/mcp/index.js';
+import { MCPClientManager } from '../../npm/src/agent/mcp/index.js';
 
 // Maximum number of messages to keep in history
 const MAX_HISTORY_MESSAGES = 100;
