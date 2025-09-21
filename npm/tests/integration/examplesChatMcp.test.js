@@ -3,6 +3,10 @@
  */
 
 import { jest } from '@jest/globals';
+
+// Mock dotenv/config before importing modules that use it
+jest.unstable_mockModule('dotenv/config', () => ({}));
+
 import { ProbeChat } from '../../../examples/chat/probeChat.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';

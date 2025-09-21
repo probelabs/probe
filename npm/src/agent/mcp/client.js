@@ -36,7 +36,11 @@ export function createTransport(serverConfig) {
       if (!url) {
         throw new Error('WebSocket transport requires a URL');
       }
-      return new WebSocketClientTransport(new URL(url));
+      try {
+        return new WebSocketClientTransport(new URL(url));
+      } catch (error) {
+        throw new Error(`Invalid WebSocket URL: ${url}`);
+      }
 
     case 'http':
     case 'streamable':

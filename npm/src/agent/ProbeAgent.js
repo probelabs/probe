@@ -19,12 +19,13 @@ import {
   parseXmlToolCallWithThinking
 } from './tools.js';
 import { createMessagePreview } from '../tools/common.js';
-import { 
-  createWrappedTools, 
-  listFilesToolInstance, 
+import {
+  createWrappedTools,
+  listFilesToolInstance,
   searchFilesToolInstance,
-  clearToolExecutionData 
+  clearToolExecutionData
 } from './probeTool.js';
+import { createMockProvider } from './mockProvider.js';
 import { listFilesByLevel } from '../index.js';
 import {
   cleanSchemaResponse,
@@ -157,6 +158,12 @@ export class ProbeAgent {
    * Initialize the AI model based on available API keys and forced provider setting
    */
   initializeModel() {
+    // Check if we're in test mode and should use mock provider
+    if (process.env.NODE_ENV === 'test' || process.env.USE_MOCK_AI === 'true') {
+      this.initializeMockModel();
+      return;
+    }
+
     // Get API keys from environment variables
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -250,9 +257,22 @@ export class ProbeAgent {
     });
     this.model = modelName || 'gemini-2.5-pro';
     this.apiType = 'google';
-    
+
     if (this.debug) {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    }
+  }
+
+  /**
+   * Initialize mock model for testing
+   */
+  initializeMockModel(modelName) {
+    this.provider = createMockProvider();
+    this.model = modelName || 'mock-model';
+    this.apiType = 'mock';
+
+    if (this.debug) {
+      console.log(`Using Mock API with model: ${this.model}`);
     }
   }
 

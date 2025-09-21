@@ -82,7 +82,13 @@ export function parseXmlMcpToolCall(xmlString, mcpToolNames = []) {
 
     let params = {};
     if (paramsMatch) {
-      const paramsContent = paramsMatch[1].trim();
+      let paramsContent = paramsMatch[1].trim();
+
+      // Handle CDATA sections
+      const cdataMatch = paramsContent.match(/^<!\[CDATA\[([\s\S]*?)\]\]>$/);
+      if (cdataMatch) {
+        paramsContent = cdataMatch[1];
+      }
 
       // Try to parse as JSON first
       try {
