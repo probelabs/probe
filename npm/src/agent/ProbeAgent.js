@@ -804,7 +804,7 @@ IMPORTANT: A schema was provided. You MUST respond with data that matches this s
 Use attempt_completion with your response directly inside the tags:
 
 <attempt_completion>
-{"key": "value", "field": "your actual data here matching the schema"}
+[Your response content matching the provided schema format]
 </attempt_completion>
 
 Your response must conform to this schema:
