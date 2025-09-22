@@ -219,8 +219,8 @@ impl LspRegistry {
         // PHP
         self.register(LspServerConfig {
             language: Language::Php,
-            command: "intelephense".to_string(),
-            args: vec!["--stdio".to_string()],
+            command: "phpactor".to_string(),
+            args: vec!["language-server".to_string()],
             initialization_options: None,
             root_markers: vec!["composer.json".to_string(), ".git".to_string()],
             initialization_timeout_secs: 30,

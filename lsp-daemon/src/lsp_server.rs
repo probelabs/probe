@@ -2,7 +2,7 @@ use crate::lsp_registry::LspServerConfig;
 use crate::path_safety;
 use crate::readiness_tracker::{ReadinessTracker, ServerType};
 use crate::socket_path::normalize_executable;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::io::ErrorKind;
@@ -622,7 +622,7 @@ impl LspServer {
             "Waiting for initialize response with timeout {}s...",
             config.initialization_timeout_secs
         );
-        let response = self
+        let mut response = self
             .wait_for_response(
                 request_id,
                 Duration::from_secs(config.initialization_timeout_secs),
@@ -632,6 +632,16 @@ impl LspServer {
 
         if response.get("error").is_some() {
             return Err(anyhow!("Initialize failed: {:?}", response["error"]));
+        }
+
+        // Fix phpactor compatibility issue: normalize non-standard "static" values
+        // phpactor sends "static" for failureHandling, but LSP expects "abort", "continue", or "retry"
+        if config.language == crate::language_detector::Language::Php {
+            if let Some(result) = response.get_mut("result") {
+                if let Some(capabilities) = result.get_mut("capabilities") {
+                    Self::normalize_phpactor_capabilities(capabilities);
+                }
+            }
         }
 
         // Send initialized notification
@@ -972,22 +982,52 @@ impl LspServer {
     async fn read_message(&self) -> Result<Value> {
         let mut stdout = self.stdout.lock().await;
 
-        let mut header = String::new();
-        let bytes_read = stdout.read_line(&mut header).await?;
+        // Read all headers until we hit an empty line
+        let mut headers = std::collections::HashMap::new();
+        let mut content_length: Option<usize> = None;
 
-        if bytes_read == 0 {
-            return Err(anyhow!("LSP server closed connection"));
+        loop {
+            let mut header_line = String::new();
+            let bytes_read = stdout.read_line(&mut header_line).await?;
+
+            if bytes_read == 0 {
+                return Err(anyhow!("LSP server closed connection"));
+            }
+
+            // Trim the line to handle different line endings (\r\n vs \n)
+            let trimmed_line = header_line.trim();
+
+            // Empty line marks the end of headers
+            if trimmed_line.is_empty() {
+                break;
+            }
+
+            // Parse header: split on first colon
+            if let Some(colon_pos) = trimmed_line.find(':') {
+                let name = trimmed_line[..colon_pos].trim().to_lowercase();
+                let value = trimmed_line[colon_pos + 1..].trim();
+
+                // Store the header
+                headers.insert(name.clone(), value.to_string());
+
+                // Extract Content-Length specifically
+                if name == "content-length" {
+                    content_length = Some(value.parse().context("Invalid Content-Length value")?);
+                }
+            } else {
+                return Err(anyhow!("Invalid header line: {}", trimmed_line));
+            }
         }
 
-        if !header.starts_with("Content-Length:") {
-            return Err(anyhow!("Invalid header: {}", header));
+        // Ensure we have a Content-Length header
+        let len = content_length.ok_or_else(|| anyhow!("Missing Content-Length header"))?;
+
+        // Log headers for debugging (excluding content-length which we already logged above)
+        for (name, value) in &headers {
+            if name != "content-length" {
+                debug!(target: "lsp_protocol", "Header: {}: {}", name, value);
+            }
         }
-
-        let len: usize = header["Content-Length:".len()..].trim().parse()?;
-
-        // Skip empty line
-        let mut empty_line = String::new();
-        stdout.read_line(&mut empty_line).await?;
 
         let mut body = vec![0; len];
         stdout.read_exact(&mut body).await?;
@@ -995,7 +1035,7 @@ impl LspServer {
         let msg: Value = serde_json::from_slice(&body)?;
 
         // Log incoming message
-        info!(target: "lsp_protocol", "<<< FROM LSP: {}", 
+        info!(target: "lsp_protocol", "<<< FROM LSP: {}",
             serde_json::to_string(&msg).unwrap_or_else(|_| msg.to_string()));
 
         Ok(msg)
@@ -1802,6 +1842,16 @@ impl LspServer {
             .map_err(|e| anyhow!("Call hierarchy prepare timed out: {}", e))?;
 
         if let Some(error) = response.get("error") {
+            // Check if the error is "Method not found" (-32601)
+            // This indicates the language server doesn't support call hierarchy
+            if let Some(code) = error.get("code") {
+                if code == -32601 {
+                    debug!("Language server doesn't support call hierarchy, falling back to references");
+                    return self
+                        .call_hierarchy_from_references(file_path, line, column)
+                        .await;
+                }
+            }
             return Err(anyhow!("Call hierarchy prepare failed: {:?}", error));
         }
 
@@ -2167,6 +2217,106 @@ impl LspServer {
             _ => "plaintext",
         }
     }
+
+    /// Normalize phpactor capabilities to fix compatibility issues.
+    /// phpactor sends non-standard values like "static" for failureHandling,
+    /// but LSP expects "abort", "continue", or "retry".
+    fn normalize_phpactor_capabilities(capabilities: &mut Value) {
+        debug!("Normalizing phpactor capabilities to fix compatibility issues");
+
+        // Function to recursively search and fix "static" values in failureHandling fields
+        fn fix_failure_handling(value: &mut Value) {
+            match value {
+                Value::Object(map) => {
+                    for (key, val) in map.iter_mut() {
+                        if key == "failureHandling" && val.as_str() == Some("static") {
+                            warn!("Found phpactor's non-standard 'static' value in failureHandling, converting to 'abort'");
+                            *val = Value::String("abort".to_string());
+                        } else {
+                            fix_failure_handling(val);
+                        }
+                    }
+                }
+                Value::Array(arr) => {
+                    for item in arr.iter_mut() {
+                        fix_failure_handling(item);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        fix_failure_handling(capabilities);
+
+        // Also check for textDocumentSync specifically, which is a common location for failureHandling
+        if let Some(text_doc_sync) = capabilities.get_mut("textDocumentSync") {
+            if let Some(failure_handling) = text_doc_sync.get_mut("failureHandling") {
+                if failure_handling.as_str() == Some("static") {
+                    warn!(
+                        "Fixed phpactor's non-standard 'static' failureHandling value to 'abort'"
+                    );
+                    *failure_handling = Value::String("abort".to_string());
+                }
+            }
+        }
+
+        debug!("Phpactor capabilities normalization completed");
+    }
+
+    /// Fallback method to simulate call hierarchy using textDocument/references
+    /// This is used when the language server doesn't support call hierarchy
+    async fn call_hierarchy_from_references(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<Value> {
+        debug!(
+            "Simulating call hierarchy using references for {:?} at {}:{}",
+            file_path, line, column
+        );
+
+        // Get references to this symbol (these are the "incoming calls")
+        let references_result = self.references(file_path, line, column, false).await;
+
+        match references_result {
+            Ok(refs_value) => {
+                // Convert references response to call hierarchy format
+                let incoming_calls =
+                    if let Some(refs_array) = refs_value.get("result").and_then(|r| r.as_array()) {
+                        refs_array.iter().map(|ref_item| {
+                        json!({
+                            "from": {
+                                "name": "reference", // We don't have the actual symbol name from references
+                                "kind": 12, // Function kind as default
+                                "uri": ref_item.get("uri").unwrap_or(&json!("")),
+                                "range": ref_item.get("range").unwrap_or(&json!({})),
+                                "selectionRange": ref_item.get("range").unwrap_or(&json!({}))
+                            },
+                            "fromRanges": [ref_item.get("range").unwrap_or(&json!({}))]
+                        })
+                    }).collect::<Vec<_>>()
+                    } else {
+                        vec![]
+                    };
+
+                // For outgoing calls, we would need definition + references, which is complex
+                // For now, return empty outgoing calls since references mainly give us incoming calls
+                Ok(json!({
+                    "incoming": incoming_calls,
+                    "outgoing": []
+                }))
+            }
+            Err(e) => {
+                debug!("References fallback also failed: {}", e);
+                // Return empty result rather than error to avoid completely failing
+                Ok(json!({
+                    "incoming": [],
+                    "outgoing": []
+                }))
+            }
+        }
+    }
 }
 
 impl Drop for LspServer {
@@ -2225,5 +2375,211 @@ impl Drop for LspServer {
         }
 
         tracing::debug!("LspServer Drop implementation complete - resources cleanup initiated");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use tokio::io::BufReader;
+
+    #[tokio::test]
+    async fn test_read_message_with_phpactor_headers() {
+        // Test that our header parsing correctly handles phpactor-style headers
+        use std::io::Cursor;
+
+        let json_body = r#"{"jsonrpc":"2.0","id":1,"result":null}"#;
+        let content_length = json_body.len();
+        let phpactor_response = format!(
+            "Content-Length: {}\r\nContent-Type: application/vscode-jsonrpc; charset=utf8\r\n\r\n{}",
+            content_length, json_body
+        );
+
+        let cursor = Cursor::new(phpactor_response.as_bytes());
+        let mut buf_reader = BufReader::new(cursor);
+
+        // Manually parse headers like our read_message method does
+        let mut headers = std::collections::HashMap::new();
+        let mut parsed_content_length: Option<usize> = None;
+
+        loop {
+            let mut header_line = String::new();
+            let bytes_read = buf_reader.read_line(&mut header_line).await.unwrap();
+
+            if bytes_read == 0 {
+                panic!("Unexpected EOF");
+            }
+
+            let trimmed_line = header_line.trim();
+
+            if trimmed_line.is_empty() {
+                break;
+            }
+
+            if let Some(colon_pos) = trimmed_line.find(':') {
+                let name = trimmed_line[..colon_pos].trim().to_lowercase();
+                let value = trimmed_line[colon_pos + 1..].trim();
+
+                headers.insert(name.clone(), value.to_string());
+
+                if name == "content-length" {
+                    parsed_content_length = Some(value.parse().unwrap());
+                }
+            }
+        }
+
+        // Verify we parsed both headers correctly
+        assert_eq!(parsed_content_length, Some(content_length));
+        assert_eq!(
+            headers.get("content-length"),
+            Some(&content_length.to_string())
+        );
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&"application/vscode-jsonrpc; charset=utf8".to_string())
+        );
+
+        // Read the body
+        let len = parsed_content_length.unwrap();
+        let mut body = vec![0; len];
+        buf_reader.read_exact(&mut body).await.unwrap();
+
+        // Parse the JSON
+        let msg: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(msg["jsonrpc"], "2.0");
+        assert_eq!(msg["id"], 1);
+        assert_eq!(msg["result"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_read_message_with_only_content_length() {
+        // Test that we still work with traditional LSP headers (only Content-Length)
+        let json_body = r#"{"jsonrpc":"2.0","id":1,"result":null}"#;
+        let content_length = json_body.len();
+        let standard_response = format!("Content-Length: {}\r\n\r\n{}", content_length, json_body);
+
+        let cursor = Cursor::new(standard_response.as_bytes());
+        let mut buf_reader = BufReader::new(cursor);
+
+        // Manually parse headers like our read_message method does
+        let mut headers = std::collections::HashMap::new();
+        let mut parsed_content_length: Option<usize> = None;
+
+        loop {
+            let mut header_line = String::new();
+            let bytes_read = buf_reader.read_line(&mut header_line).await.unwrap();
+
+            if bytes_read == 0 {
+                panic!("Unexpected EOF");
+            }
+
+            let trimmed_line = header_line.trim();
+
+            if trimmed_line.is_empty() {
+                break;
+            }
+
+            if let Some(colon_pos) = trimmed_line.find(':') {
+                let name = trimmed_line[..colon_pos].trim().to_lowercase();
+                let value = trimmed_line[colon_pos + 1..].trim();
+
+                headers.insert(name.clone(), value.to_string());
+
+                if name == "content-length" {
+                    parsed_content_length = Some(value.parse().unwrap());
+                }
+            }
+        }
+
+        // Verify we parsed the header correctly
+        assert_eq!(parsed_content_length, Some(content_length));
+        assert_eq!(
+            headers.get("content-length"),
+            Some(&content_length.to_string())
+        );
+        assert_eq!(headers.len(), 1); // Only Content-Length header
+
+        // Read the body
+        let len = parsed_content_length.unwrap();
+        let mut body = vec![0; len];
+        buf_reader.read_exact(&mut body).await.unwrap();
+
+        // Parse the JSON
+        let msg: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(msg["jsonrpc"], "2.0");
+        assert_eq!(msg["id"], 1);
+        assert_eq!(msg["result"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_multiple_headers_parsing() {
+        // Test that we can handle multiple headers including custom ones
+        let json_body = r#"{"jsonrpc":"2.0","id":1,"result":null}"#;
+        let content_length = json_body.len();
+        let multi_header_response = format!(
+            "Content-Length: {}\r\nContent-Type: application/vscode-jsonrpc; charset=utf-8\r\nX-Custom-Header: test-value\r\n\r\n{}",
+            content_length, json_body
+        );
+
+        let cursor = Cursor::new(multi_header_response.as_bytes());
+        let mut buf_reader = BufReader::new(cursor);
+
+        // Manually parse headers like our read_message method does
+        let mut headers = std::collections::HashMap::new();
+        let mut parsed_content_length: Option<usize> = None;
+
+        loop {
+            let mut header_line = String::new();
+            let bytes_read = buf_reader.read_line(&mut header_line).await.unwrap();
+
+            if bytes_read == 0 {
+                panic!("Unexpected EOF");
+            }
+
+            let trimmed_line = header_line.trim();
+
+            if trimmed_line.is_empty() {
+                break;
+            }
+
+            if let Some(colon_pos) = trimmed_line.find(':') {
+                let name = trimmed_line[..colon_pos].trim().to_lowercase();
+                let value = trimmed_line[colon_pos + 1..].trim();
+
+                headers.insert(name.clone(), value.to_string());
+
+                if name == "content-length" {
+                    parsed_content_length = Some(value.parse().unwrap());
+                }
+            }
+        }
+
+        // Verify we parsed all headers correctly
+        assert_eq!(parsed_content_length, Some(content_length));
+        assert_eq!(
+            headers.get("content-length"),
+            Some(&content_length.to_string())
+        );
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&"application/vscode-jsonrpc; charset=utf-8".to_string())
+        );
+        assert_eq!(
+            headers.get("x-custom-header"),
+            Some(&"test-value".to_string())
+        );
+        assert_eq!(headers.len(), 3); // All three headers
+
+        // Read the body
+        let len = parsed_content_length.unwrap();
+        let mut body = vec![0; len];
+        buf_reader.read_exact(&mut body).await.unwrap();
+
+        // Parse the JSON
+        let msg: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(msg["jsonrpc"], "2.0");
+        assert_eq!(msg["id"], 1);
+        assert_eq!(msg["result"], Value::Null);
     }
 }

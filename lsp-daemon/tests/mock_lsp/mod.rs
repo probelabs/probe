@@ -4,6 +4,7 @@
 //! with configurable response patterns for testing purposes.
 
 pub mod gopls_mock;
+pub mod phpactor_mock;
 pub mod protocol;
 pub mod pylsp_mock;
 pub mod rust_analyzer_mock;

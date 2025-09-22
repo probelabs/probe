@@ -592,6 +592,10 @@ impl LspDatabaseAdapter {
                     debug!("[TREE_SITTER] Using tree-sitter-cpp");
                     Some(tree_sitter_cpp::LANGUAGE.into())
                 }
+                "php" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-php");
+                    Some(tree_sitter_php::LANGUAGE_PHP.into())
+                }
                 _ => {
                     debug!(
                         "[TREE_SITTER] No parser available for language: {}",

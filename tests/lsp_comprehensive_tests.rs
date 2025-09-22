@@ -12,6 +12,7 @@
 //! Required language servers:
 //! - gopls (Go language server): go install golang.org/x/tools/gopls@latest
 //! - typescript-language-server: npm install -g typescript-language-server typescript
+//! - phpactor (PHP language server): composer global require phpactor/phpactor
 //!
 //! These tests are designed to run in CI environments and ensure full LSP functionality.
 //!
@@ -277,6 +278,84 @@ fn test_javascript_lsp_call_hierarchy_exact() -> Result<()> {
 }
 
 #[test]
+fn test_php_lsp_call_hierarchy_exact() -> Result<()> {
+    let _guard = LspTestGuard::new("test_php_lsp_call_hierarchy_exact");
+
+    setup_comprehensive_tests()?;
+
+    // Initialize test namespace for isolation
+    let socket_path = init_test_namespace("test_php_lsp_call_hierarchy_exact");
+
+    // Start daemon with isolated socket
+    start_daemon_and_wait_with_config(Some(&socket_path))?;
+
+    let workspace_path = fixtures::get_php_project1();
+    init_lsp_workspace_with_config(
+        workspace_path.to_str().unwrap(),
+        &["php"],
+        Some(&socket_path),
+    )?;
+
+    // Wait for phpactor to fully index the project using status polling
+    wait_for_lsp_servers_ready_with_config(
+        &["PHP"],
+        performance::language_server_ready_time(),
+        Some(&socket_path),
+    )?;
+
+    // Test extraction with LSP for the calculate function
+    let file_path = workspace_path.join("src/Calculator.php");
+    let extract_arg = format!("{}:22", file_path.to_string_lossy());
+    let extract_args = [
+        "extract",
+        &extract_arg, // Line 22 should be the calculate function
+        "--lsp",
+        "--allow-tests", // Allow test files since fixtures are in tests directory
+    ];
+
+    let max_extract_time = performance::max_extract_time();
+    let (stdout, stderr, success) = extract_with_call_hierarchy_retry_config(
+        &extract_args,
+        4, // Expected incoming calls: main(), processNumbers(), BusinessLogic.processValue(), advancedCalculation()
+        3, // Expected outgoing calls: Utils::add(), Utils::multiply(), Utils::subtract() (conditional)
+        max_extract_time,
+        Some(&socket_path),
+    )?;
+
+    // Cleanup before assertions to avoid daemon issues
+    ensure_daemon_stopped_with_config(Some(&socket_path));
+    cleanup_test_namespace(&socket_path);
+
+    // Validate the command succeeded
+    assert!(success, "Extract command should succeed. Stderr: {stderr}");
+
+    // Validate basic extraction worked
+    assert!(
+        stdout.contains("calculate"),
+        "Should extract the calculate function"
+    );
+    assert!(
+        stdout.contains("public function calculate"),
+        "Should show function signature"
+    );
+
+    // Validate LSP call hierarchy information is present
+    assert!(
+        stdout.contains("LSP Information"),
+        "Should contain LSP information section"
+    );
+    assert!(
+        stdout.contains("Call Hierarchy"),
+        "Should contain call hierarchy"
+    );
+
+    // Call hierarchy validation is now handled by extract_with_call_hierarchy_retry
+    // The function ensures we have the expected number of incoming and outgoing calls
+
+    Ok(())
+}
+
+#[test]
 fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     setup_comprehensive_tests()?;
 
@@ -290,6 +369,7 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     let go_workspace = fixtures::get_go_project1();
     let ts_workspace = fixtures::get_typescript_project1();
     let js_workspace = fixtures::get_javascript_project1();
+    let php_workspace = fixtures::get_php_project1();
 
     init_lsp_workspace_with_config(go_workspace.to_str().unwrap(), &["go"], Some(&socket_path))?;
     init_lsp_workspace_with_config(
@@ -302,10 +382,15 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
         &["javascript"],
         Some(&socket_path),
     )?;
+    init_lsp_workspace_with_config(
+        php_workspace.to_str().unwrap(),
+        &["php"],
+        Some(&socket_path),
+    )?;
 
     // Wait for all language servers to be ready using status polling
     wait_for_lsp_servers_ready_with_config(
-        &["Go", "TypeScript", "JavaScript"],
+        &["Go", "TypeScript", "JavaScript", "PHP"],
         performance::language_server_ready_time(),
         Some(&socket_path),
     )?;
@@ -317,10 +402,11 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     let go_file = go_workspace.join("calculator.go");
     let ts_file = ts_workspace.join("src/calculator.ts");
     let js_file = js_workspace.join("src/calculator.js");
+    let php_file = php_workspace.join("src/Calculator.php");
 
     let timeout = performance::max_extract_time();
 
-    // Run all three extractions concurrently using threads
+    // Run all four extractions concurrently using threads
     // We need to clone/move all data into the threads
     let go_file_str = format!("{}:10", go_file.to_string_lossy());
     let socket_path_clone1 = socket_path.clone();
@@ -352,6 +438,16 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
         )
     });
 
+    let php_file_str = format!("{}:22", php_file.to_string_lossy());
+    let socket_path_clone4 = socket_path.clone();
+    let php_handle = std::thread::spawn(move || {
+        run_probe_command_with_config(
+            &["extract", &php_file_str, "--lsp", "--allow-tests"],
+            timeout,
+            Some(&socket_path_clone4),
+        )
+    });
+
     // Wait for all threads to complete and collect results
     let (go_stdout, go_stderr, go_success) =
         go_handle.join().expect("Go extraction thread panicked")?;
@@ -363,6 +459,9 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     let (js_stdout, js_stderr, js_success) = js_handle
         .join()
         .expect("JavaScript extraction thread panicked")?;
+
+    let (php_stdout, php_stderr, php_success) =
+        php_handle.join().expect("PHP extraction thread panicked")?;
 
     let total_elapsed = start.elapsed();
 
@@ -382,6 +481,10 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     assert!(
         js_success,
         "JavaScript extraction should succeed. Stderr: {js_stderr}"
+    );
+    assert!(
+        php_success,
+        "PHP extraction should succeed. Stderr: {php_stderr}"
     );
 
     // Validate total time is reasonable for concurrent operations
@@ -408,6 +511,10 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
         js_stdout.contains("LSP Information"),
         "JavaScript output should contain LSP information"
     );
+    assert!(
+        php_stdout.contains("LSP Information"),
+        "PHP output should contain LSP information"
+    );
 
     // Validate call hierarchy is present in all outputs
     assert!(
@@ -421,6 +528,10 @@ fn test_concurrent_multi_language_lsp_operations() -> Result<()> {
     assert!(
         js_stdout.contains("Call Hierarchy"),
         "JavaScript output should contain call hierarchy"
+    );
+    assert!(
+        php_stdout.contains("Call Hierarchy"),
+        "PHP output should contain call hierarchy"
     );
 
     Ok(())

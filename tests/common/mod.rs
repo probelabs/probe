@@ -53,7 +53,8 @@ fn strip_ansi(s: &str) -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LanguageServer {
     Gopls,
-    TypeScriptLanguageServer,
+    TypeScript,
+    Phpactor,
 }
 
 impl LanguageServer {
@@ -61,7 +62,8 @@ impl LanguageServer {
     pub fn command_name(&self) -> &'static str {
         match self {
             LanguageServer::Gopls => "gopls",
-            LanguageServer::TypeScriptLanguageServer => "typescript-language-server",
+            LanguageServer::TypeScript => "typescript-language-server",
+            LanguageServer::Phpactor => "phpactor",
         }
     }
 
@@ -69,9 +71,10 @@ impl LanguageServer {
     pub fn display_name(&self) -> &'static str {
         match self {
             LanguageServer::Gopls => "gopls (Go language server)",
-            LanguageServer::TypeScriptLanguageServer => {
+            LanguageServer::TypeScript => {
                 "typescript-language-server (TypeScript/JavaScript language server)"
             }
+            LanguageServer::Phpactor => "phpactor (PHP language server)",
         }
     }
 
@@ -79,9 +82,10 @@ impl LanguageServer {
     pub fn installation_instructions(&self) -> &'static str {
         match self {
             LanguageServer::Gopls => "Install with: go install golang.org/x/tools/gopls@latest",
-            LanguageServer::TypeScriptLanguageServer => {
+            LanguageServer::TypeScript => {
                 "Install with: npm install -g typescript-language-server typescript\nWindows: ensure %AppData%\\npm (npm global bin) is on PATH."
             }
+            LanguageServer::Phpactor => "Install with: composer global require phpactor/phpactor\nOr download from: https://github.com/phpactor/phpactor/releases",
         }
     }
 }
@@ -91,7 +95,8 @@ impl LanguageServer {
 pub fn require_all_language_servers() -> Result<()> {
     let required_servers = [
         LanguageServer::Gopls,
-        LanguageServer::TypeScriptLanguageServer,
+        LanguageServer::TypeScript,
+        LanguageServer::Phpactor,
     ];
 
     let mut missing_servers = Vec::new();
@@ -141,7 +146,14 @@ pub fn is_language_server_available(server: LanguageServer) -> bool {
             .status()
             .map(|status| status.success())
             .unwrap_or(false),
-        LanguageServer::TypeScriptLanguageServer => Command::new("typescript-language-server")
+        LanguageServer::TypeScript => Command::new("typescript-language-server")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false),
+        LanguageServer::Phpactor => Command::new("phpactor")
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -1011,6 +1023,16 @@ fn is_language_server_ready(status_output: &str, language: &str) -> Result<bool>
                 "Golang".into(),
             ]);
         }
+        "php" => {
+            header_prefixes.extend([
+                "PHP:".into(),
+                "PHP".into(),
+                "PHP (phpactor):".into(),
+                "PHP (phpactor)".into(),
+                "phpactor:".into(),
+                "phpactor".into(),
+            ]);
+        }
         _ => {}
     }
 
@@ -1231,6 +1253,18 @@ pub mod fixtures {
         eprintln!("  exists: {}", path.exists());
         if !path.exists() {
             eprintln!("  ERROR: JavaScript project1 fixture does not exist!");
+            eprintln!("  CARGO_MANIFEST_DIR: {}", env!("CARGO_MANIFEST_DIR"));
+            eprintln!("  Current dir: {:?}", std::env::current_dir());
+        }
+        path
+    }
+
+    pub fn get_php_project1() -> PathBuf {
+        let path = get_fixtures_dir().join("php/project1");
+        eprintln!("fixtures::get_php_project1() -> {}", path.display());
+        eprintln!("  exists: {}", path.exists());
+        if !path.exists() {
+            eprintln!("  ERROR: PHP project1 fixture does not exist!");
             eprintln!("  CARGO_MANIFEST_DIR: {}", env!("CARGO_MANIFEST_DIR"));
             eprintln!("  Current dir: {:?}", std::env::current_dir());
         }
@@ -1664,7 +1698,7 @@ mod tests {
     fn test_language_server_enum() {
         assert_eq!(LanguageServer::Gopls.command_name(), "gopls");
         assert_eq!(
-            LanguageServer::TypeScriptLanguageServer.command_name(),
+            LanguageServer::TypeScript.command_name(),
             "typescript-language-server"
         );
     }

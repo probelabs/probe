@@ -12,11 +12,24 @@ use tracing::debug;
 ///
 /// This function searches upward from the given file path looking for workspace markers.
 /// For Cargo workspaces, it specifically looks for a root Cargo.toml with [workspace] section.
+/// For PHP projects, it prioritizes the nearest composer.json over parent git repositories.
 /// For other projects, it returns the topmost directory containing a workspace marker.
 ///
 /// This approach consolidates all files in a workspace under a single LSP workspace registration.
 pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
     let mut current = file_path.parent()?;
+
+    // Check if this is a PHP file to apply special workspace detection
+    let is_php_file = file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase() == "php")
+        .unwrap_or(false);
+
+    debug!(
+        "WORKSPACE_UTILS: Processing file {:?}, is_php_file: {}",
+        file_path, is_php_file
+    );
 
     // Look for common project root markers in priority order
     let markers = [
@@ -25,9 +38,9 @@ pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
         "go.mod",         // Go
         "pyproject.toml", // Python
         "setup.py",       // Python
-        ".git",           // Generic VCS
+        "composer.json",  // PHP - prioritized before .git for PHP files
         "tsconfig.json",  // TypeScript
-        "composer.json",  // PHP
+        ".git",           // Generic VCS
         "pom.xml",        // Java
         "build.gradle",   // Java/Gradle
         "CMakeLists.txt", // C/C++
@@ -53,6 +66,15 @@ pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
                         debug!("Found Cargo workspace root at: {}", current.display());
                         return Some(current.to_path_buf());
                     }
+                }
+
+                // Special handling for PHP files: prefer composer.json over .git
+                if is_php_file && *marker == "composer.json" {
+                    debug!(
+                        "Found PHP project root with composer.json at: {}",
+                        current.display()
+                    );
+                    return Some(current.to_path_buf());
                 }
 
                 // For other markers or non-workspace Cargo.toml, keep searching upward
