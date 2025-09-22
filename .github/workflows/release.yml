@@ -15,7 +15,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_ext: ""
             archive_ext: "tar.gz"
@@ -31,7 +31,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary_ext: ".exe"
             archive_ext: "zip"
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary_ext: ""
             archive_ext: "tar.gz"
@@ -69,12 +69,12 @@ jobs:
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo bash -c 'cat > /etc/apt/sources.list << EOF
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
+          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
+          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF'
 
       - name: Setup cross-compilation
@@ -156,11 +156,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Use ubuntu-20.04 for GLIBC compatibility with libc build scripts
+  # Publishing to crates.io
   publish-crates-io:
     name: Publish to crates.io
     needs: build-and-release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     if: "!contains(github.ref_name, 'rc')"
     steps:
       - name: Checkout code
