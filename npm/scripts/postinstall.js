@@ -132,6 +132,21 @@ You can download the binary from: https://github.com/probelabs/probe/releases
 				await fs.chmod(targetBinaryPath, 0o755); // Make it executable
 			}
 
+			// On macOS, try to remove quarantine attributes that might prevent execution
+			if (process.platform === 'darwin') {
+				try {
+					await exec(`xattr -d com.apple.quarantine "${targetBinaryPath}" 2>/dev/null || true`);
+					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+						console.log('Removed quarantine attributes from binary');
+					}
+				} catch (error) {
+					// Ignore errors - this is just a precaution
+					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+						console.log('Note: Could not remove quarantine attributes (this is usually fine)');
+					}
+				}
+			}
+
 			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
 				console.log('\nProbe binary was successfully downloaded and installed during installation.');
 				console.log('You can now use the probe command directly from the command line.');
