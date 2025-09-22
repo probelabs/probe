@@ -2000,24 +2000,18 @@ impl LspClient {
         self.send_request(request).await
     }
 
-    /// Send graph export request to daemon
-    pub async fn export_graph(
+    /// Send index export request to daemon
+    pub async fn export_index(
         &mut self,
         workspace_path: Option<PathBuf>,
-        format: String,
-        max_depth: Option<u32>,
-        symbol_types_filter: Option<Vec<String>>,
-        edge_types_filter: Option<Vec<String>>,
-        connected_only: bool,
+        output_path: PathBuf,
+        checkpoint: bool,
     ) -> Result<DaemonResponse> {
-        let request = DaemonRequest::ExportGraph {
+        let request = DaemonRequest::IndexExport {
             request_id: Uuid::new_v4(),
             workspace_path,
-            format,
-            max_depth,
-            symbol_types_filter,
-            edge_types_filter,
-            connected_only,
+            output_path,
+            checkpoint,
         };
 
         self.send_request(request).await

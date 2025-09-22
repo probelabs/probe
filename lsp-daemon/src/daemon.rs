@@ -2237,13 +2237,91 @@ impl LspDaemon {
                 }
             }
 
-            DaemonRequest::ExportGraph { request_id, .. } => {
-                // Graph export functionality removed
-                DaemonResponse::Error {
-                    request_id,
-                    error: "Graph export functionality has been removed".to_string(),
+            DaemonRequest::IndexExport {
+                request_id,
+                workspace_path,
+                output_path,
+                checkpoint,
+            } => {
+                // Handle index export request
+                self.handle_index_export(request_id, workspace_path, output_path, checkpoint)
+                    .await
+            }
+        }
+    }
+
+    /// Handle index export request
+    async fn handle_index_export(
+        &self,
+        request_id: Uuid,
+        workspace_path: Option<PathBuf>,
+        output_path: PathBuf,
+        checkpoint: bool,
+    ) -> DaemonResponse {
+        use std::fs;
+
+        // Determine which workspace to export from
+        let workspace = match workspace_path {
+            Some(path) => path,
+            None => {
+                // Use current working directory
+                match std::env::current_dir() {
+                    Ok(dir) => dir,
+                    Err(e) => {
+                        return DaemonResponse::Error {
+                            request_id,
+                            error: format!("Failed to get current directory: {}", e),
+                        }
+                    }
                 }
             }
+        };
+
+        // Get the cache for this workspace
+        let cache_adapter = match self
+            .workspace_cache_router
+            .cache_for_workspace(&workspace)
+            .await
+        {
+            Ok(cache) => cache,
+            Err(e) => {
+                return DaemonResponse::Error {
+                    request_id,
+                    error: format!("Failed to get cache for workspace: {}", e),
+                }
+            }
+        };
+
+        // Get the database path from the cache adapter
+        let db_path = cache_adapter.database_path();
+
+        // If checkpoint is requested, perform WAL checkpoint
+        if checkpoint {
+            if let Err(e) = cache_adapter.checkpoint().await {
+                error!("Failed to checkpoint database: {}", e);
+                // Continue with export even if checkpoint fails
+            }
+        }
+
+        // Copy the database file to the output path
+        match fs::copy(&db_path, &output_path) {
+            Ok(bytes_copied) => {
+                info!("Exported database from {} to {} ({} bytes)",
+                     db_path.display(),
+                     output_path.display(),
+                     bytes_copied);
+
+                DaemonResponse::IndexExported {
+                    request_id,
+                    workspace_path: workspace,
+                    output_path,
+                    database_size_bytes: bytes_copied as usize,
+                }
+            }
+            Err(e) => DaemonResponse::Error {
+                request_id,
+                error: format!("Failed to export database: {}", e),
+            },
         }
     }
 

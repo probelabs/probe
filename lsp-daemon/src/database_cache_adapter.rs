@@ -85,6 +85,23 @@ impl BackendType {
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
         }
     }
+
+    /// Get the database file path
+    pub fn database_path(&self) -> std::path::PathBuf {
+        match self {
+            BackendType::SQLite(db) => db.database_path(),
+        }
+    }
+
+    /// Perform a WAL checkpoint
+    pub async fn checkpoint(&self) -> Result<(), anyhow::Error> {
+        match self {
+            BackendType::SQLite(db) => db
+                .checkpoint()
+                .await
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
+        }
+    }
 }
 
 /// Database-backed cache adapter that provides the interface needed by universal cache
@@ -820,6 +837,16 @@ impl DatabaseCacheAdapter {
                 .map(|locs| if locs.is_empty() { None } else { Some(locs) })
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
         }
+    }
+
+    /// Get the database file path
+    pub fn database_path(&self) -> std::path::PathBuf {
+        self.database.database_path()
+    }
+
+    /// Perform a WAL checkpoint
+    pub async fn checkpoint(&self) -> Result<()> {
+        self.database.checkpoint().await
     }
 }
 

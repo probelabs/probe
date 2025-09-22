@@ -244,15 +244,12 @@ pub enum DaemonRequest {
         detailed: bool,
     },
 
-    // Graph export request
-    ExportGraph {
+    // Index export request
+    IndexExport {
         request_id: Uuid,
         workspace_path: Option<PathBuf>,
-        format: String, // "json", "graphml", "dot"
-        max_depth: Option<u32>,
-        symbol_types_filter: Option<Vec<String>>,
-        edge_types_filter: Option<Vec<String>>,
-        connected_only: bool,
+        output_path: PathBuf,
+        checkpoint: bool,
     },
 }
 
@@ -465,14 +462,12 @@ pub enum DaemonResponse {
         has_more: bool,
     },
 
-    // Graph export response
-    GraphExported {
+    // Index export response
+    IndexExported {
         request_id: Uuid,
-        format: String,
         workspace_path: PathBuf,
-        nodes_count: usize,
-        edges_count: usize,
-        graph_data: String, // The serialized graph data (JSON, GraphML, or DOT)
+        output_path: PathBuf,
+        database_size_bytes: usize,
     },
 
     Error {

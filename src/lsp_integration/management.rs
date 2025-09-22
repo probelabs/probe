@@ -227,24 +227,16 @@ impl LspManager {
                 Self::handle_index_config_command(config_command, format).await
             }
             LspSubcommands::Call { command } => Self::handle_call_command(command).await,
-            LspSubcommands::GraphExport {
+            LspSubcommands::IndexExport {
                 workspace,
-                format,
                 output,
-                max_depth,
-                symbol_types,
-                edge_types,
-                connected_only,
+                checkpoint,
                 daemon,
             } => {
-                Self::handle_graph_export(
+                Self::handle_index_export(
                     workspace.clone(),
-                    format,
                     output.clone(),
-                    *max_depth,
-                    symbol_types.clone(),
-                    edge_types.clone(),
-                    *connected_only,
+                    *checkpoint,
                     *daemon,
                 )
                 .await
@@ -3988,14 +3980,10 @@ impl LspManager {
     }
 
     /// Handle graph export command
-    async fn handle_graph_export(
+    async fn handle_index_export(
         workspace: Option<std::path::PathBuf>,
-        format: &str,
-        output: Option<std::path::PathBuf>,
-        max_depth: Option<u32>,
-        symbol_types: Option<String>,
-        edge_types: Option<String>,
-        connected_only: bool,
+        output: std::path::PathBuf,
+        checkpoint: bool,
         daemon: bool,
     ) -> Result<()> {
         // Ensure daemon is ready if needed
@@ -4003,77 +3991,44 @@ impl LspManager {
             Self::ensure_ready().await?;
         }
 
-        // Parse symbol types filter
-        let symbol_types_filter = symbol_types.map(|types| {
-            types
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect::<Vec<String>>()
-        });
-
-        // Parse edge types filter
-        let edge_types_filter = edge_types.map(|types| {
-            types
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect::<Vec<String>>()
-        });
-
         // Create LSP client
         let config = LspConfig::default();
         let mut client = LspClient::new(config).await?;
 
-        // Send export graph request
+        // Send index export request
         let response = client
-            .export_graph(
+            .export_index(
                 workspace,
-                format.to_string(),
-                max_depth,
-                symbol_types_filter,
-                edge_types_filter,
-                connected_only,
+                output.clone(),
+                checkpoint,
             )
             .await?;
 
         match response {
-            lsp_daemon::DaemonResponse::GraphExported {
-                format: response_format,
+            lsp_daemon::DaemonResponse::IndexExported {
                 workspace_path,
-                nodes_count,
-                edges_count,
-                graph_data,
+                output_path,
+                database_size_bytes,
                 ..
             } => {
                 // Print summary
                 println!(
                     "{}",
                     format!(
-                        "Exported graph from workspace: {}",
+                        "Successfully exported index database from workspace: {}",
                         workspace_path.to_string_lossy()
                     )
                     .green()
                     .bold()
                 );
-                println!("Format: {}", response_format);
-                println!("Nodes: {}", nodes_count);
-                println!("Edges: {}", edges_count);
+                println!("Output file: {}", output_path.to_string_lossy());
+                println!("Database size: {}", format_bytes(database_size_bytes));
                 println!();
-
-                // Write output
-                if let Some(output_path) = output {
-                    // Write to file
-                    std::fs::write(&output_path, graph_data)
-                        .with_context(|| format!("Failed to write output to {:?}", output_path))?;
-                    println!("Graph data written to: {}", output_path.to_string_lossy());
-                } else {
-                    // Write to stdout
-                    println!("{}", graph_data);
-                }
 
                 Ok(())
             }
             lsp_daemon::DaemonResponse::Error { error, .. } => {
-                Err(anyhow!("Graph export failed: {}", error))
+                Err(anyhow!("Index export failed: {}", error))
             }
             _ => Err(anyhow!("Unexpected response type from daemon")),
         }

@@ -1518,6 +1518,28 @@ impl SQLiteBackend {
         pool.return_connection(conn);
         result
     }
+
+    /// Get the database file path
+    pub fn database_path(&self) -> PathBuf {
+        PathBuf::from(&self.sqlite_config.path)
+    }
+
+    /// Perform a checkpoint to ensure WAL is flushed to the main database file
+    pub async fn checkpoint(&self) -> Result<(), DatabaseError> {
+        let pool_arc = self.pool.clone();
+        let mut pool = pool_arc.lock().await;
+        let conn = pool.get_connection().await?;
+
+        // Execute PRAGMA wal_checkpoint(FULL) to flush WAL to main database
+        conn.execute("PRAGMA wal_checkpoint(FULL)", ())
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("WAL checkpoint failed: {}", e)
+            })?;
+
+        pool.return_connection(conn);
+        Ok(())
+    }
 }
 
 #[async_trait]
