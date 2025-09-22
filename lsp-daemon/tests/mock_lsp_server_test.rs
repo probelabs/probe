@@ -12,7 +12,7 @@ mod mock_lsp;
 
 use mock_lsp::protocol::{LspRequest, LspResponse};
 use mock_lsp::server::{MockResponsePattern, MockServerConfig};
-use mock_lsp::{gopls_mock, pylsp_mock, rust_analyzer_mock, tsserver_mock};
+use mock_lsp::{gopls_mock, phpactor_mock, pylsp_mock, rust_analyzer_mock, tsserver_mock};
 
 /// Helper struct to manage a mock LSP server process for testing
 struct TestMockServer {
@@ -601,5 +601,94 @@ async fn test_method_pattern_resolution() -> Result<()> {
         .method_patterns
         .contains_key("textDocument/prepareCallHierarchy"));
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_phpactor_mock_responses() -> Result<()> {
+    let config = phpactor_mock::create_phpactor_config();
+    let mut server = TestMockServer::start(config).await?;
+
+    // Test definition request
+    let definition_request = LspRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(1)),
+        method: "textDocument/definition".to_string(),
+        params: Some(json!({
+            "textDocument": {"uri": "file:///workspace/src/Calculator.php"},
+            "position": {"line": 17, "character": 20}
+        })),
+    };
+
+    let response = server.send_request(definition_request).await?;
+    assert!(response.is_some());
+
+    let response = response.unwrap();
+    assert!(response.error.is_none());
+    assert!(response.result.is_some());
+
+    let result = response.result.unwrap();
+    assert!(result.is_array());
+    let locations = result.as_array().unwrap();
+    assert!(!locations.is_empty());
+
+    // Verify location structure
+    let location = &locations[0];
+    assert!(location.get("uri").is_some());
+    assert!(location.get("range").is_some());
+
+    // Test hover request
+    let hover_request = LspRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(2)),
+        method: "textDocument/hover".to_string(),
+        params: Some(json!({
+            "textDocument": {"uri": "file:///workspace/src/Calculator.php"},
+            "position": {"line": 12, "character": 20}
+        })),
+    };
+
+    let response = server.send_request(hover_request).await?;
+    assert!(response.is_some());
+
+    let response = response.unwrap();
+    assert!(response.error.is_none());
+    assert!(response.result.is_some());
+
+    let result = response.result.unwrap();
+    assert!(result.get("contents").is_some());
+
+    // Test call hierarchy (phpactor supports it)
+    let prepare_call_hierarchy_request = LspRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(3)),
+        method: "textDocument/prepareCallHierarchy".to_string(),
+        params: Some(json!({
+            "textDocument": {"uri": "file:///workspace/src/Calculator.php"},
+            "position": {"line": 17, "character": 20}
+        })),
+    };
+
+    let response = server.send_request(prepare_call_hierarchy_request).await?;
+    assert!(response.is_some());
+
+    let response = response.unwrap();
+    assert!(response.error.is_none());
+    assert!(response.result.is_some());
+
+    let result = response.result.unwrap();
+    assert!(result.is_array());
+    let items = result.as_array().unwrap();
+    assert!(!items.is_empty());
+
+    // Verify call hierarchy item structure
+    let item = &items[0];
+    assert!(item.get("name").is_some());
+    assert!(item.get("kind").is_some());
+    assert!(item.get("uri").is_some());
+    assert!(item.get("range").is_some());
+    assert!(item.get("selectionRange").is_some());
+
+    server.stop().await?;
     Ok(())
 }

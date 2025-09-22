@@ -1925,10 +1925,24 @@ impl LspDaemon {
                         .ensure_workspace_registered(language, workspace_root.clone())
                         .await?;
 
-                    // Make the references request directly without explicit document lifecycle
-                    // The LSP server manages its own document state
+                    // Ensure document is opened and ready before querying references
+                    // This is critical for many LSP servers (like phpactor) which require
+                    // the document to be opened before they can provide references
                     let response_json = {
                         let server = server_instance.lock().await;
+
+                        debug!(
+                            "Opening document for references analysis: {:?}",
+                            absolute_file_path
+                        );
+
+                        // Always open the document to ensure the LSP server has the latest content
+                        // Many LSP servers need the file to be properly opened before references work
+                        server
+                            .server
+                            .open_document(&absolute_file_path, &content)
+                            .await?;
+
                         server
                             .server
                             .references(&absolute_file_path, line, column, include_declaration)

@@ -13,6 +13,7 @@ pub enum ServerType {
     Gopls,
     TypeScript,
     Python,
+    Phpactor,
     Unknown,
 }
 
@@ -24,6 +25,7 @@ impl ServerType {
             Language::Go => Self::Gopls,
             Language::TypeScript | Language::JavaScript => Self::TypeScript,
             Language::Python => Self::Python,
+            Language::Php => Self::Phpactor,
             _ => Self::Unknown,
         }
     }
@@ -35,6 +37,7 @@ impl ServerType {
             Self::Gopls => Duration::from_secs(5),         // Based on experimental findings
             Self::TypeScript => Duration::from_secs(2),    // Very fast
             Self::Python => Duration::from_secs(3),        // Moderate
+            Self::Phpactor => Duration::from_secs(30),     // Conservative timeout for PHP
             Self::Unknown => Duration::from_secs(10),      // Conservative default
         }
     }
@@ -455,6 +458,12 @@ impl ReadinessTracker {
                 self.initialization_start.elapsed() > Duration::from_secs(2)
             }
 
+            ServerType::Phpactor => {
+                // Phpactor is typically ready quickly after initialization
+                // Use timeout-based readiness for now, will refine based on real logs
+                self.initialization_start.elapsed() > Duration::from_secs(3)
+            }
+
             ServerType::Unknown => {
                 // For unknown servers, use conservative timeout-based approach
                 let no_active_progress = tokens.values().all(|token| token.is_complete);
@@ -703,6 +712,12 @@ mod tests {
             3
         );
         assert_eq!(
+            ServerType::Phpactor
+                .expected_initialization_timeout()
+                .as_secs(),
+            30
+        );
+        assert_eq!(
             ServerType::Unknown
                 .expected_initialization_timeout()
                 .as_secs(),
@@ -739,6 +754,10 @@ mod tests {
         assert_eq!(
             ServerType::from_language_and_command(Language::Python, "pylsp"),
             ServerType::Python
+        );
+        assert_eq!(
+            ServerType::from_language_and_command(Language::Php, "phpactor"),
+            ServerType::Phpactor
         );
         assert_eq!(
             ServerType::from_language_and_command(Language::Java, "jdtls"),

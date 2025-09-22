@@ -39,7 +39,7 @@ use lsp_daemon::protocol::{CallHierarchyItem, CallHierarchyResult, Position, Ran
 // Import mock LSP infrastructure
 mod mock_lsp;
 use mock_lsp::server::MockServerConfig;
-use mock_lsp::{gopls_mock, pylsp_mock, rust_analyzer_mock, tsserver_mock};
+use mock_lsp::{gopls_mock, phpactor_mock, pylsp_mock, rust_analyzer_mock, tsserver_mock};
 
 /// Language-specific test environment for behavioral simulation
 pub struct LanguageServerTestEnvironment {
@@ -151,6 +151,13 @@ impl LanguageServerTestEnvironment {
                 let response_times = (25, 180); // tsserver: 25-180ms
                 let unsupported = vec![];
                 let init_delay = Duration::from_millis(800); // tsserver: 5-10s (shortened)
+                Ok((config, response_times, unsupported, init_delay))
+            }
+            "php" => {
+                let config = phpactor_mock::create_phpactor_config();
+                let response_times = (40, 250); // phpactor: 40-250ms
+                let unsupported = vec![];
+                let init_delay = Duration::from_millis(600); // phpactor: 3-7s (shortened)
                 Ok((config, response_times, unsupported, init_delay))
             }
             _ => Err(anyhow::anyhow!("Unsupported language: {}", language)),
@@ -710,7 +717,7 @@ async fn test_language_server_performance_characteristics() -> Result<()> {
 async fn test_multi_language_database_storage() -> Result<()> {
     println!("🧪 Testing multi-language database storage");
 
-    let languages = vec!["rust", "python", "go", "typescript"];
+    let languages = vec!["rust", "python", "go", "typescript", "php"];
     let mut environments = Vec::new();
 
     // Create test environments for each language
@@ -841,7 +848,7 @@ async fn test_language_workspace_isolation() -> Result<()> {
 async fn test_comprehensive_language_server_integration() -> Result<()> {
     println!("🧪 Running comprehensive language server integration test");
 
-    let languages = vec!["rust", "python", "go", "typescript"];
+    let languages = vec!["rust", "python", "go", "typescript", "php"];
 
     for language in languages {
         println!("\n  🔧 Testing {} comprehensive behavior", language);

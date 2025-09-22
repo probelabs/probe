@@ -537,6 +537,76 @@ fn format_extraction_internal(
                                 }
                             }
                         }
+
+                        // Display search-based references if available (fallback mechanism)
+                        if let Some(search_references) =
+                            lsp_info.get("search_references").and_then(|v| v.as_array())
+                        {
+                            if !search_references.is_empty() {
+                                writeln!(output, "  {}:", "References (from search)".cyan())?;
+                                for reference in search_references {
+                                    if let Some(ref_obj) = reference.as_object() {
+                                        let file_path = ref_obj
+                                            .get("file_path")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let line = ref_obj
+                                            .get("line")
+                                            .and_then(|v| v.as_u64())
+                                            .unwrap_or(0);
+                                        let context = ref_obj
+                                            .get("context")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("reference");
+                                        let file_path =
+                                            file_path.strip_prefix("file://").unwrap_or(file_path);
+                                        writeln!(
+                                            output,
+                                            "      - {} ({}:{})",
+                                            context, file_path, line
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Display search-only references if LSP didn't provide any data
+                        if let Some(search_only_references) =
+                            lsp_info.get("references").and_then(|v| v.as_array())
+                        {
+                            // Check if this is from search fallback (source field indicates this)
+                            if lsp_info.get("source").and_then(|v| v.as_str())
+                                == Some("search_fallback")
+                            {
+                                if !search_only_references.is_empty() {
+                                    writeln!(output, "  {}:", "References (from search)".green())?;
+                                    for reference in search_only_references {
+                                        if let Some(ref_obj) = reference.as_object() {
+                                            let file_path = ref_obj
+                                                .get("file_path")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let line = ref_obj
+                                                .get("line")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0);
+                                            let context = ref_obj
+                                                .get("context")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("reference");
+                                            let file_path = file_path
+                                                .strip_prefix("file://")
+                                                .unwrap_or(file_path);
+                                            writeln!(
+                                                output,
+                                                "    - {} ({}:{})",
+                                                context, file_path, line
+                                            )?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     writeln!(output)?;
