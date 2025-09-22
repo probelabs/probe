@@ -12,6 +12,7 @@ jobs:
   build-and-release:
     name: Build and Release for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       matrix:
         include:
@@ -51,7 +52,7 @@ jobs:
       # Setup Rust cache
       - name: Setup Rust cache
         uses: actions/cache@v4
-        timeout-minutes: 5
+        timeout-minutes: 10
         with:
           path: |
             ~/.cargo/bin/
@@ -76,6 +77,11 @@ jobs:
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
           EOF'
+          sudo bash -c 'cat > /etc/apt/sources.list.d/ports.list << EOF
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
+          EOF'
 
       - name: Setup cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -92,6 +98,7 @@ jobs:
 
       # Build the Rust project
       - name: Build Release
+        timeout-minutes: 45
         shell: bash
         run: |
           if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
@@ -173,7 +180,7 @@ jobs:
 
       - name: Setup Rust cache
         uses: actions/cache@v4
-        timeout-minutes: 5
+        timeout-minutes: 10
         with:
           path: |
             ~/.cargo/bin/
