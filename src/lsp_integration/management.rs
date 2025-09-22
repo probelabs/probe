@@ -233,13 +233,8 @@ impl LspManager {
                 checkpoint,
                 daemon,
             } => {
-                Self::handle_index_export(
-                    workspace.clone(),
-                    output.clone(),
-                    *checkpoint,
-                    *daemon,
-                )
-                .await
+                Self::handle_index_export(workspace.clone(), output.clone(), *checkpoint, *daemon)
+                    .await
             }
         }
     }
@@ -3997,11 +3992,7 @@ impl LspManager {
 
         // Send index export request
         let response = client
-            .export_index(
-                workspace,
-                output.clone(),
-                checkpoint,
-            )
+            .export_index(workspace, output.clone(), checkpoint)
             .await?;
 
         match response {

@@ -1534,7 +1534,7 @@ impl SQLiteBackend {
         conn.execute("PRAGMA wal_checkpoint(FULL)", ())
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("WAL checkpoint failed: {}", e)
+                message: format!("WAL checkpoint failed: {}", e),
             })?;
 
         pool.return_connection(conn);
