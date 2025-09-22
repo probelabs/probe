@@ -63,6 +63,19 @@ jobs:
           npm install -g typescript-language-server typescript
           echo "NPM global bin path: $(npm config get prefix)"
 
+      - name: Setup PHP for phpactor
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer
+
+      - name: Install phpactor (PHP language server)
+        run: |
+          composer global require phpactor/phpactor
+          echo "Composer global bin path: $(composer global config bin-dir --absolute)"
+          # Add composer global bin to PATH for the current job
+          echo "$(composer global config bin-dir --absolute)" >> $GITHUB_PATH
+
       - name: Show LSP tool versions
         run: |
           rustc --version
@@ -72,6 +85,9 @@ jobs:
           node --version
           npm --version
           typescript-language-server --version
+          php --version
+          composer --version
+          phpactor --version
 
       - name: Build Rust project (includes LSP daemon library)
         run: cargo build
@@ -110,9 +126,19 @@ jobs:
             echo "$NPM_GLOBAL" >> "$GITHUB_PATH"
             echo "Added to GITHUB_PATH: $NPM_GLOBAL"
           fi
+          echo "=== Ensuring composer global binaries are in PATH ==="
+          COMPOSER_BIN=$(composer global config bin-dir --absolute 2>/dev/null || echo "")
+          if [ -n "$COMPOSER_BIN" ] && [ -d "$COMPOSER_BIN" ]; then
+            echo "Composer global bin directory: $COMPOSER_BIN"
+            export PATH="$COMPOSER_BIN:$PATH"
+            echo "Updated PATH with composer: $PATH"
+          else
+            echo "Warning: Could not determine composer global bin directory"
+          fi
           echo "=== Language Server Versions ==="
           gopls version || echo "gopls version failed"
           typescript-language-server --version || echo "typescript-language-server version failed"
+          phpactor --version || echo "phpactor version failed"
           echo "=== Starting LSP comprehensive tests ==="
           echo "NOTE: Running tests sequentially with --test-threads=1 to avoid race conditions"
           cargo test --test lsp_comprehensive_tests -- --nocapture --test-threads=1
