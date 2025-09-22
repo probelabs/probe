@@ -14,6 +14,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -69,15 +70,15 @@ jobs:
       - name: Configure APT sources for arm64
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
+          # Remove existing sources and create clean configuration
+          sudo rm -f /etc/apt/sources.list.d/*.list
           sudo bash -c 'cat > /etc/apt/sources.list << EOF
+          # AMD64 packages from main Ubuntu repositories
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
           deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          EOF'
-          sudo bash -c 'cat > /etc/apt/sources.list.d/ports.list << EOF
+          
+          # ARM64 packages from Ubuntu Ports
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
@@ -120,6 +121,7 @@ jobs:
 
       # Package the binary into an archive
       - name: Package Binary
+        timeout-minutes: 10
         shell: bash
         run: |
           BINARY_NAME="probe"
@@ -154,6 +156,7 @@ jobs:
 
       # Upload the binary as a release asset
       - name: Release
+        timeout-minutes: 15
         uses: softprops/action-gh-release@v2
         with:
           files: |
