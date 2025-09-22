@@ -1,23 +1,51 @@
 /**
  * Integration tests for examples/chat ProbeChat with MCP support
+ *
+ * NOTE: This test requires examples/chat dependencies to be installed.
+ * It tests the integration between the npm package and the examples/chat application.
  */
 
 import { jest } from '@jest/globals';
-
-// Mock dotenv/config before importing modules that use it
-jest.unstable_mockModule('dotenv/config', () => ({}));
-
-import { ProbeChat } from '../../../examples/chat/probeChat.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
+import { existsSync } from 'fs';
+
+// Check if examples/chat exists and has node_modules
+const examplesPath = join(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))), 'examples', 'chat');
+const examplesNodeModules = join(examplesPath, 'node_modules');
+
+// Skip these tests if examples/chat dependencies are not installed
+const skipTests = !existsSync(examplesNodeModules);
+
+// Only import ProbeChat if we can run the tests
+let ProbeChat;
+if (!skipTests) {
+  // Mock dotenv/config before importing modules that use it
+  jest.unstable_mockModule('dotenv/config', () => ({}));
+
+  // Import ProbeChat only if we'll run the tests
+  const module = await import('../../../examples/chat/probeChat.js');
+  ProbeChat = module.ProbeChat;
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-describe('ProbeChat MCP Integration', () => {
+const describeOrSkip = skipTests ? describe.skip : describe;
+
+describeOrSkip('ProbeChat MCP Integration', () => {
   let tempDir;
+
+  if (skipTests) {
+    test('Tests skipped - examples/chat dependencies not installed', () => {
+      console.log('Skipping ProbeChat tests as examples/chat dependencies are not installed');
+      console.log(`Checked path: ${examplesNodeModules}`);
+      expect(true).toBe(true);
+    });
+    return;
+  }
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'probe-chat-mcp-test-'));
