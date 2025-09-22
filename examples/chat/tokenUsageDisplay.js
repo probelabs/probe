@@ -4,6 +4,10 @@ import chalk from 'chalk';
  * TokenUsageDisplay class to format token usage information
  */
 export class TokenUsageDisplay {
+	constructor() {
+		this.tokenUsage = null;
+	}
+
 	/**
 	 * Format a number with commas
 	 * @param {number} num Number to format
@@ -66,5 +70,65 @@ export class TokenUsageDisplay {
 		};
 
 		return formatted;
+	}
+
+	/**
+	 * Update token usage from a token counter
+	 * @param {Object} tokenCounter - The token counter instance
+	 */
+	updateFromTokenCounter(tokenCounter) {
+		if (tokenCounter && typeof tokenCounter.getTokenUsage === 'function') {
+			this.tokenUsage = tokenCounter.getTokenUsage();
+		}
+	}
+
+	/**
+	 * Display formatted token usage to console
+	 */
+	display() {
+		if (!this.tokenUsage) {
+			return;
+		}
+
+		const formatted = this.format(this.tokenUsage);
+
+		console.log(chalk.cyan('\n🔢 Token Usage Summary:'));
+		console.log(chalk.gray('───────────────────────'));
+
+		// Current request tokens
+		if (formatted.current.total > 0) {
+			console.log(chalk.blue('📝 Current Request:'));
+			console.log(`   Input:  ${chalk.yellow(formatted.current.request)} tokens`);
+			console.log(`   Output: ${chalk.yellow(formatted.current.response)} tokens`);
+			console.log(`   Total:  ${chalk.yellow(formatted.current.total)} tokens`);
+
+			// Cache info for current request
+			if (formatted.current.cache.total > 0) {
+				console.log(`   Cache:  ${chalk.green(formatted.current.cache.read)} read, ${chalk.green(formatted.current.cache.write)} write`);
+			}
+		}
+
+		// Session totals
+		console.log(chalk.blue('\n📊 Session Total:'));
+		console.log(`   Input:  ${chalk.yellow(formatted.total.request)} tokens`);
+		console.log(`   Output: ${chalk.yellow(formatted.total.response)} tokens`);
+		console.log(`   Total:  ${chalk.yellow(formatted.total.total)} tokens`);
+
+		// Cache totals
+		if (formatted.total.cache.total > 0) {
+			console.log(`   Cache:  ${chalk.green(formatted.total.cache.read)} read, ${chalk.green(formatted.total.cache.write)} write`);
+		}
+
+		// Context window
+		console.log(`   Context: ${chalk.magenta(formatted.contextWindow)} tokens`);
+
+		console.log(chalk.gray('───────────────────────\n'));
+	}
+
+	/**
+	 * Clear stored token usage data
+	 */
+	clear() {
+		this.tokenUsage = null;
 	}
 }

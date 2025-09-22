@@ -16,7 +16,9 @@ jobs:
 
     - name: Download actionlint
       id: get_actionlint
-      run: bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+      run: |
+        bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+        echo "executable=./actionlint" >> "$GITHUB_OUTPUT"
       shell: bash
 
     - name: Check workflow files
@@ -409,6 +411,12 @@ jobs:
 
     - name: Build Rust binary
       run: cargo build --release
+
+    - name: Build npm package
+      run: |
+        cd npm
+        npm install
+        npm run build
 
     - name: Install chat example dependencies
       run: |

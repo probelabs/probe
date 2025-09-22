@@ -65,15 +65,15 @@ describe('Delegate Tool Integration', () => {
       expect(tool.description).toContain('agentic loop');
       
       // Zod schema should be an object
-      expect(tool.parameters).toBeDefined();
-      expect(typeof tool.parameters).toBe('object');
-      
+      expect(tool.inputSchema).toBeDefined();
+      expect(typeof tool.inputSchema).toBe('object');
+
       // Check that the schema can parse valid input
       const validInput = { task: 'Test task' };
-      expect(() => tool.parameters.parse(validInput)).not.toThrow();
-      
+      expect(() => tool.inputSchema.parse(validInput)).not.toThrow();
+
       // Check that invalid input throws
-      expect(() => tool.parameters.parse({})).toThrow(); // Missing required task
+      expect(() => tool.inputSchema.parse({})).toThrow(); // Missing required task
     });
 
     it('should execute delegate tool with correct parameters', async () => {
@@ -118,11 +118,11 @@ describe('Delegate Tool Integration', () => {
       // This would be how AI agent converts XML to tool call
       const toolCall = {
         name: tool.name,
-        parameters: { task: parsedTask }
+        arguments: { task: parsedTask }
       };
-      
+
       expect(toolCall.name).toBe('delegate');
-      expect(toolCall.parameters.task).toBe('Find all TODO comments in the codebase');
+      expect(toolCall.arguments.task).toBe('Find all TODO comments in the codebase');
     });
   });
 

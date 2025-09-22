@@ -145,7 +145,7 @@ class ImplementTool {
     return {
       name: 'implement',
       description: 'Implement a feature or fix a bug using AI-powered code generation. Only available when --allow-edit is enabled.',
-      parameters: {
+      inputSchema: {
         type: 'object',
         properties: {
           task: {

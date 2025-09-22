@@ -25,7 +25,7 @@ export const searchTool = (options = {}) => {
 	return tool({
 		name: 'search',
 		description: searchDescription,
-		parameters: searchSchema,
+		inputSchema: searchSchema,
 		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language }) => {
 			try {
 				// Use parameter maxTokens if provided, otherwise use the default
@@ -86,7 +86,7 @@ export const queryTool = (options = {}) => {
 	return tool({
 		name: 'query',
 		description: queryDescription,
-		parameters: querySchema,
+		inputSchema: querySchema,
 		execute: async ({ pattern, path, language, allow_tests }) => {
 			try {
 				// Use the path from parameters if provided, otherwise use defaultPath from config
@@ -134,7 +134,7 @@ export const extractTool = (options = {}) => {
 	return tool({
 		name: 'extract',
 		description: extractDescription,
-		parameters: extractSchema,
+		inputSchema: extractSchema,
 		execute: async ({ targets, input_content, line, end_line, allow_tests, context_lines, format }) => {
 			try {
 				// Use the defaultPath from config for context
@@ -248,7 +248,7 @@ export const delegateTool = (options = {}) => {
 	return tool({
 		name: 'delegate',
 		description: delegateDescription,
-		parameters: delegateSchema,
+		inputSchema: delegateSchema,
 		execute: async ({ task }) => {
 			try {
 				if (debug) {

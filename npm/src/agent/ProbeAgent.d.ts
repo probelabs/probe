@@ -23,6 +23,14 @@ export interface ProbeAgentOptions {
   debug?: boolean;
   /** Optional telemetry tracer instance */
   tracer?: any;
+  /** Enable MCP (Model Context Protocol) tool integration */
+  enableMcp?: boolean;
+  /** Path to MCP configuration file */
+  mcpConfigPath?: string;
+  /** MCP configuration object (overrides mcpConfigPath) */
+  mcpConfig?: any;
+  /** @deprecated Use mcpConfig instead */
+  mcpServers?: any[];
 }
 
 /**

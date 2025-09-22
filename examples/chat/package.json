@@ -12,10 +12,10 @@
     "start": "node index.js",
     "web": "node index.js --web",
     "build": "node build.js",
-    "build:prod": "NODE_ENV=production node build.js",
-    "test": "node --test test/integration/chatFlows.test.js test/integration/toolCalling.test.js",
-    "test:chat": "node --test test/integration/chatFlows.test.js",
-    "test:tools": "node --test test/integration/toolCalling.test.js",
+    "build:prod": "cross-env NODE_ENV=production node build.js",
+    "test": "cross-env NODE_ENV=test node --test test/integration/chatFlows.test.js test/integration/toolCalling.test.js",
+    "test:chat": "cross-env NODE_ENV=test node --test test/integration/chatFlows.test.js",
+    "test:tools": "cross-env NODE_ENV=test node --test test/integration/toolCalling.test.js",
     "prepublishOnly": "chmod +x ./bin/probe-chat.js"
   },
   "keywords": [
@@ -29,16 +29,17 @@
   "author": "Leonid Bugaev",
   "license": "Apache-2.0",
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.2.0",
-    "@ai-sdk/google": "^1.2.1",
-    "@ai-sdk/openai": "^1.3.0",
-    "@probelabs/probe": "*",
+    "@ai-sdk/anthropic": "^2.0.8",
+    "@ai-sdk/google": "^2.0.14",
+    "@ai-sdk/openai": "^2.0.10",
+    "@probelabs/probe": "file:../../npm",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
     "@opentelemetry/resources": "^2.0.1",
     "@opentelemetry/sdk-node": "^0.203.0",
     "@opentelemetry/semantic-conventions": "^1.36.0",
-    "ai": "^4.2.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ai": "^5.0.0",
     "chalk": "^5.3.0",
     "commander": "^11.1.0",
     "dotenv": "^16.4.7",
@@ -49,6 +50,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "cross-env": "^7.0.3",
     "esbuild": "^0.21.5"
   },
   "peerDependencies": {

@@ -1,6 +1,6 @@
 {
   "name": "@probelabs/probe",
-  "version": "1.0.0",
+  "version": "0.6.0-rc88",
   "description": "Node.js wrapper for the probe code search tool",
   "main": "src/index.js",
   "module": "src/index.js",
@@ -20,6 +20,9 @@
     "./telemetry": {
       "import": "./src/agent/simpleTelemetry.js",
       "require": "./cjs/agent/simpleTelemetry.cjs"
+    },
+    "./agent/mcp": {
+      "import": "./src/agent/mcp/index.js"
     }
   },
   "bin": {
@@ -65,10 +68,10 @@
   "author": "probelabs",
   "license": "ISC",
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.2.0",
-    "@ai-sdk/google": "^1.2.0",
-    "@ai-sdk/openai": "^1.3.0",
-    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@ai-sdk/anthropic": "^2.0.8",
+    "@ai-sdk/google": "^2.0.14",
+    "@ai-sdk/openai": "^2.0.10",
+    "@modelcontextprotocol/sdk": "^1.0.0",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/core": "^1.30.1",
     "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",
@@ -76,9 +79,10 @@
     "@opentelemetry/sdk-node": "^0.203.0",
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/semantic-conventions": "^1.36.0",
-    "ai": "^4.1.60",
+    "ai": "^5.0.0",
     "axios": "^1.8.3",
     "fs-extra": "^11.1.1",
+    "dotenv": "^16.4.7",
     "glob": "^10.3.10",
     "tar": "^6.2.0",
     "tiktoken": "^1.0.20",
@@ -94,7 +98,7 @@
     "typescript": "^5.9.2"
   },
   "peerDependencies": {
-    "ai": "^4.1.60"
+    "ai": "^5.0.0"
   },
   "engines": {
     "node": ">=14.16.0"
