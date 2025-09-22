@@ -660,8 +660,17 @@ impl LspClient {
             }
         };
 
-        // Get references
-        let references = match self.call_references(file_path, line, column, false).await {
+        // Get references - PHP requires includeDeclaration=true to return results
+        let include_declaration = file_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext == "php")
+            .unwrap_or(false);
+
+        let references = match self
+            .call_references(file_path, line, column, include_declaration)
+            .await
+        {
             Ok(locations) => locations
                 .into_iter()
                 .map(|loc| ReferenceInfo {
