@@ -249,7 +249,14 @@ export class ProbeChat {
    * Clean up resources (including MCP connections)
    */
   async cleanup() {
-    await this.agent.cleanup();
+    try {
+      await this.agent.cleanup();
+    } catch (error) {
+      // Log the error but don't throw to ensure graceful cleanup
+      if (!this.isNonInteractive) {
+        console.warn('Warning during cleanup:', error.message);
+      }
+    }
   }
 }
 

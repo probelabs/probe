@@ -213,9 +213,9 @@ describe('MCP Error Handling and Edge Cases', () => {
       if (bridge.getToolNames().length > 0) {
         // Test error tool that generates validation errors
         const errorXml = `
-          <error_test>
+          <error-test-server_error_test>
           <params>{"error_type": "validation", "message": "Test validation error"}</params>
-          </error_test>
+          </error-test-server_error_test>
         `;
 
         const result = await bridge.executeFromXml(errorXml);
@@ -224,9 +224,9 @@ describe('MCP Error Handling and Edge Cases', () => {
 
         // Test error tool that generates runtime errors
         const runtimeErrorXml = `
-          <error_test>
+          <error-test-server_error_test>
           <params>{"error_type": "runtime", "message": "Test runtime error"}</params>
-          </error_test>
+          </error-test-server_error_test>
         `;
 
         const runtimeResult = await bridge.executeFromXml(runtimeErrorXml);
@@ -295,9 +295,9 @@ describe('MCP Error Handling and Edge Cases', () => {
       if (bridge.getToolNames().length > 0) {
         // Test slow operation (should complete within reasonable time)
         const slowXml = `
-          <slow_operation>
+          <timeout-test-server_slow_operation>
           <params>{"delay_ms": 500, "result": "completed successfully"}</params>
-          </slow_operation>
+          </timeout-test-server_slow_operation>
         `;
 
         const start = Date.now();
