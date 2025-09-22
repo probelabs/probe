@@ -2306,10 +2306,12 @@ impl LspDaemon {
         // Copy the database file to the output path
         match fs::copy(&db_path, &output_path) {
             Ok(bytes_copied) => {
-                info!("Exported database from {} to {} ({} bytes)",
-                     db_path.display(),
-                     output_path.display(),
-                     bytes_copied);
+                info!(
+                    "Exported database from {} to {} ({} bytes)",
+                    db_path.display(),
+                    output_path.display(),
+                    bytes_copied
+                );
 
                 DaemonResponse::IndexExported {
                     request_id,
