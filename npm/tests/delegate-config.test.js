@@ -123,8 +123,8 @@ describe('Delegate Tool Configuration', () => {
       expect(delegateTool).toBeDefined();
       expect(delegateTool.kind).toBe('execute');
       expect(delegateTool.description).toContain('Automatically delegate');
-      expect(delegateTool.parameters.properties.task).toBeDefined();
-      expect(delegateTool.parameters.required).toContain('task');
+      expect(delegateTool.inputSchema.properties.task).toBeDefined();
+      expect(delegateTool.inputSchema.required).toContain('task');
     });
   });
 

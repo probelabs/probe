@@ -288,26 +288,26 @@ describe('ACPToolManager', () => {
       const searchTool = definitions.find(d => d.name === 'search');
       expect(searchTool).toBeDefined();
       expect(searchTool.kind).toBe(ToolCallKind.search);
-      expect(searchTool.parameters.properties.query).toBeDefined();
-      expect(searchTool.parameters.required).toContain('query');
-      
+      expect(searchTool.inputSchema.properties.query).toBeDefined();
+      expect(searchTool.inputSchema.required).toContain('query');
+
       const queryTool = definitions.find(d => d.name === 'query');
       expect(queryTool).toBeDefined();
       expect(queryTool.kind).toBe(ToolCallKind.query);
-      expect(queryTool.parameters.properties.pattern).toBeDefined();
-      expect(queryTool.parameters.required).toContain('pattern');
-      
+      expect(queryTool.inputSchema.properties.pattern).toBeDefined();
+      expect(queryTool.inputSchema.required).toContain('pattern');
+
       const extractTool = definitions.find(d => d.name === 'extract');
       expect(extractTool).toBeDefined();
       expect(extractTool.kind).toBe(ToolCallKind.extract);
-      expect(extractTool.parameters.properties.files).toBeDefined();
-      expect(extractTool.parameters.required).toContain('files');
-      
+      expect(extractTool.inputSchema.properties.files).toBeDefined();
+      expect(extractTool.inputSchema.required).toContain('files');
+
       const delegateTool = definitions.find(d => d.name === 'delegate');
       expect(delegateTool).toBeDefined();
       expect(delegateTool.kind).toBe(ToolCallKind.execute);
-      expect(delegateTool.parameters.properties.task).toBeDefined();
-      expect(delegateTool.parameters.required).toContain('task');
+      expect(delegateTool.inputSchema.properties.task).toBeDefined();
+      expect(delegateTool.inputSchema.required).toContain('task');
     });
   });
   

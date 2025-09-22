@@ -616,13 +616,15 @@ export async function validateMermaidDiagram(diagram) {
           };
         }
         
-        // GitHub-strict: Check for single quotes inside node labels (causes PS token error)
-        const nodeWithQuotes = line.match(/\{[^{}]*'[^{}]*\}|\[[^[\]]*'[^[\]]*\]/);
+        // GitHub-strict: Check for single quotes and backticks inside node labels (causes PS token error)
+        const nodeWithQuotes = line.match(/\{[^{}]*['`][^{}]*\}|\[[^[\]]*['`][^[\]]*\]/);
         if (nodeWithQuotes) {
+          const hasBacktick = line.includes('`');
+          const quoteType = hasBacktick ? 'backticks' : 'single quotes';
           return {
             isValid: false,
-            error: `Single quotes in node label on line ${i + 1} (GitHub incompatible)`,
-            detailedError: `Line "${line}" contains single quotes inside node label. GitHub mermaid renderer fails with 'got PS' error. Use double quotes or escape characters instead.`
+            error: `${hasBacktick ? 'Backticks' : 'Single quotes'} in node label on line ${i + 1} (GitHub incompatible)`,
+            detailedError: `Line "${line}" contains ${quoteType} inside node label. GitHub mermaid renderer fails with 'got PS' error. Use double quotes or escape characters instead.`
           };
         }
         
@@ -968,6 +970,26 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     console.log(`[DEBUG] Mermaid validation: Starting enhanced validation for response (${response.length} chars)`);
     console.log(`[DEBUG] Mermaid validation: Options - path: ${path}, provider: ${provider}, model: ${model}`);
   }
+
+  /**
+   * Helper function to determine if node content needs quoting due to problematic characters
+   * @param {string} content - The node content to check
+   * @returns {boolean} - True if content needs to be quoted
+   */
+  const needsQuoting = (content) => {
+    return /[()'"<>&`]/.test(content) ||  // Core problematic characters
+           content.includes('e.g.') ||
+           content.includes('i.e.') ||
+           content.includes('src/') ||
+           content.includes('defaults/') ||
+           content.includes('.ts') ||
+           content.includes('.js') ||
+           content.includes('.yaml') ||
+           content.includes('.json') ||
+           content.includes('.md') ||
+           content.includes('.html') ||
+           content.includes('.css');
+  };
   
   // Record mermaid validation start in telemetry
   if (tracer) {
@@ -996,9 +1018,20 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     }
   }
   
-  if (validation.isValid) {
+  // Always check for HTML entities, even if diagrams are technically valid
+  let needsHtmlEntityCheck = false;
+  if (validation.diagrams && validation.diagrams.length > 0) {
+    for (const diagram of validation.diagrams) {
+      if (diagram.content && (diagram.content.includes('&lt;') || diagram.content.includes('&gt;') || diagram.content.includes('&amp;') || diagram.content.includes('&quot;') || diagram.content.includes('&#39;'))) {
+        needsHtmlEntityCheck = true;
+        break;
+      }
+    }
+  }
+
+  if (validation.isValid && !needsHtmlEntityCheck) {
     if (debug) {
-      console.log(`[DEBUG] Mermaid validation: All diagrams valid, no fixing needed`);
+      console.log(`[DEBUG] Mermaid validation: All diagrams valid and no HTML entities found, no fixing needed`);
     }
     
     // Record successful validation in telemetry
@@ -1011,7 +1044,7 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       });
     }
     
-    // All diagrams are valid, no fixing needed
+    // All diagrams are valid and no HTML entities found, no fixing needed
     return {
       ...validation,
       wasFixed: false,
@@ -1033,10 +1066,14 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     };
   }
 
-  // Some diagrams are invalid, first try HTML entity decoding auto-fix
+  // Try HTML entity decoding auto-fix (for both invalid diagrams and valid diagrams with HTML entities)
   const invalidCount = validation.diagrams.filter(d => !d.isValid).length;
   if (debug) {
-    console.log(`[DEBUG] Mermaid validation: ${invalidCount} invalid diagrams detected, trying HTML entity auto-fix first...`);
+    if (invalidCount > 0) {
+      console.log(`[DEBUG] Mermaid validation: ${invalidCount} invalid diagrams detected, trying HTML entity auto-fix first...`);
+    } else {
+      console.log(`[DEBUG] Mermaid validation: Diagrams are valid but HTML entities detected, applying HTML entity auto-fix...`);
+    }
   }
 
   try {
@@ -1047,14 +1084,14 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
     // Extract diagrams with position information for replacement
     const { diagrams } = extractMermaidFromMarkdown(response);
     
-    // First pass: Try HTML entity decoding on invalid diagrams
-    const invalidDiagrams = validation.diagrams
+    // First pass: Try HTML entity decoding on ALL diagrams (not just invalid ones)
+    // HTML entities in mermaid diagrams are almost always unintended, even if the diagram is technically valid
+    const allDiagrams = validation.diagrams
       .map((result, index) => ({ ...result, originalIndex: index }))
-      .filter(result => !result.isValid)
       .reverse();
 
-    for (const invalidDiagram of invalidDiagrams) {
-      const originalContent = invalidDiagram.content;
+    for (const diagram of allDiagrams) {
+      const originalContent = diagram.content;
       const decodedContent = decodeHtmlEntities(originalContent);
       
       if (decodedContent !== originalContent) {
@@ -1062,8 +1099,8 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
         try {
           const quickValidation = await validateMermaidDiagram(decodedContent);
           if (quickValidation.isValid) {
-            // HTML entity decoding fixed this diagram!
-            const originalDiagram = diagrams[invalidDiagram.originalIndex];
+            // HTML entity decoding improved this diagram!
+            const originalDiagram = diagrams[diagram.originalIndex];
             const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
             const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${decodedContent}\n\`\`\``;
             
@@ -1072,25 +1109,25 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
                            fixedResponse.slice(originalDiagram.endIndex);
             
             fixingResults.push({
-              diagramIndex: invalidDiagram.originalIndex,
+              diagramIndex: diagram.originalIndex,
               wasFixed: true,
               originalContent: originalContent,
               fixedContent: decodedContent,
-              originalError: invalidDiagram.error,
+              originalError: diagram.error || 'HTML entity cleanup',
               fixedWithHtmlDecoding: true
             });
             
             htmlEntityFixesApplied = true;
             
             if (debug) {
-              console.log(`[DEBUG] Mermaid validation: Fixed diagram ${invalidDiagram.originalIndex + 1} with HTML entity decoding`);
-              console.log(`[DEBUG] Mermaid validation: Original error: ${invalidDiagram.error}`);
-              console.log(`[DEBUG] Mermaid validation: Decoded ${originalContent.length - decodedContent.length} HTML entities`);
+              console.log(`[DEBUG] Mermaid validation: Fixed diagram ${diagram.originalIndex + 1} with HTML entity decoding`);
+              console.log(`[DEBUG] Mermaid validation: Original status: ${diagram.isValid ? 'valid' : 'invalid'} - ${diagram.error || 'no error'}`);
+              console.log(`[DEBUG] Mermaid validation: Decoded HTML entities`);
             }
           }
         } catch (error) {
           if (debug) {
-            console.log(`[DEBUG] Mermaid validation: HTML entity decoding didn't fix diagram ${invalidDiagram.originalIndex + 1}: ${error.message}`);
+            console.log(`[DEBUG] Mermaid validation: HTML entity decoding didn't improve diagram ${diagram.originalIndex + 1}: ${error.message}`);
           }
         }
       }
@@ -1122,6 +1159,133 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
           originalResponse: response,
           fixedResponse: fixedResponse,
           fixingResults: fixingResults
+        };
+      }
+    }
+    
+    // Proactive pass: Fix common node label issues in ALL diagrams (not just invalid ones)
+    let proactiveFixesApplied = false;
+    
+    // Re-extract diagrams after HTML entity fixes
+    const { diagrams: currentDiagrams } = extractMermaidFromMarkdown(fixedResponse);
+    
+    for (let diagramIndex = currentDiagrams.length - 1; diagramIndex >= 0; diagramIndex--) {
+      const diagram = currentDiagrams[diagramIndex];
+      const originalContent = diagram.content;
+      const lines = originalContent.split('\n');
+      let wasFixed = false;
+      
+      // Proactively fix node labels that contain special characters
+      const fixedLines = lines.map(line => {
+        const trimmedLine = line.trim();
+        let modifiedLine = line;
+        
+        // Enhanced auto-fixing for square bracket nodes [...]
+        if (trimmedLine.match(/\[[^\]]*\]/)) {
+          modifiedLine = modifiedLine.replace(/\[([^\]]*)\]/g, (match, content) => {
+            // Skip if already properly quoted
+            if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+              return match;
+            }
+            
+            // Check if content needs quoting (contains problematic patterns)
+            if (needsQuoting(content)) {
+              wasFixed = true;
+              // Replace internal double quotes with single quotes to avoid nesting
+              const safeContent = content.replace(/"/g, "'");
+              return `["${safeContent}"]`;
+            }
+            
+            return match;
+          });
+        }
+        
+        // Enhanced auto-fixing for diamond nodes {...}
+        if (trimmedLine.match(/\{[^{}]*\}/)) {
+          modifiedLine = modifiedLine.replace(/\{([^{}]*)\}/g, (match, content) => {
+            // Skip if already properly quoted
+            if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+              return match;
+            }
+            
+            // Check if content needs quoting (contains problematic patterns)
+            if (needsQuoting(content)) {
+              wasFixed = true;
+              // Replace internal double quotes with single quotes to avoid nesting
+              const safeContent = content.replace(/"/g, "'");
+              return `{"${safeContent}"}`;
+            }
+            
+            return match;
+          });
+        }
+        
+        return modifiedLine;
+      });
+      
+      if (wasFixed) {
+        const fixedContent = fixedLines.join('\n');
+        
+        // Replace the diagram in the response
+        const attributesStr = diagram.attributes ? ` ${diagram.attributes}` : '';
+        const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${fixedContent}\n\`\`\``;
+        
+        fixedResponse = fixedResponse.slice(0, diagram.startIndex) + 
+                       newCodeBlock + 
+                       fixedResponse.slice(diagram.endIndex);
+        
+        fixingResults.push({
+          diagramIndex: diagramIndex,
+          wasFixed: true,
+          originalContent: originalContent,
+          fixedContent: fixedContent,
+          originalError: 'Proactive node label quoting',
+          fixMethod: 'node_label_quote_wrapping',
+          fixedWithProactiveQuoting: true
+        });
+        
+        proactiveFixesApplied = true;
+        
+        if (debug) {
+          console.log(`[DEBUG] Mermaid validation: Proactively fixed diagram ${diagramIndex + 1} with node label quoting`);
+          console.log(`[DEBUG] Mermaid validation: Applied automatic quoting to special characters`);
+        }
+      }
+    }
+    
+    // If proactive fixes were applied, re-validate the entire response
+    if (proactiveFixesApplied) {
+      const revalidation = await validateMermaidResponse(fixedResponse);
+      if (revalidation.isValid) {
+        // All diagrams are now valid, return without AI fixing
+        const totalTime = Date.now() - startTime;
+        if (debug) {
+          console.log(`[DEBUG] Mermaid validation: All diagrams fixed with proactive quoting in ${totalTime}ms, no AI needed`);
+          console.log(`[DEBUG] Mermaid validation: Applied ${fixingResults.length} proactive fixes`);
+        }
+        
+        // Record proactive fix success in telemetry
+        if (tracer) {
+          tracer.recordMermaidValidationEvent('proactive_fix_completed', {
+            'mermaid_validation.success': true,
+            'mermaid_validation.fix_method': 'node_label_quote_wrapping',
+            'mermaid_validation.diagrams_fixed': fixingResults.length,
+            'mermaid_validation.duration_ms': totalTime
+          });
+        }
+        return {
+          ...revalidation,
+          wasFixed: true,
+          originalResponse: response,
+          fixedResponse: fixedResponse,
+          fixingResults: fixingResults,
+          performanceMetrics: {
+            totalTimeMs: totalTime,
+            aiFixingTimeMs: 0,
+            finalValidationTimeMs: 0,
+            diagramsProcessed: fixingResults.length,
+            diagramsFixed: fixingResults.length
+          }
         };
       }
     }
@@ -1258,46 +1422,58 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       // Check if this is a node label error that we can auto-fix
       if (invalidDiagram.error && 
           (invalidDiagram.error.includes('Parentheses in node label') || 
-           invalidDiagram.error.includes('Complex expression in diamond node'))) {
+           invalidDiagram.error.includes('Complex expression in diamond node') ||
+           invalidDiagram.error.includes('Single quotes in node label') ||
+           invalidDiagram.error.includes('Backticks in node label'))) {
         const originalContent = invalidDiagram.content;
         const lines = originalContent.split('\n');
         let wasFixed = false;
         
-        // Find and fix node labels with unquoted parentheses  
+        // Find and fix node labels with special characters that need quoting
         const fixedLines = lines.map(line => {
           const trimmedLine = line.trim();
           let modifiedLine = line;
           
-          // Look for node definitions with unquoted parentheses in square brackets
-          // Pattern: [some text (with parens) more text]
-          if (trimmedLine.match(/\[[^\]"]*\([^\]"]*\]/)) {
-            modifiedLine = modifiedLine.replace(/\[([^\]"]*\([^\]"]*)\]/g, (match, content) => {
-              // Only fix if it's not already quoted
-              if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
+          // Enhanced auto-fixing for square bracket nodes [...]
+          // Look for any node labels that contain special characters and aren't already quoted
+          if (trimmedLine.match(/\[[^\]]*\]/)) {
+            modifiedLine = modifiedLine.replace(/\[([^\]]*)\]/g, (match, content) => {
+              // Skip if already properly quoted
+              if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+                return match;
+              }
+              
+              // Check if content needs quoting (contains problematic patterns)
+              if (needsQuoting(content)) {
                 wasFixed = true;
                 // Replace internal double quotes with single quotes to avoid nesting
                 const safeContent = content.replace(/"/g, "'");
                 return `["${safeContent}"]`;
               }
+              
               return match;
             });
           }
           
-          // Look for diamond node definitions with unquoted parentheses
-          // Pattern: {some text (with parens) more text}
-          if (trimmedLine.match(/\{[^{}"]*\([^{}"]*\}/)) {
-            modifiedLine = modifiedLine.replace(/\{([^{}"]*\([^{}"]*)\}/g, (match, content) => {
-              // Only fix if it's not already quoted
-              if (!content.trim().startsWith('"') || !content.trim().endsWith('"')) {
+          // Enhanced auto-fixing for diamond nodes {...}
+          if (trimmedLine.match(/\{[^{}]*\}/)) {
+            modifiedLine = modifiedLine.replace(/\{([^{}]*)\}/g, (match, content) => {
+              // Skip if already properly quoted
+              if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+                return match;
+              }
+              
+              // Check if content needs quoting (contains problematic patterns)
+              if (needsQuoting(content)) {
                 wasFixed = true;
                 // Replace internal double quotes with single quotes to avoid nesting
                 const safeContent = content.replace(/"/g, "'");
                 return `{"${safeContent}"}`;
               }
+              
               return match;
             });
           }
-          
           
           return modifiedLine;
         });

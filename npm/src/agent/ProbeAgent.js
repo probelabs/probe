@@ -19,14 +19,15 @@ import {
   parseXmlToolCallWithThinking
 } from './tools.js';
 import { createMessagePreview } from '../tools/common.js';
-import { 
-  createWrappedTools, 
-  listFilesToolInstance, 
+import {
+  createWrappedTools,
+  listFilesToolInstance,
   searchFilesToolInstance,
-  clearToolExecutionData 
+  clearToolExecutionData
 } from './probeTool.js';
+import { createMockProvider } from './mockProvider.js';
 import { listFilesByLevel } from '../index.js';
-import { 
+import {
   cleanSchemaResponse,
   isJsonSchema,
   validateJsonResponse,
@@ -35,6 +36,11 @@ import {
   createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse
 } from './schemaUtils.js';
+import {
+  MCPXmlBridge,
+  parseHybridXmlToolCall,
+  loadMCPConfigurationFromPath
+} from './mcp/index.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
@@ -57,6 +63,11 @@ export class ProbeAgent {
    * @param {boolean} [options.debug] - Enable debug mode
    * @param {boolean} [options.outline] - Enable outline-xml format for search results
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
+   * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
+   * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
+   * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
+   * @param {Object} [options.mcpConfig] - MCP configuration object (overrides mcpConfigPath)
+   * @param {Array} [options.mcpServers] - Deprecated, use mcpConfig instead
    */
   constructor(options = {}) {
     // Basic configuration
@@ -69,6 +80,7 @@ export class ProbeAgent {
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
+    this.disableMermaidValidation = !!options.disableMermaidValidation;
 
     // Search configuration
     this.allowedFolders = options.path ? [options.path] : [process.cwd()];
@@ -90,14 +102,29 @@ export class ProbeAgent {
     // Initialize tools
     this.initializeTools();
 
+    // Initialize chat history
+    this.history = [];
+
+    // Initialize event emitter for tool execution updates
+    this.events = new EventEmitter();
+
+    // MCP configuration
+    this.enableMcp = !!options.enableMcp || process.env.ENABLE_MCP === '1';
+    this.mcpConfigPath = options.mcpConfigPath || null;
+    this.mcpConfig = options.mcpConfig || null;
+    this.mcpServers = options.mcpServers || null; // Deprecated, keep for backward compatibility
+    this.mcpBridge = null;
+
     // Initialize the AI model
     this.initializeModel();
 
-    // Initialize chat history
-    this.history = [];
-    
-    // Initialize event emitter for tool execution updates
-    this.events = new EventEmitter();
+    // Initialize MCP if enabled
+    if (this.enableMcp) {
+      this.initializeMCP().catch(error => {
+        console.error('[MCP] Failed to initialize MCP:', error);
+        this.mcpBridge = null;
+      });
+    }
   }
 
   /**
@@ -136,6 +163,12 @@ export class ProbeAgent {
    * Initialize the AI model based on available API keys and forced provider setting
    */
   initializeModel() {
+    // Check if we're in test mode and should use mock provider
+    if (process.env.NODE_ENV === 'test' || process.env.USE_MOCK_AI === 'true') {
+      this.initializeMockModel();
+      return;
+    }
+
     // Get API keys from environment variables
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
@@ -229,9 +262,80 @@ export class ProbeAgent {
     });
     this.model = modelName || 'gemini-2.5-pro';
     this.apiType = 'google';
-    
+
     if (this.debug) {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    }
+  }
+
+  /**
+   * Initialize mock model for testing
+   */
+  initializeMockModel(modelName) {
+    this.provider = createMockProvider();
+    this.model = modelName || 'mock-model';
+    this.apiType = 'mock';
+
+    if (this.debug) {
+      console.log(`Using Mock API with model: ${this.model}`);
+    }
+  }
+
+  /**
+   * Initialize MCP bridge and load tools
+   */
+  async initializeMCP() {
+    if (!this.enableMcp) return;
+
+    try {
+      let mcpConfig = null;
+
+      // Priority order: mcpConfig > mcpConfigPath > mcpServers (deprecated) > auto-discovery
+      if (this.mcpConfig) {
+        // Direct config object provided (SDK usage)
+        mcpConfig = this.mcpConfig;
+        if (this.debug) {
+          console.log('[DEBUG] Using provided MCP config object');
+        }
+      } else if (this.mcpConfigPath) {
+        // Explicit config path provided
+        try {
+          mcpConfig = loadMCPConfigurationFromPath(this.mcpConfigPath);
+          if (this.debug) {
+            console.log(`[DEBUG] Loaded MCP config from: ${this.mcpConfigPath}`);
+          }
+        } catch (error) {
+          throw new Error(`Failed to load MCP config from ${this.mcpConfigPath}: ${error.message}`);
+        }
+      } else if (this.mcpServers) {
+        // Backward compatibility: convert old mcpServers format
+        mcpConfig = { mcpServers: this.mcpServers };
+        if (this.debug) {
+          console.warn('[DEBUG] Using deprecated mcpServers option. Consider using mcpConfig instead.');
+        }
+      }
+      // Note: auto-discovery fallback is removed - user must explicitly provide config
+
+      // Initialize the MCP XML bridge
+      this.mcpBridge = new MCPXmlBridge({ debug: this.debug });
+      await this.mcpBridge.initialize(mcpConfig);
+
+      const mcpToolCount = this.mcpBridge.getToolNames().length;
+      if (mcpToolCount > 0) {
+        if (this.debug) {
+          console.log(`[DEBUG] Loaded ${mcpToolCount} MCP tools`);
+        }
+      } else {
+        // For backward compatibility: if no tools were loaded, set bridge to null
+        // This maintains the behavior expected by existing tests
+        if (this.debug) {
+          console.log('[DEBUG] No MCP tools loaded, setting bridge to null');
+        }
+        this.mcpBridge = null;
+      }
+    } catch (error) {
+      console.error('[MCP] Error initializing MCP:', error);
+      this.mcpBridge = null;
     }
   }
 
@@ -425,6 +529,13 @@ When troubleshooting:
 
     // Add Tool Definitions
     systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
+
+    // Add MCP tools if available
+    if (this.mcpBridge && this.mcpBridge.getToolNames().length > 0) {
+      systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
+      systemMessage += this.mcpBridge.getXmlToolDefinitions();
+      systemMessage += `\n\nFor MCP tools, use JSON format within the params tag, e.g.:\n<mcp_tool>\n<params>\n{"key": "value"}\n</params>\n</mcp_tool>\n`;
+    }
 
     // Add folder information
     const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
@@ -638,7 +749,11 @@ When troubleshooting:
           validTools.push('implement');
         }
         
-        const parsedTool = parseXmlToolCallWithThinking(assistantResponseContent, validTools);
+        // Try parsing with hybrid parser that supports both native and MCP tools
+        const nativeTools = validTools;
+        const parsedTool = this.mcpBridge
+          ? parseHybridXmlToolCall(assistantResponseContent, nativeTools, this.mcpBridge)
+          : parseXmlToolCallWithThinking(assistantResponseContent, validTools);
         if (parsedTool) {
           const { toolName, params } = parsedTool;
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
@@ -652,7 +767,9 @@ When troubleshooting:
               const lastAssistantMessage = [...currentMessages].reverse().find(msg =>
                 msg.role === 'assistant' &&
                 msg.content &&
-                !parseXmlToolCallWithThinking(msg.content, validTools)
+                !(this.mcpBridge
+                  ? parseHybridXmlToolCall(msg.content, validTools, this.mcpBridge)
+                  : parseXmlToolCallWithThinking(msg.content, validTools))
               );
 
               if (lastAssistantMessage) {
@@ -675,8 +792,32 @@ When troubleshooting:
             }
             break;
           } else {
-            // Execute the tool
-            if (this.toolImplementations[toolName]) {
+            // Check tool type and execute accordingly
+            const { type } = parsedTool;
+
+            if (type === 'mcp' && this.mcpBridge && this.mcpBridge.isMcpTool(toolName)) {
+              // Execute MCP tool
+              try {
+                if (this.debug) console.log(`[DEBUG] Executing MCP tool '${toolName}' with params:`, params);
+
+                // Execute MCP tool through the bridge
+                const executionResult = await this.mcpBridge.mcpTools[toolName].execute(params);
+
+                const toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
+                const preview = createMessagePreview(toolResultContent);
+                if (this.debug) {
+                  console.log(`[DEBUG] MCP tool '${toolName}' executed successfully. Result preview: ${preview}`);
+                }
+
+                currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
+              } catch (error) {
+                console.error(`Error executing MCP tool ${toolName}:`, error);
+                const toolResultContent = `Error executing MCP tool ${toolName}: ${error.message}`;
+                if (this.debug) console.log(`[DEBUG] MCP tool '${toolName}' execution FAILED.`);
+                currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
+              }
+            } else if (this.toolImplementations[toolName]) {
+              // Execute native tool
               try {
                 // Add sessionId to params for tool execution
                 const toolParams = { ...params, sessionId: this.sessionId };
@@ -776,9 +917,15 @@ When troubleshooting:
             } else {
               console.error(`[ERROR] Unknown tool: ${toolName}`);
               currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+
+              // Build list of available tools including MCP tools
+              const nativeTools = Object.keys(this.toolImplementations);
+              const mcpTools = this.mcpBridge ? this.mcpBridge.getToolNames() : [];
+              const allAvailableTools = [...nativeTools, ...mcpTools];
+
               currentMessages.push({
                 role: 'user',
-                content: `<tool_result>\nError: Unknown tool '${toolName}'. Available tools: ${Object.keys(this.toolImplementations).join(', ')}\n</tool_result>`
+                content: `<tool_result>\nError: Unknown tool '${toolName}'. Available tools: ${allAvailableTools.join(', ')}\n</tool_result>`
               });
             }
           }
@@ -802,7 +949,7 @@ IMPORTANT: A schema was provided. You MUST respond with data that matches this s
 Use attempt_completion with your response directly inside the tags:
 
 <attempt_completion>
-{"key": "value", "field": "your actual data here matching the schema"}
+[Your response content matching the provided schema format]
 </attempt_completion>
 
 Your response must conform to this schema:
@@ -901,62 +1048,66 @@ Convert your previous response content into actual JSON data that follows this s
           finalResult = cleanSchemaResponse(finalResult);
           
           // Step 3: Validate and fix Mermaid diagrams if present
-          try {
-            if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: Starting enhanced mermaid validation...`);
-            }
-            
-            // Record mermaid validation start in telemetry
-            if (this.tracer) {
-              this.tracer.recordMermaidValidationEvent('schema_processing_started', {
-                'mermaid_validation.context': 'schema_processing',
-                'mermaid_validation.response_length': finalResult.length
-              });
-            }
-            
-            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
-              debug: this.debug,
-              path: this.allowedFolders[0],
-              provider: this.clientApiProvider,
-              model: this.model,
-              tracer: this.tracer
-            });
-            
-            if (mermaidValidation.wasFixed) {
-              finalResult = mermaidValidation.fixedResponse;
+          if (!this.disableMermaidValidation) {
+            try {
               if (this.debug) {
-                console.log(`[DEBUG] Mermaid validation: Diagrams successfully fixed`);
-                
-                if (mermaidValidation.performanceMetrics) {
-                  const metrics = mermaidValidation.performanceMetrics;
-                  console.log(`[DEBUG] Mermaid validation: Performance - total: ${metrics.totalTimeMs}ms, AI fixing: ${metrics.aiFixingTimeMs}ms`);
-                  console.log(`[DEBUG] Mermaid validation: Results - ${metrics.diagramsFixed}/${metrics.diagramsProcessed} diagrams fixed`);
+                console.log(`[DEBUG] Mermaid validation: Starting enhanced mermaid validation...`);
+              }
+              
+              // Record mermaid validation start in telemetry
+              if (this.tracer) {
+                this.tracer.recordMermaidValidationEvent('schema_processing_started', {
+                  'mermaid_validation.context': 'schema_processing',
+                  'mermaid_validation.response_length': finalResult.length
+                });
+              }
+              
+              const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+                debug: this.debug,
+                path: this.allowedFolders[0],
+                provider: this.clientApiProvider,
+                model: this.model,
+                tracer: this.tracer
+              });
+              
+              if (mermaidValidation.wasFixed) {
+                finalResult = mermaidValidation.fixedResponse;
+                if (this.debug) {
+                  console.log(`[DEBUG] Mermaid validation: Diagrams successfully fixed`);
+                  
+                  if (mermaidValidation.performanceMetrics) {
+                    const metrics = mermaidValidation.performanceMetrics;
+                    console.log(`[DEBUG] Mermaid validation: Performance - total: ${metrics.totalTimeMs}ms, AI fixing: ${metrics.aiFixingTimeMs}ms`);
+                    console.log(`[DEBUG] Mermaid validation: Results - ${metrics.diagramsFixed}/${metrics.diagramsProcessed} diagrams fixed`);
+                  }
+                  
+                  if (mermaidValidation.fixingResults) {
+                    mermaidValidation.fixingResults.forEach((fixResult, index) => {
+                      if (fixResult.wasFixed) {
+                        const method = fixResult.fixedWithHtmlDecoding ? 'HTML entity decoding' : 'AI correction';
+                        const time = fixResult.aiFixingTimeMs ? ` in ${fixResult.aiFixingTimeMs}ms` : '';
+                        console.log(`[DEBUG] Mermaid validation: Fixed diagram ${fixResult.diagramIndex + 1} with ${method}${time}`);
+                        console.log(`[DEBUG] Mermaid validation: Original error: ${fixResult.originalError}`);
+                      } else {
+                        console.log(`[DEBUG] Mermaid validation: Failed to fix diagram ${fixResult.diagramIndex + 1}: ${fixResult.fixingError}`);
+                      }
+                    });
+                  }
                 }
-                
-                if (mermaidValidation.fixingResults) {
-                  mermaidValidation.fixingResults.forEach((fixResult, index) => {
-                    if (fixResult.wasFixed) {
-                      const method = fixResult.fixedWithHtmlDecoding ? 'HTML entity decoding' : 'AI correction';
-                      const time = fixResult.aiFixingTimeMs ? ` in ${fixResult.aiFixingTimeMs}ms` : '';
-                      console.log(`[DEBUG] Mermaid validation: Fixed diagram ${fixResult.diagramIndex + 1} with ${method}${time}`);
-                      console.log(`[DEBUG] Mermaid validation: Original error: ${fixResult.originalError}`);
-                    } else {
-                      console.log(`[DEBUG] Mermaid validation: Failed to fix diagram ${fixResult.diagramIndex + 1}: ${fixResult.fixingError}`);
-                    }
-                  });
+              } else if (this.debug) {
+                console.log(`[DEBUG] Mermaid validation: No fixes needed or fixes unsuccessful`);
+                if (mermaidValidation.diagrams?.length > 0) {
+                  console.log(`[DEBUG] Mermaid validation: Found ${mermaidValidation.diagrams.length} diagrams, all valid: ${mermaidValidation.isValid}`);
                 }
               }
-            } else if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: No fixes needed or fixes unsuccessful`);
-              if (mermaidValidation.diagrams?.length > 0) {
-                console.log(`[DEBUG] Mermaid validation: Found ${mermaidValidation.diagrams.length} diagrams, all valid: ${mermaidValidation.isValid}`);
+            } catch (error) {
+              if (this.debug) {
+                console.log(`[DEBUG] Mermaid validation: Process failed with error: ${error.message}`);
+                console.log(`[DEBUG] Mermaid validation: Stack trace: ${error.stack}`);
               }
             }
-          } catch (error) {
-            if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: Process failed with error: ${error.message}`);
-              console.log(`[DEBUG] Mermaid validation: Stack trace: ${error.stack}`);
-            }
+          } else if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Skipped due to disableMermaidValidation option`);
           }
           
           // Step 4: Validate and potentially correct JSON responses
@@ -1086,28 +1237,32 @@ Convert your previous response content into actual JSON data that follows this s
           finalResult = cleanSchemaResponse(finalResult);
           
           // Validate and fix Mermaid diagrams if present
-          if (this.debug) {
-            console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result...`);
-          }
-          
-          const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
-            debug: this.debug,
-            path: this.allowedFolders[0],
-            provider: this.clientApiProvider,
-            model: this.model,
-            tracer: this.tracer
-          });
-          
-          if (mermaidValidation.wasFixed) {
-            finalResult = mermaidValidation.fixedResponse;
+          if (!this.disableMermaidValidation) {
             if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: attempt_completion diagrams fixed`);
-              if (mermaidValidation.performanceMetrics) {
-                console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
+              console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result...`);
+            }
+            
+            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+              debug: this.debug,
+              path: this.allowedFolders[0],
+              provider: this.clientApiProvider,
+              model: this.model,
+              tracer: this.tracer
+            });
+            
+            if (mermaidValidation.wasFixed) {
+              finalResult = mermaidValidation.fixedResponse;
+              if (this.debug) {
+                console.log(`[DEBUG] Mermaid validation: attempt_completion diagrams fixed`);
+                if (mermaidValidation.performanceMetrics) {
+                  console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
+                }
               }
+            } else if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
             }
           } else if (this.debug) {
-            console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
+            console.log(`[DEBUG] Mermaid validation: Skipped for attempt_completion result due to disableMermaidValidation option`);
           }
           
           // Validate and potentially correct JSON for attempt_completion results
@@ -1230,6 +1385,42 @@ Convert your previous response content into actual JSON data that follows this s
         }
       }
 
+      // Final mermaid validation for all responses (regardless of schema or attempt_completion)
+      if (!this.disableMermaidValidation) {
+        try {
+          if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Performing final mermaid validation on result...`);
+          }
+          
+          const finalMermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+            debug: this.debug,
+            path: this.allowedFolders[0],
+            provider: this.clientApiProvider,
+            model: this.model,
+            tracer: this.tracer
+          });
+          
+          if (finalMermaidValidation.wasFixed) {
+            finalResult = finalMermaidValidation.fixedResponse;
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: Final result diagrams fixed`);
+              if (finalMermaidValidation.performanceMetrics) {
+                console.log(`[DEBUG] Mermaid validation: Final validation took ${finalMermaidValidation.performanceMetrics.totalTimeMs}ms`);
+              }
+            }
+          } else if (this.debug && finalMermaidValidation.diagrams?.length > 0) {
+            console.log(`[DEBUG] Mermaid validation: Final result validation completed (${finalMermaidValidation.diagrams.length} diagrams found, no fixes needed)`);
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.log(`[DEBUG] Mermaid validation: Final validation failed with error: ${error.message}`);
+          }
+          // Don't fail the entire request if final mermaid validation fails
+        }
+      } else if (this.debug) {
+        console.log(`[DEBUG] Mermaid validation: Skipped final validation due to disableMermaidValidation option`);
+      }
+
       return finalResult;
 
     } catch (error) {
@@ -1261,6 +1452,26 @@ Convert your previous response content into actual JSON data that follows this s
     if (this.debug) {
       console.log(`[DEBUG] Cleared conversation history and reset counters for session ${this.sessionId}`);
     }
+  }
+
+  /**
+   * Clean up resources (including MCP connections)
+   */
+  async cleanup() {
+    // Clean up MCP bridge
+    if (this.mcpBridge) {
+      try {
+        await this.mcpBridge.cleanup();
+        if (this.debug) {
+          console.log('[DEBUG] MCP bridge cleaned up');
+        }
+      } catch (error) {
+        console.error('Error cleaning up MCP bridge:', error);
+      }
+    }
+
+    // Clear history and other resources
+    this.clearHistory();
   }
 
   /**

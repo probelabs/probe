@@ -269,7 +269,7 @@ export class ACPToolManager {
         name: 'search',
         description: 'Search for code patterns and content using flexible text search with stemming and stopword removal. Supports regex patterns and elastic search query syntax.',
         kind: ToolCallKind.search,
-        parameters: {
+        inputSchema: {
           type: 'object',
           properties: {
             query: {
@@ -296,7 +296,7 @@ export class ACPToolManager {
         name: 'query',
         description: 'Perform structural queries using AST patterns to find specific code structures like functions, classes, or methods.',
         kind: ToolCallKind.query,
-        parameters: {
+        inputSchema: {
           type: 'object',
           properties: {
             pattern: {
@@ -323,7 +323,7 @@ export class ACPToolManager {
         name: 'extract',
         description: 'Extract specific code blocks from files based on file paths and optional line numbers.',
         kind: ToolCallKind.extract,
-        parameters: {
+        inputSchema: {
           type: 'object',
           properties: {
             files: {
@@ -352,7 +352,7 @@ export class ACPToolManager {
         name: 'delegate',
         description: 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Use when complex requests can be broken into focused, parallel tasks.',
         kind: ToolCallKind.execute,
-        parameters: {
+        inputSchema: {
           type: 'object',
           properties: {
             task: {

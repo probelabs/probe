@@ -107,6 +107,11 @@ jobs:
           cd npm
           npm install
 
+      - name: Build npm package
+        run: |
+          cd npm
+          npm run build
+
       - name: Run npm agent tests
         run: |
           cd npm
