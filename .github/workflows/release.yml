@@ -67,32 +67,11 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
 
-      - name: Setup ARM64 architecture
+      - name: Setup ARM64 cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          # Test minimal approach - just add ARM64 architecture and let GitHub's defaults handle repositories
-          echo "=== BEFORE: Default GitHub APT Configuration ==="
-          echo "Architecture:"
-          dpkg --print-architecture || echo "No architecture"
-          dpkg --print-foreign-architectures || echo "No foreign architectures"
-          echo "Sources.list:"
-          cat /etc/apt/sources.list || echo "No sources.list"
-          echo "Sources.list.d:"
-          ls -la /etc/apt/sources.list.d/ || echo "No sources.list.d"
-          echo "Apt mirrors:"
-          cat /etc/apt/apt-mirrors.txt || echo "No apt-mirrors.txt"
-          
-          # Simply add ARM64 architecture - let GitHub handle the repos
-          sudo dpkg --add-architecture arm64
-          
-          echo "=== AFTER: Added ARM64 Architecture ==="
-          echo "Architecture:"
-          dpkg --print-architecture
-          dpkg --print-foreign-architectures
-
-      - name: Setup cross-compilation
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
+          # Simple approach: just add ARM64 architecture and install packages
+          # Let GitHub's default APT configuration handle the repositories
           sudo dpkg --add-architecture arm64
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
