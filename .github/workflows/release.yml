@@ -70,11 +70,19 @@ jobs:
       - name: Setup ARM64 cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          # Simple approach: just add ARM64 architecture and install packages
-          # Let GitHub's default APT configuration handle the repositories
+          # Add ARM64 architecture
           sudo dpkg --add-architecture arm64
+          
+          # Add Ubuntu Ports repository for ARM64 packages (GitHub's defaults only have security.ubuntu.com)
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
+          
+          # Update package lists and install cross-compilation tools
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
+          
+          # Set environment variables for cross-compilation
           {
             echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
             echo "PKG_CONFIG_ALLOW_CROSS=1"
