@@ -10,9 +10,55 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check-changes:
+    name: Check what code changed
+    runs-on: ubuntu-latest
+    outputs:
+      rust-changed: ${{ steps.changes.outputs.rust }}
+      npm-changed: ${{ steps.changes.outputs.npm }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Check for changes
+        id: changes
+        run: |
+          if [ "${{ github.event_name }}" == "push" ]; then
+            # For push events, check changes since the previous commit
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+          else
+            # For pull requests, check changes against the base branch
+            git fetch origin "${{ github.base_ref }}"
+            CHANGED_FILES=$(git diff --name-only "origin/${{ github.base_ref }}" HEAD)
+          fi
+          
+          echo "Changed files:"
+          echo "$CHANGED_FILES"
+          
+          # Check if any Rust-related files changed
+          if echo "$CHANGED_FILES" | grep -E '\.(rs|toml)$|^Cargo\.|^Makefile$|^\.github/workflows/rust-tests\.yml$|^\.githooks/|^scripts/|^tests/' > /dev/null; then
+            echo "Rust code or related files changed"
+            echo "rust=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Rust code changes detected"
+            echo "rust=false" >> "$GITHUB_OUTPUT"
+          fi
+          
+          # Check if any NPM-related files changed
+          if echo "$CHANGED_FILES" | grep -E '^npm/|package\.json$|package-lock\.json$|\.js$|\.ts$|\.json$|^examples/chat/' > /dev/null; then
+            echo "NPM/Node.js code or related files changed"
+            echo "npm=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No NPM code changes detected"
+            echo "npm=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: Test on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    needs: check-changes
+    if: needs.check-changes.outputs.rust-changed == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -71,6 +117,8 @@ jobs:
   npm-tests:
     name: NPM Agent Tests on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    needs: check-changes
+    if: needs.check-changes.outputs.npm-changed == 'true'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
