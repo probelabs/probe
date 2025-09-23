@@ -1,10 +1,34 @@
 use anyhow::Result;
 use regex::Regex;
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use probe_code::models::SearchResult;
 use probe_code::search::query::QueryPlan;
 use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+
+/// Create a cache of file contents for outline formatters to avoid redundant I/O
+fn create_file_content_cache(results: &[&SearchResult]) -> HashMap<PathBuf, Arc<String>> {
+    let mut cache = HashMap::new();
+
+    // Collect unique file paths
+    let mut unique_files = std::collections::HashSet::new();
+    for result in results {
+        if !result.file.is_empty() {
+            unique_files.insert(PathBuf::from(&result.file));
+        }
+    }
+
+    // Read each file once and cache the content
+    for file_path in unique_files {
+        if let Ok(content) = std::fs::read_to_string(&file_path) {
+            cache.insert(file_path, Arc::new(content));
+        }
+    }
+
+    cache
+}
 
 /// Function to format and print search results according to the specified format
 pub fn format_and_print_search_results(
@@ -42,11 +66,15 @@ pub fn format_and_print_search_results(
             return; // Skip the summary output at the end
         }
         "outline" => {
-            format_and_print_outline_results(&valid_results, dry_run);
+            let file_cache = create_file_content_cache(&valid_results);
+            format_and_print_outline_results(&valid_results, dry_run, &file_cache);
             return; // Skip the duplicate summary output at the end
         }
         "outline-xml" => {
-            if let Err(e) = format_and_print_outline_xml_results(&valid_results, dry_run) {
+            let file_cache = create_file_content_cache(&valid_results);
+            if let Err(e) =
+                format_and_print_outline_xml_results(&valid_results, dry_run, &file_cache)
+            {
                 eprintln!("Error formatting outline XML: {e}");
             }
             return; // Skip the duplicate summary output at the end
@@ -1515,15 +1543,17 @@ fn render_outline_lines(
     keywords: &Option<Vec<String>>,
     closing_brace_contexts: &std::collections::HashMap<usize, crate::models::ParentContext>,
     last_displayed_per_file: &mut std::collections::HashMap<String, usize>,
+    file_cache: &HashMap<PathBuf, Arc<String>>,
 ) {
     if lines.is_empty() {
         return;
     }
 
-    // Read the source file
-    let source = match std::fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(_) => return,
+    // Get the source file from cache
+    let file_path_buf = PathBuf::from(file_path);
+    let source = match file_cache.get(&file_path_buf) {
+        Some(content) => content,
+        None => return,
     };
     let source_lines: Vec<&str> = source.lines().collect();
 
@@ -2096,7 +2126,11 @@ fn print_ellipsis_once(
 }
 
 /// Format and print search results in outline format
-fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
+fn format_and_print_outline_results(
+    results: &[&SearchResult],
+    dry_run: bool,
+    file_cache: &HashMap<PathBuf, Arc<String>>,
+) {
     // Track actual content displayed for accurate token/byte counting
     let mut displayed_content = Vec::new();
 
@@ -2249,6 +2283,7 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
             &all_keywords,
             &all_closing_brace_contexts,
             &mut last_displayed_per_file,
+            file_cache,
         );
     }
 
@@ -2267,7 +2302,11 @@ fn format_and_print_outline_results(results: &[&SearchResult], dry_run: bool) {
 
 /// Format and print search results in outline XML format
 /// This reuses the outline format logic but outputs in XML structure
-fn format_and_print_outline_xml_results(results: &[&SearchResult], dry_run: bool) -> Result<()> {
+fn format_and_print_outline_xml_results(
+    results: &[&SearchResult],
+    dry_run: bool,
+    file_cache: &HashMap<PathBuf, Arc<String>>,
+) -> Result<()> {
     // Track content for accounting
     let mut displayed_content = Vec::new();
 
@@ -2371,6 +2410,7 @@ fn format_and_print_outline_xml_results(results: &[&SearchResult], dry_run: bool
             &all_closing_brace_contexts,
             dry_run,
             &mut displayed_content,
+            file_cache,
         );
 
         // Print the file element with content (no XML escaping for simpler output)
@@ -2405,15 +2445,17 @@ fn generate_outline_xml_content(
     _closing_brace_contexts: &std::collections::HashMap<usize, crate::models::ParentContext>,
     dry_run: bool,
     displayed_content: &mut Vec<String>,
+    file_cache: &HashMap<PathBuf, Arc<String>>,
 ) -> String {
     if lines.is_empty() {
         return String::new();
     }
 
-    // Read the source file
-    let source = match std::fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(_) => return String::new(),
+    // Get the source file from cache
+    let file_path_buf = PathBuf::from(file_path);
+    let source = match file_cache.get(&file_path_buf) {
+        Some(content) => content,
+        None => return String::new(),
     };
     let source_lines: Vec<&str> = source.lines().collect();
 
@@ -2681,5 +2723,102 @@ mod tests {
             "this is a very long line that ..."
         );
         assert_eq!(extract_default_context(""), "");
+    }
+
+    #[test]
+    fn test_create_file_content_cache() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create temporary test files
+        let mut temp_file1 = NamedTempFile::new().expect("Failed to create temp file");
+        let mut temp_file2 = NamedTempFile::new().expect("Failed to create temp file");
+
+        let content1 = "fn test() {\n    println!(\"Hello\");\n}";
+        let content2 = "class Test {\n    void run() {}\n}";
+
+        temp_file1
+            .write_all(content1.as_bytes())
+            .expect("Failed to write to temp file");
+        temp_file2
+            .write_all(content2.as_bytes())
+            .expect("Failed to write to temp file");
+
+        // Create mock search results
+        let result1 = SearchResult {
+            file: temp_file1.path().to_string_lossy().to_string(),
+            lines: (1, 3),
+            node_type: "function".to_string(),
+            code: "fn test() {\n    println!(\"Hello\");\n}".to_string(),
+            symbol_signature: None,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            tfidf_rank: None,
+            bm25_score: None,
+            bm25_rank: None,
+            combined_score_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_lines: None,
+            matched_keywords: None,
+            tokenized_content: None,
+            parent_context: None,
+        };
+
+        let result2 = SearchResult {
+            file: temp_file2.path().to_string_lossy().to_string(),
+            lines: (1, 3),
+            node_type: "class".to_string(),
+            code: "class Test {\n    void run() {}\n}".to_string(),
+            symbol_signature: None,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            tfidf_rank: None,
+            bm25_score: None,
+            bm25_rank: None,
+            combined_score_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_lines: None,
+            matched_keywords: None,
+            tokenized_content: None,
+            parent_context: None,
+        };
+
+        let results = vec![&result1, &result2];
+
+        // Test cache creation
+        let cache = create_file_content_cache(&results);
+
+        // Verify cache contains both files
+        assert_eq!(cache.len(), 2);
+
+        // Verify content is correctly cached
+        let path1 = PathBuf::from(&result1.file);
+        let path2 = PathBuf::from(&result2.file);
+
+        assert!(cache.contains_key(&path1));
+        assert!(cache.contains_key(&path2));
+
+        assert_eq!(cache.get(&path1).unwrap().as_ref(), content1);
+        assert_eq!(cache.get(&path2).unwrap().as_ref(), content2);
     }
 }
