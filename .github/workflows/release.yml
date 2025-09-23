@@ -73,7 +73,12 @@ jobs:
           # Add ARM64 architecture
           sudo dpkg --add-architecture arm64
           
-          # Add Ubuntu Ports repository for ARM64 packages (GitHub's defaults only have security.ubuntu.com)
+          # Fix GitHub's default sources to not try fetching ARM64 from security.ubuntu.com (404 errors)
+          # by restricting them to amd64 only, then add proper ports.ubuntu.com for ARM64
+          sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
+          sudo sed -i 's/deb https/deb [arch=amd64] https/g' /etc/apt/sources.list
+          
+          # Add Ubuntu Ports repository for ARM64 packages  
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
