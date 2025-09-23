@@ -70,31 +70,41 @@ jobs:
       - name: Configure APT sources for arm64
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          # Completely remove all existing sources to prevent conflicts
+          # Disable automatic Ubuntu mirrors and create completely clean configuration
           sudo rm -rf /etc/apt/sources.list.d/
           sudo mkdir -p /etc/apt/sources.list.d
+          
+          # Remove any apt-mirrors configuration that might override our settings
+          sudo rm -f /etc/apt/apt-mirrors.txt
           
           # Backup original sources.list
           sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
           
-          # Create clean, conflict-free configuration with proper architecture separation
+          # Create ONLY ports.ubuntu.com configuration for clean ARM64 support
           sudo bash -c 'cat > /etc/apt/sources.list << EOF
-          # AMD64 packages from main Ubuntu repositories  
+          # Multi-arch configuration for cross-compilation
+          # AMD64 packages (host architecture)
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
           deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
           deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-backports main restricted universe multiverse
           
-          # ARM64 packages from Ubuntu Ports (ONLY for ARM64)
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse  
+          # ARM64 packages (target architecture) - MUST use ports.ubuntu.com
+          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
           deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-backports main restricted universe multiverse
           EOF'
+          
+          # Ensure dpkg knows about arm64 architecture
+          sudo dpkg --add-architecture arm64
           
           # Display configuration for debugging
           echo "=== APT Configuration ==="
           cat /etc/apt/sources.list
+          echo "=== Sources.list.d directory ==="
+          ls -la /etc/apt/sources.list.d/ || echo "Directory empty/doesn't exist"
+          echo "=== Architectures ==="
+          dpkg --print-architecture
+          dpkg --print-foreign-architectures
           echo "=== End Configuration ==="
 
       - name: Setup cross-compilation
