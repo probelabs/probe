@@ -10,13 +10,13 @@ You can install Probe in several ways - choose the method that best fits your en
 
 ```bash
 # Pull the CLI image
-docker pull buger/probe:latest
+docker pull probelabs/probe:latest
 
 # Create an alias for easy usage
-alias probe='docker run --rm -v $(pwd):/workspace buger/probe'
+alias probe='docker run --rm -v $(pwd):/workspace probelabs/probe'
 
 # For the AI chat interface
-docker pull buger/probe-chat:latest
+docker pull probelabs/probe-chat:latest
 ```
 
 **Benefits of Docker installation**:
@@ -37,7 +37,7 @@ npm install -g @probelabs/probe@latest
 ### Using curl (For macOS and Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/probelabs/probe/main/install.sh | bash
 ```
 
 **What the curl script does**:
@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
 ### Using PowerShell (For Windows)
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/probelabs/probe/main/install.ps1 | iex
 ```
 
 **What the PowerShell script does**:
@@ -69,16 +69,16 @@ The PowerShell script supports several options:
 
 ```powershell
 # Install for current user (default)
-iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/probelabs/probe/main/install.ps1 | iex
 
 # Install system-wide (requires admin privileges)
-iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--system"
+iwr -useb https://raw.githubusercontent.com/probelabs/probe/main/install.ps1 | iex -args "--system"
 
 # Install to a custom directory
-iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--dir", "C:\Tools\Probe"
+iwr -useb https://raw.githubusercontent.com/probelabs/probe/main/install.ps1 | iex -args "--dir", "C:\Tools\Probe"
 
 # Show help
-iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex -args "--help"
+iwr -useb https://raw.githubusercontent.com/probelabs/probe/main/install.ps1 | iex -args "--help"
 ```
 
 ## Requirements

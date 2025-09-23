@@ -10,8 +10,8 @@ Probe provides Docker images for both the CLI tool and the web interface, making
 ## Docker Hub Images
 
 Pre-built images are available on Docker Hub:
-- **Probe CLI**: `buger/probe:latest`
-- **Probe Chat**: `buger/probe-chat:latest`
+- **Probe CLI**: `probelabs/probe:latest`
+- **Probe Chat**: `probelabs/probe-chat:latest`
 
 ### Available Tags
 - `latest` - Latest stable release
@@ -25,13 +25,13 @@ Pre-built images are available on Docker Hub:
 
 ```bash
 # Pull the image
-docker pull buger/probe:latest
+docker pull probelabs/probe:latest
 
 # Basic usage
-docker run --rm -v $(pwd):/workspace buger/probe search "function" /workspace
+docker run --rm -v $(pwd):/workspace probelabs/probe search "function" /workspace
 
 # Create an alias for convenience
-alias probe='docker run --rm -v $(pwd):/workspace buger/probe'
+alias probe='docker run --rm -v $(pwd):/workspace probelabs/probe'
 probe search "class" .
 ```
 
@@ -43,7 +43,7 @@ probe search "class" .
 docker run --rm -it \
   -e ANTHROPIC_API_KEY=your_api_key \
   -v $(pwd):/workspace \
-  buger/probe-chat
+  probelabs/probe-chat
 ```
 
 #### Web Mode
@@ -53,7 +53,7 @@ docker run --rm \
   -e ANTHROPIC_API_KEY=your_api_key \
   -v $(pwd):/workspace \
   -p 3000:3000 \
-  buger/probe-chat --web
+  probelabs/probe-chat --web
 ```
 
 ## Docker Compose
@@ -104,7 +104,7 @@ docker compose up probe-chat-web
 - name: Analyze Code Structure
   run: |
     docker run --rm -v ${{ github.workspace }}:/workspace \
-      buger/probe search "TODO|FIXME" /workspace --format json > analysis.json
+      probelabs/probe search "TODO|FIXME" /workspace --format json > analysis.json
 ```
 
 ### Development Teams
@@ -115,7 +115,7 @@ docker run --rm -it \
   -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
   -v $(pwd):/workspace \
   -p 3000:3000 \
-  buger/probe-chat --web
+  probelabs/probe-chat --web
 ```
 
 ### Code Review Automation
@@ -124,7 +124,7 @@ docker run --rm -it \
 # Automated code review
 docker run --rm \
   -v $(pwd):/workspace \
-  buger/probe extract "security|auth" /workspace --format markdown
+  probelabs/probe extract "security|auth" /workspace --format markdown
 ```
 
 ## Multi-Platform Support
@@ -168,7 +168,7 @@ Both images include health checks:
 ### Port Already in Use
 If port 3000 is already in use:
 ```bash
-docker run --rm -e ANTHROPIC_API_KEY=your_key -p 8080:3000 buger/probe-chat --web
+docker run --rm -e ANTHROPIC_API_KEY=your_key -p 8080:3000 probelabs/probe-chat --web
 ```
 
 ### Permission Issues
@@ -195,7 +195,7 @@ export ANTHROPIC_API_KEY=your_actual_key
 For advanced use cases, you can extend the base images:
 
 ```dockerfile
-FROM buger/probe-chat:latest
+FROM probelabs/probe-chat:latest
 
 # Add custom configurations
 COPY custom-config.json /app/config/
@@ -223,7 +223,7 @@ For production deployments, consider:
 version: '3.8'
 services:
   probe-chat:
-    image: buger/probe-chat:1.0.0
+    image: probelabs/probe-chat:1.0.0
     environment:
       - ANTHROPIC_API_KEY_FILE=/run/secrets/anthropic_api_key
     secrets:
