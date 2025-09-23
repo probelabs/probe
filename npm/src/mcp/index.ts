@@ -604,5 +604,5 @@ class ProbeServer {
   }
 }
 
-const server = new ProbeServer(cliConfig.timeout, cliConfig.format);
+const server = new ProbeServer(cliConfig.timeout, cliConfig.format || 'outline-xml');
 server.run().catch(console.error);
