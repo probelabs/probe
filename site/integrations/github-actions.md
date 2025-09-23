@@ -35,7 +35,7 @@ permissions:
 jobs:
   trigger_probe_chat:
     # Use the reusable workflow from the main Probe repository
-    uses: buger/probe/.github/workflows/probe.yml@main
+    uses: probelabs/probe/.github/workflows/probe.yml@main
     # Pass required inputs
     with:
       # Define the command prefix to trigger the bot
@@ -56,7 +56,7 @@ jobs:
 
 1.  **Triggers**: The workflow runs when a new PR/issue is opened or a comment is made on an issue.
 2.  **Permissions**: It requires `write` permissions for issues/PRs to post comments and `read` permission for `contents` to access repository code for analysis.
-3.  **Reusable Workflow**: It utilizes `buger/probe/.github/workflows/probe.yml@main`, which handles parsing the command, invoking the Probe AI agent, searching the codebase, generating a response, and posting it back as a comment.
+3.  **Reusable Workflow**: It utilizes `probelabs/probe/.github/workflows/probe.yml@main`, which handles parsing the command, invoking the Probe AI agent, searching the codebase, generating a response, and posting it back as a comment.
 4.  **Configuration**:
     *   `command_prefix`: Defines how users trigger the bot (e.g., `/probe <Your question>`).
     *   `secrets`: Requires AI provider secrets (e.g., `ANTHROPIC_API_KEY`).
@@ -83,7 +83,7 @@ permissions:
 jobs:
   trigger_probe_implement:
     # Use the reusable workflow
-    uses: buger/probe/.github/workflows/probe.yml@main
+    uses: probelabs/probe/.github/workflows/probe.yml@main
     with:
       # Define the command prefix
       command_prefix: "/engineer" # Specific prefix for this persona
@@ -109,7 +109,7 @@ jobs:
 
 1.  **Trigger**: This workflow specifically triggers on issue comments.
 2.  **Permissions**: Crucially, it requires `contents: write` permission in addition to `issues: write` and potentially `pull-requests: write`. The `contents: write` permission is essential for allowing the workflow to modify files in the repository.
-3.  **Reusable Workflow**: Still uses `buger/probe/.github/workflows/probe.yml@main`.
+3.  **Reusable Workflow**: Still uses `probelabs/probe/.github/workflows/probe.yml@main`.
 4.  **Configuration**:
     *   `command_prefix`: Uses `/engineer` to invoke this specific workflow.
     *   `allow_edit: true`: This flag enables Probe's code editing capabilities (likely via the `implement` tool). **Use with caution.**
@@ -176,7 +176,7 @@ You can allow workflows using `probe.yml` to be triggered manually from the GitH
 
     jobs:
       trigger_probe_manual:
-        uses: buger/probe/.github/workflows/probe.yml@main
+        uses: probelabs/probe/.github/workflows/probe.yml@main
         with:
           # Use the input from the manual trigger
           manual_input: ${{ github.event.inputs.user_request }}
@@ -209,7 +209,7 @@ Add the `enable_tracing` parameter to your workflow:
 ```yaml
 jobs:
   trigger_probe_chat:
-    uses: buger/probe/.github/workflows/probe.yml@main
+    uses: probelabs/probe/.github/workflows/probe.yml@main
     with:
       command_prefix: "/probe"
       enable_tracing: true # Enable OpenTelemetry tracing
@@ -229,7 +229,7 @@ When `enable_tracing: true` is set without `TRACING_URL`, traces are saved to a 
 ```yaml
 jobs:
   trigger_probe_chat:
-    uses: buger/probe/.github/workflows/probe.yml@main
+    uses: probelabs/probe/.github/workflows/probe.yml@main
     with:
       command_prefix: "/probe"
       enable_tracing: true
@@ -245,7 +245,7 @@ For remote tracing to an OpenTelemetry collector, add the `TRACING_URL` secret:
 ```yaml
 jobs:
   trigger_probe_chat:
-    uses: buger/probe/.github/workflows/probe.yml@main
+    uses: probelabs/probe/.github/workflows/probe.yml@main
     with:
       command_prefix: "/probe"
       enable_tracing: true
@@ -323,7 +323,7 @@ For remote tracing with Jaeger:
    ```yaml
    jobs:
      trigger_probe_chat:
-       uses: buger/probe/.github/workflows/probe.yml@main
+       uses: probelabs/probe/.github/workflows/probe.yml@main
        with:
          enable_tracing: true
        secrets:
@@ -381,7 +381,7 @@ By default, Probe creates a new comment for each invocation. However, you can co
 ```yaml
 jobs:
   trigger_probe_chat:
-    uses: buger/probe/.github/workflows/probe.yml@main
+    uses: probelabs/probe/.github/workflows/probe.yml@main
     with:
       command_prefix: "/probe"
       # Enable comment updating

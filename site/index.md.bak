@@ -76,7 +76,7 @@ features:
 
     <p>Get started with a single command:</p>
     
-    <div class="language-bash"><pre><code>curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash</code></pre></div>
+    <div class="language-bash"><pre><code>curl -fsSL https://raw.githubusercontent.com/probelabs/probe/main/install.sh | bash</code></pre></div>
     
     <p>Then start exploring your code:</p>
     
