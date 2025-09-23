@@ -69,36 +69,9 @@ jobs:
 
       - name: Setup ARM64 cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          # Add ARM64 architecture
-          sudo dpkg --add-architecture arm64
-          
-          # Fix GitHub's default sources to not try fetching ARM64 from security.ubuntu.com (404 errors)
-          # by restricting them to amd64 only, then add proper ports.ubuntu.com for ARM64
-          sudo sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list
-          sudo sed -i 's/deb https/deb [arch=amd64] https/g' /etc/apt/sources.list
-          
-          # Add Ubuntu Ports repository for ARM64 packages  
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/ports.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
-          
-          # Update package lists (ignore 404 errors from GitHub's default sources)  
-          sudo apt-get update --allow-releaseinfo-change || true
-          
-          # Install cross-compilation tools (install base libraries first to resolve dependencies)
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libc6-dev-arm64-cross
-          
-          # Install SSL development libraries for ARM64 (may need to skip if dependencies conflict)
-          sudo apt-get install -y libssl-dev:arm64 || echo "Warning: Could not install libssl-dev:arm64, trying alternative approach"
-          
-          # Set environment variables for cross-compilation
-          {
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
-            echo "PKG_CONFIG_ALLOW_CROSS=1"
-            echo "OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu"
-            echo "OPENSSL_INCLUDE_DIR=/usr/include"
-          } >> "$GITHUB_ENV"
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: aarch64-unknown-linux-gnu
 
       # Build the Rust project
       - name: Build Release
