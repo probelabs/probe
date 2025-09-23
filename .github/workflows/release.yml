@@ -67,45 +67,28 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
 
-      - name: Configure APT sources for arm64
+      - name: Setup ARM64 architecture
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
-          # Disable automatic Ubuntu mirrors and create completely clean configuration
-          sudo rm -rf /etc/apt/sources.list.d/
-          sudo mkdir -p /etc/apt/sources.list.d
+          # Test minimal approach - just add ARM64 architecture and let GitHub's defaults handle repositories
+          echo "=== BEFORE: Default GitHub APT Configuration ==="
+          echo "Architecture:"
+          dpkg --print-architecture || echo "No architecture"
+          dpkg --print-foreign-architectures || echo "No foreign architectures"
+          echo "Sources.list:"
+          cat /etc/apt/sources.list || echo "No sources.list"
+          echo "Sources.list.d:"
+          ls -la /etc/apt/sources.list.d/ || echo "No sources.list.d"
+          echo "Apt mirrors:"
+          cat /etc/apt/apt-mirrors.txt || echo "No apt-mirrors.txt"
           
-          # Remove any apt-mirrors configuration that might override our settings
-          sudo rm -f /etc/apt/apt-mirrors.txt
-          
-          # Backup original sources.list
-          sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
-          
-          # Create ONLY ports.ubuntu.com configuration for clean ARM64 support
-          sudo bash -c 'cat > /etc/apt/sources.list << EOF
-          # Multi-arch configuration for cross-compilation
-          # AMD64 packages (host architecture)
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu noble-updates main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu noble-security main restricted universe multiverse
-          
-          # ARM64 packages (target architecture) - MUST use ports.ubuntu.com
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse
-          EOF'
-          
-          # Ensure dpkg knows about arm64 architecture
+          # Simply add ARM64 architecture - let GitHub handle the repos
           sudo dpkg --add-architecture arm64
           
-          # Display configuration for debugging
-          echo "=== APT Configuration ==="
-          cat /etc/apt/sources.list
-          echo "=== Sources.list.d directory ==="
-          ls -la /etc/apt/sources.list.d/ || echo "Directory empty/doesn't exist"
-          echo "=== Architectures ==="
+          echo "=== AFTER: Added ARM64 Architecture ==="
+          echo "Architecture:"
           dpkg --print-architecture
           dpkg --print-foreign-architectures
-          echo "=== End Configuration ==="
 
       - name: Setup cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-gnu'
