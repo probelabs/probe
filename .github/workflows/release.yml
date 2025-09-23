@@ -250,14 +250,12 @@ jobs:
       - name: Install dependencies
         run: cd examples/chat && npm install
 
-      - name: Update package version and dependencies
+      - name: Update package version
         run: |
           cd examples/chat
           # Update version in package.json without git operations
           npm version "$VERSION" --no-git-tag-version
-          # Update dependency on @buger/probe to use the specific version
-          npm pkg set dependencies."@buger/probe"="^$VERSION"
-          echo "Updated probe-chat package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
+          echo "Updated probe-chat package.json to version $VERSION"
 
       - name: Publish to npm
         run: cd examples/chat && npm publish --access public
