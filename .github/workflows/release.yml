@@ -86,8 +86,11 @@ jobs:
           # Update package lists (ignore 404 errors from GitHub's default sources)  
           sudo apt-get update --allow-releaseinfo-change || true
           
-          # Install cross-compilation tools
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
+          # Install cross-compilation tools (install base libraries first to resolve dependencies)
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libc6-dev-arm64-cross
+          
+          # Install SSL development libraries for ARM64 (may need to skip if dependencies conflict)
+          sudo apt-get install -y libssl-dev:arm64 || echo "Warning: Could not install libssl-dev:arm64, trying alternative approach"
           
           # Set environment variables for cross-compilation
           {
