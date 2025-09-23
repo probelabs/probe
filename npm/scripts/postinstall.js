@@ -10,7 +10,11 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { downloadProbeBinary } from '../src/downloader.js';
+
+const execAsync = promisify(exec);
 
 // Get the directory of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -24,7 +28,19 @@ const binDir = path.resolve(__dirname, '..', 'bin');
  */
 async function main() {
 	try {
-		// Skip postinstall if binary already exists (for CI or development)
+		// Skip postinstall in CI environments to prevent wrong binaries from being packaged
+		const isCI = process.env.CI || process.env.GITHUB_ACTIONS || process.env.CONTINUOUS_INTEGRATION || 
+		             process.env.BUILD_NUMBER || process.env.JENKINS_URL || process.env.TRAVIS ||
+		             process.env.CIRCLECI || process.env.GITLAB_CI;
+		
+		if (isCI) {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log('Detected CI environment, skipping probe binary download');
+			}
+			return;
+		}
+
+		// Skip postinstall if binary already exists (for development)
 		const isWindows = process.platform === 'win32';
 		const targetBinaryName = isWindows ? 'probe.exe' : 'probe-binary';
 		const targetBinaryPath = path.join(binDir, targetBinaryName);
@@ -135,7 +151,7 @@ You can download the binary from: https://github.com/probelabs/probe/releases
 			// On macOS, try to remove quarantine attributes that might prevent execution
 			if (process.platform === 'darwin') {
 				try {
-					await exec(`xattr -d com.apple.quarantine "${targetBinaryPath}" 2>/dev/null || true`);
+					await execAsync(`xattr -d com.apple.quarantine "${targetBinaryPath}" 2>/dev/null || true`);
 					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
 						console.log('Removed quarantine attributes from binary');
 					}
