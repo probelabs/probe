@@ -83,8 +83,10 @@ jobs:
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/ports.list
           
-          # Update package lists and install cross-compilation tools
-          sudo apt-get update
+          # Update package lists (ignore 404 errors from GitHub's default sources)  
+          sudo apt-get update --allow-releaseinfo-change || true
+          
+          # Install cross-compilation tools
           sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
           
           # Set environment variables for cross-compilation
