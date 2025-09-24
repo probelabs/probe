@@ -342,14 +342,32 @@ export class ProbeAgent {
         return true;
       }
 
-      // Security validation: resolve path relative to allowed folders
-      const baseDir = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
-      const absolutePath = isAbsolute(imagePath) ? imagePath : resolve(baseDir, imagePath);
+      // Security validation: check if path is within any allowed directory
+      const allowedDirs = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders : [process.cwd()];
       
-      // Security check: ensure path is within allowed directory
-      if (!absolutePath.startsWith(resolve(baseDir))) {
+      let absolutePath;
+      let isPathAllowed = false;
+      
+      // If absolute path, check if it's within any allowed directory
+      if (isAbsolute(imagePath)) {
+        absolutePath = imagePath;
+        isPathAllowed = allowedDirs.some(dir => absolutePath.startsWith(resolve(dir)));
+      } else {
+        // For relative paths, try resolving against each allowed directory
+        for (const dir of allowedDirs) {
+          const resolvedPath = resolve(dir, imagePath);
+          if (resolvedPath.startsWith(resolve(dir))) {
+            absolutePath = resolvedPath;
+            isPathAllowed = true;
+            break;
+          }
+        }
+      }
+      
+      // Security check: ensure path is within at least one allowed directory
+      if (!isPathAllowed) {
         if (this.debug) {
-          console.log(`[DEBUG] Image path outside allowed directory: ${imagePath}`);
+          console.log(`[DEBUG] Image path outside allowed directories: ${imagePath}`);
         }
         return false;
       }

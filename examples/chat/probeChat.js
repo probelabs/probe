@@ -70,17 +70,20 @@ function isSecureFilePath(filePath, baseDir = process.cwd()) {
  */
 async function convertImageFileToBase64(filePath, debug = false) {
   try {
-    // Security check: validate the file path
-    const allowedDir = allowedFolders.length > 0 ? allowedFolders[0] : process.cwd();
-    if (!isSecureFilePath(filePath, allowedDir)) {
+    // Security check: validate the file path against all allowed directories
+    const allowedDirs = allowedFolders.length > 0 ? allowedFolders : [process.cwd()];
+    const isPathAllowed = allowedDirs.some(dir => isSecureFilePath(filePath, dir));
+    
+    if (!isPathAllowed) {
       if (debug) {
         console.log(`[DEBUG] Security check failed for path: ${filePath}`);
       }
       return null;
     }
 
-    // Resolve the path
-    const absolutePath = isAbsolute(filePath) ? filePath : resolve(allowedDir, filePath);
+    // Resolve the path - for relative paths, use the first allowed directory as base
+    const baseDir = allowedDirs[0];
+    const absolutePath = isAbsolute(filePath) ? filePath : resolve(baseDir, filePath);
     
     // Check if file exists and get file stats
     let fileStats;
