@@ -52,6 +52,7 @@ fn standalone_function() {
         prompt: None,
         instructions: None,
         no_gitignore: false,
+        lsp: false,
     };
 
     // Call handle_extract
@@ -123,9 +124,11 @@ fn standalone_function() {
     println!("Command stdout: {stdout}");
     println!("Command stderr: {stderr}");
 
-    // Check for deduplication logs in stdout (not stderr)
+    // Check for deduplication logs (may appear on stderr when using `cargo run`)
     assert!(
-        stdout.contains("Before deduplication:") && stdout.contains("After deduplication:"),
+        (stdout.contains("Before deduplication:") && stdout.contains("After deduplication:"))
+            || (stderr.contains("Before deduplication:")
+                && stderr.contains("After deduplication:")),
         "Deduplication logs not found in output"
     );
 
