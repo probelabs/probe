@@ -283,7 +283,7 @@ class ProbeAgentMcpServer {
           tools: {},
         },
         serverInfo: {
-          name: '@buger/probe-agent',
+          name: '@probelabs/probe agent',
           version: '1.0.0',
         },
       };
