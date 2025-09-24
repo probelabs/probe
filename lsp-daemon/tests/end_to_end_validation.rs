@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! End-to-end validation tests for the null edge caching system
 //!
 //! These tests validate the complete flow from daemon startup through

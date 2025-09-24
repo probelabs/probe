@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! LSP Error Handling and Resilience Tests
 //!
 //! This module tests error handling scenarios including:

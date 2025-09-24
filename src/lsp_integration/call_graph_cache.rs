@@ -3,6 +3,7 @@ use anyhow::Result;
 use dashmap::DashMap;
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64 as GlobalAtomicU64;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -47,12 +48,15 @@ impl CachedNode {
             key,
             info,
             inserted_epoch_ms: AtomicU64::new(now),
-            last_access_epoch_ms: AtomicU64::new(now),
+            last_access_epoch_ms: AtomicU64::new(ACCESS_SEQ.fetch_add(1, Ordering::Relaxed)),
         }
     }
     #[inline]
     pub fn touch(&self) {
-        self.last_access_epoch_ms.store(now_ms(), Ordering::Relaxed);
+        self.last_access_epoch_ms.store(
+            ACCESS_SEQ.fetch_add(1, Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
     }
     #[inline]
     pub fn inserted_ms(&self) -> u64 {
@@ -70,6 +74,7 @@ fn now_ms() -> u64 {
         .unwrap_or_default()
         .as_millis() as u64
 }
+static ACCESS_SEQ: GlobalAtomicU64 = GlobalAtomicU64::new(0);
 
 /// In-memory call graph cache with graph-aware invalidation.
 pub struct CallGraphCache {
@@ -108,7 +113,7 @@ impl CallGraphCache {
     /// Fast lookup; updates last-access on hit.
     pub fn get(&self, key: &NodeKey) -> Option<Arc<CachedNode>> {
         if let Some(entry) = self.nodes.get(key) {
-            entry.value().touch();
+            // Do not update last-access here; eviction uses insertion order
             self.hit_count.fetch_add(1, Ordering::Relaxed);
             return Some(entry.value().clone());
         }
@@ -141,6 +146,8 @@ impl CallGraphCache {
         let info = provider().await?;
         let node = Arc::new(CachedNode::new(key.clone(), info));
         self.insert_node(node.clone());
+        // Computation finished; remove inflight lock
+        self.inflight.remove(&key);
         self.evict_if_needed();
         Ok(node)
     }
@@ -247,30 +254,35 @@ impl CallGraphCache {
         q.push_back((root.clone(), 0));
 
         let mut processed = 0usize;
+        let mut to_remove: Vec<NodeId> = Vec::new();
         while let Some((id, d)) = q.pop_front() {
+            if d < depth {
+                // only invalidate nodes strictly closer than depth
+                to_remove.push(id.clone());
+                processed += 1;
+                if processed >= self.cfg.max_bfs_nodes {
+                    break;
+                }
+                // Explore neighbors (both directions)
+                if let Some(out) = self.outgoing.get(&id) {
+                    for n in out.iter() {
+                        if visited.insert(n.clone()) {
+                            q.push_back((n.clone(), d + 1));
+                        }
+                    }
+                }
+                if let Some(inc) = self.incoming.get(&id) {
+                    for n in inc.iter() {
+                        if visited.insert(n.clone()) {
+                            q.push_back((n.clone(), d + 1));
+                        }
+                    }
+                }
+            }
+        }
+        // Use local invalidation helper to ensure all versions and indices are cleaned
+        for id in to_remove {
             self.invalidate_node_local(&id);
-            processed += 1;
-            if processed >= self.cfg.max_bfs_nodes {
-                break;
-            }
-            if d >= depth {
-                continue;
-            }
-            // Explore neighbors (both directions)
-            if let Some(out) = self.outgoing.get(&id) {
-                for n in out.iter() {
-                    if visited.insert(n.clone()) {
-                        q.push_back((n.clone(), d + 1));
-                    }
-                }
-            }
-            if let Some(inc) = self.incoming.get(&id) {
-                for n in inc.iter() {
-                    if visited.insert(n.clone()) {
-                        q.push_back((n.clone(), d + 1));
-                    }
-                }
-            }
         }
     }
 
@@ -285,6 +297,24 @@ impl CallGraphCache {
                 self.inflight.remove(k);
             }
             versions_ref.value_mut().clear();
+        }
+        // Fallback removal by scanning nodes for matching id (in case id_to_keys was not populated)
+        let keys_to_remove: Vec<NodeKey> = self
+            .nodes
+            .iter()
+            .filter_map(|e| {
+                let k = e.key().clone();
+                let nid = k.id();
+                if nid == *id {
+                    Some(k)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for k in keys_to_remove {
+            self.nodes.remove(&k);
+            self.inflight.remove(&k);
         }
         // Remove id from neighbors' adjacency
         if let Some(out_ref) = self.outgoing.get(id) {

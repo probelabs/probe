@@ -571,9 +571,27 @@ pub struct SymbolInformation {
     pub deprecated: Option<bool>,
     pub location: Location,
     pub container_name: Option<String>,
+    pub tags: Option<Vec<SymbolTag>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(try_from = "u32")]
+pub enum SymbolTag {
+    Deprecated = 1,
+}
+
+impl TryFrom<u32> for SymbolTag {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(SymbolTag::Deprecated),
+            _ => Err(format!("Unknown SymbolTag value: {}", value)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
 pub enum SymbolKind {
     File = 1,
     Module = 2,
@@ -603,6 +621,130 @@ pub enum SymbolKind {
     TypeParameter = 26,
 }
 
+impl TryFrom<u32> for SymbolKind {
+    type Error = String;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(SymbolKind::File),
+            2 => Ok(SymbolKind::Module),
+            3 => Ok(SymbolKind::Namespace),
+            4 => Ok(SymbolKind::Package),
+            5 => Ok(SymbolKind::Class),
+            6 => Ok(SymbolKind::Method),
+            7 => Ok(SymbolKind::Property),
+            8 => Ok(SymbolKind::Field),
+            9 => Ok(SymbolKind::Constructor),
+            10 => Ok(SymbolKind::Enum),
+            11 => Ok(SymbolKind::Interface),
+            12 => Ok(SymbolKind::Function),
+            13 => Ok(SymbolKind::Variable),
+            14 => Ok(SymbolKind::Constant),
+            15 => Ok(SymbolKind::String),
+            16 => Ok(SymbolKind::Number),
+            17 => Ok(SymbolKind::Boolean),
+            18 => Ok(SymbolKind::Array),
+            19 => Ok(SymbolKind::Object),
+            20 => Ok(SymbolKind::Key),
+            21 => Ok(SymbolKind::Null),
+            22 => Ok(SymbolKind::EnumMember),
+            23 => Ok(SymbolKind::Struct),
+            24 => Ok(SymbolKind::Event),
+            25 => Ok(SymbolKind::Operator),
+            26 => Ok(SymbolKind::TypeParameter),
+            _ => Err(format!("Unknown SymbolKind value: {}", value)),
+        }
+    }
+}
+
+impl std::str::FromStr for SymbolKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "File" => Ok(SymbolKind::File),
+            "Module" => Ok(SymbolKind::Module),
+            "Namespace" => Ok(SymbolKind::Namespace),
+            "Package" => Ok(SymbolKind::Package),
+            "Class" => Ok(SymbolKind::Class),
+            "Method" => Ok(SymbolKind::Method),
+            "Property" => Ok(SymbolKind::Property),
+            "Field" => Ok(SymbolKind::Field),
+            "Constructor" => Ok(SymbolKind::Constructor),
+            "Enum" => Ok(SymbolKind::Enum),
+            "Interface" => Ok(SymbolKind::Interface),
+            "Function" => Ok(SymbolKind::Function),
+            "Variable" => Ok(SymbolKind::Variable),
+            "Constant" => Ok(SymbolKind::Constant),
+            "String" => Ok(SymbolKind::String),
+            "Number" => Ok(SymbolKind::Number),
+            "Boolean" => Ok(SymbolKind::Boolean),
+            "Array" => Ok(SymbolKind::Array),
+            "Object" => Ok(SymbolKind::Object),
+            "Key" => Ok(SymbolKind::Key),
+            "Null" => Ok(SymbolKind::Null),
+            "EnumMember" => Ok(SymbolKind::EnumMember),
+            "Struct" => Ok(SymbolKind::Struct),
+            "Event" => Ok(SymbolKind::Event),
+            "Operator" => Ok(SymbolKind::Operator),
+            "TypeParameter" => Ok(SymbolKind::TypeParameter),
+            _ => Err(format!("Unknown SymbolKind string: {}", s)),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SymbolKind {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, Unexpected, Visitor};
+        use std::fmt;
+
+        struct SymbolKindVisitor;
+
+        impl<'de> Visitor<'de> for SymbolKindVisitor {
+            type Value = SymbolKind;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a SymbolKind integer or string")
+            }
+
+            fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                SymbolKind::try_from(value as u32)
+                    .map_err(|e| de::Error::invalid_value(Unexpected::Unsigned(value), &e.as_str()))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if value < 0 {
+                    return Err(de::Error::invalid_value(
+                        Unexpected::Signed(value),
+                        &"a positive integer",
+                    ));
+                }
+                self.visit_u64(value as u64)
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                use std::str::FromStr;
+                SymbolKind::from_str(value)
+                    .map_err(|e| de::Error::invalid_value(Unexpected::Str(value), &e.as_str()))
+            }
+        }
+
+        deserializer.deserialize_any(SymbolKindVisitor)
+    }
+}
+
 // Indexing configuration and status types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexingConfig {
@@ -614,6 +756,8 @@ pub struct IndexingConfig {
     pub exclude_patterns: Vec<String>,
     #[serde(default)]
     pub include_patterns: Vec<String>,
+    #[serde(default)]
+    pub specific_files: Vec<String>,
     #[serde(default)]
     pub max_file_size_mb: Option<u64>,
     #[serde(default)]
@@ -663,6 +807,7 @@ impl Default for IndexingConfig {
                 "*/dist/*".to_string(),
             ],
             include_patterns: vec![],
+            specific_files: vec![],
             max_file_size_mb: Some(10),
             incremental: Some(true),
             languages: vec![],
@@ -694,6 +839,9 @@ pub struct IndexingStatusInfo {
     pub started_at: Option<u64>, // Unix timestamp
     pub elapsed_seconds: u64,
     pub lsp_enrichment: Option<LspEnrichmentInfo>, // LSP enrichment progress
+    pub database: Option<DatabaseInfo>,            // Actual persisted database counts
+    #[serde(default)]
+    pub lsp_indexing: Option<LspIndexingInfo>, // LSP indexing (prewarm) aggregated stats
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -741,7 +889,20 @@ pub struct LspEnrichmentInfo {
     pub symbols_enriched: u64,
     pub symbols_failed: u64,
     pub queue_stats: LspEnrichmentQueueInfo,
+    /// Total call hierarchy edges persisted by workers
     pub edges_created: u64,
+    /// Total reference edges persisted by workers
+    #[serde(default)]
+    pub reference_edges_created: u64,
+    /// Positions adjusted (snapped to identifier)
+    #[serde(default)]
+    pub positions_adjusted: u64,
+    /// Successful call hierarchy operations
+    #[serde(default)]
+    pub call_hierarchy_success: u64,
+    /// Total references found across symbols
+    #[serde(default)]
+    pub references_found: u64,
     pub success_rate: f64, // Percentage of successfully enriched symbols
 }
 
@@ -751,6 +912,25 @@ pub struct LspEnrichmentQueueInfo {
     pub high_priority_items: usize,
     pub medium_priority_items: usize,
     pub low_priority_items: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspIndexingInfo {
+    pub positions_adjusted: u64,
+    pub call_hierarchy_success: u64,
+    pub symbols_persisted: u64,
+    pub edges_persisted: u64,
+    pub references_found: u64,
+    pub reference_edges_persisted: u64,
+    pub lsp_calls: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DatabaseInfo {
+    pub total_symbols: u64,           // Count from symbol_state table
+    pub total_edges: u64,             // Count from edge table
+    pub total_files: u64,             // Count from file table
+    pub workspace_id: Option<String>, // Current workspace ID
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

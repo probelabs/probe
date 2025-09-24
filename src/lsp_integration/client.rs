@@ -513,7 +513,21 @@ impl LspClient {
         let lsp_server = self.detect_lsp_server(file_path);
         let symbol_type = "function"; // For now, assume functions (could be enhanced)
 
-        // Get position offset from analyzer
+        // First, snap to the identifier start using the shared resolver from lsp-daemon
+        let (base_line, base_column) = {
+            let lang_str = language.as_deref().unwrap_or("unknown");
+            match lsp_daemon::position::resolve_symbol_position(
+                file_path,
+                tree_sitter_line,
+                tree_sitter_column,
+                lang_str,
+            ) {
+                Ok((l, c)) => (l, c),
+                Err(_) => (tree_sitter_line, tree_sitter_column),
+            }
+        };
+
+        // Then apply any learned position offset pattern from analyzer (relative to identifier start)
         let position_offset = if let Some(lang) = &language {
             self.position_analyzer
                 .get_position_offset(lang, symbol_type, lsp_server.as_deref())
@@ -525,12 +539,12 @@ impl LspClient {
 
         // Apply the position offset or use default (start position)
         match position_offset {
-            Some(offset) => offset.apply(tree_sitter_line, tree_sitter_column, identifier_len),
+            Some(offset) => offset.apply(base_line, base_column, identifier_len),
             None => {
                 // Default fallback: use start position
                 debug!("No position pattern found for language={:?} symbol_type={} server={:?}, using start position", 
                        language, symbol_type, lsp_server);
-                (tree_sitter_line, tree_sitter_column)
+                (base_line, base_column)
             }
         }
     }
@@ -1845,6 +1859,190 @@ impl LspClient {
         }
     }
 
+    /// Get the fully qualified name for a symbol at a specific position
+    pub async fn get_symbol_fqn(
+        &mut self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<String> {
+        // Try AST-based FQN extraction first (more reliable)
+        if let Ok(fqn) = Self::get_fqn_from_ast(file_path, line, column) {
+            if !fqn.is_empty() {
+                return Ok(fqn);
+            }
+        }
+
+        // Fall back to hover-based extraction if AST fails
+        let hover = self.call_hover(file_path, line, column).await?;
+
+        // Extract the FQN from hover response if hover exists
+        if let Some(hover_content) = hover {
+            let fqn = Self::extract_fqn_from_hover(&hover_content)?;
+            Ok(fqn)
+        } else {
+            // No hover info available
+            Ok(String::new())
+        }
+    }
+
+    /// Extract the fully qualified name from hover response
+    fn extract_fqn_from_hover(hover: &lsp_daemon::protocol::HoverContent) -> Result<String> {
+        // Hover content format varies by language server:
+        // rust-analyzer: "probe_code::config::ProbeConfig\n\npub search: Option<SearchConfig>\n\n\nsize = ..."
+        // pylsp: "module.ClassName.method\n\nDocstring here..."
+        // The first line is the parent's FQN, then we extract the field/method name from the detail line
+
+        let content = &hover.contents;
+
+        // Parse based on the format of hover.contents
+        // If it's a JSON object with "kind" and "value" fields, extract the value
+        let text = if content.starts_with("{\"kind\":") {
+            // It's a JSON object, parse it
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
+                parsed["value"].as_str().unwrap_or(content).to_string()
+            } else {
+                content.clone()
+            }
+        } else {
+            content.clone()
+        };
+
+        // The parent FQN is typically the first line
+        let parent_fqn = if let Some(first_line) = text.lines().next() {
+            // Clean up the FQN - remove any markdown formatting or extra whitespace
+            let cleaned = first_line.trim();
+
+            // If it starts with backticks (markdown code), extract the content
+            if cleaned.starts_with('`') && cleaned.ends_with('`') {
+                cleaned.trim_matches('`').to_string()
+            } else if cleaned.starts_with("```") {
+                // Multi-line code block, extract after language specifier
+                if let Some(pos) = cleaned.find(' ') {
+                    cleaned[pos + 1..].to_string()
+                } else {
+                    cleaned.to_string()
+                }
+            } else {
+                cleaned.to_string()
+            }
+        } else {
+            // If hover is empty, return empty FQN
+            return Ok(String::new());
+        };
+
+        // Detect the language-specific separator from the parent FQN
+        let separator = if parent_fqn.contains("::") {
+            "::" // Rust, C++, Ruby
+        } else if parent_fqn.contains('.') {
+            "." // Python, JavaScript, TypeScript, Java, Go, C#
+        } else if parent_fqn.contains('\\') {
+            "\\" // PHP
+        } else {
+            // Default to :: for Rust since we're in a Rust project
+            "::"
+        };
+
+        // For field/method access, extract the member name from the detail line
+        // Look for patterns like "pub field_name:", "fn method_name(", "const CONST_NAME:", etc.
+        let lines: Vec<&str> = text.lines().collect();
+
+        // The member definition is usually on the third line (after parent FQN and empty line)
+        if lines.len() > 2 {
+            let member_line = lines[2];
+
+            // Try to extract the member name
+            if let Some(member_name) = Self::extract_member_name(member_line) {
+                // Combine parent FQN with member name using appropriate separator
+                return Ok(format!("{}{}{}", parent_fqn, separator, member_name));
+            }
+        }
+
+        // If we couldn't extract a member name, just return the parent FQN
+        Ok(parent_fqn)
+    }
+
+    /// Helper function to extract member name from a hover detail line
+    fn extract_member_name(line: &str) -> Option<String> {
+        let trimmed = line.trim();
+
+        // Rust patterns: "pub field_name: Type", "fn method_name(...)", "const CONST_NAME: Type"
+        // Handle "pub fn" as a special case
+        if trimmed.starts_with("pub fn ") {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let name = parts[2]; // Skip "pub" and "fn", get the actual function name
+                                     // Extract just the function name before parentheses or generics
+                if let Some(paren_pos) = name.find('(') {
+                    return Some(name[..paren_pos].to_string());
+                } else if let Some(angle_pos) = name.find('<') {
+                    return Some(name[..angle_pos].to_string());
+                } else {
+                    return Some(name.to_string());
+                }
+            }
+        } else if trimmed.starts_with("pub ")
+            || trimmed.starts_with("fn ")
+            || trimmed.starts_with("const ")
+            || trimmed.starts_with("static ")
+        {
+            // Split by whitespace and take the second token, then clean it up
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[1];
+                // Remove trailing : or ( if present
+                let name = name.trim_end_matches(':').trim_end_matches('(');
+                return Some(name.to_string());
+            }
+        }
+
+        // Python patterns: "def method_name(...):", "class ClassName:", "variable_name = ..."
+        if trimmed.starts_with("def ") || trimmed.starts_with("class ") {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[1];
+                // Remove trailing ( or : if present
+                let name = name.trim_end_matches('(').trim_end_matches(':');
+                return Some(name.to_string());
+            }
+        }
+
+        // JavaScript/TypeScript patterns: "function name(...)", "const name = ...", "let name = ...", "var name = ..."
+        if trimmed.starts_with("function ")
+            || trimmed.starts_with("const ")
+            || trimmed.starts_with("let ")
+            || trimmed.starts_with("var ")
+        {
+            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[1];
+                // Remove trailing ( or = if present
+                let name = name.trim_end_matches('(').trim_end_matches('=');
+                return Some(name.to_string());
+            }
+        }
+
+        // Generic pattern: if the line contains a colon, take everything before it
+        if let Some(colon_pos) = trimmed.find(':') {
+            let before_colon = &trimmed[..colon_pos];
+            // Take the last word before the colon
+            if let Some(name) = before_colon.split_whitespace().last() {
+                return Some(name.to_string());
+            }
+        }
+
+        // Generic pattern: if the line contains parentheses, take the word before them
+        if let Some(paren_pos) = trimmed.find('(') {
+            let before_paren = &trimmed[..paren_pos];
+            // Take the last word before the parenthesis
+            if let Some(name) = before_paren.split_whitespace().last() {
+                return Some(name.to_string());
+            }
+        }
+
+        None
+    }
+
     /// Search for symbols in the workspace
     pub async fn call_workspace_symbols(
         &mut self,
@@ -1990,6 +2188,365 @@ impl LspClient {
             DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
             _ => Err(anyhow!("Unexpected response type")),
         }
+    }
+
+    /// Extract FQN using tree-sitter AST parsing
+    fn get_fqn_from_ast(file_path: &Path, line: u32, column: u32) -> Result<String> {
+        use crate::language::parser_pool::{get_pooled_parser, return_pooled_parser};
+        use std::fs;
+
+        // Read file content
+        let content = fs::read_to_string(file_path)?;
+        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // Acquire a parser for this file type from the pool
+        let mut parser = get_pooled_parser(extension)?;
+
+        // Parse the file
+        let tree = parser
+            .parse(content.as_bytes(), None)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
+
+        // Return the parser to the pool as soon as possible
+        return_pooled_parser(extension, parser);
+
+        // Find node at the specified position
+        let root = tree.root_node();
+        let point = tree_sitter::Point::new(line as usize, column as usize);
+        let node = Self::find_node_at_point(root, point)?;
+
+        // Build FQN by traversing up the AST
+        let mut fqn = Self::build_fqn_from_node(node, content.as_bytes(), extension)?;
+
+        // Prepend the path-based package/module information
+        if let Some(path_prefix) = Self::get_path_based_prefix(file_path, extension) {
+            if !path_prefix.is_empty() {
+                if fqn.is_empty() {
+                    fqn = path_prefix;
+                } else {
+                    fqn = format!("{}::{}", path_prefix, fqn);
+                }
+            }
+        }
+
+        Ok(fqn)
+    }
+
+    /// Find the most specific node at the given point
+    fn find_node_at_point<'a>(
+        node: tree_sitter::Node<'a>,
+        point: tree_sitter::Point,
+    ) -> Result<tree_sitter::Node<'a>> {
+        let mut current = node;
+
+        // Traverse down to find the most specific node containing the point
+        loop {
+            let mut found_child = false;
+
+            // Walk children with a temporary cursor to avoid borrow issues
+            let mut tmp_cursor = current.walk();
+            let mut selected_child: Option<tree_sitter::Node<'a>> = None;
+            for child in current.children(&mut tmp_cursor) {
+                let start = child.start_position();
+                let end = child.end_position();
+
+                // Check if point is within this child's range
+                if (start.row < point.row
+                    || (start.row == point.row && start.column <= point.column))
+                    && (end.row > point.row || (end.row == point.row && end.column >= point.column))
+                {
+                    selected_child = Some(child);
+                    found_child = true;
+                    break;
+                }
+            }
+
+            if let Some(child) = selected_child {
+                current = child;
+            }
+
+            if !found_child {
+                break;
+            }
+        }
+
+        Ok(current)
+    }
+
+    /// Build FQN by traversing up the AST and collecting namespace/class/module names
+    fn build_fqn_from_node(
+        node: tree_sitter::Node,
+        content: &[u8],
+        extension: &str,
+    ) -> Result<String> {
+        let mut components = Vec::new();
+        let mut current_node = Some(node);
+        let mut method_name_added = false;
+
+        // Detect the language-specific separator
+        let separator = Self::get_language_separator(extension);
+
+        // Traverse up from the current node
+        while let Some(node) = current_node {
+            // Check if this is a method node
+            if Self::is_method_node(&node, extension) && !method_name_added {
+                // For methods, we want: StructName.MethodName
+                // So collect method name first (will be reversed later)
+                if let Some(method_name) = Self::extract_node_name(node, content) {
+                    components.push(method_name);
+                    method_name_added = true;
+                }
+                if let Some(receiver_type) =
+                    Self::extract_method_receiver(&node, content, extension)
+                {
+                    components.push(receiver_type);
+                }
+            }
+            // Check if this node represents a namespace/module/class/struct
+            else if Self::is_namespace_node(&node, extension) {
+                if let Some(name) = Self::extract_node_name(node, content) {
+                    components.push(name);
+                }
+            }
+            // If we haven't added any name yet and this is the initial node
+            else if components.is_empty() && current_node == Some(node) {
+                // Get the name of the current node if it's a named entity
+                if let Some(name) = Self::extract_node_name(node, content) {
+                    components.push(name);
+                }
+            }
+
+            current_node = node.parent();
+        }
+
+        // Reverse to get top-down order and join with separator
+        components.reverse();
+        Ok(components.join(separator))
+    }
+
+    /// Check if a node represents a method/function
+    fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
+        let kind = node.kind();
+        match extension {
+            "rs" => kind == "function_item" || kind == "impl_item",
+            "go" => kind == "method_declaration",
+            "py" => kind == "function_definition",
+            "js" | "ts" | "tsx" => kind == "method_definition" || kind == "function_declaration",
+            "java" => kind == "method_declaration",
+            "cpp" | "cc" | "cxx" | "hpp" => kind == "function_definition",
+            "cs" => kind == "method_declaration",
+            "rb" => kind == "method",
+            "php" => kind == "method_declaration",
+            _ => false,
+        }
+    }
+
+    /// Extract the receiver type from a method node
+    fn extract_method_receiver(
+        node: &tree_sitter::Node,
+        content: &[u8],
+        extension: &str,
+    ) -> Option<String> {
+        match extension {
+            "go" => {
+                // For Go, look for the receiver parameter
+                if let Some(receiver) = node.child_by_field_name("receiver") {
+                    let mut cursor = receiver.walk();
+                    for child in receiver.children(&mut cursor) {
+                        if child.kind() == "parameter_declaration" {
+                            if let Some(type_node) = child.child_by_field_name("type") {
+                                // Handle pointer types like *BusinessLogic
+                                let mut type_cursor = type_node.walk();
+                                for type_child in type_node.children(&mut type_cursor) {
+                                    if type_child.kind() == "type_identifier" {
+                                        return type_child
+                                            .utf8_text(content)
+                                            .ok()
+                                            .map(|s| s.to_string());
+                                    } else if type_child.kind() == "pointer_type" {
+                                        if let Some(pointee) =
+                                            type_child.child_by_field_name("type")
+                                        {
+                                            return pointee
+                                                .utf8_text(content)
+                                                .ok()
+                                                .map(|s| s.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                None
+            }
+            "rs" => {
+                // For Rust, if we're in an impl block, get the type being implemented
+                if node.kind() == "impl_item" {
+                    if let Some(type_node) = node.child_by_field_name("type") {
+                        return type_node.utf8_text(content).ok().map(|s| s.to_string());
+                    }
+                }
+                None
+            }
+            _ => None, // For other languages, the parent class/struct should be caught by is_namespace_node
+        }
+    }
+
+    /// Get the namespace separator (using :: universally)
+    fn get_language_separator(_extension: &str) -> &'static str {
+        "::"
+    }
+
+    /// Get path-based package/module prefix based on file location
+    fn get_path_based_prefix(file_path: &Path, _extension: &str) -> Option<String> {
+        // Try to find the workspace root (where we typically have Cargo.toml, package.json, go.mod, etc.)
+        let workspace_root = Self::find_workspace_root(file_path)?;
+
+        // Get the path relative to workspace root
+        let relative_path = file_path.strip_prefix(&workspace_root).ok()?;
+
+        // Convert the path components into a module/package hierarchy
+        let mut components = Vec::new();
+
+        for component in relative_path.parent()?.components() {
+            if let std::path::Component::Normal(name) = component {
+                if let Some(name_str) = name.to_str() {
+                    // Skip common directory names that don't contribute to package structure
+                    if !matches!(
+                        name_str,
+                        "src"
+                            | "lib"
+                            | "test"
+                            | "tests"
+                            | "examples"
+                            | "benches"
+                            | "target"
+                            | "dist"
+                            | "build"
+                            | "out"
+                    ) {
+                        // Convert to snake_case for consistency
+                        let normalized =
+                            name_str.replace('-', "_").replace(' ', "_").to_lowercase();
+                        components.push(normalized);
+                    }
+                }
+            }
+        }
+
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("::"))
+        }
+    }
+
+    /// Find the workspace root by looking for common project markers
+    fn find_workspace_root(file_path: &Path) -> Option<std::path::PathBuf> {
+        let markers = vec![
+            "Cargo.toml",
+            "package.json",
+            "go.mod",
+            "pyproject.toml",
+            "setup.py",
+            "pom.xml",
+            "build.gradle",
+            ".git",
+        ];
+
+        let mut current = file_path.parent()?;
+
+        while current.parent().is_some() {
+            for marker in &markers {
+                if current.join(marker).exists() {
+                    return Some(current.to_path_buf());
+                }
+            }
+            current = current.parent()?;
+        }
+
+        None
+    }
+
+    /// Check if a node represents a namespace/module/class
+    fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
+        let kind = node.kind();
+        match extension {
+            "rs" => matches!(
+                kind,
+                "mod_item" | "impl_item" | "struct_item" | "enum_item" | "trait_item"
+            ),
+            "go" => matches!(kind, "type_declaration" | "method_declaration"),
+            "py" => matches!(kind, "class_definition" | "function_definition"),
+            "js" | "ts" | "tsx" => matches!(
+                kind,
+                "class_declaration" | "namespace_declaration" | "object"
+            ),
+            "java" => matches!(
+                kind,
+                "class_declaration" | "interface_declaration" | "enum_declaration"
+            ),
+            "cpp" | "cc" | "cxx" | "hpp" => matches!(
+                kind,
+                "namespace_definition" | "class_specifier" | "struct_specifier"
+            ),
+            "cs" => matches!(
+                kind,
+                "namespace_declaration" | "class_declaration" | "interface_declaration"
+            ),
+            "rb" => matches!(kind, "module" | "class"),
+            "php" => matches!(kind, "namespace_definition" | "class_declaration"),
+            _ => false,
+        }
+    }
+
+    /// Extract the name from a tree-sitter node
+    fn extract_node_name(node: tree_sitter::Node, content: &[u8]) -> Option<String> {
+        // Try to find an identifier or name child node
+        let mut cursor = node.walk();
+
+        // First try field-based name lookup
+        if let Some(name_node) = node.child_by_field_name("name") {
+            return name_node.utf8_text(content).ok().map(|s| s.to_string());
+        }
+
+        // Look for common identifier node types
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "identifier"
+                | "field_identifier"
+                | "type_identifier"
+                | "property_identifier"
+                | "constant"
+                | "string" => {
+                    if let Ok(text) = child.utf8_text(content) {
+                        // Skip keywords and operators
+                        if !matches!(
+                            text,
+                            "pub"
+                                | "const"
+                                | "let"
+                                | "var"
+                                | "function"
+                                | "class"
+                                | "struct"
+                                | "enum"
+                                | "impl"
+                                | "mod"
+                                | "namespace"
+                                | "interface"
+                                | "trait"
+                        ) {
+                            return Some(text.to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        None
     }
 
     /// Send cache list keys request

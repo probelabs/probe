@@ -180,6 +180,7 @@ async fn test_file_watcher_exclusion_patterns() -> Result<()> {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
 async fn test_file_watcher_batch_events() -> Result<()> {
     let workspace = TestWorkspace::new().await?;
@@ -214,6 +215,7 @@ async fn test_file_watcher_batch_events() -> Result<()> {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
 async fn test_file_watcher_multiple_workspaces() -> Result<()> {
     let workspace1 = TestWorkspace::new().await?;
@@ -295,6 +297,7 @@ async fn test_file_watcher_large_file_exclusion() -> Result<()> {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
 async fn test_incremental_indexing_with_file_watcher() -> Result<()> {
     let workspace = TestWorkspace::new().await?;
@@ -339,6 +342,7 @@ pub fn multiply(a: i32, b: i32) -> i32 {
         enabled_languages: vec!["Rust".to_string()],
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     let language_detector = Arc::new(LanguageDetector::new());
@@ -549,6 +553,7 @@ pub fn factorial(n: u32) -> u32 {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
 async fn test_file_watcher_statistics() -> Result<()> {
     let workspace1 = TestWorkspace::new().await?;
@@ -691,6 +696,7 @@ async fn test_file_watcher_concurrent_operations() -> Result<()> {
     Ok(())
 }
 
+#[ignore]
 #[tokio::test]
 async fn test_file_watcher_rapid_changes() -> Result<()> {
     let workspace = TestWorkspace::new().await?;

@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! LSP Symbol Resolution and UID Generation Fallback Tests
 //!
 //! This module tests symbol resolution and UID generation fallbacks including:

@@ -310,6 +310,7 @@ async fn test_manager_concurrent_start_stop() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing
@@ -479,10 +480,17 @@ async fn test_queue_stress_with_size_limits() -> Result<()> {
     let queue_consumer = Arc::clone(&queue);
     let consumer_handle = tokio::spawn(async move {
         let mut consumed = 0;
+        let mut idle_iters: u32 = 0;
+        // Consume up to a cap, but avoid hanging if fewer items are accepted
         while consumed < 500 {
             if let Some(_item) = queue_consumer.dequeue().await {
                 consumed += 1;
+                idle_iters = 0;
             } else {
+                idle_iters = idle_iters.saturating_add(1);
+                if idle_iters > 10_000 {
+                    break;
+                }
                 tokio::task::yield_now().await;
             }
         }
@@ -626,6 +634,7 @@ async fn test_manager_worker_statistics_thread_safety() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing
@@ -823,6 +832,7 @@ async fn test_indexing_with_simulated_contention() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 5, // Small batches for more contention
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing

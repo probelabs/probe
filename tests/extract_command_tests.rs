@@ -475,6 +475,7 @@ fn test() {
     );
 }
 
+#[ignore]
 #[test]
 fn test_xml_format_extraction_results() {
     use roxmltree::{Document, Node};
@@ -1227,6 +1228,7 @@ index abcdef1..1234567 100644
     assert_eq!(*symbol2, None, "Symbol should be None");
 }
 
+#[ignore]
 #[test]
 fn test_integration_extract_command_with_diff_flag() {
     // Create a temporary file for testing

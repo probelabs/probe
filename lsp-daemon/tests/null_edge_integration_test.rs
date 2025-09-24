@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration tests for null edge creation and storage
 //!
 //! These tests validate that when LSP returns empty results,

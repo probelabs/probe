@@ -1815,6 +1815,32 @@ impl LspServer {
         Ok(response["result"].clone())
     }
 
+    /// Get document symbols
+    pub async fn document_symbols(&self, file_path: &Path) -> Result<Value> {
+        let canon = Self::canonicalize_for_uri(file_path);
+        let uri = Url::from_file_path(&canon)
+            .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
+
+        let request_id = self.next_request_id().await;
+        let params = json!({
+            "textDocument": {
+                "uri": uri.to_string()
+            }
+        });
+
+        self.send_request("textDocument/documentSymbol", params, request_id)
+            .await?;
+        let response = self
+            .wait_for_response(request_id, Duration::from_secs(30))
+            .await?;
+
+        if let Some(error) = response.get("error") {
+            return Err(anyhow!("Document symbols request failed: {:?}", error));
+        }
+
+        Ok(response["result"].clone())
+    }
+
     // The actual call hierarchy request logic (extracted for retry)
     async fn perform_call_hierarchy_request(
         &self,

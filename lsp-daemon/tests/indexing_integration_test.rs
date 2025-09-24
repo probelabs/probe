@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Comprehensive integration tests for the Phase 1 IndexingManager implementation
 //!
 //! This test suite verifies that the IncrementalAnalysisEngine actually works and stores

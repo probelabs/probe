@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Real-world workload simulation for the null edge caching system
 //!
 //! Simulates realistic development scenarios with mixed cache hits/misses,

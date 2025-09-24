@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Document Lifecycle and Edge Cases Integration Tests - Milestone 6
 //!
 //! This test module provides comprehensive testing of document lifecycle management

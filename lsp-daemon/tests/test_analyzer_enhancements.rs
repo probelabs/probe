@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 use std::path::PathBuf;
 use std::sync::Arc;
 

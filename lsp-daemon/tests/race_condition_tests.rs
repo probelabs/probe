@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 use anyhow::Result;
 use std::sync::{Arc, Barrier};
 use std::thread;

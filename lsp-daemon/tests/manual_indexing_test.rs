@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Manual IndexingManager Functionality Test
 //!
 //! This test manually verifies that the IndexingManager can:

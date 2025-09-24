@@ -194,6 +194,7 @@ impl LspManager {
             }
             LspSubcommands::Index {
                 workspace,
+                files,
                 languages,
                 recursive,
                 max_workers,
@@ -204,6 +205,7 @@ impl LspManager {
             } => {
                 Self::handle_index_command(
                     workspace.clone(),
+                    files.clone(),
                     languages.clone(),
                     *recursive,
                     *max_workers,
@@ -2306,6 +2308,7 @@ impl LspManager {
     #[allow(clippy::too_many_arguments)]
     async fn handle_index_command(
         workspace: Option<String>,
+        files: Vec<String>,
         languages: Option<String>,
         recursive: bool,
         max_workers: Option<usize>,
@@ -2336,6 +2339,23 @@ impl LspManager {
             vec![]
         };
 
+        // Resolve specific files to absolute paths if provided
+        let specific_files = if !files.is_empty() {
+            files
+                .iter()
+                .map(|f| {
+                    let path = std::path::PathBuf::from(f);
+                    if path.is_absolute() {
+                        f.clone()
+                    } else {
+                        workspace_root.join(&path).to_string_lossy().to_string()
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         // Create indexing config using defaults and override specific fields
         let indexing_config = lsp_daemon::protocol::IndexingConfig {
             max_workers,
@@ -2348,6 +2368,7 @@ impl LspManager {
                 "*/dist/*".to_string(),
             ],
             include_patterns: vec![],
+            specific_files,
             max_file_size_mb: Some(10),
             incremental: Some(true),
             languages: language_list,
@@ -2717,6 +2738,17 @@ impl LspManager {
                                 queue.low_priority_items
                             );
                         }
+                    }
+                }
+
+                // Display database information
+                if let Some(ref database) = status.database {
+                    println!("\n{}", "Database".bold().cyan());
+                    println!("  {}: {}", "Symbols".bold(), database.total_symbols);
+                    println!("  {}: {}", "Edges".bold(), database.total_edges);
+                    println!("  {}: {}", "Files".bold(), database.total_files);
+                    if let Some(ref workspace_id) = database.workspace_id {
+                        println!("  {}: {}", "Workspace".bold(), workspace_id);
                     }
                 }
 
@@ -3496,6 +3528,13 @@ impl LspManager {
                     .await?;
                 Self::display_locations(&results, "Type Definition", format).await
             }
+            LspCallCommands::Fqn { location, format } => {
+                let resolved = crate::lsp_integration::symbol_resolver::resolve_location(location)?;
+                let fqn = client
+                    .get_symbol_fqn(&resolved.file_path, resolved.line, resolved.column)
+                    .await?;
+                Self::display_fqn(&fqn, format).await
+            }
         }
     }
 
@@ -3640,6 +3679,28 @@ impl LspManager {
                         println!("{}", "No hover information available".yellow());
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Display FQN (Fully Qualified Name)
+    async fn display_fqn(fqn: &str, format: &str) -> Result<()> {
+        match format {
+            "json" => {
+                let output = serde_json::json!({
+                    "fqn": fqn
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            }
+            "plain" => {
+                println!("{}", fqn);
+            }
+            _ => {
+                // Terminal format
+                println!("{}", "Fully Qualified Name:".bold().green());
+                println!();
+                println!("  {}", fqn.cyan());
             }
         }
         Ok(())

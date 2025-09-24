@@ -155,6 +155,10 @@ pub enum LspSubcommands {
         #[clap(short = 'w', long = "workspace")]
         workspace: Option<String>,
 
+        /// Specific file(s) to index (can be specified multiple times)
+        #[clap(short = 'f', long = "file")]
+        files: Vec<String>,
+
         /// Specific languages to index (comma-separated, e.g., "rust,typescript")
         #[clap(short = 'l', long = "languages")]
         languages: Option<String>,
@@ -774,6 +778,16 @@ pub enum LspCallCommands {
 
     /// Go to type definition of a symbol
     TypeDefinition {
+        /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
+        location: String,
+
+        /// Output format (terminal, json, plain)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json", "plain"])]
+        format: String,
+    },
+
+    /// Get fully qualified name (FQN) for a symbol
+    Fqn {
         /// Location in format 'file.rs:42:10' (line:column) or 'file.rs#symbol_name'
         location: String,
 

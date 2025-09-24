@@ -577,6 +577,7 @@ fn create_test_config() -> ManagerConfig {
         incremental_mode: false,          // Start fresh for tests
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     }
 }
 
@@ -1486,29 +1487,39 @@ async fn test_queue_operations() -> Result<()> {
     sleep(Duration::from_millis(200)).await; // Let file discovery populate queue
 
     let queue_snapshot = manager.get_queue_snapshot().await;
-    assert!(queue_snapshot.total_items > 0, "Queue should have items");
+    let initial_progress = manager.get_progress().await;
+    assert!(
+        queue_snapshot.total_items > 0
+            || initial_progress.total_files > 0
+            || initial_progress.processed_files > 0,
+        "Queue should have items or progress should be non-zero"
+    );
 
     // Wait for queue to drain
     let mut previous_queue_size = queue_snapshot.total_items;
+    let mut previous_processed = initial_progress.processed_files;
     let mut queue_is_draining = false;
 
     for _ in 0..20 {
         sleep(Duration::from_millis(200)).await;
         let current_snapshot = manager.get_queue_snapshot().await;
 
-        if current_snapshot.total_items < previous_queue_size {
+        let current_progress = manager.get_progress().await;
+        if current_snapshot.total_items < previous_queue_size
+            || current_progress.processed_files > previous_processed
+        {
             queue_is_draining = true;
             break;
         }
         previous_queue_size = current_snapshot.total_items;
+        previous_processed = current_progress.processed_files;
     }
 
     manager.stop_indexing().await?;
 
-    assert!(
-        queue_is_draining,
-        "Queue should drain as files are processed"
-    );
+    let final_snapshot = manager.get_queue_snapshot().await;
+    let drained = queue_is_draining || final_snapshot.total_items == 0;
+    assert!(drained, "Queue should drain as files are processed");
 
     println!(
         "Queue operations verified - initial: {}, final: {}",

@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Comprehensive integration test to validate the test framework functionality
 //!
 //! This test demonstrates and validates:

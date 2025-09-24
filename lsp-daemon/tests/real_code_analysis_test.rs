@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Phase 5: Real Code Testing
 //!
 //! This test module validates the IndexingManager works on actual real codebases,

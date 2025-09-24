@@ -24,6 +24,7 @@ pub mod database_cache_adapter;
 pub mod hash_utils;
 pub mod lsp_cache;
 pub mod lsp_database_adapter;
+pub mod position;
 // pub mod universal_cache; // Removed - using database-first approach
 
 // Handler modules removed

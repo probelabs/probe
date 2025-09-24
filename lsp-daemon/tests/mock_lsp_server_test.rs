@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration tests for the mock LSP server infrastructure
 //!
 //! These tests validate that the MockLspServer can properly simulate different

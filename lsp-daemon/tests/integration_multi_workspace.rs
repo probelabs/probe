@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 use anyhow::Result;
 use lsp_daemon::{
     get_default_socket_path, start_daemon_background, DaemonRequest, DaemonResponse, DaemonStatus,

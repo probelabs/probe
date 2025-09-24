@@ -494,4 +494,6 @@ For questions or support:
 
 ## License
 
-Apache 2.0 - See [LICENSE](LICENSE) for details.
+---
+
+For questions or contributions, please open an issue on [GitHub](https://github.com/probelabs/probe/issues) or join our [Discord community](https://discord.gg/hBN4UsTZ) for discussions and support. Happy coding—and searching!

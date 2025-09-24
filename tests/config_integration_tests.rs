@@ -419,7 +419,7 @@ fn test_invalid_config_fallback() -> Result<()> {
 
     // Should have default values
     assert_eq!(json["indexing"]["enabled"], true);
-    assert_eq!(json["indexing"]["auto_index"], true);
+    assert_eq!(json["indexing"]["auto_index"], false);
     assert_eq!(json["indexing"]["watch_files"], true);
 
     Ok(())

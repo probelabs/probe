@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Real Codebase Testing
 //!
 //! This test demonstrates that the IndexingManager successfully processes actual

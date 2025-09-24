@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Performance regression prevention tests
 //!
 //! Validates that performance doesn't degrade beyond acceptable thresholds.

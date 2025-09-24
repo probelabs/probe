@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration tests for tree-sitter dependencies
 //!
 //! These tests verify that tree-sitter parsers can be created and used

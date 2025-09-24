@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Comprehensive performance stress testing for the null edge caching system
 //!
 //! This module provides advanced performance testing beyond basic benchmarks,

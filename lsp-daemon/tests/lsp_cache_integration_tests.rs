@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! LSP Cache Integration Tests
 //!
 //! DISABLED: This module tests cache integration with the old universal_cache system.

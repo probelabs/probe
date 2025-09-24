@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 use anyhow::Result;
 use lsp_daemon::lsp_registry::LspRegistry;
 use lsp_daemon::LspDaemon;

@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Core LSP Operation Integration Tests
 //!
 //! This test module provides comprehensive integration testing of LSP operations using

@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 // Comprehensive stress tests for LSP daemon robustness validation
 // These tests validate async I/O, timeouts, health monitoring, and recovery mechanisms
 

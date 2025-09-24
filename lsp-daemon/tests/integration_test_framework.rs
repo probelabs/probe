@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration test framework for comprehensive LSP daemon testing
 //!
 //! This module provides the IntegrationTestHarness that manages:

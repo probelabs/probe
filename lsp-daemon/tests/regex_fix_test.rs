@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 /// Integration test to verify that the regex compilation issues have been fixed
 use lsp_daemon::symbol::Normalizer;
 

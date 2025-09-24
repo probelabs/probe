@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration tests for PRD schema implementation
 //!
 //! This test verifies that the full PRD schema is correctly implemented

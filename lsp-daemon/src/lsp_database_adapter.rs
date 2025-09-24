@@ -31,6 +31,63 @@ impl LspDatabaseAdapter {
         }
     }
 
+    /// Resolve the best LSP cursor position for a symbol by snapping
+    /// to the identifier using tree-sitter when possible.
+    ///
+    /// Inputs and outputs are 0-based (LSP-compatible) line/column.
+    /// If no better position is found, returns the input (line, column).
+    pub fn resolve_symbol_position(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        language: &str,
+    ) -> Result<(u32, u32)> {
+        debug!(
+            "[POSITION_RESOLVER] Resolving position for {}:{}:{} ({})",
+            file_path.display(),
+            line,
+            column,
+            language
+        );
+
+        // Read file content synchronously (consistent with other helpers here)
+        let content = match std::fs::read_to_string(file_path) {
+            Ok(c) => c,
+            Err(e) => {
+                warn!(
+                    "[POSITION_RESOLVER] Failed to read file {}: {}. Using original position",
+                    file_path.display(),
+                    e
+                );
+                return Ok((line, column));
+            }
+        };
+
+        match self.find_symbol_at_position(&content, file_path, line, column, language) {
+            Ok(Some(info)) => {
+                let snapped_line = info.location.start_line;
+                let snapped_char = info.location.start_char;
+                debug!(
+                    "[POSITION_RESOLVER] Snapped to identifier at {}:{}",
+                    snapped_line, snapped_char
+                );
+                Ok((snapped_line, snapped_char))
+            }
+            Ok(None) => {
+                debug!("[POSITION_RESOLVER] No symbol found at/near position; using original");
+                Ok((line, column))
+            }
+            Err(e) => {
+                warn!(
+                    "[POSITION_RESOLVER] Tree-sitter error resolving position: {}. Using original",
+                    e
+                );
+                Ok((line, column))
+            }
+        }
+    }
+
     /// Convert CallHierarchyResult to database symbols and edges
     ///
     /// Returns (symbols, edges) that should be stored in the database
@@ -113,7 +170,7 @@ impl LspDatabaseAdapter {
                             source_symbol_uid: caller_symbol.symbol_uid.clone(),
                             target_symbol_uid: main_symbol_uid,
                             file_path: Some(caller_symbol.file_path.clone()),
-                            start_line: Some(caller_symbol.def_start_line),
+                            start_line: Some(std::cmp::max(1, caller_symbol.def_start_line)),
                             start_char: Some(caller_symbol.def_start_char),
                             confidence: 1.0, // Perfect confidence from LSP server
                             language: language.to_string(),
@@ -183,7 +240,7 @@ impl LspDatabaseAdapter {
                             source_symbol_uid: main_symbol_uid,
                             target_symbol_uid: callee_symbol.symbol_uid.clone(),
                             file_path: Some(source_file_path),
-                            start_line: Some(callee_symbol.def_start_line),
+                            start_line: Some(std::cmp::max(1, callee_symbol.def_start_line)),
                             start_char: Some(callee_symbol.def_start_char),
                             confidence: 1.0, // Perfect confidence from LSP server
                             language: language.to_string(),
@@ -232,12 +289,15 @@ impl LspDatabaseAdapter {
         let path_resolver = PathResolver::new();
         let relative_file_path = path_resolver.get_relative_path(&file_path, workspace_root);
 
+        // Extract FQN using AST parsing
+        let fqn = Self::extract_fqn_from_call_hierarchy_item(&file_path, item, language);
+
         let symbol = SymbolState {
             symbol_uid,
             file_path: relative_file_path,
             language: language.to_string(),
             name: item.name.clone(),
-            fqn: None, // LSP doesn't always provide FQN
+            fqn,
             kind: kind.to_string(),
             signature: None,  // Could be extracted from name if needed
             visibility: None, // Not provided by LSP call hierarchy
@@ -368,9 +428,8 @@ impl LspDatabaseAdapter {
             ));
         }
 
-        // Read the file content asynchronously
-        let content = tokio::fs::read_to_string(file_path)
-            .await
+        // Read the file content synchronously to avoid requiring a Tokio reactor
+        let content = std::fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {}", file_path.display()))?;
 
         debug!("[SYMBOL_RESOLVE] Read {} bytes from file", content.len());
@@ -1107,7 +1166,16 @@ impl LspDatabaseAdapter {
             // Convert URI to file path
             let reference_file = PathBuf::from(location.uri.replace("file://", ""));
 
+            // Warn if LSP returned a 0-based line (we normalize to 1-based for storage/display)
+            if location.range.start.line == 0 {
+                warn!(
+                    "LSP reference returned line=0 for {} — normalizing to 1",
+                    reference_file.display()
+                );
+            }
+
             // Generate source symbol UID (the symbol that references the target)
+            let stored_start_line = location.range.start.line.saturating_add(1);
             let source_symbol_uid = match self
                 .resolve_symbol_at_location(
                     &reference_file,
@@ -1140,7 +1208,7 @@ impl LspDatabaseAdapter {
                 source_symbol_uid,
                 target_symbol_uid: target_symbol_uid.clone(),
                 file_path: Some(source_file_path),
-                start_line: Some(location.range.start.line),
+                start_line: Some(stored_start_line),
                 start_char: Some(location.range.start.character),
                 confidence: 1.0, // Perfect confidence from LSP server
                 language: language.to_string(),
@@ -1152,7 +1220,7 @@ impl LspDatabaseAdapter {
                 edge.source_symbol_uid,
                 edge.target_symbol_uid,
                 reference_file.display(),
-                location.range.start.line,
+                stored_start_line,
                 location.range.start.character
             );
 
@@ -1221,6 +1289,13 @@ impl LspDatabaseAdapter {
             // Convert URI to file path
             let definition_file = PathBuf::from(location.uri.replace("file://", ""));
 
+            if location.range.start.line == 0 {
+                warn!(
+                    "LSP definition returned line=0 for {} — normalizing to 1",
+                    definition_file.display()
+                );
+            }
+
             // Generate target symbol UID (the symbol at the definition location)
             let target_symbol_uid =
                 match futures::executor::block_on(self.resolve_symbol_at_location(
@@ -1246,6 +1321,9 @@ impl LspDatabaseAdapter {
             let path_resolver = PathResolver::new();
             let source_file_path = path_resolver.get_relative_path(source_file, workspace_root);
 
+            // Normalize to 1-based line numbers for storage/display (LSP is 0-based)
+            let stored_start_line = location.range.start.line.saturating_add(1);
+
             // Create edge: source symbol is defined by target symbol
             // Note: Using EdgeRelation::References with metadata to distinguish as definitions
             // since EdgeRelation doesn't have a dedicated Defines variant
@@ -1254,7 +1332,7 @@ impl LspDatabaseAdapter {
                 source_symbol_uid: source_symbol_uid.clone(),
                 target_symbol_uid,
                 file_path: Some(source_file_path),
-                start_line: Some(location.range.start.line),
+                start_line: Some(stored_start_line),
                 start_char: Some(location.range.start.character),
                 confidence: 1.0, // Perfect confidence from LSP server
                 language: language.to_string(),
@@ -1266,7 +1344,7 @@ impl LspDatabaseAdapter {
                 edge.source_symbol_uid,
                 edge.target_symbol_uid,
                 definition_file.display(),
-                location.range.start.line,
+                stored_start_line,
                 location.range.start.character
             );
 
@@ -1335,6 +1413,13 @@ impl LspDatabaseAdapter {
             // Convert URI to file path
             let implementation_file = PathBuf::from(location.uri.replace("file://", ""));
 
+            if location.range.start.line == 0 {
+                warn!(
+                    "LSP implementation returned line=0 for {} — normalizing to 1",
+                    implementation_file.display()
+                );
+            }
+
             // Generate source symbol UID (the symbol that implements the interface/trait)
             let source_symbol_uid =
                 match futures::executor::block_on(self.resolve_symbol_at_location(
@@ -1361,13 +1446,16 @@ impl LspDatabaseAdapter {
             let implementation_file_path =
                 path_resolver.get_relative_path(&implementation_file, workspace_root);
 
+            // Normalize to 1-based line numbers for storage/display (LSP is 0-based)
+            let stored_start_line = location.range.start.line.saturating_add(1);
+
             // Create edge: implementation symbol implements interface/trait symbol
             let edge = Edge {
                 relation: EdgeRelation::Implements,
                 source_symbol_uid,
                 target_symbol_uid: target_symbol_uid.clone(),
                 file_path: Some(implementation_file_path),
-                start_line: Some(location.range.start.line),
+                start_line: Some(stored_start_line),
                 start_char: Some(location.range.start.character),
                 confidence: 1.0, // Perfect confidence from LSP server
                 language: language.to_string(),
@@ -1379,7 +1467,7 @@ impl LspDatabaseAdapter {
                 edge.source_symbol_uid,
                 edge.target_symbol_uid,
                 implementation_file.display(),
-                location.range.start.line,
+                stored_start_line,
                 location.range.start.character
             );
 
@@ -1638,6 +1726,523 @@ impl LspDatabaseAdapter {
         self.store_in_database(database, symbols, edges).await?;
 
         Ok(())
+    }
+
+    /// Extract FQN from CallHierarchyItem using AST parsing
+    fn extract_fqn_from_call_hierarchy_item(
+        file_path: &Path,
+        item: &CallHierarchyItem,
+        language: &str,
+    ) -> Option<String> {
+        // Use the position from the CallHierarchyItem
+        let line = item.range.start.line;
+        let column = item.range.start.character;
+
+        match Self::get_fqn_from_ast(file_path, line, column, language) {
+            Ok(fqn) if !fqn.is_empty() => Some(fqn),
+            Ok(_) => None, // Empty FQN
+            Err(e) => {
+                tracing::debug!(
+                    "Failed to extract FQN for symbol '{}' at {}:{}:{}: {}",
+                    item.name,
+                    file_path.display(),
+                    line,
+                    column,
+                    e
+                );
+                None
+            }
+        }
+    }
+
+    /// Extract FQN using tree-sitter AST parsing (adapted from pipelines)
+    fn get_fqn_from_ast(
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        language: &str,
+    ) -> anyhow::Result<String> {
+        use std::fs;
+
+        // Read file content
+        let content = fs::read_to_string(file_path)?;
+        let extension = Self::language_to_extension(language);
+
+        // Create a simple parser for FQN extraction
+        let mut parser = tree_sitter::Parser::new();
+
+        // Set the language based on file extension
+        let language_fn = match extension {
+            "rs" => Some(tree_sitter_rust::LANGUAGE),
+            "py" => Some(tree_sitter_python::LANGUAGE),
+            "js" | "jsx" => Some(tree_sitter_javascript::LANGUAGE),
+            "ts" | "tsx" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
+            "java" => Some(tree_sitter_java::LANGUAGE),
+            "go" => Some(tree_sitter_go::LANGUAGE),
+            "cpp" | "cc" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
+            _ => None,
+        };
+
+        if let Some(lang_fn) = language_fn {
+            parser
+                .set_language(&lang_fn.into())
+                .map_err(|e| anyhow::anyhow!("Failed to set parser language: {}", e))?;
+        } else {
+            // If we don't have a parser for this language, just return empty FQN
+            return Ok(String::new());
+        }
+
+        // Parse the file
+        let tree = parser
+            .parse(content.as_bytes(), None)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
+
+        // Find node at the specified position
+        let root = tree.root_node();
+        let point = tree_sitter::Point::new(line as usize, column as usize);
+        let node = Self::find_node_at_point(root, point)?;
+
+        // Build FQN by traversing up the AST
+        let mut fqn = Self::build_fqn_from_node(node, content.as_bytes(), extension)?;
+
+        // Prepend the path-based package/module information
+        if let Some(path_prefix) = Self::get_path_based_prefix(file_path, extension) {
+            if !path_prefix.is_empty() {
+                if fqn.is_empty() {
+                    fqn = path_prefix;
+                } else {
+                    fqn = format!("{}::{}", path_prefix, fqn);
+                }
+            }
+        }
+
+        Ok(fqn)
+    }
+
+    /// Convert language string to file extension
+    fn language_to_extension(language: &str) -> &str {
+        match language.to_lowercase().as_str() {
+            "rust" => "rs",
+            "python" => "py",
+            "javascript" => "js",
+            "typescript" => "ts",
+            "java" => "java",
+            "go" => "go",
+            "c++" | "cpp" => "cpp",
+            "c" => "c",
+            _ => language, // Fallback to original if no mapping
+        }
+    }
+
+    /// Find the most specific node at the given point
+    fn find_node_at_point<'a>(
+        node: tree_sitter::Node<'a>,
+        point: tree_sitter::Point,
+    ) -> anyhow::Result<tree_sitter::Node<'a>> {
+        let mut current = node;
+
+        // Traverse down to find the most specific node containing the point
+        loop {
+            let mut found_child = false;
+
+            // Walk children with a temporary cursor to avoid borrow issues
+            let mut tmp_cursor = current.walk();
+            let mut selected_child: Option<tree_sitter::Node<'a>> = None;
+            for child in current.children(&mut tmp_cursor) {
+                let start = child.start_position();
+                let end = child.end_position();
+
+                // Check if point is within this child's range
+                if (start.row < point.row
+                    || (start.row == point.row && start.column <= point.column))
+                    && (end.row > point.row || (end.row == point.row && end.column >= point.column))
+                {
+                    selected_child = Some(child);
+                    found_child = true;
+                    break;
+                }
+            }
+
+            if let Some(child) = selected_child {
+                current = child;
+            }
+
+            if !found_child {
+                break;
+            }
+        }
+
+        Ok(current)
+    }
+
+    /// Build FQN by traversing up the AST and collecting namespace/class/module names
+    fn build_fqn_from_node(
+        node: tree_sitter::Node,
+        content: &[u8],
+        extension: &str,
+    ) -> anyhow::Result<String> {
+        let mut components = Vec::new();
+        let mut current_node = Some(node);
+        let mut method_name_added = false;
+
+        // Detect the language-specific separator
+        let separator = Self::get_language_separator(extension);
+
+        // Traverse up from the current node
+        while let Some(node) = current_node {
+            // Check if this is a method node
+            if Self::is_method_node(&node, extension) && !method_name_added {
+                // For methods, we want: StructName.MethodName
+                // So collect method name first (will be reversed later)
+                if let Some(method_name) = Self::extract_node_name(node, content) {
+                    components.push(method_name);
+                    method_name_added = true;
+                }
+                if let Some(receiver_type) =
+                    Self::extract_method_receiver(&node, content, extension)
+                {
+                    components.push(receiver_type);
+                }
+            }
+            // Check if this node represents a namespace/module/class/struct
+            else if Self::is_namespace_node(&node, extension) {
+                if let Some(name) = Self::extract_node_name(node, content) {
+                    components.push(name);
+                }
+            }
+            // If we haven't added any name yet and this is the initial node
+            else if components.is_empty() && current_node.as_ref().unwrap().id() == node.id() {
+                if let Some(name) = Self::extract_node_name(node, content) {
+                    components.push(name);
+                }
+            }
+
+            current_node = node.parent();
+        }
+
+        // Reverse to get proper order (root to leaf)
+        components.reverse();
+
+        Ok(components.join(separator))
+    }
+
+    /// Get language-specific separator for FQN components
+    fn get_language_separator(extension: &str) -> &str {
+        match extension {
+            "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
+            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" => ".",
+            "php" => "\\",
+            _ => "::", // Default to Rust-style for unknown languages
+        }
+    }
+
+    /// Check if a node represents a method/function
+    fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
+        let kind = node.kind();
+        match extension {
+            "rs" => matches!(kind, "function_item" | "impl_item"),
+            "py" => kind == "function_definition",
+            "js" | "ts" | "jsx" | "tsx" => matches!(
+                kind,
+                "function_declaration" | "method_definition" | "arrow_function"
+            ),
+            "java" | "cs" => kind == "method_declaration",
+            "go" => kind == "function_declaration",
+            "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
+            _ => kind.contains("function") || kind.contains("method"),
+        }
+    }
+
+    /// Check if a node represents a namespace/module/class/struct
+    fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
+        let kind = node.kind();
+        match extension {
+            "rs" => matches!(
+                kind,
+                "mod_item" | "struct_item" | "enum_item" | "trait_item" | "impl_item"
+            ),
+            "py" => kind == "class_definition",
+            "js" | "ts" | "jsx" | "tsx" => matches!(
+                kind,
+                "class_declaration" | "namespace_declaration" | "module"
+            ),
+            "java" | "cs" => matches!(kind, "class_declaration" | "interface_declaration"),
+            "go" => matches!(kind, "type_declaration" | "package_clause"),
+            "cpp" | "cc" | "cxx" => matches!(
+                kind,
+                "class_specifier" | "struct_specifier" | "namespace_definition"
+            ),
+            _ => {
+                kind.contains("class")
+                    || kind.contains("struct")
+                    || kind.contains("namespace")
+                    || kind.contains("module")
+            }
+        }
+    }
+
+    /// Extract name from a tree-sitter node
+    fn extract_node_name(node: tree_sitter::Node, content: &[u8]) -> Option<String> {
+        // Try to find identifier child node
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "identifier" || child.kind() == "name" {
+                return Some(child.utf8_text(content).unwrap_or("").to_string());
+            }
+        }
+
+        // If no identifier child, try getting text of the whole node if it's small
+        if node.byte_range().len() < 100 {
+            node.utf8_text(content)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        }
+    }
+
+    /// Extract method receiver type (for method FQN construction)
+    fn extract_method_receiver(
+        node: &tree_sitter::Node,
+        content: &[u8],
+        extension: &str,
+    ) -> Option<String> {
+        // Look for receiver/self parameter or parent struct/class
+        match extension {
+            "rs" => {
+                // For Rust, look for impl block parent
+                let mut current = node.parent();
+                while let Some(parent) = current {
+                    if parent.kind() == "impl_item" {
+                        // Find the type being implemented
+                        let mut cursor = parent.walk();
+                        for child in parent.children(&mut cursor) {
+                            if child.kind() == "type_identifier" {
+                                return Some(child.utf8_text(content).unwrap_or("").to_string());
+                            }
+                        }
+                    }
+                    current = parent.parent();
+                }
+            }
+            "py" => {
+                // For Python, look for class parent
+                let mut current = node.parent();
+                while let Some(parent) = current {
+                    if parent.kind() == "class_definition" {
+                        return Self::extract_node_name(parent, content);
+                    }
+                    current = parent.parent();
+                }
+            }
+            "java" | "cs" => {
+                // For Java/C#, look for class parent
+                let mut current = node.parent();
+                while let Some(parent) = current {
+                    if parent.kind() == "class_declaration" {
+                        return Self::extract_node_name(parent, content);
+                    }
+                    current = parent.parent();
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Get path-based package/module prefix from file path
+    fn get_path_based_prefix(file_path: &Path, extension: &str) -> Option<String> {
+        match extension {
+            "rs" => Self::get_rust_module_prefix(file_path),
+            "py" => Self::get_python_package_prefix(file_path),
+            "java" => Self::get_java_package_prefix(file_path),
+            "go" => Self::get_go_package_prefix(file_path),
+            "js" | "ts" | "jsx" | "tsx" => Self::get_javascript_module_prefix(file_path),
+            _ => None,
+        }
+    }
+
+    /// Get Rust module prefix from file path
+    fn get_rust_module_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+
+        // Remove the file extension
+        let without_ext = path_str.strip_suffix(".rs")?;
+
+        // Split path components and filter out common non-module directories
+        let components: Vec<&str> = without_ext
+            .split('/')
+            .filter(|&component| {
+                !matches!(
+                    component,
+                    "src" | "tests" | "examples" | "benches" | "target" | "." | ".." | ""
+                )
+            })
+            .collect();
+
+        if components.is_empty() {
+            return None;
+        }
+
+        // Handle lib.rs and main.rs specially
+        let mut module_components = Vec::new();
+        for component in components {
+            if component != "lib" && component != "main" {
+                // Convert file/directory names to valid Rust identifiers
+                let identifier = component.replace('-', "_");
+                module_components.push(identifier);
+            }
+        }
+
+        if module_components.is_empty() {
+            None
+        } else {
+            Some(module_components.join("::"))
+        }
+    }
+
+    /// Get Python package prefix from file path
+    fn get_python_package_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+        let without_ext = path_str.strip_suffix(".py")?;
+
+        let components: Vec<&str> = without_ext
+            .split('/')
+            .filter(|&component| !matches!(component, "." | ".." | "" | "__pycache__"))
+            .collect();
+
+        if components.is_empty() {
+            return None;
+        }
+
+        // Convert __init__.py to its parent directory name
+        let mut module_components = Vec::new();
+        for component in components {
+            if component != "__init__" {
+                module_components.push(component);
+            }
+        }
+
+        if module_components.is_empty() {
+            None
+        } else {
+            Some(module_components.join("."))
+        }
+    }
+
+    /// Get Java package prefix from file path
+    fn get_java_package_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+        let without_ext = path_str.strip_suffix(".java")?;
+
+        // Look for src/main/java pattern or similar
+        let components: Vec<&str> = without_ext.split('/').collect();
+
+        // Find java directory and take everything after it
+        if let Some(java_idx) = components.iter().position(|&c| c == "java") {
+            let package_components: Vec<&str> = components[(java_idx + 1)..].to_vec();
+            if !package_components.is_empty() {
+                return Some(package_components.join("."));
+            }
+        }
+
+        None
+    }
+
+    /// Get Go package prefix from file path
+    fn get_go_package_prefix(file_path: &Path) -> Option<String> {
+        // Go packages are typically directory-based
+        file_path
+            .parent()?
+            .file_name()?
+            .to_str()
+            .map(|s| s.to_string())
+    }
+
+    /// Get JavaScript/TypeScript module prefix from file path
+    fn get_javascript_module_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+
+        // Remove extension
+        let without_ext = if let Some(stripped) = path_str.strip_suffix(".tsx") {
+            stripped
+        } else if let Some(stripped) = path_str.strip_suffix(".jsx") {
+            stripped
+        } else if let Some(stripped) = path_str.strip_suffix(".ts") {
+            stripped
+        } else if let Some(stripped) = path_str.strip_suffix(".js") {
+            stripped
+        } else {
+            return None;
+        };
+
+        let components: Vec<&str> = without_ext
+            .split('/')
+            .filter(|&component| {
+                !matches!(
+                    component,
+                    "src"
+                        | "lib"
+                        | "components"
+                        | "pages"
+                        | "utils"
+                        | "node_modules"
+                        | "dist"
+                        | "build"
+                        | "."
+                        | ".."
+                        | ""
+                )
+            })
+            .collect();
+
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_resolver {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn test_resolve_symbol_position_rust_simple_fn() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("sample.rs");
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        // 'foo' starts at column 3: "fn " (0..=2) then 'f' at 3
+        writeln!(f, "fn foo() {{ println!(\"hi\"); }}").unwrap();
+        drop(f);
+
+        let adapter = LspDatabaseAdapter::new();
+        // Position on 'fn' (column 0) should snap to 'foo' (column 3)
+        let (line, col) = adapter
+            .resolve_symbol_position(&file_path, 0, 0, "rust")
+            .unwrap();
+        assert_eq!(line, 0);
+        assert_eq!(col, 3);
+    }
+
+    #[test]
+    fn test_resolve_symbol_position_python_def() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("sample.py");
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        // 'bar' starts at column 4: "def " then 'b' at 4
+        writeln!(f, "def bar(x):\n    pass").unwrap();
+        drop(f);
+
+        let adapter = LspDatabaseAdapter::new();
+        let (line, col) = adapter
+            .resolve_symbol_position(&file_path, 0, 0, "python")
+            .unwrap();
+        assert_eq!(line, 0);
+        assert_eq!(col, 4);
     }
 }
 
@@ -2184,11 +2789,11 @@ pub fn test_function() -> i32 {
             uri: format!("file://{}", target_file.display()),
             range: crate::protocol::Range {
                 start: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 10,
                 },
                 end: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 20,
                 },
             },
@@ -2213,6 +2818,178 @@ pub fn test_function() -> i32 {
 
         // Clean up
         std::fs::remove_file(target_file).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_convert_and_store_hierarchy_and_refs_smoke() {
+        use crate::database::{DatabaseConfig, SQLiteBackend};
+        use crate::protocol::{
+            CallHierarchyCall, CallHierarchyItem, CallHierarchyResult, Position, Range,
+        };
+        use std::path::Path;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let workspace_root = temp_dir.path().to_path_buf();
+
+        // Create two files
+        let main_path = workspace_root.join("main.rs");
+        let util_path = workspace_root.join("util.rs");
+        std::fs::write(&main_path, "fn foo() {}\n").unwrap();
+        std::fs::write(&util_path, "fn bar() { foo(); }\n").unwrap();
+
+        let uri_main = format!("file://{}", main_path.display());
+        let uri_util = format!("file://{}", util_path.display());
+
+        // Build a minimal call hierarchy: util::bar -> main::foo
+        let item_main = CallHierarchyItem {
+            name: "foo".to_string(),
+            kind: "function".to_string(),
+            uri: uri_main.clone(),
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 3,
+                },
+                end: Position {
+                    line: 0,
+                    character: 6,
+                },
+            },
+            selection_range: Range {
+                start: Position {
+                    line: 0,
+                    character: 3,
+                },
+                end: Position {
+                    line: 0,
+                    character: 6,
+                },
+            },
+        };
+        let item_util = CallHierarchyItem {
+            name: "bar".to_string(),
+            kind: "function".to_string(),
+            uri: uri_util.clone(),
+            range: Range {
+                start: Position {
+                    line: 0,
+                    character: 3,
+                },
+                end: Position {
+                    line: 0,
+                    character: 6,
+                },
+            },
+            selection_range: Range {
+                start: Position {
+                    line: 0,
+                    character: 3,
+                },
+                end: Position {
+                    line: 0,
+                    character: 6,
+                },
+            },
+        };
+        let hierarchy = CallHierarchyResult {
+            item: item_main.clone(),
+            incoming: vec![CallHierarchyCall {
+                from: item_util.clone(),
+                from_ranges: vec![Range {
+                    start: Position {
+                        line: 0,
+                        character: 3,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 6,
+                    },
+                }],
+            }],
+            outgoing: vec![CallHierarchyCall {
+                from: item_util.clone(),
+                from_ranges: vec![Range {
+                    start: Position {
+                        line: 0,
+                        character: 3,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 6,
+                    },
+                }],
+            }],
+        };
+
+        let adapter = LspDatabaseAdapter::new();
+        let (symbols, edges) = adapter
+            .convert_call_hierarchy_to_database(&hierarchy, &main_path, "rust", 1, &workspace_root)
+            .expect("convert hierarchy");
+
+        // Prepare SQLite backend
+        let db_path = workspace_root.join("test_smoke.db");
+        let db_config = DatabaseConfig {
+            path: Some(db_path),
+            temporary: false,
+            compression: false,
+            cache_capacity: 8 * 1024 * 1024,
+            compression_factor: 3,
+            flush_every_ms: Some(1000),
+        };
+        let sqlite = SQLiteBackend::new(db_config).await.expect("sqlite backend");
+
+        // Store hierarchy data
+        if !symbols.is_empty() {
+            sqlite.store_symbols(&symbols).await.expect("store symbols");
+        }
+        if !edges.is_empty() {
+            sqlite.store_edges(&edges).await.expect("store edges");
+        }
+
+        // Build references for the same symbol and store them
+        let refs = vec![
+            crate::protocol::Location {
+                uri: uri_util.clone(),
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 10,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 13,
+                    },
+                },
+            },
+            crate::protocol::Location {
+                uri: uri_main.clone(),
+                range: Range {
+                    start: Position {
+                        line: 0,
+                        character: 3,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 6,
+                    },
+                },
+            },
+        ];
+        let ref_edges = adapter
+            .convert_references_to_database(&refs, &main_path, (1, 3), "rust", 1, &workspace_root)
+            .await
+            .expect("convert refs");
+        if !ref_edges.is_empty() {
+            sqlite
+                .store_edges(&ref_edges)
+                .await
+                .expect("store ref edges");
+        }
+
+        let (symbols_count, edges_count, _files_count) =
+            sqlite.get_table_counts().await.expect("counts");
+        assert!(symbols_count >= 1, "expected persisted symbols");
+        assert!(edges_count >= 1, "expected persisted edges");
     }
 
     #[tokio::test]
@@ -2341,6 +3118,54 @@ class Calculator:
     }
 
     #[tokio::test]
+    async fn test_convert_references_to_database_clamps_zero_line_to_one() {
+        let adapter = create_test_adapter();
+
+        let rust_code = r#"
+pub fn defined_function() -> i32 { 1 }
+pub fn usage() { let _ = defined_function(); }
+"#;
+        let source_file = create_temp_file_with_content(rust_code, "rs");
+
+        // Simulate LSP location with 0-based line number at the first line
+        let locations = vec![crate::protocol::Location {
+            uri: format!("file://{}", source_file.display()),
+            range: crate::protocol::Range {
+                start: crate::protocol::Position {
+                    line: 0,
+                    character: 10,
+                },
+                end: crate::protocol::Position {
+                    line: 0,
+                    character: 20,
+                },
+            },
+        }];
+
+        let result = adapter
+            .convert_references_to_database(
+                &locations,
+                &source_file,
+                (1, 3), // zero-based position inside defined_function target (line 2 in file)
+                "rust",
+                0,
+                std::path::Path::new("/workspace"),
+            )
+            .await
+            .expect("convert refs");
+
+        assert!(result.len() <= 1);
+        if let Some(edge) = result.get(0) {
+            assert!(
+                edge.start_line.unwrap_or(0) >= 1,
+                "lines are clamped to >= 1"
+            );
+        }
+
+        std::fs::remove_file(source_file).ok();
+    }
+
+    #[tokio::test]
     async fn test_convert_references_to_database_edge_metadata() {
         let adapter = create_test_adapter();
 
@@ -2416,11 +3241,11 @@ pub fn caller() {
             uri: format!("file://{}", source_file.display()),
             range: crate::protocol::Range {
                 start: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 10,
                 },
                 end: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 25,
                 },
             },
@@ -2690,11 +3515,11 @@ pub fn usage() {
             uri: format!("file://{}", source_file.display()),
             range: crate::protocol::Range {
                 start: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 10,
                 },
                 end: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 26,
                 },
             },
@@ -2750,11 +3575,11 @@ def caller():
             uri: format!("file://{}", python_file.display()),
             range: crate::protocol::Range {
                 start: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 4,
                 },
                 end: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 19,
                 },
             },
@@ -2808,11 +3633,11 @@ pub fn helper_function() {
             uri: format!("file://{}", definition_file.display()),
             range: crate::protocol::Range {
                 start: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 10,
                 },
                 end: crate::protocol::Position {
-                    line: 1,
+                    line: 0,
                     character: 25,
                 },
             },
@@ -3594,5 +4419,99 @@ impl Calculator {
             "PHASE 1 INTEGRATION COMPLETE: {} symbols successfully persisted through full pipeline",
             extracted_symbols.len()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_line_norm {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    fn create_temp_file_with_content(content: &str, extension: &str) -> std::path::PathBuf {
+        let mut temp_file = NamedTempFile::with_suffix(&format!(".{}", extension))
+            .expect("Failed to create temp file");
+        temp_file
+            .write_all(content.as_bytes())
+            .expect("Failed to write temp content");
+        let path = temp_file.path().to_path_buf();
+        temp_file
+            .into_temp_path()
+            .persist(&path)
+            .expect("Failed to persist temp file");
+        path
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_convert_definitions_to_database_line_normalization() {
+        let adapter = LspDatabaseAdapter::new();
+        let rust_code = r#"
+fn defined() {}
+fn caller() { defined(); }
+"#;
+        let source_file = create_temp_file_with_content(rust_code, "rs");
+        let locations = vec![crate::protocol::Location {
+            uri: format!("file://{}", source_file.display()),
+            range: crate::protocol::Range {
+                start: crate::protocol::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: crate::protocol::Position {
+                    line: 0,
+                    character: 5,
+                },
+            },
+        }];
+        let edges = adapter
+            .convert_definitions_to_database(
+                &locations,
+                &source_file,
+                (1, 0),
+                "rust",
+                0,
+                std::path::Path::new("/workspace"),
+            )
+            .expect("defs convert");
+        if let Some(edge) = edges.get(0) {
+            assert!(edge.start_line.unwrap_or(0) >= 1);
+        }
+        std::fs::remove_file(source_file).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_convert_implementations_to_database_line_normalization() {
+        let adapter = LspDatabaseAdapter::new();
+        let rust_trait = r#"
+trait T { fn m(&self); }
+"#;
+        let interface_file = create_temp_file_with_content(rust_trait, "rs");
+        let locations = vec![crate::protocol::Location {
+            uri: format!("file://{}", interface_file.display()),
+            range: crate::protocol::Range {
+                start: crate::protocol::Position {
+                    line: 0,
+                    character: 0,
+                },
+                end: crate::protocol::Position {
+                    line: 0,
+                    character: 5,
+                },
+            },
+        }];
+        let edges = adapter
+            .convert_implementations_to_database(
+                &locations,
+                &interface_file,
+                (1, 0),
+                "rust",
+                0,
+                std::path::Path::new("/workspace"),
+            )
+            .expect("impls convert");
+        if let Some(edge) = edges.get(0) {
+            assert!(edge.start_line.unwrap_or(0) >= 1);
+        }
+        std::fs::remove_file(interface_file).ok();
     }
 }

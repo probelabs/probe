@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Indexing Analysis Demonstration Tests
 //!
 //! This test module demonstrates sophisticated symbol and relationship extraction
