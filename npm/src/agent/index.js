@@ -266,6 +266,9 @@ class ProbeAgentMcpServer {
       }
     );
 
+    // Don't initialize AI agent on startup - lazy initialize when needed
+    this.agent = null;
+
     this.setupToolHandlers();
     this.server.onerror = (error) => console.error('[MCP Error]', error);
     process.on('SIGINT', async () => {
@@ -393,20 +396,29 @@ class ProbeAgentMcpServer {
           }
         }
 
-        // Create agent with configuration
-        const agentConfig = {
-          path: args.path || process.cwd(),
-          promptType: args.prompt || 'code-explorer',
-          customPrompt: systemPrompt,
-          provider: args.provider,
-          model: args.model,
-          allowEdit: !!args.allow_edit,
-          debug: process.env.DEBUG === '1',
-          maxResponseTokens: args.max_response_tokens,
-          disableMermaidValidation: !!args.no_mermaid_validation
-        };
+        // Lazy initialize AI agent only when tool is called
+        if (!this.agent) {
+          if (process.env.DEBUG === '1') {
+            console.error('[DEBUG] Initializing AI agent on first MCP tool call');
+          }
+          
+          // Create agent with configuration
+          const agentConfig = {
+            path: args.path || process.cwd(),
+            promptType: args.prompt || 'code-explorer',
+            customPrompt: systemPrompt,
+            provider: args.provider,
+            model: args.model,
+            allowEdit: !!args.allow_edit,
+            debug: process.env.DEBUG === '1',
+            maxResponseTokens: args.max_response_tokens,
+            disableMermaidValidation: !!args.no_mermaid_validation
+          };
 
-        const agent = new ProbeAgent(agentConfig);
+          this.agent = new ProbeAgent(agentConfig);
+        }
+
+        const agent = this.agent;
         let result = await agent.answer(query, [], { schema });
 
         // If schema is provided, make a follow-up request to format the output
@@ -479,7 +491,7 @@ class ProbeAgentMcpServer {
         }
 
         // Get token usage for debugging
-        const tokenUsage = agent.getTokenUsage();
+        const tokenUsage = this.agent.getTokenUsage();
         console.error(`Token usage: ${JSON.stringify(tokenUsage)}`);
 
         return {
