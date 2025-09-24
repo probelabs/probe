@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ErrorCode,
+  InitializeRequestSchema,
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
@@ -255,7 +256,7 @@ class ProbeAgentMcpServer {
   constructor() {
     this.server = new Server(
       {
-        name: '@buger/probe-agent',
+        name: '@probelabs/probe agent',
         version: '1.0.0',
       },
       {
@@ -274,6 +275,20 @@ class ProbeAgentMcpServer {
   }
 
   setupToolHandlers() {
+    // Handle MCP initialize request
+    this.server.setRequestHandler(InitializeRequestSchema, async (request) => {
+      return {
+        protocolVersion: '2024-11-05',
+        capabilities: {
+          tools: {},
+        },
+        serverInfo: {
+          name: '@probelabs/probe agent',
+          version: '1.0.0',
+        },
+      };
+    });
+
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
