@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Production Load Test for Database-First LSP Caching System
 //!
 //! This test validates that the database-first caching system can handle

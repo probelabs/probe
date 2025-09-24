@@ -259,11 +259,14 @@ impl PipelineResult {
                         .unwrap_or(symbol.column + symbol.name.len() as u32),
                 );
 
+                // Extract FQN using tree-sitter AST parsing
+                let qualified_name = Self::extract_fqn_for_symbol(&self.file_path, symbol);
+
                 let extracted_symbol = ExtractedSymbol {
                     uid: String::new(), // Will be generated later by SymbolUIDGenerator
                     name: symbol.name.clone(),
                     kind: SymbolKind::from(symbol.kind.as_str()),
-                    qualified_name: None, // This could be enhanced if we parse FQN from signature
+                    qualified_name,
                     signature: symbol.signature.clone(),
                     visibility: symbol
                         .visibility
@@ -334,6 +337,458 @@ impl PipelineResult {
         }
 
         Ok(symbol_states)
+    }
+
+    /// Extract FQN for a symbol using tree-sitter AST parsing
+    fn extract_fqn_for_symbol(file_path: &Path, symbol: &SymbolInfo) -> Option<String> {
+        // Use the existing FQN extraction logic from the LSP client
+        // Convert 1-based line to 0-based for the AST parser
+        let line_0_based = symbol.line.saturating_sub(1);
+
+        match Self::get_fqn_from_ast(file_path, line_0_based, symbol.column) {
+            Ok(fqn) if !fqn.is_empty() => Some(fqn),
+            Ok(_) => None, // Empty FQN
+            Err(e) => {
+                tracing::debug!(
+                    "Failed to extract FQN for symbol '{}' at {}:{}:{}: {}",
+                    symbol.name,
+                    file_path.display(),
+                    symbol.line,
+                    symbol.column,
+                    e
+                );
+                None
+            }
+        }
+    }
+
+    /// Extract FQN using tree-sitter AST parsing (adapted from LSP client)
+    fn get_fqn_from_ast(file_path: &Path, line: u32, column: u32) -> anyhow::Result<String> {
+        use std::fs;
+
+        // Read file content
+        let content = fs::read_to_string(file_path)?;
+        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // Create a simple parser for FQN extraction
+        let mut parser = tree_sitter::Parser::new();
+
+        // Set the language based on file extension
+        let language = match extension {
+            "rs" => Some(tree_sitter_rust::LANGUAGE),
+            "py" => Some(tree_sitter_python::LANGUAGE),
+            "js" | "jsx" => Some(tree_sitter_javascript::LANGUAGE),
+            "ts" | "tsx" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
+            "java" => Some(tree_sitter_java::LANGUAGE),
+            "go" => Some(tree_sitter_go::LANGUAGE),
+            "cpp" | "cc" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
+            _ => None,
+        };
+
+        if let Some(lang_fn) = language {
+            parser
+                .set_language(&lang_fn.into())
+                .map_err(|e| anyhow::anyhow!("Failed to set parser language: {}", e))?;
+        } else {
+            // If we don't have a parser for this language, just return empty FQN
+            return Ok(String::new());
+        }
+
+        // Parse the file
+        let tree = parser
+            .parse(content.as_bytes(), None)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
+
+        // Find node at the specified position
+        let root = tree.root_node();
+        let point = tree_sitter::Point::new(line as usize, column as usize);
+        let node = Self::find_node_at_point(root, point)?;
+
+        // Build FQN by traversing up the AST
+        let mut fqn = Self::build_fqn_from_node(node, content.as_bytes(), extension)?;
+
+        // Prepend the path-based package/module information
+        if let Some(path_prefix) = Self::get_path_based_prefix(file_path, extension) {
+            if !path_prefix.is_empty() {
+                if fqn.is_empty() {
+                    fqn = path_prefix;
+                } else {
+                    fqn = format!("{}::{}", path_prefix, fqn);
+                }
+            }
+        }
+
+        Ok(fqn)
+    }
+
+    /// Find the most specific node at the given point
+    fn find_node_at_point<'a>(
+        node: tree_sitter::Node<'a>,
+        point: tree_sitter::Point,
+    ) -> anyhow::Result<tree_sitter::Node<'a>> {
+        let mut current = node;
+
+        // Traverse down to find the most specific node containing the point
+        loop {
+            let mut found_child = false;
+
+            // Walk children with a temporary cursor to avoid borrow issues
+            let mut tmp_cursor = current.walk();
+            let mut selected_child: Option<tree_sitter::Node<'a>> = None;
+            for child in current.children(&mut tmp_cursor) {
+                let start = child.start_position();
+                let end = child.end_position();
+
+                // Check if point is within this child's range
+                if (start.row < point.row
+                    || (start.row == point.row && start.column <= point.column))
+                    && (end.row > point.row || (end.row == point.row && end.column >= point.column))
+                {
+                    selected_child = Some(child);
+                    found_child = true;
+                    break;
+                }
+            }
+
+            if let Some(child) = selected_child {
+                current = child;
+            }
+
+            if !found_child {
+                break;
+            }
+        }
+
+        Ok(current)
+    }
+
+    /// Build FQN by traversing up the AST and collecting namespace/class/module names
+    fn build_fqn_from_node(
+        node: tree_sitter::Node,
+        content: &[u8],
+        extension: &str,
+    ) -> anyhow::Result<String> {
+        let mut components = Vec::new();
+        let mut current_node = Some(node);
+        let mut method_name_added = false;
+
+        // Detect the language-specific separator
+        let separator = Self::get_language_separator(extension);
+
+        // Traverse up from the current node
+        while let Some(node) = current_node {
+            // Check if this is a method node
+            if Self::is_method_node(&node, extension) && !method_name_added {
+                // For methods, we want: StructName.MethodName
+                // So collect method name first (will be reversed later)
+                if let Some(method_name) = Self::extract_node_name(node, content) {
+                    components.push(method_name);
+                    method_name_added = true;
+                }
+                if let Some(receiver_type) =
+                    Self::extract_method_receiver(&node, content, extension)
+                {
+                    components.push(receiver_type);
+                }
+            }
+            // Check if this node represents a namespace/module/class/struct
+            else if Self::is_namespace_node(&node, extension) {
+                if let Some(name) = Self::extract_node_name(node, content) {
+                    components.push(name);
+                }
+            }
+            // If we haven't added any name yet and this is the initial node
+            else if components.is_empty() && current_node.as_ref().unwrap().id() == node.id() {
+                if let Some(name) = Self::extract_node_name(node, content) {
+                    components.push(name);
+                }
+            }
+
+            current_node = node.parent();
+        }
+
+        // Reverse to get proper order (root to leaf)
+        components.reverse();
+
+        Ok(components.join(separator))
+    }
+
+    /// Get language-specific separator for FQN components
+    fn get_language_separator(extension: &str) -> &str {
+        match extension {
+            "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
+            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" => ".",
+            "php" => "\\",
+            _ => "::", // Default to Rust-style for unknown languages
+        }
+    }
+
+    /// Check if a node represents a method/function
+    fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
+        let kind = node.kind();
+        match extension {
+            "rs" => matches!(kind, "function_item" | "impl_item"),
+            "py" => kind == "function_definition",
+            "js" | "ts" | "jsx" | "tsx" => matches!(
+                kind,
+                "function_declaration" | "method_definition" | "arrow_function"
+            ),
+            "java" | "cs" => kind == "method_declaration",
+            "go" => kind == "function_declaration",
+            "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
+            _ => kind.contains("function") || kind.contains("method"),
+        }
+    }
+
+    /// Check if a node represents a namespace/module/class/struct
+    fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
+        let kind = node.kind();
+        match extension {
+            "rs" => matches!(
+                kind,
+                "mod_item" | "struct_item" | "enum_item" | "trait_item" | "impl_item"
+            ),
+            "py" => kind == "class_definition",
+            "js" | "ts" | "jsx" | "tsx" => matches!(
+                kind,
+                "class_declaration" | "namespace_declaration" | "module"
+            ),
+            "java" | "cs" => matches!(kind, "class_declaration" | "interface_declaration"),
+            "go" => matches!(kind, "type_declaration" | "package_clause"),
+            "cpp" | "cc" | "cxx" => matches!(
+                kind,
+                "class_specifier" | "struct_specifier" | "namespace_definition"
+            ),
+            _ => {
+                kind.contains("class")
+                    || kind.contains("struct")
+                    || kind.contains("namespace")
+                    || kind.contains("module")
+            }
+        }
+    }
+
+    /// Extract name from a tree-sitter node
+    fn extract_node_name(node: tree_sitter::Node, content: &[u8]) -> Option<String> {
+        // Try to find identifier child node
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "identifier" || child.kind() == "name" {
+                return Some(child.utf8_text(content).unwrap_or("").to_string());
+            }
+        }
+
+        // If no identifier child, try getting text of the whole node if it's small
+        if node.byte_range().len() < 100 {
+            node.utf8_text(content)
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        } else {
+            None
+        }
+    }
+
+    /// Extract method receiver type (for method FQN construction)
+    fn extract_method_receiver(
+        node: &tree_sitter::Node,
+        content: &[u8],
+        extension: &str,
+    ) -> Option<String> {
+        // Look for receiver/self parameter or parent struct/class
+        match extension {
+            "rs" => {
+                // For Rust, look for impl block parent
+                let mut current = node.parent();
+                while let Some(parent) = current {
+                    if parent.kind() == "impl_item" {
+                        // Find the type being implemented
+                        let mut cursor = parent.walk();
+                        for child in parent.children(&mut cursor) {
+                            if child.kind() == "type_identifier" {
+                                return Some(child.utf8_text(content).unwrap_or("").to_string());
+                            }
+                        }
+                    }
+                    current = parent.parent();
+                }
+            }
+            "py" => {
+                // For Python, look for class parent
+                let mut current = node.parent();
+                while let Some(parent) = current {
+                    if parent.kind() == "class_definition" {
+                        return Self::extract_node_name(parent, content);
+                    }
+                    current = parent.parent();
+                }
+            }
+            "java" | "cs" => {
+                // For Java/C#, look for class parent
+                let mut current = node.parent();
+                while let Some(parent) = current {
+                    if parent.kind() == "class_declaration" {
+                        return Self::extract_node_name(parent, content);
+                    }
+                    current = parent.parent();
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
+    /// Get path-based package/module prefix from file path
+    fn get_path_based_prefix(file_path: &Path, extension: &str) -> Option<String> {
+        match extension {
+            "rs" => Self::get_rust_module_prefix(file_path),
+            "py" => Self::get_python_package_prefix(file_path),
+            "java" => Self::get_java_package_prefix(file_path),
+            "go" => Self::get_go_package_prefix(file_path),
+            "js" | "ts" | "jsx" | "tsx" => Self::get_javascript_module_prefix(file_path),
+            _ => None,
+        }
+    }
+
+    /// Get Rust module prefix from file path
+    fn get_rust_module_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+
+        // Remove the file extension
+        let without_ext = path_str.strip_suffix(".rs")?;
+
+        // Split path components and filter out common non-module directories
+        let components: Vec<&str> = without_ext
+            .split('/')
+            .filter(|&component| {
+                !matches!(
+                    component,
+                    "src" | "tests" | "examples" | "benches" | "target" | "." | ".." | ""
+                )
+            })
+            .collect();
+
+        if components.is_empty() {
+            return None;
+        }
+
+        // Handle lib.rs and main.rs specially
+        let mut module_components = Vec::new();
+        for component in components {
+            if component != "lib" && component != "main" {
+                // Convert file/directory names to valid Rust identifiers
+                let identifier = component.replace('-', "_");
+                module_components.push(identifier);
+            }
+        }
+
+        if module_components.is_empty() {
+            None
+        } else {
+            Some(module_components.join("::"))
+        }
+    }
+
+    /// Get Python package prefix from file path
+    fn get_python_package_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+        let without_ext = path_str.strip_suffix(".py")?;
+
+        let components: Vec<&str> = without_ext
+            .split('/')
+            .filter(|&component| !matches!(component, "." | ".." | "" | "__pycache__"))
+            .collect();
+
+        if components.is_empty() {
+            return None;
+        }
+
+        // Convert __init__.py to its parent directory name
+        let mut module_components = Vec::new();
+        for component in components {
+            if component != "__init__" {
+                module_components.push(component);
+            }
+        }
+
+        if module_components.is_empty() {
+            None
+        } else {
+            Some(module_components.join("."))
+        }
+    }
+
+    /// Get Java package prefix from file path
+    fn get_java_package_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+        let without_ext = path_str.strip_suffix(".java")?;
+
+        // Look for src/main/java pattern or similar
+        let components: Vec<&str> = without_ext.split('/').collect();
+
+        // Find java directory and take everything after it
+        if let Some(java_idx) = components.iter().position(|&c| c == "java") {
+            let package_components: Vec<&str> = components[(java_idx + 1)..].to_vec();
+            if !package_components.is_empty() {
+                return Some(package_components.join("."));
+            }
+        }
+
+        None
+    }
+
+    /// Get Go package prefix from file path
+    fn get_go_package_prefix(file_path: &Path) -> Option<String> {
+        // Go packages are typically directory-based
+        file_path
+            .parent()?
+            .file_name()?
+            .to_str()
+            .map(|s| s.to_string())
+    }
+
+    /// Get JavaScript/TypeScript module prefix from file path
+    fn get_javascript_module_prefix(file_path: &Path) -> Option<String> {
+        let path_str = file_path.to_str()?;
+
+        // Remove extension
+        let without_ext = if let Some(stripped) = path_str.strip_suffix(".tsx") {
+            stripped
+        } else if let Some(stripped) = path_str.strip_suffix(".jsx") {
+            stripped
+        } else if let Some(stripped) = path_str.strip_suffix(".ts") {
+            stripped
+        } else if let Some(stripped) = path_str.strip_suffix(".js") {
+            stripped
+        } else {
+            return None;
+        };
+
+        let components: Vec<&str> = without_ext
+            .split('/')
+            .filter(|&component| {
+                !matches!(
+                    component,
+                    "src"
+                        | "lib"
+                        | "components"
+                        | "pages"
+                        | "utils"
+                        | "node_modules"
+                        | "dist"
+                        | "build"
+                        | "."
+                        | ".."
+                        | ""
+                )
+            })
+            .collect();
+
+        if components.is_empty() {
+            None
+        } else {
+            Some(components.join("."))
+        }
     }
 }
 

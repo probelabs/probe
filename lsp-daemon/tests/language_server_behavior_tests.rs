@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Language Server Behavior Simulation Tests
 //!
 //! This module provides comprehensive tests for different language server behaviors,

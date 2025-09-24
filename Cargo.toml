@@ -79,7 +79,7 @@ candle-transformers = { version = "0.8", optional = true }
 tokenizers = { version = "0.20", optional = true }
 hf-hub = { version = "0.3", features = ["tokio"], optional = true }
 parking_lot = { version = "0.12", optional = true }
-turso = "0.1.4"
+turso = "0.2.0-pre.7"
 
 [dev-dependencies]
 tempfile = "3.10.1"

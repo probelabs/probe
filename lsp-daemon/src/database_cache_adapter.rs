@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, SQLiteBackend};
 
@@ -836,6 +836,93 @@ impl DatabaseCacheAdapter {
                 .await
                 .map(|locs| if locs.is_empty() { None } else { Some(locs) })
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
+        }
+    }
+
+    /// Get document symbols for a file (bridge method for daemon.rs)
+    pub async fn get_document_symbols(
+        &self,
+        workspace_id: i64,
+        cache_key: &str,
+    ) -> Result<Option<Vec<crate::protocol::DocumentSymbol>>> {
+        let key = format!("{}:textDocument/documentSymbol:{}", workspace_id, cache_key);
+
+        match self.database.open_tree("cache").await {
+            Ok(tree) => {
+                match tree.get(key.as_bytes()).await {
+                    Ok(Some(data)) => {
+                        debug!("🎯 DATABASE HIT for document symbols key: {}", key);
+                        // Deserialize the cached document symbols
+                        match bincode::deserialize::<Vec<crate::protocol::DocumentSymbol>>(&data) {
+                            Ok(symbols) => Ok(Some(symbols)),
+                            Err(e) => {
+                                warn!("Failed to deserialize cached document symbols: {}", e);
+                                Ok(None)
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        debug!("❌ DATABASE MISS for document symbols key: {}", key);
+                        Ok(None)
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Database document symbols lookup failed for key {}: {}",
+                            key, e
+                        );
+                        Ok(None) // Graceful fallback on error
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to open cache tree for document symbols lookup: {}",
+                    e
+                );
+                Ok(None) // Graceful fallback on error
+            }
+        }
+    }
+
+    /// Store document symbols in cache (bridge method for daemon.rs)
+    pub async fn store_document_symbols(
+        &self,
+        workspace_id: i64,
+        cache_key: &str,
+        symbols: &[crate::protocol::DocumentSymbol],
+    ) -> Result<()> {
+        let key = format!("{}:textDocument/documentSymbol:{}", workspace_id, cache_key);
+
+        match self.database.open_tree("cache").await {
+            Ok(tree) => {
+                // Serialize the document symbols
+                match bincode::serialize(symbols) {
+                    Ok(data) => match tree.set(key.as_bytes(), &data).await {
+                        Ok(_) => {
+                            debug!("Successfully stored document symbols for key: {}", key);
+                            Ok(())
+                        }
+                        Err(e) => {
+                            warn!("Failed to store document symbols in cache: {}", e);
+                            Err(anyhow::anyhow!("Failed to store document symbols: {}", e))
+                        }
+                    },
+                    Err(e) => {
+                        warn!("Failed to serialize document symbols: {}", e);
+                        Err(anyhow::anyhow!(
+                            "Failed to serialize document symbols: {}",
+                            e
+                        ))
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to open cache tree for document symbols storage: {}",
+                    e
+                );
+                Err(anyhow::anyhow!("Failed to open cache tree: {}", e))
+            }
         }
     }
 

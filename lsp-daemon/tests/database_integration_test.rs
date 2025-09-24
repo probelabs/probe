@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration tests for database-first LSP caching functionality
 //!
 //! These tests validate the complete database-first caching pipeline

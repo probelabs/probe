@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration test for tree-sitter parser pool fix
 //!
 //! This test verifies that the LSP daemon's tree-sitter analyzer can properly

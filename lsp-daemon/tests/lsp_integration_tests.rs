@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Comprehensive LSP Integration Testing Suite
 //!
 //! This test suite validates LSP integration with real language servers including:

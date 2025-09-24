@@ -986,6 +986,7 @@ async fn test_multi_language_file_detection() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 20,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing
@@ -1102,6 +1103,7 @@ async fn test_language_specific_filtering() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing
@@ -1206,6 +1208,7 @@ async fn test_error_handling_with_problematic_files() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing
@@ -1384,6 +1387,7 @@ async fn test_concurrent_multi_language_processing() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 5, // Smaller batches for more concurrent processing
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing
@@ -1497,6 +1501,7 @@ async fn test_memory_pressure_with_large_files() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 10,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing
@@ -1609,6 +1614,7 @@ async fn test_language_priority_processing() -> Result<()> {
         incremental_mode: false,
         discovery_batch_size: 100,
         status_update_interval_secs: 1,
+        specific_files: vec![],
     };
 
     // Create mock LSP dependencies for testing

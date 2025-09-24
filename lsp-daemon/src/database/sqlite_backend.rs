@@ -8,7 +8,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
@@ -29,7 +28,7 @@ use crate::database::{
 };
 use crate::protocol::{CallHierarchyResult, Location};
 
-/// Safely execute a turso query operation that might panic
+/// Execute a turso query and map errors consistently (async, no blocking)
 async fn safe_query<P>(
     conn: &Connection,
     sql: &str,
@@ -44,26 +43,15 @@ where
         sql, context
     );
 
-    match panic::catch_unwind(AssertUnwindSafe(|| {
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(conn.query(sql, params))
-        })
-    })) {
-        Ok(result) => {
+    match conn.query(sql, params).await {
+        Ok(rows) => {
             eprintln!("✅ SQL_DEBUG: Query completed successfully: '{}'", sql);
-            result.map_err(|e| DatabaseError::OperationFailed {
-                message: format!("{}: {}", context, e),
-            })
+            Ok(rows)
         }
-        Err(panic_err) => {
-            let panic_msg = extract_panic_message(panic_err);
-            eprintln!("💥 SQL_DEBUG: Query PANICKED: '{}' - {}", sql, panic_msg);
-            error!(
-                "Turso query panicked in {}: SQL='{}' - {}",
-                context, sql, panic_msg
-            );
+        Err(e) => {
+            eprintln!("❌ SQL_DEBUG: Query failed: '{}' - Error: {}", sql, e);
             Err(DatabaseError::OperationFailed {
-                message: format!("{}: Turso panic - {}", context, panic_msg),
+                message: format!("{}: {}", context, e),
             })
         }
     }
@@ -2594,8 +2582,56 @@ impl DatabaseBackend for SQLiteBackend {
             const BATCH_SIZE: usize = 200;
 
             for chunk in edges.chunks(BATCH_SIZE) {
-                // Prepare batch insert query
-                let placeholders = chunk
+                // Filter out duplicates before inserting
+                // Check each edge individually - turso doesn't support tuple IN clause
+                let mut edges_to_insert = Vec::new();
+
+                for edge in chunk.iter() {
+                    // Check if this specific edge exists
+                    let check_sql = "SELECT 1 FROM edge WHERE source_symbol_uid = ? AND target_symbol_uid = ? AND relation = ? AND start_line = ? AND start_char = ? LIMIT 1";
+
+                    let check_params = vec![
+                        turso::Value::Text(edge.source_symbol_uid.clone()),
+                        turso::Value::Text(edge.target_symbol_uid.clone()),
+                        turso::Value::Text(edge.relation.to_string().to_string()),
+                        edge.start_line
+                            .map(|l| turso::Value::Integer((if l >= 1 { l } else { 1 }) as i64))
+                            .unwrap_or(turso::Value::Null),
+                        edge.start_char
+                            .map(|c| turso::Value::Integer(c as i64))
+                            .unwrap_or(turso::Value::Null),
+                    ];
+
+                    // Check if edge exists
+                    let exists = match conn.query(check_sql, check_params).await {
+                        Ok(mut rows) => match rows.next().await {
+                            Ok(Some(_)) => true,
+                            _ => false,
+                        },
+                        Err(_) => false, // Assume doesn't exist if we can't check
+                    };
+
+                    if !exists {
+                        edges_to_insert.push(edge);
+                    } else {
+                        info!(
+                            "[DEBUG] store_edges: Skipping duplicate edge: {} -> {}",
+                            edge.source_symbol_uid, edge.target_symbol_uid
+                        );
+                    }
+                }
+
+                // Skip if no new edges to insert
+                if edges_to_insert.is_empty() {
+                    info!(
+                        "[DEBUG] store_edges: All {} edges in batch already exist, skipping",
+                        chunk.len()
+                    );
+                    continue;
+                }
+
+                // Prepare batch insert query for non-duplicate edges
+                let placeholders = edges_to_insert
                     .iter()
                     .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?)")
                     .collect::<Vec<_>>()
@@ -2604,13 +2640,13 @@ impl DatabaseBackend for SQLiteBackend {
                 // Prepare batch parameters
                 let mut params = Vec::new();
 
-                for edge in chunk {
+                for edge in edges_to_insert.iter() {
                     params.extend(vec![
                         turso::Value::Text(edge.relation.to_string().to_string()),
                         turso::Value::Text(edge.source_symbol_uid.clone()),
                         turso::Value::Text(edge.target_symbol_uid.clone()),
                         edge.start_line
-                            .map(|l| turso::Value::Integer(l as i64))
+                            .map(|l| turso::Value::Integer((if l >= 1 { l } else { 1 }) as i64))
                             .unwrap_or(turso::Value::Null),
                         edge.start_char
                             .map(|c| turso::Value::Integer(c as i64))
@@ -2624,14 +2660,15 @@ impl DatabaseBackend for SQLiteBackend {
                     ]);
                 }
 
-                // Execute batch insert
+                // Execute batch insert - note: turso doesn't support INSERT OR IGNORE
                 let batch_sql = format!(
                 "INSERT INTO edge (relation, source_symbol_uid, target_symbol_uid, start_line, start_char, confidence, language, metadata) VALUES {}",
                 placeholders
             );
 
                 info!(
-                    "[DEBUG] store_edges: Executing batch insert with {} values",
+                    "[DEBUG] store_edges: Executing batch insert with {} values (filtered from {})",
+                    edges_to_insert.len(),
                     chunk.len()
                 );
 
@@ -2660,7 +2697,7 @@ impl DatabaseBackend for SQLiteBackend {
 
                 info!(
                     "[DEBUG] store_edges: Successfully inserted {} edges",
-                    chunk.len()
+                    edges_to_insert.len()
                 );
             }
         }
@@ -4344,9 +4381,9 @@ impl SQLiteBackend {
                        s.file_path as raw_file_path
                 FROM edge e
                 LEFT JOIN symbol_state s ON e.source_symbol_uid = s.symbol_uid
-                WHERE e.target_symbol_uid = ? AND e.relation = 'references'
+                WHERE (e.target_symbol_uid = ? OR e.source_symbol_uid = ?) AND e.relation = 'references'
                 "#,
-                [turso::Value::Text(symbol_uid.to_string())],
+                [turso::Value::Text(symbol_uid.to_string()), turso::Value::Text(symbol_uid.to_string())],
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
@@ -4874,6 +4911,71 @@ fn sanitize_table_name(name: &str) -> String {
             }
         })
         .collect()
+}
+
+impl SQLiteBackend {
+    /// Get specific table counts for index status reporting
+    pub async fn get_table_counts(&self) -> Result<(u64, u64, u64), DatabaseError> {
+        let mut pool = self.pool.lock().await;
+        let conn = pool.get_connection().await?;
+
+        // Count symbols from symbol_state table
+        let symbol_count = {
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM symbol_state", ())
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to count symbols: {}", e),
+                })?;
+
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(count)) => count as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        };
+
+        // Count edges from edge table
+        let edge_count = {
+            let mut rows = conn
+                .query("SELECT COUNT(*) FROM edge", ())
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to count edges: {}", e),
+                })?;
+
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(count)) => count as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        };
+
+        // Count distinct files from symbol_state table
+        let file_count = {
+            let mut rows = conn
+                .query("SELECT COUNT(DISTINCT file_path) FROM symbol_state", ())
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to count files: {}", e),
+                })?;
+
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(count)) => count as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        };
+
+        pool.return_connection(conn);
+        Ok((symbol_count, edge_count, file_count))
+    }
 }
 
 #[cfg(test)]

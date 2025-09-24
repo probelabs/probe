@@ -416,6 +416,8 @@ fn extract_function_names(node: &tree_sitter::Node, source: &[u8]) -> Vec<String
 /// Test that session cache persistence works across loads
 #[test]
 fn test_session_cache_persistence_works() {
+    let temp_home = tempfile::TempDir::new().unwrap();
+    std::env::set_var("HOME", temp_home.path());
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("persist_test.rs");
 

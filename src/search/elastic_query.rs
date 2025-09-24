@@ -212,32 +212,19 @@ impl Expr {
                     // Required => must all be present
                     all_present
                 } else {
-                    // Optional => if there's at least one required term anywhere in the entire query,
-                    // then we do NOT fail if this optional is absent. Otherwise, we do need to match.
+                    // Optional term
                     if has_required_anywhere {
+                        // When there are required terms elsewhere, optional terms do not gate inclusion
                         true
                     } else {
-                        // When there are no required terms, we still need to enforce that all keywords
-                        // within a single Term are present (AND logic within a Term).
-                        // This ensures that for a term like "JWTMiddleware" which gets tokenized to
-                        // ["jwt", "middleware"], both parts must be present.
-
-                        // Check if any keywords are present
-                        let any_present = keywords.iter().any(|kw| {
+                        // No required terms: treat multiple keywords within a Term as alternatives
+                        // This avoids false negatives for stemming variants (e.g., repository/repositori).
+                        keywords.iter().any(|kw| {
                             term_indices
                                 .get(kw)
                                 .map(|idx| matched_terms.contains(idx))
                                 .unwrap_or(false)
-                        });
-
-                        // If no keywords are present, the term doesn't match
-                        if !any_present {
-                            return false;
-                        }
-
-                        // If at least one keyword is present, require all keywords to be present
-                        // This maintains the AND relationship between keywords in a single Term
-                        all_present
+                        })
                     }
                 }
             }

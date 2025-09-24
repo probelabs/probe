@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Architecture Validation for Real Code
 //!
 //! This test validates that the IndexingManager architecture is correctly

@@ -1,11 +1,17 @@
-//! Example of using the ProtocolConverter
-//!
-//! This example demonstrates how to convert database types (Edge, SymbolState)
-//! to LSP protocol types (Location, CallHierarchyItem, CallHierarchyCall)
+#![cfg_attr(not(feature = "legacy-tests"), allow(dead_code, unused_imports))]
+#[cfg(not(feature = "legacy-tests"))]
+fn main() {}
 
+// Example of using the ProtocolConverter
+//
+// This example demonstrates how to convert database types (Edge, SymbolState)
+// to LSP protocol types (Location, CallHierarchyItem, CallHierarchyCall)
+
+#[cfg(feature = "legacy-tests")]
 use lsp_daemon::database::{Edge, EdgeRelation, ProtocolConverter, SymbolState};
 use std::path::Path;
 
+#[cfg(feature = "legacy-tests")]
 fn main() {
     let converter = ProtocolConverter::new();
 

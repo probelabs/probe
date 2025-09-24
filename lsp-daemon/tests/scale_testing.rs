@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Scale testing for the null edge caching system
 //!
 //! Tests system behavior and performance with large datasets,

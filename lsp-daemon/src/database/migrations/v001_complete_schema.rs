@@ -139,6 +139,11 @@ CREATE TABLE IF NOT EXISTS edge (
     metadata TEXT
 );
 
+-- Add unique constraint to prevent duplicate edges
+-- Note: NULL values in start_line/start_char are treated as distinct in SQLite
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edge_unique
+ON edge(source_symbol_uid, target_symbol_uid, relation, start_line, start_char);
+
 -- File dependency relationships
 CREATE TABLE IF NOT EXISTS file_dependency (
     dependency_id TEXT PRIMARY KEY,

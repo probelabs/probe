@@ -66,6 +66,16 @@ pub struct EnrichmentWorkerStats {
     pub symbols_failed: AtomicU64,
     /// Number of active workers
     pub active_workers: AtomicU64,
+    /// Positions adjusted (snapped to identifier)
+    pub positions_adjusted: AtomicU64,
+    /// Successful call hierarchy operations
+    pub call_hierarchy_success: AtomicU64,
+    /// Total references found across symbols
+    pub references_found: AtomicU64,
+    /// Total edges persisted from call hierarchy
+    pub edges_persisted: AtomicU64,
+    /// Total edges persisted from references
+    pub reference_edges_persisted: AtomicU64,
 }
 
 impl EnrichmentWorkerStats {
@@ -76,6 +86,11 @@ impl EnrichmentWorkerStats {
             symbols_enriched: self.symbols_enriched.load(Ordering::Relaxed),
             symbols_failed: self.symbols_failed.load(Ordering::Relaxed),
             active_workers: self.active_workers.load(Ordering::Relaxed),
+            positions_adjusted: self.positions_adjusted.load(Ordering::Relaxed),
+            call_hierarchy_success: self.call_hierarchy_success.load(Ordering::Relaxed),
+            references_found: self.references_found.load(Ordering::Relaxed),
+            edges_persisted: self.edges_persisted.load(Ordering::Relaxed),
+            reference_edges_persisted: self.reference_edges_persisted.load(Ordering::Relaxed),
         }
     }
 
@@ -98,6 +113,11 @@ pub struct EnrichmentWorkerStatsSnapshot {
     pub symbols_enriched: u64,
     pub symbols_failed: u64,
     pub active_workers: u64,
+    pub positions_adjusted: u64,
+    pub call_hierarchy_success: u64,
+    pub references_found: u64,
+    pub edges_persisted: u64,
+    pub reference_edges_persisted: u64,
 }
 
 /// LSP Enrichment Worker Pool
@@ -215,6 +235,7 @@ impl LspEnrichmentWorkerPool {
                             &path_resolver,
                             &cache_adapter,
                             &config,
+                            &stats,
                         )
                         .await
                         {
@@ -258,6 +279,7 @@ impl LspEnrichmentWorkerPool {
         path_resolver: &Arc<PathResolver>,
         cache_adapter: &Arc<DatabaseCacheAdapter>,
         config: &EnrichmentWorkerConfig,
+        stats: &Arc<EnrichmentWorkerStats>,
     ) -> Result<()> {
         let mut last_error = None;
 
@@ -276,6 +298,7 @@ impl LspEnrichmentWorkerPool {
                 path_resolver,
                 cache_adapter,
                 config,
+                stats,
             )
             .await
             {
@@ -302,6 +325,7 @@ impl LspEnrichmentWorkerPool {
         _path_resolver: &Arc<PathResolver>,
         cache_adapter: &Arc<DatabaseCacheAdapter>,
         config: &EnrichmentWorkerConfig,
+        stats: &Arc<EnrichmentWorkerStats>,
     ) -> Result<()> {
         // Step 1: Resolve workspace root using simple workspace detection
         let workspace_root =
@@ -324,15 +348,37 @@ impl LspEnrichmentWorkerPool {
             queue_item.file_path.display()
         );
 
-        // Step 3: Get call hierarchy using SingleServerManager directly
+        // Step 3: Resolve a precise LSP position (snap to identifier)
+        let original_line = queue_item.def_start_line;
+        let original_char = queue_item.def_start_char;
+        let (adj_line, adj_char) = crate::position::resolve_symbol_position(
+            &queue_item.file_path,
+            original_line, // Queue items store 0-based positions
+            original_char,
+            language.as_str(),
+        )
+        .unwrap_or((original_line, original_char));
+
+        if adj_line != original_line || adj_char != original_char {
+            stats.positions_adjusted.fetch_add(1, Ordering::Relaxed);
+        }
+
+        debug!(
+            "Using adjusted LSP position {}:{} for {}",
+            adj_line,
+            adj_char,
+            queue_item.file_path.display()
+        );
+
+        // Step 4: Get call hierarchy using SingleServerManager directly
         let call_hierarchy_result = timeout(
             config.request_timeout,
             server_manager.call_hierarchy(
                 language,
                 workspace_root.clone(),
                 &queue_item.file_path,
-                queue_item.def_start_line,
-                queue_item.def_start_char,
+                adj_line,
+                adj_char,
             ),
         )
         .await
@@ -346,15 +392,15 @@ impl LspEnrichmentWorkerPool {
             queue_item.def_start_char
         ))?;
 
-        // Step 4: Get references using SingleServerManager directly
+        // Step 5: Get references using SingleServerManager directly
         let references_result = timeout(
             config.request_timeout,
             server_manager.references(
                 language,
                 workspace_root.clone(),
                 &queue_item.file_path,
-                queue_item.def_start_line,
-                queue_item.def_start_char,
+                adj_line,
+                adj_char,
                 true, // include_declaration
             ),
         )
@@ -391,12 +437,46 @@ impl LspEnrichmentWorkerPool {
                 .store_edges(&edges)
                 .await
                 .context("Failed to store call hierarchy edges in database")?;
+            stats
+                .edges_persisted
+                .fetch_add(edges.len() as u64, Ordering::Relaxed);
         }
+
+        stats.call_hierarchy_success.fetch_add(1, Ordering::Relaxed);
 
         // For now, skip storing references as the conversion is complex
         // TODO: Implement proper references to edges conversion
-        let _references_locations = Self::parse_references_json_to_locations(&references_result)
+        let references_locations = Self::parse_references_json_to_locations(&references_result)
             .context("Failed to parse references result to locations")?;
+        if !references_locations.is_empty() {
+            stats
+                .references_found
+                .fetch_add(references_locations.len() as u64, Ordering::Relaxed);
+
+            // Convert and persist reference edges
+            let ref_edges = database_adapter
+                .convert_references_to_database(
+                    &references_locations,
+                    &queue_item.file_path,
+                    (adj_line, adj_char),
+                    language.as_str(),
+                    1,
+                    &workspace_root,
+                )
+                .await
+                .context("Failed to convert references to database edges")?;
+
+            if !ref_edges.is_empty() {
+                let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+                sqlite_backend
+                    .store_edges(&ref_edges)
+                    .await
+                    .context("Failed to store reference edges in database")?;
+                stats
+                    .reference_edges_persisted
+                    .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
+            }
+        }
         let _reference_edges: Vec<crate::database::Edge> = Vec::new(); // Placeholder
 
         info!(

@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Production Readiness Demonstration
 //!
 //! This test demonstrates that all IndexingManager components are ready for

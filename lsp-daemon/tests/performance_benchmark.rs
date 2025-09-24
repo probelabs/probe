@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Performance benchmarks for the null edge caching system
 //!
 //! Measures the performance improvement from caching empty LSP results

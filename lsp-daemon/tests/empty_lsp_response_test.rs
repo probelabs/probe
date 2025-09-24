@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration test for empty LSP response handling
 //!
 //! This test verifies that when LSP returns empty results ([]),

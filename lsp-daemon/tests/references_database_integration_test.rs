@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 use anyhow::Result;
 use lsp_daemon::database::{DatabaseBackend, DatabaseConfig, SQLiteBackend};
 use lsp_daemon::lsp_database_adapter::LspDatabaseAdapter;

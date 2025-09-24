@@ -210,6 +210,8 @@ impl LspCachingConfig {
                 parse_lsp_operations_list(&value, "PROBE_LSP_DISABLED_OPERATIONS")?;
         }
 
+        // No additional flags
+
         Ok(config)
     }
 
@@ -1092,6 +1094,7 @@ impl IndexingConfig {
             memory_budget_mb: None, // Removed - no longer used
             exclude_patterns: self.global_exclude_patterns.clone(),
             include_patterns: self.global_include_patterns.clone(),
+            specific_files: vec![], // Empty by default, populated when indexing specific files
             max_file_size_mb: Some(self.max_file_size_bytes / 1024 / 1024),
             incremental: Some(self.incremental_mode),
             languages: self

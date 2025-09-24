@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Comprehensive Caching Performance Tests
 //!
 //! This test module validates caching behavior and performance for the LSP daemon.

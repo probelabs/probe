@@ -386,14 +386,19 @@ impl TreeSitterAnalyzer {
             return Ok(None);
         }
 
-        // Create location information
+        // Use exact same coordinate calculation as extract --lsp command
+        // This uses 0-indexed coordinates directly from tree-sitter node start position
         let start_point = node.start_position();
+        let identifier_row = start_point.row as u32;
+        let identifier_col = start_point.column as u32;
+
+        // Create location information using 0-indexed coordinates (same as extract --lsp)
         let end_point = node.end_position();
         let location = SymbolLocation::new(
             file_path.to_path_buf(),
-            start_point.row as u32 + 1, // tree-sitter is 0-based, we want 1-based
-            start_point.column as u32,
-            end_point.row as u32 + 1,
+            identifier_row,
+            identifier_col,
+            end_point.row as u32,
             end_point.column as u32,
         );
 

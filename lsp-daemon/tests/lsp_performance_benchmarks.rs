@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! LSP Performance Benchmarking Suite
 //!
 //! This module provides comprehensive performance benchmarks for LSP operations

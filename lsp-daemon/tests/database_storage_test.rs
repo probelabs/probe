@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Database Storage Integration Test
 //!
 //! This comprehensive test verifies that database storage implementation

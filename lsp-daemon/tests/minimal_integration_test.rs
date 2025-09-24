@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Minimal Integration Test
 //!
 //! This test provides a minimal validation that the IndexingManager

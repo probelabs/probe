@@ -669,8 +669,44 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: all_files after filename matches: {all_files:?}");
     }
 
-    // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms?).
-    // Actually we pass 'true' to 'evaluate(..., true)', so that ignores excluded terms, contrary to the debug comment.
+    // Apply excluded-term filtering at the file level (document-level NOT semantics)
+    // Remove any file that contains any excluded term anywhere in its content
+    if !plan.excluded_terms.is_empty() {
+        let excluded_indices: HashSet<usize> = plan
+            .excluded_terms
+            .iter()
+            .filter_map(|t| plan.term_indices.get(t).copied())
+            .collect();
+
+        if debug_mode {
+            println!("DEBUG: Applying file-level exclusion for indices: {excluded_indices:?}");
+        }
+
+        all_files.retain(|pathbuf| {
+            if let Some(term_map) = file_term_map.get(pathbuf) {
+                let has_excluded = excluded_indices
+                    .iter()
+                    .any(|idx| term_map.contains_key(idx));
+                if has_excluded {
+                    if debug_mode {
+                        println!("DEBUG: Excluding file due to excluded terms: {pathbuf:?}");
+                    }
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        });
+
+        // Also drop excluded files from file_term_map to keep structures in sync
+        file_term_map.retain(|pathbuf, _| all_files.contains(pathbuf));
+    }
+
+    // Early filtering step — keep files that are plausible matches without being overly strict.
+    // Important: ignore negatives here and do NOT require all stem tokens of a term to be present.
+    // This prevents false negatives for terms like "Repository" that stem to ["repository", "repositori"].
     let early_filter_start = Instant::now();
     if debug_mode {
         println!("DEBUG: Starting early AST filtering...");
@@ -686,8 +722,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             // Extract unique terms found in the file
             let matched_terms: HashSet<usize> = term_map.keys().copied().collect();
 
-            // Evaluate the file against the AST, but we pass 'true' for ignore_negatives
-            if plan.ast.evaluate(&matched_terms, &plan.term_indices, true) {
+            // Loose evaluation for early filtering:
+            // - If there are required terms anywhere, ensure all required are present
+            // - Otherwise, keep any file that has at least one matched (non-negative) term
+            let keep = if plan.has_required_anywhere {
+                if debug_mode {
+                    println!("DEBUG: Evaluating required terms for early filtering");
+                }
+                plan.required_terms_indices
+                    .iter()
+                    .all(|idx| matched_terms.contains(idx))
+            } else {
+                !matched_terms.is_empty()
+            };
+
+            if keep {
                 filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
                 filtered_all_files.insert(pathbuf.clone());
             } else if debug_mode {

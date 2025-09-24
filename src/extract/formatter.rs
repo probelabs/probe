@@ -454,18 +454,28 @@ fn format_extraction_internal(
                                                 .get("file_path")
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or("");
-                                            let line = call_obj
-                                                .get("line")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0);
+                                            let line_disp =
+                                                match call_obj.get("line").and_then(|v| v.as_u64())
+                                                {
+                                                    Some(l) if l > 0 => l,
+                                                    Some(_) | None => 0,
+                                                };
                                             let file_path = file_path
                                                 .strip_prefix("file://")
                                                 .unwrap_or(file_path);
-                                            writeln!(
-                                                output,
-                                                "      - {} ({}:{})",
-                                                name, file_path, line
-                                            )?;
+                                            if line_disp > 0 {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({}:{})",
+                                                    name, file_path, line_disp
+                                                )?;
+                                            } else {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({})",
+                                                    name, file_path
+                                                )?;
+                                            }
                                         }
                                     }
                                 }
@@ -488,18 +498,28 @@ fn format_extraction_internal(
                                                 .get("file_path")
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or("");
-                                            let line = call_obj
-                                                .get("line")
-                                                .and_then(|v| v.as_u64())
-                                                .unwrap_or(0);
+                                            let line_disp =
+                                                match call_obj.get("line").and_then(|v| v.as_u64())
+                                                {
+                                                    Some(l) if l > 0 => l,
+                                                    Some(_) | None => 0,
+                                                };
                                             let file_path = file_path
                                                 .strip_prefix("file://")
                                                 .unwrap_or(file_path);
-                                            writeln!(
-                                                output,
-                                                "      - {} ({}:{})",
-                                                name, file_path, line
-                                            )?;
+                                            if line_disp > 0 {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({}:{})",
+                                                    name, file_path, line_disp
+                                                )?;
+                                            } else {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({})",
+                                                    name, file_path
+                                                )?;
+                                            }
                                         }
                                     }
                                 }
@@ -518,21 +538,26 @@ fn format_extraction_internal(
                                             .get("file_path")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("");
-                                        let line = ref_obj
-                                            .get("line")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(0);
+                                        let line_disp =
+                                            match ref_obj.get("line").and_then(|v| v.as_u64()) {
+                                                Some(l) if l > 0 => l,
+                                                Some(_) | None => 0,
+                                            };
                                         let context = ref_obj
                                             .get("context")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("reference");
                                         let file_path =
                                             file_path.strip_prefix("file://").unwrap_or(file_path);
-                                        writeln!(
-                                            output,
-                                            "    - {} ({}:{})",
-                                            context, file_path, line
-                                        )?;
+                                        if line_disp > 0 {
+                                            writeln!(
+                                                output,
+                                                "    - {} ({}:{})",
+                                                context, file_path, line_disp
+                                            )?;
+                                        } else {
+                                            writeln!(output, "    - {} ({})", context, file_path)?;
+                                        }
                                     }
                                 }
                             }
@@ -550,21 +575,30 @@ fn format_extraction_internal(
                                             .get("file_path")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("");
-                                        let line = ref_obj
-                                            .get("line")
-                                            .and_then(|v| v.as_u64())
-                                            .unwrap_or(0);
+                                        let line_disp =
+                                            match ref_obj.get("line").and_then(|v| v.as_u64()) {
+                                                Some(l) if l > 0 => l,
+                                                Some(_) | None => 0,
+                                            };
                                         let context = ref_obj
                                             .get("context")
                                             .and_then(|v| v.as_str())
                                             .unwrap_or("reference");
                                         let file_path =
                                             file_path.strip_prefix("file://").unwrap_or(file_path);
-                                        writeln!(
-                                            output,
-                                            "      - {} ({}:{})",
-                                            context, file_path, line
-                                        )?;
+                                        if line_disp > 0 {
+                                            writeln!(
+                                                output,
+                                                "      - {} ({}:{})",
+                                                context, file_path, line_disp
+                                            )?;
+                                        } else {
+                                            writeln!(
+                                                output,
+                                                "      - {} ({})",
+                                                context, file_path
+                                            )?;
+                                        }
                                     }
                                 }
                             }
@@ -586,10 +620,13 @@ fn format_extraction_internal(
                                                 .get("file_path")
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or("");
-                                            let line = ref_obj
+                                            let line_disp = match ref_obj
                                                 .get("line")
                                                 .and_then(|v| v.as_u64())
-                                                .unwrap_or(0);
+                                            {
+                                                Some(l) if l > 0 => l,
+                                                Some(_) | None => 0,
+                                            };
                                             let context = ref_obj
                                                 .get("context")
                                                 .and_then(|v| v.as_str())
@@ -597,11 +634,19 @@ fn format_extraction_internal(
                                             let file_path = file_path
                                                 .strip_prefix("file://")
                                                 .unwrap_or(file_path);
-                                            writeln!(
-                                                output,
-                                                "    - {} ({}:{})",
-                                                context, file_path, line
-                                            )?;
+                                            if line_disp > 0 {
+                                                writeln!(
+                                                    output,
+                                                    "    - {} ({}:{})",
+                                                    context, file_path, line_disp
+                                                )?;
+                                            } else {
+                                                writeln!(
+                                                    output,
+                                                    "    - {} ({})",
+                                                    context, file_path
+                                                )?;
+                                            }
                                         }
                                     }
                                 }
@@ -817,5 +862,58 @@ pub fn get_language_from_extension(extension: &str) -> &'static str {
         "pl" | "pm" => "perl",
         "proto" => "protobuf",
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_no_zero_line_in_formatter() {
+        let lsp_info = json!({
+            "call_hierarchy": {
+                "outgoing": [ {"name":"f","file_path":"file://y.rs","line":0} ]
+            },
+            "references": [ {"file_path":"file://x.rs","line":0,"context":"ref"} ],
+            "search_references": [ {"file_path":"file://z.rs","line":0,"context":"ref"} ]
+        });
+        let result = SearchResult {
+            file: "src/main.rs".to_string(),
+            lines: (1, 1),
+            node_type: "function".to_string(),
+            code: "fn main(){}".to_string(),
+            symbol_signature: None,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            matched_lines: None,
+            tokenized_content: None,
+            lsp_info: Some(lsp_info),
+            parent_context: None,
+        };
+        let out =
+            format_extraction_results(&[result], "terminal", None, None, None, false).unwrap();
+        assert!(
+            !out.contains(":0"),
+            "output should not contain :0, got: {}",
+            out
+        );
     }
 }

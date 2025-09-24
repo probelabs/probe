@@ -43,7 +43,7 @@ pub fn find_symbol_in_file(
 /// the exact position of the symbol name, not just the start of the node.
 ///
 /// Returns (line, column) in 0-indexed coordinates, or None if not found
-fn find_identifier_position_in_node(
+pub fn find_identifier_position_in_node(
     node: tree_sitter::Node,
     identifier_name: &str,
     content: &[u8],

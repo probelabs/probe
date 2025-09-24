@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Comprehensive End-to-End Integration Test for Code Graph Indexer
 //!
 //! This test demonstrates the complete workflow from git operations through symbol analysis

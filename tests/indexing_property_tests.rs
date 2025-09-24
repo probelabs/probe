@@ -83,6 +83,7 @@ fn manager_config_strategy() -> impl Strategy<Value = ManagerConfig> {
                 incremental_mode: false,
                 discovery_batch_size: batch_size,
                 status_update_interval_secs: 1,
+                specific_files: vec![],
             },
         )
 }
@@ -525,6 +526,7 @@ proptest! {
                 incremental_mode: false,
                 discovery_batch_size: 10,
                 status_update_interval_secs: 1,
+                specific_files: vec![],
             };
 
             // Create mock LSP dependencies for testing

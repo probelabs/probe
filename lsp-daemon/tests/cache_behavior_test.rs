@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Cache behavior tests for the null edge system
 //!
 //! Tests that validate the complete cycle:

@@ -15,7 +15,7 @@ use crate::process_group::ProcessGroup;
 use crate::protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
     DaemonResponse, DaemonStatus, DocumentSymbol, HoverContent, LanguageInfo, Location,
-    MessageCodec, PoolStatus, SymbolInformation,
+    MessageCodec, PoolStatus, Position, Range, SymbolInformation,
 };
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
@@ -2851,7 +2851,7 @@ impl LspDaemon {
         info: &CallHierarchyInfo,
         item: CallHierarchyItem,
     ) -> CallHierarchyResult {
-        use crate::protocol::{CallHierarchyCall, Position, Range};
+        use crate::protocol::CallHierarchyCall;
 
         let incoming = info
             .incoming_calls
@@ -3105,6 +3105,93 @@ impl LspDaemon {
         }
     }
 
+    /// Parse LSP document symbols response (JSON) into Vec<DocumentSymbol>
+    fn parse_document_symbols_response(
+        response: &serde_json::Value,
+    ) -> Result<Vec<DocumentSymbol>> {
+        if let Some(symbols) = response.as_array() {
+            let mut result = Vec::new();
+
+            // Check if we have SymbolInformation or DocumentSymbol format
+            // SymbolInformation has 'location' field, DocumentSymbol has 'range' field
+            if !symbols.is_empty() {
+                let first = &symbols[0];
+
+                // If it's SymbolInformation format (has 'location'), convert to DocumentSymbol
+                if first.get("location").is_some() {
+                    // rust-analyzer returned SymbolInformation format
+                    // Convert to DocumentSymbol format
+                    for symbol_value in symbols {
+                        match serde_json::from_value::<SymbolInformation>(symbol_value.clone()) {
+                            Ok(symbol_info) => {
+                                // Convert SymbolInformation to DocumentSymbol
+                                let doc_symbol = DocumentSymbol {
+                                    name: symbol_info.name,
+                                    detail: symbol_info.container_name,
+                                    kind: symbol_info.kind,
+                                    range: Range {
+                                        start: Position {
+                                            line: symbol_info.location.range.start.line,
+                                            character: symbol_info.location.range.start.character,
+                                        },
+                                        end: Position {
+                                            line: symbol_info.location.range.end.line,
+                                            character: symbol_info.location.range.end.character,
+                                        },
+                                    },
+                                    selection_range: Range {
+                                        start: Position {
+                                            line: symbol_info.location.range.start.line,
+                                            character: symbol_info.location.range.start.character,
+                                        },
+                                        end: Position {
+                                            line: symbol_info.location.range.end.line,
+                                            character: symbol_info.location.range.end.character,
+                                        },
+                                    },
+                                    children: None,
+                                    deprecated: symbol_info.deprecated,
+                                };
+                                result.push(doc_symbol);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to parse SymbolInformation: {}. Symbol data: {}",
+                                    e, symbol_value
+                                );
+                                debug!("Parsing error details: {:?}", e);
+                            }
+                        }
+                    }
+                } else {
+                    // Already DocumentSymbol format
+                    for symbol_value in symbols {
+                        match serde_json::from_value::<DocumentSymbol>(symbol_value.clone()) {
+                            Ok(symbol) => {
+                                result.push(symbol);
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to parse DocumentSymbol: {}. Symbol data: {}",
+                                    e, symbol_value
+                                );
+                                debug!("Parsing error details: {:?}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(result)
+        } else if response.is_null() {
+            Ok(Vec::new())
+        } else {
+            Err(anyhow!(
+                "Invalid document symbols response format: {}",
+                response
+            ))
+        }
+    }
+
     // ========================================================================================
     // New LSP Operation Handler Methods
     // ========================================================================================
@@ -3113,11 +3200,119 @@ impl LspDaemon {
 
     async fn handle_document_symbols(
         &self,
-        _file_path: &Path,
-        _workspace_hint: Option<PathBuf>,
+        file_path: &Path,
+        workspace_hint: Option<PathBuf>,
     ) -> Result<Vec<DocumentSymbol>> {
-        // TODO: Implement document symbols support in LSP server
-        Err(anyhow!("Document symbols operation is not yet implemented"))
+        // Check if file should be excluded from LSP processing
+        if should_exclude_from_lsp(file_path) {
+            warn!(
+                "Ignoring DocumentSymbols request for excluded file: {:?} (build artifact/generated code)",
+                file_path
+            );
+            return Err(anyhow!(
+                "File is excluded from LSP processing (build artifact or generated code)"
+            ));
+        }
+
+        // Handle document symbols request directly (universal cache middleware handles caching)
+        let absolute_file_path = safe_canonicalize(file_path);
+
+        let result = async {
+            let language = self.detector.detect(&absolute_file_path)?;
+            if language == Language::Unknown {
+                return Err(anyhow!(
+                    "Unknown language for file: {:?}",
+                    absolute_file_path
+                ));
+            }
+
+            let workspace_root = {
+                let mut resolver = self.workspace_resolver.lock().await;
+                resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
+            };
+
+            // Read file content for cache key generation
+            let content = fs::read_to_string(&absolute_file_path)?;
+
+            // PHASE 1: Try database first
+            // Generate cache key for document symbols (file-level, no position needed)
+            let hash_str = blake3::hash(content.as_bytes()).to_hex();
+            let cache_key = format!(
+                "document_symbols:{}:{}",
+                absolute_file_path.display(),
+                &hash_str.as_str()[..16]
+            );
+
+            if let Ok(workspace_cache) = self
+                .workspace_cache_router
+                .cache_for_workspace(&workspace_root)
+                .await
+            {
+                // Generate workspace-specific ID from workspace_root
+                let workspace_id = self.generate_workspace_id_hash(&workspace_root);
+
+                match workspace_cache
+                    .get_document_symbols(workspace_id, &cache_key)
+                    .await
+                {
+                    Ok(Some(symbols)) => {
+                        info!(
+                            "Database HIT for document symbols at {}",
+                            absolute_file_path.display()
+                        );
+                        return Ok(symbols);
+                    }
+                    Ok(None) => {
+                        debug!("Database MISS for document symbols - calling LSP");
+                    }
+                    Err(e) => {
+                        warn!("Database query error: {} - falling back to LSP", e);
+                        // Track database error for health monitoring
+                        self.record_database_error(&e).await;
+                    }
+                }
+            }
+
+            // PHASE 2: Database miss - proceed with LSP call
+            let server_instance = self
+                .server_manager
+                .ensure_workspace_registered(language, workspace_root.clone())
+                .await?;
+
+            // Make the document symbols request directly without explicit document lifecycle
+            // The LSP server manages its own document state
+            let response_json = {
+                let server = server_instance.lock().await;
+                server.server.document_symbols(&absolute_file_path).await?
+            };
+
+            // Check if response is null vs empty array
+            let is_null_response = response_json.is_null();
+            debug!(
+                "Document symbols response: is_null={}, response={}",
+                is_null_response, response_json
+            );
+            let symbols = Self::parse_document_symbols_response(&response_json)?;
+            info!(
+                "Parsed {} document symbols from LSP response",
+                symbols.len()
+            );
+
+            // Note: Document symbols are not cached in the database for ad-hoc LSP calls
+            // This is intended behavior for on-demand queries via `probe lsp call`
+
+            if is_null_response {
+                info!(
+                    "LSP returned null for document symbols at {} (LSP server may not be ready)",
+                    absolute_file_path.display()
+                );
+            }
+
+            Ok(symbols)
+        }
+        .await;
+
+        result
     }
 
     async fn handle_workspace_symbols(
@@ -3785,6 +3980,50 @@ impl LspDaemon {
         Ok(())
     }
 
+    /// Store document symbols data in the database
+    async fn store_document_symbols_in_database(
+        &self,
+        symbols: &[DocumentSymbol],
+        file_path: &Path,
+        workspace_root: &Path,
+        _language: &str,
+        cache_key: &str,
+    ) -> Result<()> {
+        debug!(
+            "Storing document symbols data in database for file: {:?}",
+            file_path
+        );
+
+        // Get workspace cache
+        let workspace_cache = self
+            .workspace_cache_router
+            .cache_for_workspace(workspace_root)
+            .await
+            .with_context(|| format!("Failed to get workspace cache for {:?}", workspace_root))?;
+
+        // Generate workspace-specific ID from workspace_root
+        let workspace_id = self.generate_workspace_id_hash(workspace_root);
+
+        // Store document symbols using the cache adapter's method
+        workspace_cache
+            .store_document_symbols(workspace_id, cache_key, symbols)
+            .await
+            .with_context(|| {
+                format!(
+                    "Failed to store document symbols for file: {}",
+                    file_path.display()
+                )
+            })?;
+
+        info!(
+            "Successfully stored document symbols data: {} symbols for {}",
+            symbols.len(),
+            file_path.display()
+        );
+
+        Ok(())
+    }
+
     // ========================================================================================
     // End of New LSP Operation Handler Methods
     // ========================================================================================
@@ -4388,6 +4627,7 @@ impl LspDaemon {
             incremental_mode: config.incremental.unwrap_or(true),
             discovery_batch_size: 100,
             status_update_interval_secs: 5,
+            specific_files: config.specific_files,
         };
 
         // Check if indexing manager is already running
@@ -4553,6 +4793,8 @@ impl LspDaemon {
                 ),
                 elapsed_seconds: progress.elapsed_seconds,
                 lsp_enrichment: manager.get_lsp_enrichment_info().await,
+                lsp_indexing: manager.get_lsp_indexing_info().await,
+                database: self.get_database_info().await.ok(),
             };
 
             Ok(status_info)
@@ -4586,10 +4828,56 @@ impl LspDaemon {
                 started_at: None,
                 elapsed_seconds: 0,
                 lsp_enrichment: None,
+                lsp_indexing: None,
+                database: self.get_database_info().await.ok(),
             };
 
             Ok(status_info)
         }
+    }
+
+    /// Get database information from the current workspace
+    async fn get_database_info(&self) -> Result<crate::protocol::DatabaseInfo> {
+        use crate::protocol::DatabaseInfo;
+
+        // Get current working directory as workspace root
+        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+
+        // Get workspace cache for current directory
+        let cache = self
+            .workspace_cache_router
+            .cache_for_workspace(&current_dir)
+            .await
+            .context("Failed to get workspace cache")?;
+
+        // Get the backend to query the database directly
+        let backend = cache.backend();
+
+        // Query symbol and edge counts from the database
+        let (total_symbols, total_edges, total_files, workspace_id) = match backend {
+            crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
+                // Use the new public method to get table counts
+                let (symbol_count, edge_count, file_count) = sqlite_backend
+                    .get_table_counts()
+                    .await
+                    .context("Failed to get table counts")?;
+
+                // Get workspace ID
+                let workspace_id = self
+                    .workspace_cache_router
+                    .workspace_id_for(&current_dir)
+                    .unwrap_or_else(|_| "unknown".to_string());
+
+                (symbol_count, edge_count, file_count, workspace_id)
+            }
+        };
+
+        Ok(DatabaseInfo {
+            total_symbols,
+            total_edges,
+            total_files,
+            workspace_id: Some(workspace_id),
+        })
     }
 
     async fn handle_set_indexing_config(

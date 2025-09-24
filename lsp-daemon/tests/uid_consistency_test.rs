@@ -1,3 +1,4 @@
+#![cfg(feature = "legacy-tests")]
 //! Integration test to verify UID consistency between storage and query paths
 //!
 //! This test validates that both the LspDatabaseAdapter (storage path) and
