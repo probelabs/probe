@@ -73,13 +73,19 @@ For GitHub-compatible mermaid diagrams, avoid single quotes and parentheses in n
 
 **Rules:**
 - NO single quotes in any node labels: 'text' → "text" or text
-- NO parentheses in square brackets: [Text (detail)] → [Text - detail]
+- NO parentheses in square brackets: [Text (detail)] → [Text - detail]  
 - NO complex expressions in diamonds: {a && b} → {condition}
+- NO HTML tags in node labels: [<pre>code</pre>] → ["code block"] or [Code Block]
 - USE single quotes for styles and classes: classDef highlight fill:'#ff9999'
+- CRITICAL: When using quotes in node labels, place them INSIDE the brackets: ["quoted text"], NOT [quoted text"]
 
 **Examples:**
 - ✅ [Load Config] ["Run command"] {Valid?}
+- ✅ ["depends_on: [generate-items]"] (correct quote placement)
+- ✅ ["Code Block"] (clean text instead of HTML)
 - ❌ [Load (config)] [Run 'command'] {isValid('x')}
+- ❌ [depends_on: [generate-items"] (incorrect quote placement - quote ends inside bracket)
+- ❌ [<pre>depends_on: [generate-items]</pre>] (HTML tags in node labels)
 
 **Diagram Type Selection:**
 
