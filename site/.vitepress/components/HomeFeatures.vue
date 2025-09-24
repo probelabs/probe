@@ -138,7 +138,7 @@ Lines: 56-62
 
 <span style="color: rgb(136, 0, 0); font-weight: 400;">jobs</span>:
   <span style="color: rgb(136, 0, 0); font-weight: 400;">trigger_probe_chat</span>:
-    <span style="color: rgb(136, 0, 0); font-weight: 400;">uses</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">buger/probe/.github/workflows/probe.yml@main</span>
+    <span style="color: rgb(136, 0, 0); font-weight: 400;">uses</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">probelabs/probe/.github/workflows/probe.yml@main</span>
     <span style="color: rgb(136, 0, 0); font-weight: 400;">with</span>:
       <span style="color: rgb(136, 0, 0); font-weight: 400;">command_prefix</span>: <span style="color: rgb(0, 136, 0); font-weight: 400;">"/probe"</span>
     <span style="color: rgb(136, 0, 0); font-weight: 400;">secrets</span>:
@@ -154,17 +154,17 @@ Lines: 56-62
         <p>Built by developers for developers, Probe is designed to be easy to install and extend:</p>
         
         <div class="language-bash"><pre style="font-family:monospace;color: rgb(68, 68, 68); background-color: rgb(243, 243, 243); font-weight: 400; "><code><span style="color: rgb(105, 112, 112); font-weight: 400;"># Use the core Probe tool without installation</span>
-npx -y @buger/probe@latest search <span style="color: rgb(136, 0, 0); font-weight: 400;">"error handling"</span> ./src
+npx -y @probelabs/probe@latest search <span style="color: rgb(136, 0, 0); font-weight: 400;">"error handling"</span> ./src
 
 <span style="color: rgb(105, 112, 112); font-weight: 400;"># Start an interactive AI chat with your codebase</span>
-npx -y @buger/probe-chat@latest
+npx -y @probelabs/probe-chat@latest
 
 <span style="color: rgb(105, 112, 112); font-weight: 400;"># Start the web interface on localhost:3000</span>
-npx -y @buger/probe-chat@latest --web</code></pre></div>
+npx -y @probelabs/probe-chat@latest --web</code></pre></div>
       </template>
       <template #code>
         <div class="language-typescript"><pre style="font-family:monospace;color: rgb(68, 68, 68); background-color: rgb(243, 243, 243); font-weight: 400; "><code><span style="color: rgb(105, 112, 112); font-weight: 400;">// Example of using Probe's Node.js SDK</span>
-<span style="color: rgb(0, 0, 136); font-weight: 400;">import</span> { search } <span style="color: rgb(0, 0, 136); font-weight: 400;">from</span> <span style="color: rgb(136, 0, 0); font-weight: 400;">'@buger/probe'</span>;
+<span style="color: rgb(0, 0, 136); font-weight: 400;">import</span> { search } <span style="color: rgb(0, 0, 136); font-weight: 400;">from</span> <span style="color: rgb(136, 0, 0); font-weight: 400;">'@probelabs/probe'</span>;
 
 <span style="color: rgb(0, 0, 136); font-weight: 400;">const</span> results = <span style="color: rgb(0, 0, 136); font-weight: 400;">await</span> search({
   <span style="color: rgb(136, 0, 0); font-weight: 400;">query</span>: <span style="color: rgb(136, 0, 0); font-weight: 400;">"error handling"</span>,
@@ -194,9 +194,9 @@ console.log(<span style="color: rgb(136, 0, 0); font-weight: 400;">`Found ${resu
         </ul>
       </template>
       <template #code>
-        <div class="language-typescript"><pre style="font-family:monospace;color: rgb(68, 68, 68); background-color: rgb(243, 243, 243); font-weight: 400; "><code><span style="color: rgb(0, 0, 136); font-weight: 400;">import</span> { search } <span style="color: rgb(0, 0, 136); font-weight: 400;">from</span> <span style="color: rgb(136, 0, 0); font-weight: 400;">'@buger/probe'</span>;
+        <div class="language-typescript"><pre style="font-family:monospace;color: rgb(68, 68, 68); background-color: rgb(243, 243, 243); font-weight: 400; "><code><span style="color: rgb(0, 0, 136); font-weight: 400;">import</span> { search } <span style="color: rgb(0, 0, 136); font-weight: 400;">from</span> <span style="color: rgb(136, 0, 0); font-weight: 400;">'@probelabs/probe'</span>;
 <span style="color: rgb(0, 0, 136); font-weight: 400;">import</span> { ChatOpenAI } <span style="color: rgb(0, 0, 136); font-weight: 400;">from</span> <span style="color: rgb(136, 0, 0); font-weight: 400;">'@langchain/openai'</span>;
-<span style="color: rgb(0, 0, 136); font-weight: 400;">import</span> { tools } <span style="color: rgb(0, 0, 136); font-weight: 400;">from</span> <span style="color: rgb(136, 0, 0); font-weight: 400;">'@buger/probe'</span>;
+<span style="color: rgb(0, 0, 136); font-weight: 400;">import</span> { tools } <span style="color: rgb(0, 0, 136); font-weight: 400;">from</span> <span style="color: rgb(136, 0, 0); font-weight: 400;">'@probelabs/probe'</span>;
 
 <span style="color: rgb(105, 112, 112); font-weight: 400;">// Create AI assistant with code search capability</span>
 <span style="color: rgb(0, 0, 136); font-weight: 400;">const</span> searchTool = tools.createSearchTool();

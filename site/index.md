@@ -38,11 +38,18 @@ hero:
               <p class="option-description">Built-in AI agent. <small>OpenAI or Anthropic (API key required)</small></p>
             </div>
             <div class="quick-start-option">
-              <h3>Docker</h3>
+              <h3>MCP Server</h3>
               <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>docker run --rm -v $(pwd):/workspace buger/probe search "function"</code></pre></div>
+                <div class="language-bash"><pre><code>probe mcp</code></pre></div>
               </div>
-              <p class="option-description">Containerized deployment with multi-platform support</p>
+              <p class="option-description">Model Context Protocol server for AI editors</p>
+            </div>
+            <div class="quick-start-option">
+              <h3>Probe Agent</h3>
+              <div class="pre-wrapper">
+                <div class="language-bash"><pre><code>npx -y @probelabs/probe@latest extract "main.rs:42" --prompt engineer</code></pre></div>
+              </div>
+              <p class="option-description">LLM-optimized code extraction with prompt templates</p>
             </div>
     </div>
   </div>
@@ -70,6 +77,7 @@ hero:
 .quick-start-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
   gap: 2rem;
   max-width: 1200px;
   margin: 0 auto;

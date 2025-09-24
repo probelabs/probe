@@ -76,9 +76,9 @@ pub struct Args {
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 
-    /// Output format (default: color)
+    /// Output format (default: outline)
     /// Use 'json' or 'xml' for machine-readable output
-    #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
+    #[arg(short = 'o', long = "format", default_value = "outline", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
     pub format: String,
 
     /// Session ID for caching search results
@@ -201,9 +201,9 @@ pub enum Commands {
         #[arg(long = "dry-run")]
         dry_run: bool,
 
-        /// Output format (default: color)
+        /// Output format (default: outline)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
+        #[arg(short = 'o', long = "format", default_value = "outline", value_parser = ["terminal", "markdown", "plain", "json", "xml", "color", "outline", "outline-xml"])]
         format: String,
 
         /// Session ID for caching search results

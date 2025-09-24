@@ -99,7 +99,7 @@ export default defineConfig({
           ]}
         ]
       },
-      { text: 'GitHub', link: 'https://github.com/buger/probe' },
+      { text: 'GitHub', link: 'https://github.com/probelabs/probe' },
       { text: 'Discord', link: 'https://discord.gg/hBN4UsTZ' }
     ],
 
@@ -163,8 +163,8 @@ export default defineConfig({
         text: 'Contributing',
         collapsed: true,
         items: [
-          { text: 'Contributing Guide', link: 'https://github.com/buger/probe/blob/main/CONTRIBUTING.md' },
-          { text: 'Code of Conduct', link: 'https://github.com/buger/probe/blob/main/CODE_OF_CONDUCT.md' },
+          { text: 'Contributing Guide', link: 'https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md' },
+          { text: 'Code of Conduct', link: 'https://github.com/probelabs/probe/blob/main/CODE_OF_CONDUCT.md' },
           { text: 'Documentation Maintenance', link: '/contributing/documentation-maintenance' },
           { text: 'Documentation Structure', link: '/contributing/documentation-structure' },
           { text: 'Documentation Cross-References', link: '/contributing/documentation-cross-references' }
@@ -176,13 +176,13 @@ export default defineConfig({
         items: [
           { text: 'Changelog', link: '/changelog' },
           { text: 'Blog', link: '/blog/' },
-          { text: 'GitHub Releases', link: 'https://github.com/buger/probe/releases' }
+          { text: 'GitHub Releases', link: 'https://github.com/probelabs/probe/releases' }
         ]
       }
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/buger/probe' },
+      { icon: 'github', link: 'https://github.com/probelabs/probe' },
       { icon: 'discord', link: 'https://discord.gg/hBN4UsTZ' }
     ],
     

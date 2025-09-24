@@ -384,7 +384,7 @@ Examples:
 </extract>
 
 <attempt_completion>
-<result>The configuration is loaded from src/config.js lines 15-25 which contains the database settings.</result>
+The configuration is loaded from src/config.js lines 15-25 which contains the database settings.
 </attempt_completion>
 
 # Special Case: Quick Completion
@@ -411,7 +411,7 @@ I need to find code related to error handling in the search module. The most app
 6. Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
 7. Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
 8. If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
-9. If you cannot proceed (e.g., missing information, invalid request), explain the issue clearly before using \`<attempt_completion>\` with an appropriate message in the \`<result>\` tag.
+9. If you cannot proceed (e.g., missing information, invalid request), use \`<attempt_completion>\` to explain the issue clearly with an appropriate message directly inside the tags.
 10. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
 
 Available Tools:

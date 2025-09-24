@@ -68,8 +68,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### Docker Integration & CI/CD
 - **Official Docker images**: Pre-built images available on Docker Hub
-  - `buger/probe` - CLI tool for code search
-  - `buger/probe-chat` - AI-powered chat interface
+  - `probelabs/probe` - CLI tool for code search
+  - `probelabs/probe-chat` - AI-powered chat interface
 - **Multi-platform support**: Images built for linux/amd64 and linux/arm64
 - **Docker Compose configuration**: Easy local development setup
 - **Automated CI/CD**: Docker images automatically built and published on releases

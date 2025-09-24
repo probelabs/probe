@@ -12,10 +12,12 @@ jobs:
   build-and-release:
     name: Build and Release for ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_ext: ""
             archive_ext: "tar.gz"
@@ -31,7 +33,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             binary_ext: ".exe"
             archive_ext: "zip"
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             binary_ext: ""
             archive_ext: "tar.gz"
@@ -51,7 +53,7 @@ jobs:
       # Setup Rust cache
       - name: Setup Rust cache
         uses: actions/cache@v4
-        timeout-minutes: 5
+        timeout-minutes: 10
         with:
           path: |
             ~/.cargo/bin/
@@ -65,33 +67,15 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
 
-      - name: Configure APT sources for arm64
+      - name: Setup ARM64 cross-compilation
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo bash -c 'cat > /etc/apt/sources.list << EOF
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy main restricted universe multiverse
-          deb [arch=amd64] http://archive.ubuntu.com/ubuntu jammy-updates main restricted universe multiverse
-          deb [arch=amd64] http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse
-          deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse
-          EOF'
-
-      - name: Setup cross-compilation
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo dpkg --add-architecture arm64
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config libssl-dev:arm64 libc6-dev-arm64-cross
-          {
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc"
-            echo "PKG_CONFIG_ALLOW_CROSS=1"
-            echo "OPENSSL_LIB_DIR=/usr/lib/aarch64-linux-gnu"
-            echo "OPENSSL_INCLUDE_DIR=/usr/include"
-          } >> "$GITHUB_ENV"
+        uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: aarch64-unknown-linux-gnu
 
       # Build the Rust project
       - name: Build Release
+        timeout-minutes: 45
         shell: bash
         run: |
           if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
@@ -113,6 +97,7 @@ jobs:
 
       # Package the binary into an archive
       - name: Package Binary
+        timeout-minutes: 10
         shell: bash
         run: |
           BINARY_NAME="probe"
@@ -147,6 +132,7 @@ jobs:
 
       # Upload the binary as a release asset
       - name: Release
+        timeout-minutes: 15
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -156,11 +142,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Use ubuntu-20.04 for GLIBC compatibility with libc build scripts
+  # Publishing to crates.io
   publish-crates-io:
     name: Publish to crates.io
     needs: build-and-release
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     if: "!contains(github.ref_name, 'rc')"
     steps:
       - name: Checkout code
@@ -173,7 +159,7 @@ jobs:
 
       - name: Setup Rust cache
         uses: actions/cache@v4
-        timeout-minutes: 5
+        timeout-minutes: 10
         with:
           path: |
             ~/.cargo/bin/
@@ -193,50 +179,6 @@ jobs:
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-
-  publish-mcp-agent:
-    name: Publish MCP Agent to npm
-    needs: publish-npm-package
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Extract version from tag
-        id: extract_version
-        run: |
-          # Remove 'v' prefix from tag (e.g., v1.0.0 -> 1.0.0)
-          VERSION="${GITHUB_REF#refs/tags/v}"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Extracted version: $VERSION"
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-          registry-url: "https://registry.npmjs.org/"
-          scope: "@buger"
-          token: ${{ secrets.NPM_TOKEN }} # Let setup-node handle authentication
-
-      - name: Install dependencies
-        run: cd mcp-agent && npm install
-
-      - name: Update package version and dependencies
-        run: |
-          cd mcp-agent
-          # Update version in package.json without git operations
-          npm version "$VERSION" --no-git-tag-version
-          # Update dependency on @buger/probe to use the specific version
-          npm pkg set dependencies."@buger/probe"="^$VERSION"
-          echo "Updated MCP Agent package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
-
-      - name: Build
-        run: cd mcp-agent && npm run build
-
-      - name: Publish to npm
-        run: cd mcp-agent && npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
 
   publish-npm-package:
@@ -308,14 +250,12 @@ jobs:
       - name: Install dependencies
         run: cd examples/chat && npm install
 
-      - name: Update package version and dependencies
+      - name: Update package version
         run: |
           cd examples/chat
           # Update version in package.json without git operations
           npm version "$VERSION" --no-git-tag-version
-          # Update dependency on @buger/probe to use the specific version
-          npm pkg set dependencies."@buger/probe"="^$VERSION"
-          echo "Updated probe-chat package.json to version $VERSION with @buger/probe dependency set to ^$VERSION"
+          echo "Updated probe-chat package.json to version $VERSION"
 
       - name: Publish to npm
         run: cd examples/chat && npm publish --access public
