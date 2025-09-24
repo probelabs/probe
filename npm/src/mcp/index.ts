@@ -112,37 +112,19 @@ console.log(`Bin directory: ${binDir}`);
 interface SearchCodeArgs {
   path: string;
   query: string | string[];
-  filesOnly?: boolean;
-  ignore?: string[];
-  excludeFilenames?: boolean;
   exact?: boolean;
   maxResults?: number;
   maxTokens?: number;
   allowTests?: boolean;
   session?: string;
-  timeout?: number;
   noGitignore?: boolean;
 }
 
-interface QueryCodeArgs {
-  path: string;
-  pattern: string;
-  language?: string;
-  ignore?: string[];
-  allowTests?: boolean;
-  maxResults?: number;
-  format?: 'markdown' | 'plain' | 'json' | 'color';
-  timeout?: number;
-  noGitignore?: boolean;
-}
 
 interface ExtractCodeArgs {
   path: string;
   files: string[];
   allowTests?: boolean;
-  contextLines?: number;
-  format?: 'markdown' | 'plain' | 'json';
-  timeout?: number;
   noGitignore?: boolean;
 }
 
@@ -193,37 +175,21 @@ class ProbeServer {
               },
               query: {
                 type: 'string',
-                description: 'Elastic search query. Supports logical operators (AND, OR, NOT), and grouping with parentheses. Examples: "config", "(term1 OR term2) AND term3". Use quotes for exact matches, like function or type names.',
-              },
-              filesOnly: {
-                type: 'boolean',
-                description: 'Skip AST parsing and just output unique files',
-              },
-              ignore: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Custom patterns to ignore (in addition to .gitignore and common patterns)'
-              },
-              excludeFilenames: {
-                type: 'boolean',
-                description: 'Exclude filenames from being used for matching'
+                description: 'Elastic search query. Supports logical operators (AND, OR, NOT), and grouping with parentheses. For exact matches of specific identifiers, use quotes: "MyFunction", "SpecificStruct", "exact_variable_name". Examples: "config", "(term1 OR term2) AND term3", "getUserData", "struct Config".',
               },
               exact: {
                 type: 'boolean',
-                description: 'Perform exact search without tokenization (case-insensitive)'
+                description: 'When you exactly know what you are looking for, like known function name, struct name, or variable name, set this flag for precise matching'
               },
               allowTests: {
                 type: 'boolean',
-                description: 'Allow test files and test code blocks in results (disabled by default)'
+                description: 'Allow test files and test code blocks in results (enabled by default)',
+                default: true
               },
               session: {
                 type: 'string',
                 description: 'Session identifier for caching. Set to "new" if unknown, or want to reset cache. Re-use session ID returned from previous searches',
                 default: "new",
-              },
-              timeout: {
-                type: 'number',
-                description: 'Timeout for the search operation in seconds (default: 30)',
               },
               noGitignore: {
                 type: 'boolean',
@@ -231,50 +197,6 @@ class ProbeServer {
               }
             },
             required: ['path', 'query']
-          },
-        },
-        {
-          name: 'query_code',
-          description: "Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.",
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: {
-                type: 'string',
-                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
-              },
-              pattern: {
-                type: 'string',
-                description: 'The ast-grep pattern to search for. Examples: "fn $NAME($$$PARAMS) $$$BODY" for Rust functions, "def $NAME($$$PARAMS): $$$BODY" for Python functions.',
-              },
-              language: {
-                type: 'string',
-                description: 'The programming language to search in. If not specified, the tool will try to infer the language from file extensions. Supported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp, yaml.',
-              },
-              ignore: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Custom patterns to ignore (in addition to common patterns)',
-              },
-              maxResults: {
-                type: 'number',
-                description: 'Maximum number of results to return'
-              },
-              format: {
-                type: 'string',
-                enum: ['markdown', 'plain', 'json', 'color'],
-                description: 'Output format for the query results'
-              },
-              timeout: {
-                type: 'number',
-                description: 'Timeout for the query operation in seconds (default: 30)',
-              },
-              noGitignore: {
-                type: 'boolean',
-                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
-              }
-            },
-            required: ['path', 'pattern']
           },
         },
         {
@@ -294,22 +216,8 @@ class ProbeServer {
               },
               allowTests: {
                 type: 'boolean',
-                description: 'Allow test files and test code blocks in results (disabled by default)',
-              },
-              contextLines: {
-                type: 'number',
-                description: 'Number of context lines to include before and after the extracted block when AST parsing fails to find a suitable node',
-                default: 0
-              },
-              format: {
-                type: 'string',
-                enum: ['markdown', 'plain', 'json'],
-                description: 'Output format for the extracted code',
-                default: 'markdown'
-              },
-              timeout: {
-                type: 'number',
-                description: 'Timeout for the extract operation in seconds (default: 30)',
+                description: 'Allow test files and test code blocks in results (enabled by default)',
+                default: true
               },
               noGitignore: {
                 type: 'boolean',
@@ -323,8 +231,8 @@ class ProbeServer {
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'search_code' && request.params.name !== 'query_code' && request.params.name !== 'extract_code' &&
-          request.params.name !== 'probe' && request.params.name !== 'query' && request.params.name !== 'extract') {
+      if (request.params.name !== 'search_code' && request.params.name !== 'extract_code' &&
+          request.params.name !== 'probe' && request.params.name !== 'extract') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
@@ -356,9 +264,6 @@ class ProbeServer {
           }
           
           result = await this.executeCodeSearch(args);
-        } else if (request.params.name === 'query_code' || request.params.name === 'query') {
-          const args = request.params.arguments as unknown as QueryCodeArgs;
-          result = await this.executeCodeQuery(args);
         } else { // extract_code or extract
           const args = request.params.arguments as unknown as ExtractCodeArgs;
           result = await this.executeCodeExtract(args);
@@ -409,13 +314,15 @@ class ProbeServer {
       };
       
       // Add optional parameters only if they exist
-      if (args.filesOnly !== undefined) options.filesOnly = args.filesOnly;
-      if (args.ignore !== undefined) options.ignore = args.ignore;
-      if (args.excludeFilenames !== undefined) options.excludeFilenames = args.excludeFilenames;
       if (args.exact !== undefined) options.exact = args.exact;
       if (args.maxResults !== undefined) options.maxResults = args.maxResults;
       if (args.maxTokens !== undefined) options.maxTokens = args.maxTokens;
-      if (args.allowTests !== undefined) options.allowTests = args.allowTests;
+      // Set allowTests to true by default if not specified
+      if (args.allowTests !== undefined) {
+        options.allowTests = args.allowTests;
+      } else {
+        options.allowTests = true;
+      }
       // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
       if (args.noGitignore !== undefined) {
         options.noGitignore = args.noGitignore;
@@ -426,12 +333,6 @@ class ProbeServer {
         options.session = args.session;
       } else {
         options.session = "new";
-      }
-      // Use timeout from args, or fall back to instance default
-      if (args.timeout !== undefined) {
-        options.timeout = args.timeout;
-      } else if (this.defaultTimeout !== undefined) {
-        options.timeout = this.defaultTimeout;
       }
 
       // Handle format options
@@ -467,50 +368,6 @@ class ProbeServer {
     }
   }
 
-  private async executeCodeQuery(args: QueryCodeArgs): Promise<string> {
-    try {
-      // Validate required parameters
-      if (!args.path) {
-        throw new Error("Path is required");
-      }
-      if (!args.pattern) {
-        throw new Error("Pattern is required");
-      }
-
-      // Create a single options object with both pattern and path
-      const options: any = {
-        path: args.path,
-        pattern: args.pattern,
-        language: args.language,
-        ignore: args.ignore,
-        allowTests: args.allowTests,
-        maxResults: args.maxResults,
-        format: args.format,
-        timeout: args.timeout || this.defaultTimeout
-      };
-      
-      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
-      if (args.noGitignore !== undefined) {
-        options.noGitignore = args.noGitignore;
-      } else if (process.env.PROBE_NO_GITIGNORE) {
-        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
-      }
-      
-      console.log("Executing query with options:", JSON.stringify({
-        path: options.path,
-        pattern: options.pattern
-      }));
-      
-      const result = await query(options);
-      return result;
-    } catch (error: any) {
-      console.error('Error executing code query:', error);
-      throw new McpError(
-        'MethodNotFound' as unknown as ErrorCode,
-        `Error executing code query: ${error.message || String(error)}`
-      );
-    }
-  }
 
   private async executeCodeExtract(args: ExtractCodeArgs): Promise<string> {
     try {
@@ -526,11 +383,15 @@ class ProbeServer {
       const options: any = {
         files: args.files,
         path: args.path,
-        allowTests: args.allowTests,
-        contextLines: args.contextLines,
-        format: args.format,
-        timeout: args.timeout || this.defaultTimeout
+        format: 'xml'
       };
+      
+      // Set allowTests to true by default if not specified
+      if (args.allowTests !== undefined) {
+        options.allowTests = args.allowTests;
+      } else {
+        options.allowTests = true;
+      }
       
       // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
       if (args.noGitignore !== undefined) {
