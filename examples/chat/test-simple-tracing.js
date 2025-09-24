@@ -19,7 +19,7 @@ async function testSimpleTracing() {
     const { extractImageUrls } = await import('./probeChat.js');
     
     // This should create a span
-    const result = extractImageUrls(message, true);
+    const result = await extractImageUrls(message, true);
     
     console.log('✅ extractImageUrls result:', result);
     console.log('🎉 Test completed!');

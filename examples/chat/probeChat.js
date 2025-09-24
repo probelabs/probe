@@ -2,7 +2,8 @@ import 'dotenv/config';
 import { ProbeAgent } from '@probelabs/probe/agent';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { readFile, stat } from 'fs/promises';
+import { join, resolve, isAbsolute } from 'path';
 import { TelemetryConfig } from './telemetry.js';
 import { trace } from '@opentelemetry/api';
 import { appTracer } from './appTracer.js';
@@ -39,24 +40,128 @@ if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDA
   validateFolders();
 }
 
+// Maximum image file size (20MB) to prevent OOM attacks
+const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
+
 /**
- * Extract image URLs from message text
+ * Security validation for local file paths
+ * @param {string} filePath - The file path to validate
+ * @param {string} baseDir - The base directory to restrict access to
+ * @returns {boolean} - Whether the path is safe to access
+ */
+function isSecureFilePath(filePath, baseDir = process.cwd()) {
+  try {
+    // Resolve the absolute path
+    const absolutePath = isAbsolute(filePath) ? filePath : resolve(baseDir, filePath);
+    const normalizedBase = resolve(baseDir);
+    
+    // Ensure the resolved path is within the allowed directory
+    return absolutePath.startsWith(normalizedBase);
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * Convert local image file to base64 data URL
+ * @param {string} filePath - Path to the image file
+ * @param {boolean} debug - Whether to log debug information
+ * @returns {Promise<string|null>} - Base64 data URL or null if failed
+ */
+async function convertImageFileToBase64(filePath, debug = false) {
+  try {
+    // Security check: validate the file path against all allowed directories
+    const allowedDirs = allowedFolders.length > 0 ? allowedFolders : [process.cwd()];
+    const isPathAllowed = allowedDirs.some(dir => isSecureFilePath(filePath, dir));
+    
+    if (!isPathAllowed) {
+      if (debug) {
+        console.log(`[DEBUG] Security check failed for path: ${filePath}`);
+      }
+      return null;
+    }
+
+    // Resolve the path - for relative paths, use the first allowed directory as base
+    const baseDir = allowedDirs[0];
+    const absolutePath = isAbsolute(filePath) ? filePath : resolve(baseDir, filePath);
+    
+    // Check if file exists and get file stats
+    let fileStats;
+    try {
+      fileStats = await stat(absolutePath);
+    } catch (error) {
+      if (debug) {
+        console.log(`[DEBUG] File not found: ${absolutePath}`);
+      }
+      return null;
+    }
+
+    // Validate file size to prevent OOM attacks
+    if (fileStats.size > MAX_IMAGE_FILE_SIZE) {
+      if (debug) {
+        console.log(`[DEBUG] Image file too large: ${absolutePath} (${fileStats.size} bytes, max: ${MAX_IMAGE_FILE_SIZE})`);
+      }
+      return null;
+    }
+
+    // Determine MIME type based on file extension
+    const extension = absolutePath.toLowerCase().split('.').pop();
+    const mimeTypes = {
+      'png': 'image/png',
+      'jpg': 'image/jpeg', 
+      'jpeg': 'image/jpeg',
+      'webp': 'image/webp',
+      'gif': 'image/gif'
+    };
+    
+    const mimeType = mimeTypes[extension];
+    if (!mimeType) {
+      if (debug) {
+        console.log(`[DEBUG] Unsupported image format: ${extension}`);
+      }
+      return null;
+    }
+
+    // Read file and convert to base64 asynchronously
+    const fileBuffer = await readFile(absolutePath);
+    const base64Data = fileBuffer.toString('base64');
+    const dataUrl = `data:${mimeType};base64,${base64Data}`;
+    
+    if (debug) {
+      console.log(`[DEBUG] Successfully converted ${absolutePath} to base64 (${fileBuffer.length} bytes)`);
+    }
+    
+    return dataUrl;
+  } catch (error) {
+    if (debug) {
+      console.log(`[DEBUG] Error converting file to base64: ${error.message}`);
+    }
+    return null;
+  }
+}
+
+// Export the extractImageUrls function for testing
+export { extractImageUrls };
+
+/**
+ * Extract image URLs and local file paths from message text
  * @param {string} message - The message text to analyze
  * @param {boolean} debug - Whether to log debug information
- * @returns {Array} Array of { url: string, cleanedMessage: string }
+ * @returns {Promise<Object>} Promise resolving to { urls: Array, cleanedMessage: string }
  */
-function extractImageUrls(message, debug = false) {
+async function extractImageUrls(message, debug = false) {
   // This function should be called within the session context, so it will inherit the trace ID
   const tracer = trace.getTracer('probe-chat', '1.0.0');
-  return tracer.startActiveSpan('content.image.extract', (span) => {
+  return tracer.startActiveSpan('content.image.extract', async (span) => {
     try {
-      // Pattern to match image URLs and base64 data:
+      // Pattern to match image URLs, base64 data, and local file paths:
       // 1. GitHub private-user-images URLs (always images, regardless of extension)
       // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
       // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
       // 4. Base64 data URLs (data:image/...)
+      // 5. Local file paths with image extensions (relative and absolute)
       // Updated to stop at quotes, spaces, or common HTML/XML delimiters
-      const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?))/gi;
+      const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|gif))/gi;
 
       span.setAttributes({
         'message.length': message.length,
@@ -69,31 +174,57 @@ function extractImageUrls(message, debug = false) {
       }
 
       const urls = [];
+      const foundPatterns = [];
       let match;
 
       while ((match = imageUrlPattern.exec(message)) !== null) {
-        urls.push(match[0]);
+        foundPatterns.push(match[0]);
         if (debug) {
-          console.log(`[DEBUG] Found image URL: ${match[0]}`);
+          console.log(`[DEBUG] Found image pattern: ${match[0]}`);
         }
       }
 
-      // Clean the message by removing found URLs
+      // Process each found pattern - convert local files to base64, keep URLs as-is
+      for (const pattern of foundPatterns) {
+        // Check if it's already a URL or base64 data
+        if (pattern.startsWith('http') || pattern.startsWith('data:image/')) {
+          urls.push(pattern);
+          if (debug) {
+            console.log(`[DEBUG] Using URL/base64 as-is: ${pattern.substring(0, 50)}...`);
+          }
+        } else {
+          // It's a local file path - convert to base64
+          const base64Data = await convertImageFileToBase64(pattern, debug);
+          if (base64Data) {
+            urls.push(base64Data);
+            if (debug) {
+              console.log(`[DEBUG] Converted local file ${pattern} to base64`);
+            }
+          } else {
+            if (debug) {
+              console.log(`[DEBUG] Failed to convert local file: ${pattern}`);
+            }
+          }
+        }
+      }
+
+      // Clean the message by removing found patterns
       let cleanedMessage = message;
-      urls.forEach(url => {
-        cleanedMessage = cleanedMessage.replace(url, '').trim();
+      foundPatterns.forEach(pattern => {
+        cleanedMessage = cleanedMessage.replace(pattern, '').trim();
       });
 
       // Clean up any remaining extra whitespace
       cleanedMessage = cleanedMessage.replace(/\s+/g, ' ').trim();
 
       span.setAttributes({
-        'images.found': urls.length,
+        'patterns.found': foundPatterns.length,
+        'images.processed': urls.length,
         'message.cleaned_length': cleanedMessage.length
       });
 
       if (debug) {
-        console.log(`[DEBUG] Extracted ${urls.length} image URLs`);
+        console.log(`[DEBUG] Found ${foundPatterns.length} patterns, processed ${urls.length} images`);
         console.log(`[DEBUG] Cleaned message length: ${cleanedMessage.length}`);
       }
 
@@ -163,7 +294,7 @@ export class ProbeChat {
     let cleanedMessage = message;
 
     if (!images.length) {
-      const extracted = extractImageUrls(message, this.debug);
+      const extracted = await extractImageUrls(message, this.debug);
       images = extracted.urls;
       cleanedMessage = extracted.cleanedMessage;
 

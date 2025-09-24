@@ -5,6 +5,9 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import { existsSync } from 'fs';
+import { readFile, stat } from 'fs/promises';
+import { resolve, isAbsolute } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { 
   createTools,
@@ -45,6 +48,12 @@ import {
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
 const MAX_HISTORY_MESSAGES = 100;
+
+// Supported image file extensions
+const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+
+// Maximum image file size (20MB) to prevent OOM attacks
+const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
 
 /**
  * ProbeAgent class to handle AI interactions with code search capabilities
@@ -104,6 +113,10 @@ export class ProbeAgent {
 
     // Initialize chat history
     this.history = [];
+
+    // Initialize image tracking for agentic loop
+    this.pendingImages = new Map(); // Map<imagePath, base64Data> to avoid reloading
+    this.currentImages = []; // Currently active images for AI calls
 
     // Initialize event emitter for tool execution updates
     this.events = new EventEmitter();
@@ -266,6 +279,226 @@ export class ProbeAgent {
     if (this.debug) {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
     }
+  }
+
+  /**
+   * Process assistant response content and detect/load image references
+   * @param {string} content - The assistant's response content
+   * @returns {Promise<void>}
+   */
+  async processImageReferences(content) {
+    if (!content) return;
+
+    // Enhanced pattern to detect image file mentions in various contexts
+    // Looks for: "image", "file", "screenshot", etc. followed by path-like strings with image extensions
+    const extensionsPattern = `(?:${SUPPORTED_IMAGE_EXTENSIONS.join('|')})`;
+    const imagePatterns = [
+      // Direct file path mentions: "./screenshot.png", "/path/to/image.jpg", etc.
+      new RegExp(`(?:\\.?\\.\\/)?[^\\s"'<>\\[\\]]+\\\.${extensionsPattern}(?!\\w)`, 'gi'),
+      // Contextual mentions: "look at image.png", "the file screenshot.jpg shows"
+      new RegExp(`(?:image|file|screenshot|diagram|photo|picture|graphic)\\s*:?\\s*([^\\s"'<>\\[\\]]+\\.${extensionsPattern})(?!\\w)`, 'gi'),
+      // Tool result mentions: often contain file paths
+      new RegExp(`(?:found|saved|created|generated).*?([^\\s"'<>\\[\\]]+\\.${extensionsPattern})(?!\\w)`, 'gi')
+    ];
+
+    const foundPaths = new Set();
+
+    // Extract potential image paths using all patterns
+    for (const pattern of imagePatterns) {
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        // For patterns with capture groups, use the captured path; otherwise use the full match
+        const imagePath = match[1] || match[0];
+        if (imagePath && imagePath.length > 0) {
+          foundPaths.add(imagePath.trim());
+        }
+      }
+    }
+
+    if (foundPaths.size === 0) return;
+
+    if (this.debug) {
+      console.log(`[DEBUG] Found ${foundPaths.size} potential image references:`, Array.from(foundPaths));
+    }
+
+    // Process each found path
+    for (const imagePath of foundPaths) {
+      await this.loadImageIfValid(imagePath);
+    }
+  }
+
+  /**
+   * Load and cache an image if it's valid and accessible
+   * @param {string} imagePath - Path to the image file
+   * @returns {Promise<boolean>} - True if image was loaded successfully
+   */
+  async loadImageIfValid(imagePath) {
+    try {
+      // Skip if already loaded
+      if (this.pendingImages.has(imagePath)) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image already loaded: ${imagePath}`);
+        }
+        return true;
+      }
+
+      // Security validation: check if path is within any allowed directory
+      const allowedDirs = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders : [process.cwd()];
+      
+      let absolutePath;
+      let isPathAllowed = false;
+      
+      // If absolute path, check if it's within any allowed directory
+      if (isAbsolute(imagePath)) {
+        absolutePath = imagePath;
+        isPathAllowed = allowedDirs.some(dir => absolutePath.startsWith(resolve(dir)));
+      } else {
+        // For relative paths, try resolving against each allowed directory
+        for (const dir of allowedDirs) {
+          const resolvedPath = resolve(dir, imagePath);
+          if (resolvedPath.startsWith(resolve(dir))) {
+            absolutePath = resolvedPath;
+            isPathAllowed = true;
+            break;
+          }
+        }
+      }
+      
+      // Security check: ensure path is within at least one allowed directory
+      if (!isPathAllowed) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image path outside allowed directories: ${imagePath}`);
+        }
+        return false;
+      }
+
+      // Check if file exists and get file stats
+      let fileStats;
+      try {
+        fileStats = await stat(absolutePath);
+      } catch (error) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image file not found: ${absolutePath}`);
+        }
+        return false;
+      }
+
+      // Validate file size to prevent OOM attacks
+      if (fileStats.size > MAX_IMAGE_FILE_SIZE) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image file too large: ${absolutePath} (${fileStats.size} bytes, max: ${MAX_IMAGE_FILE_SIZE})`);
+        }
+        return false;
+      }
+
+      // Validate file extension
+      const extension = absolutePath.toLowerCase().split('.').pop();
+      if (!SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
+        if (this.debug) {
+          console.log(`[DEBUG] Unsupported image format: ${extension}`);
+        }
+        return false;
+      }
+
+      // Determine MIME type
+      const mimeTypes = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'webp': 'image/webp',
+        'gif': 'image/gif',
+        'bmp': 'image/bmp',
+        'svg': 'image/svg+xml'
+      };
+      const mimeType = mimeTypes[extension];
+
+      // Read and encode file asynchronously
+      const fileBuffer = await readFile(absolutePath);
+      const base64Data = fileBuffer.toString('base64');
+      const dataUrl = `data:${mimeType};base64,${base64Data}`;
+
+      // Cache the loaded image
+      this.pendingImages.set(imagePath, dataUrl);
+
+      if (this.debug) {
+        console.log(`[DEBUG] Successfully loaded image: ${imagePath} (${fileBuffer.length} bytes)`);
+      }
+
+      return true;
+    } catch (error) {
+      if (this.debug) {
+        console.log(`[DEBUG] Failed to load image ${imagePath}: ${error.message}`);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Get all currently loaded images as an array for AI model consumption
+   * @returns {Array<string>} - Array of base64 data URLs
+   */
+  getCurrentImages() {
+    return Array.from(this.pendingImages.values());
+  }
+
+  /**
+   * Clear loaded images (useful for new conversations)
+   */
+  clearLoadedImages() {
+    this.pendingImages.clear();
+    this.currentImages = [];
+    if (this.debug) {
+      console.log('[DEBUG] Cleared all loaded images');
+    }
+  }
+
+  /**
+   * Prepare messages for AI consumption, adding images to the latest user message if available
+   * @param {Array} messages - Current conversation messages
+   * @returns {Array} - Messages formatted for AI SDK with potential image content
+   */
+  prepareMessagesWithImages(messages) {
+    const loadedImages = this.getCurrentImages();
+    
+    // If no images loaded, return messages as-is
+    if (loadedImages.length === 0) {
+      return messages;
+    }
+
+    // Clone messages to avoid mutating the original
+    const messagesWithImages = [...messages];
+    
+    // Find the last user message to attach images to
+    const lastUserMessageIndex = messagesWithImages.map(m => m.role).lastIndexOf('user');
+    
+    if (lastUserMessageIndex === -1) {
+      if (this.debug) {
+        console.log('[DEBUG] No user messages found to attach images to');
+      }
+      return messages;
+    }
+
+    const lastUserMessage = messagesWithImages[lastUserMessageIndex];
+    
+    // Convert to multimodal format if we have images
+    if (typeof lastUserMessage.content === 'string') {
+      messagesWithImages[lastUserMessageIndex] = {
+        ...lastUserMessage,
+        content: [
+          { type: 'text', text: lastUserMessage.content },
+          ...loadedImages.map(imageData => ({
+            type: 'image',
+            image: imageData
+          }))
+        ]
+      };
+
+      if (this.debug) {
+        console.log(`[DEBUG] Added ${loadedImages.length} images to the latest user message`);
+      }
+    }
+
+    return messagesWithImages;
   }
 
   /**
@@ -695,9 +928,12 @@ When troubleshooting:
         try {
           // Wrap AI request with tracing if available
           const executeAIRequest = async () => {
+            // Prepare messages with potential image content
+            const messagesForAI = this.prepareMessagesWithImages(currentMessages);
+            
             const result = await streamText({
               model: this.provider(this.model),
-              messages: currentMessages,
+              messages: messagesForAI,
               maxTokens: maxResponseTokens,
               temperature: 0.3,
             });
@@ -739,6 +975,11 @@ When troubleshooting:
         if (this.debug && assistantResponseContent) {
           const assistantPreview = createMessagePreview(assistantResponseContent);
           console.log(`[DEBUG] Assistant response (${assistantResponseContent.length} chars): ${assistantPreview}`);
+        }
+
+        // Process image references in assistant response for next iteration
+        if (assistantResponseContent) {
+          await this.processImageReferences(assistantResponseContent);
         }
 
         // Parse tool call from response with valid tools list
@@ -898,10 +1139,19 @@ When troubleshooting:
                 
                 // Add assistant response and tool result to conversation
                 currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+                
+                const toolResultContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2);
+                const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
+                
                 currentMessages.push({
                   role: 'user',
-                  content: `<tool_result>\n${typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2)}\n</tool_result>`
+                  content: toolResultMessage
                 });
+
+                // Process tool result for image references
+                if (toolResultContent) {
+                  await this.processImageReferences(toolResultContent);
+                }
 
                 if (this.debug) {
                   console.log(`[DEBUG] Tool ${toolName} executed successfully. Result length: ${typeof toolResult === 'string' ? toolResult.length : JSON.stringify(toolResult).length}`);
