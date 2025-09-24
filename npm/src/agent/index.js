@@ -256,7 +256,7 @@ class ProbeAgentMcpServer {
   constructor() {
     this.server = new Server(
       {
-        name: '@buger/probe-agent',
+        name: '@probelabs/probe agent',
         version: '1.0.0',
       },
       {
