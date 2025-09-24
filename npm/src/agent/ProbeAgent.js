@@ -5,7 +5,8 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
-import { readFileSync, existsSync } from 'fs';
+import { existsSync } from 'fs';
+import { readFile, stat } from 'fs/promises';
 import { resolve, isAbsolute } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { 
@@ -50,6 +51,9 @@ const MAX_HISTORY_MESSAGES = 100;
 
 // Supported image file extensions
 const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+
+// Maximum image file size (20MB) to prevent OOM attacks
+const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
 
 /**
  * ProbeAgent class to handle AI interactions with code search capabilities
@@ -350,10 +354,21 @@ export class ProbeAgent {
         return false;
       }
 
-      // Check if file exists
-      if (!existsSync(absolutePath)) {
+      // Check if file exists and get file stats
+      let fileStats;
+      try {
+        fileStats = await stat(absolutePath);
+      } catch (error) {
         if (this.debug) {
           console.log(`[DEBUG] Image file not found: ${absolutePath}`);
+        }
+        return false;
+      }
+
+      // Validate file size to prevent OOM attacks
+      if (fileStats.size > MAX_IMAGE_FILE_SIZE) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image file too large: ${absolutePath} (${fileStats.size} bytes, max: ${MAX_IMAGE_FILE_SIZE})`);
         }
         return false;
       }
@@ -379,8 +394,8 @@ export class ProbeAgent {
       };
       const mimeType = mimeTypes[extension];
 
-      // Read and encode file
-      const fileBuffer = readFileSync(absolutePath);
+      // Read and encode file asynchronously
+      const fileBuffer = await readFile(absolutePath);
       const base64Data = fileBuffer.toString('base64');
       const dataUrl = `data:${mimeType};base64,${base64Data}`;
 
