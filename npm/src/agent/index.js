@@ -763,8 +763,13 @@ async function main() {
       }
     }
 
-    // Output the result
-    console.log(result);
+    // Output the result (strip <result> tags if present for cleaner CLI output)
+    const resultMatch = result.match(/<result>([\s\S]*?)<\/result>/);
+    if (resultMatch) {
+      console.log(resultMatch[1].trim());
+    } else {
+      console.log(result);
+    }
 
     // Show token usage in verbose mode
     if (config.verbose) {
