@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import { ProbeAgent } from '@probelabs/probe/agent';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
-import { writeFileSync, existsSync, readFileSync } from 'fs';
+import { writeFileSync, existsSync } from 'fs';
+import { readFile, stat } from 'fs/promises';
 import { join, resolve, isAbsolute } from 'path';
 import { TelemetryConfig } from './telemetry.js';
 import { trace } from '@opentelemetry/api';
@@ -38,6 +39,9 @@ const validateFolders = () => {
 if (typeof process !== 'undefined' && !process.env.PROBE_CHAT_SKIP_FOLDER_VALIDATION) {
   validateFolders();
 }
+
+// Maximum image file size (20MB) to prevent OOM attacks
+const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
 
 /**
  * Security validation for local file paths
@@ -78,10 +82,21 @@ async function convertImageFileToBase64(filePath, debug = false) {
     // Resolve the path
     const absolutePath = isAbsolute(filePath) ? filePath : resolve(allowedDir, filePath);
     
-    // Check if file exists
-    if (!existsSync(absolutePath)) {
+    // Check if file exists and get file stats
+    let fileStats;
+    try {
+      fileStats = await stat(absolutePath);
+    } catch (error) {
       if (debug) {
         console.log(`[DEBUG] File not found: ${absolutePath}`);
+      }
+      return null;
+    }
+
+    // Validate file size to prevent OOM attacks
+    if (fileStats.size > MAX_IMAGE_FILE_SIZE) {
+      if (debug) {
+        console.log(`[DEBUG] Image file too large: ${absolutePath} (${fileStats.size} bytes, max: ${MAX_IMAGE_FILE_SIZE})`);
       }
       return null;
     }
@@ -104,8 +119,8 @@ async function convertImageFileToBase64(filePath, debug = false) {
       return null;
     }
 
-    // Read file and convert to base64
-    const fileBuffer = readFileSync(absolutePath);
+    // Read file and convert to base64 asynchronously
+    const fileBuffer = await readFile(absolutePath);
     const base64Data = fileBuffer.toString('base64');
     const dataUrl = `data:${mimeType};base64,${base64Data}`;
     
