@@ -5,6 +5,7 @@
 
 import { MCPClientManager } from './client.js';
 import { loadMCPConfiguration } from './config.js';
+import { processXmlWithThinkingAndRecovery } from '../xmlParsingUtils.js';
 
 /**
  * Convert MCP tool to XML definition format
@@ -254,18 +255,18 @@ export class MCPXmlBridge {
 
 /**
  * Enhanced XML parser that handles both native and MCP tools
+ * Uses the exact same logic as CLI/SDK mode to ensure consistency
  * @param {string} xmlString - XML string to parse
  * @param {Array<string>} nativeTools - List of native tool names
  * @param {MCPXmlBridge} mcpBridge - MCP bridge instance
  * @returns {Object|null} Parsed tool call
  */
 export function parseHybridXmlToolCall(xmlString, nativeTools = [], mcpBridge = null) {
-  // First try native tools with standard XML parsing
-  for (const toolName of nativeTools) {
-    const nativeResult = parseNativeXmlTool(xmlString, toolName);
-    if (nativeResult) {
-      return { ...nativeResult, type: 'native' };
-    }
+  // First try native tools with the same logic as CLI/SDK mode
+  // This includes thinking tag removal and attempt_complete recovery logic
+  const nativeResult = parseNativeXmlToolWithThinking(xmlString, nativeTools);
+  if (nativeResult) {
+    return { ...nativeResult, type: 'native' };
   }
 
   // Then try MCP tools if bridge is available
@@ -273,6 +274,33 @@ export function parseHybridXmlToolCall(xmlString, nativeTools = [], mcpBridge = 
     const mcpResult = parseXmlMcpToolCall(xmlString, mcpBridge.getToolNames());
     if (mcpResult) {
       return { ...mcpResult, type: 'mcp' };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse native XML tools using the same logic as CLI/SDK mode
+ * Now uses shared utilities instead of duplicating code
+ * @param {string} xmlString - XML string to parse
+ * @param {Array<string>} validTools - List of valid tool names
+ * @returns {Object|null} Parsed tool call
+ */
+function parseNativeXmlToolWithThinking(xmlString, validTools) {
+  // Use the shared processing logic
+  const { cleanedXmlString, recoveryResult } = processXmlWithThinkingAndRecovery(xmlString, validTools);
+  
+  // If recovery found an attempt_complete pattern, return it
+  if (recoveryResult) {
+    return recoveryResult;
+  }
+
+  // Use the original parseNativeXmlTool function to parse the cleaned XML string
+  for (const toolName of validTools) {
+    const result = parseNativeXmlTool(cleanedXmlString, toolName);
+    if (result) {
+      return result;
     }
   }
 
