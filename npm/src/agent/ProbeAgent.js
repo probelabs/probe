@@ -1117,8 +1117,12 @@ When troubleshooting:
             } else if (this.toolImplementations[toolName]) {
               // Execute native tool
               try {
-                // Add sessionId to params for tool execution
-                const toolParams = { ...params, sessionId: this.sessionId };
+                // Add sessionId and workingDirectory to params for tool execution
+                const toolParams = { 
+                  ...params, 
+                  sessionId: this.sessionId,
+                  workingDirectory: this.allowedFolders[0] || process.cwd()
+                };
                 
                 // Emit tool start event
                 this.events.emit('toolCall', {

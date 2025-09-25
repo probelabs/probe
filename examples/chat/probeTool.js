@@ -534,15 +534,11 @@ const baseSearchFilesTool = {
 						await fsPromises.access(searchDir);
 					} catch (err) {
 						console.error(`Directory does not exist: ${searchDir}`);
-						return {
-							success: true,
-							directory: targetDir,
-							pattern: pattern,
-							recursive: recursive,
-							files: [],
-							count: 0,
-							timestamp: new Date().toISOString()
-						};
+						console.error(`Falling back to search in parent directory: ${targetDir}`);
+						// Fall back to searching in the parent directory instead of failing
+						searchDir = targetDir;
+						// Adjust the pattern to include the subdirectory in the search
+						filePattern = pattern; // Use the original pattern for glob matching
 					}
 
 					// Read directory contents

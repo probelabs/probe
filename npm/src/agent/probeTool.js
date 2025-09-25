@@ -207,14 +207,17 @@ export function createWrappedTools(baseTools) {
 // Simple file listing tool
 export const listFilesTool = {
   execute: async (params) => {
-    const { directory = '.' } = params;
+    const { directory = '.', workingDirectory } = params;
+    
+    // Use the provided working directory, or fall back to process.cwd()
+    const baseCwd = workingDirectory || process.cwd();
     
     try {
       const files = await listFilesByLevel({
         directory,
         maxFiles: 100,
         respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
-        cwd: process.cwd()
+        cwd: baseCwd
       });
       
       return files;
@@ -227,15 +230,18 @@ export const listFilesTool = {
 // Simple file search tool
 export const searchFilesTool = {
   execute: async (params) => {
-    const { pattern, directory = '.', recursive = true } = params;
+    const { pattern, directory = '.', recursive = true, workingDirectory } = params;
     
     if (!pattern) {
       throw new Error('Pattern is required for file search');
     }
     
+    // Use the provided working directory, or fall back to the directory param
+    const searchDir = workingDirectory ? path.resolve(workingDirectory, directory) : directory;
+    
     try {
       const options = {
-        cwd: directory,
+        cwd: searchDir,
         ignore: ['node_modules/**', '.git/**'],
         absolute: false
       };

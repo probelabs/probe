@@ -306,7 +306,7 @@ class ProbeAgentMcpServer {
               },
               path: {
                 type: 'string',
-                description: 'Optional path to the directory to search in. Defaults to current directory.',
+                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
               },
               prompt: {
                 type: 'string',
@@ -315,34 +315,6 @@ class ProbeAgentMcpServer {
               system_prompt: {
                 type: 'string',
                 description: 'Optional custom system prompt (text or file path).',
-              },
-              provider: {
-                type: 'string',
-                description: 'Optional AI provider to force: anthropic, openai, google.',
-              },
-              model: {
-                type: 'string',
-                description: 'Optional model name override.',
-              },
-              allow_edit: {
-                type: 'boolean',
-                description: 'Enable code modification capabilities.',
-              },
-              max_iterations: {
-                type: 'number',
-                description: 'Maximum number of tool iterations (default: 30).',
-              },
-              max_response_tokens: {
-                type: 'number',
-                description: 'Maximum tokens for AI response (overrides model defaults).',
-              },
-              schema: {
-                type: 'string',
-                description: 'Optional output schema (JSON, XML, or any format - text or file path).',
-              },
-              no_mermaid_validation: {
-                type: 'boolean',
-                description: 'Disable automatic mermaid diagram validation and fixing.',
               }
             },
             required: ['query']
