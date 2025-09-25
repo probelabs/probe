@@ -296,13 +296,13 @@ class ProbeAgentMcpServer {
       tools: [
         {
           name: 'search_code',
-          description: "Search code and answer questions about the codebase using an AI agent. This tool provides intelligent responses based on code analysis.",
+          description: "AI agent that answers free-form questions about codebases. Ask detailed questions in natural language.",
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
-                description: 'The question or request about the codebase.',
+                description: 'A detailed, free-form question about the codebase in natural language. Be specific and descriptive. Example: "How does the authentication system work and where is user session management implemented?"',
               },
               path: {
                 type: 'string',
