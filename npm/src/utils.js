@@ -43,7 +43,7 @@ export async function getBinaryPath(options = {}) {
 	
 	// Check bin directory
 	const isWindows = process.platform === 'win32';
-	const binaryName = isWindows ? 'probe.exe' : 'probe';
+	const binaryName = isWindows ? 'probe.exe' : 'probe-binary';
 	const binaryPath = path.join(binDir, binaryName);
 
 	if (fs.existsSync(binaryPath) && !forceDownload) {
