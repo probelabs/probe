@@ -207,14 +207,24 @@ export function createWrappedTools(baseTools) {
 // Simple file listing tool
 export const listFilesTool = {
   execute: async (params) => {
-    const { directory = '.' } = params;
+    const { directory = '.', workingDirectory } = params;
+    
+    // Use the provided working directory, or fall back to process.cwd()
+    const baseCwd = workingDirectory || process.cwd();
+    
+    // Security: Validate path to prevent traversal attacks
+    const secureBaseDir = path.resolve(baseCwd);
+    const targetDir = path.resolve(secureBaseDir, directory);
+    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      throw new Error('Path traversal attempt detected. Access denied.');
+    }
     
     try {
       const files = await listFilesByLevel({
-        directory,
+        directory: targetDir,
         maxFiles: 100,
         respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
-        cwd: process.cwd()
+        cwd: secureBaseDir
       });
       
       return files;
@@ -227,15 +237,23 @@ export const listFilesTool = {
 // Simple file search tool
 export const searchFilesTool = {
   execute: async (params) => {
-    const { pattern, directory = '.', recursive = true } = params;
+    const { pattern, directory = '.', recursive = true, workingDirectory } = params;
     
     if (!pattern) {
       throw new Error('Pattern is required for file search');
     }
     
+    // Security: Validate path to prevent traversal attacks
+    const baseCwd = workingDirectory || process.cwd();
+    const secureBaseDir = path.resolve(baseCwd);
+    const targetDir = path.resolve(secureBaseDir, directory);
+    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      throw new Error('Path traversal attempt detected. Access denied.');
+    }
+    
     try {
       const options = {
-        cwd: directory,
+        cwd: targetDir,
         ignore: ['node_modules/**', '.git/**'],
         absolute: false
       };

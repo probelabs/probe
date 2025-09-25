@@ -112,6 +112,7 @@ function parseArgs() {
     acp: false,
     question: null,
     path: null,
+    allowedFolders: null,
     prompt: null,
     systemPrompt: null,
     schema: null,
@@ -145,6 +146,8 @@ function parseArgs() {
       config.allowEdit = true;
     } else if (arg === '--path' && i + 1 < args.length) {
       config.path = args[++i];
+    } else if (arg === '--allowed-folders' && i + 1 < args.length) {
+      config.allowedFolders = args[++i].split(',').map(dir => dir.trim());
     } else if (arg === '--prompt' && i + 1 < args.length) {
       config.prompt = args[++i];
     } else if (arg === '--system-prompt' && i + 1 < args.length) {
@@ -201,6 +204,7 @@ Usage:
 
 Options:
   --path <dir>                     Search directory (default: current)
+  --allowed-folders <dirs>         Comma-separated list of allowed directories for file operations
   --prompt <type>                  Persona: code-explorer, engineer, code-review, support, architect
   --system-prompt <text|file>      Custom system prompt (text or file path)
   --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
@@ -296,17 +300,22 @@ class ProbeAgentMcpServer {
       tools: [
         {
           name: 'search_code',
-          description: "Search code and answer questions about the codebase using an AI agent. This tool provides intelligent responses based on code analysis.",
+          description: "AI agent that answers free-form questions about codebases. Ask detailed questions in natural language.",
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
-                description: 'The question or request about the codebase.',
+                description: 'A detailed, free-form question about the codebase in natural language. Be specific and descriptive. Example: "How does the authentication system work and where is user session management implemented?"',
               },
               path: {
                 type: 'string',
-                description: 'Optional path to the directory to search in. Defaults to current directory.',
+                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
+              },
+              allowed_folders: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional list of allowed directories for file operations. Defaults to current directory if not specified.',
               },
               prompt: {
                 type: 'string',
@@ -315,34 +324,6 @@ class ProbeAgentMcpServer {
               system_prompt: {
                 type: 'string',
                 description: 'Optional custom system prompt (text or file path).',
-              },
-              provider: {
-                type: 'string',
-                description: 'Optional AI provider to force: anthropic, openai, google.',
-              },
-              model: {
-                type: 'string',
-                description: 'Optional model name override.',
-              },
-              allow_edit: {
-                type: 'boolean',
-                description: 'Enable code modification capabilities.',
-              },
-              max_iterations: {
-                type: 'number',
-                description: 'Maximum number of tool iterations (default: 30).',
-              },
-              max_response_tokens: {
-                type: 'number',
-                description: 'Maximum tokens for AI response (overrides model defaults).',
-              },
-              schema: {
-                type: 'string',
-                description: 'Optional output schema (JSON, XML, or any format - text or file path).',
-              },
-              no_mermaid_validation: {
-                type: 'boolean',
-                description: 'Disable automatic mermaid diagram validation and fixing.',
               }
             },
             required: ['query']
@@ -404,7 +385,7 @@ class ProbeAgentMcpServer {
           
           // Create agent with configuration
           const agentConfig = {
-            path: args.path || process.cwd(),
+            path: args.path || (args.allowed_folders && args.allowed_folders[0]) || process.cwd(),
             promptType: args.prompt || 'code-explorer',
             customPrompt: systemPrompt,
             provider: args.provider,
@@ -643,6 +624,7 @@ async function main() {
     // Create and configure agent
     const agentConfig = {
       path: config.path,
+      allowedFolders: config.allowedFolders,
       promptType: config.prompt,
       customPrompt: systemPrompt,
       allowEdit: config.allowEdit,
