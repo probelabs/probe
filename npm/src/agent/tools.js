@@ -141,12 +141,45 @@ export function parseXmlToolCallWithThinking(xmlString, validTools) {
   // Remove thinking tags and their content from the XML string
   let cleanedXmlString = xmlString.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
 
-  // Check for attempt_complete shorthand (single tag with no closing tag and no parameters)
-  const attemptCompleteMatch = cleanedXmlString.match(/^<attempt_complete>\s*$/);
-  if (attemptCompleteMatch) {
-    // Convert shorthand to full attempt_completion format with special marker
+  // Enhanced recovery logic for attempt_complete shorthand
+  // Check for various forms of attempt_complete tags:
+  // 1. Perfect shorthand: <attempt_complete>
+  // 2. Self-closing: <attempt_complete/>  
+  // 3. Empty with closing tag: <attempt_complete></attempt_complete>
+  // 4. Incomplete: <attempt_complete (missing closing bracket)
+  // 5. With trailing content that should be ignored
+  const attemptCompletePatterns = [
+    // Standard shorthand with optional whitespace
+    /^<attempt_complete>\s*$/,
+    // Empty with proper closing tag (common case from the logs)
+    /^<attempt_complete>\s*<\/attempt_complete>\s*$/,
+    // Self-closing variant
+    /^<attempt_complete\s*\/>\s*$/,
+    // Incomplete opening tag (missing closing bracket)
+    /^<attempt_complete\s*$/,
+    // With trailing content (extract just the tag part) - must come after empty tag pattern
+    /^<attempt_complete>(.*)$/s,
+    // Self-closing with trailing content
+    /^<attempt_complete\s*\/>(.*)$/s
+  ];
+
+  for (const pattern of attemptCompletePatterns) {
+    const match = cleanedXmlString.match(pattern);
+    if (match) {
+      // Convert any form of attempt_complete to the standard format
+      return {
+        toolName: 'attempt_completion',
+        params: { result: '__PREVIOUS_RESPONSE__' }
+      };
+    }
+  }
+
+  // Additional recovery: check if the string contains attempt_complete anywhere
+  // and treat the entire response as a completion signal if no other tool tags are found
+  if (cleanedXmlString.includes('<attempt_complete') && !hasOtherToolTags(cleanedXmlString, validTools)) {
+    // This handles malformed cases where attempt_complete appears but is broken
     return {
-      toolName: 'attempt_completion',
+      toolName: 'attempt_completion', 
       params: { result: '__PREVIOUS_RESPONSE__' }
     };
   }
@@ -160,4 +193,23 @@ export function parseXmlToolCallWithThinking(xmlString, validTools) {
   }
 
   return parsedTool;
+}
+
+/**
+ * Helper function to check if the XML string contains other tool tags
+ * @param {string} xmlString - The XML string to check
+ * @param {string[]} validTools - List of valid tool names
+ * @returns {boolean} - True if other tool tags are found
+ */
+function hasOtherToolTags(xmlString, validTools = []) {
+  const defaultTools = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'implement', 'attempt_completion'];
+  const toolsToCheck = validTools.length > 0 ? validTools : defaultTools;
+  
+  // Check for any tool tags other than attempt_complete variants
+  for (const tool of toolsToCheck) {
+    if (tool !== 'attempt_completion' && xmlString.includes(`<${tool}`)) {
+      return true;
+    }
+  }
+  return false;
 }

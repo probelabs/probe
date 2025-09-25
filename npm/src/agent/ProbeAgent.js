@@ -1271,8 +1271,10 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
-Or for quick completion if your previous response was already correct:
-<attempt_complete>`;
+Or for quick completion if your previous response was already correct and complete:
+<attempt_complete>
+
+IMPORTANT: When using <attempt_complete>, this must be the ONLY content in your response. No additional text, explanations, or other content should be included. This tag signals to reuse your previous response as the final answer.`;
           }
 
           currentMessages.push({
