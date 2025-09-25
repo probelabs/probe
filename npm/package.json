@@ -68,6 +68,7 @@
   "author": "probelabs",
   "license": "ISC",
   "dependencies": {
+    "@ai-sdk/amazon-bedrock": "^1.0.8",
     "@ai-sdk/anthropic": "^2.0.8",
     "@ai-sdk/google": "^2.0.14",
     "@ai-sdk/openai": "^2.0.10",

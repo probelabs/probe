@@ -2,6 +2,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { streamText } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -186,12 +187,18 @@ export class ProbeAgent {
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
     const googleApiKey = process.env.GOOGLE_API_KEY;
+    const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    const awsRegion = process.env.AWS_REGION;
+    const awsSessionToken = process.env.AWS_SESSION_TOKEN;
+    const awsApiKey = process.env.AWS_BEDROCK_API_KEY;
 
     // Get custom API URLs if provided
     const llmBaseUrl = process.env.LLM_BASE_URL;
     const anthropicApiUrl = process.env.ANTHROPIC_API_URL || llmBaseUrl;
     const openaiApiUrl = process.env.OPENAI_API_URL || llmBaseUrl;
     const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;
+    const awsBedrockBaseUrl = process.env.AWS_BEDROCK_BASE_URL || llmBaseUrl;
 
     // Get model override if provided
     const modelName = process.env.MODEL_NAME;
@@ -200,7 +207,12 @@ export class ProbeAgent {
     const forceProvider = this.clientApiProvider || (process.env.FORCE_PROVIDER ? process.env.FORCE_PROVIDER.toLowerCase() : null);
 
     if (this.debug) {
-      console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}`);
+      const hasAwsCredentials = !!(awsAccessKeyId && awsSecretAccessKey && awsRegion);
+      const hasAwsApiKey = !!awsApiKey;
+      console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}, AWS Bedrock=${hasAwsCredentials || hasAwsApiKey}`);
+      if (hasAwsCredentials) console.log(`[DEBUG] AWS credentials: AccessKey=${!!awsAccessKeyId}, SecretKey=${!!awsSecretAccessKey}, Region=${awsRegion}, SessionToken=${!!awsSessionToken}`);
+      if (hasAwsApiKey) console.log(`[DEBUG] AWS API Key provided`);
+      if (awsBedrockBaseUrl) console.log(`[DEBUG] AWS Bedrock base URL: ${awsBedrockBaseUrl}`);
       console.log(`[DEBUG] Force provider: ${forceProvider || '(not set)'}`);
       if (modelName) console.log(`[DEBUG] Model override: ${modelName}`);
     }
@@ -216,6 +228,9 @@ export class ProbeAgent {
       } else if (forceProvider === 'google' && googleApiKey) {
         this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
         return;
+      } else if (forceProvider === 'bedrock' && ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey)) {
+        this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
+        return;
       }
       console.warn(`WARNING: Forced provider "${forceProvider}" selected but required API key is missing or invalid! Falling back to auto-detection.`);
     }
@@ -227,8 +242,10 @@ export class ProbeAgent {
       this.initializeOpenAIModel(openaiApiKey, openaiApiUrl, modelName);
     } else if (googleApiKey) {
       this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
+    } else if ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey) {
+      this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
     } else {
-      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
+      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
     }
   }
 
@@ -278,6 +295,46 @@ export class ProbeAgent {
 
     if (this.debug) {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
+    }
+  }
+
+  /**
+   * Initialize AWS Bedrock model
+   */
+  initializeBedrockModel(accessKeyId, secretAccessKey, region, sessionToken, apiKey, baseURL, modelName) {
+    // Build configuration object, only including defined values
+    const config = {};
+    
+    // Authentication - prefer API key if provided, otherwise use AWS credentials
+    if (apiKey) {
+      config.apiKey = apiKey;
+    } else if (accessKeyId && secretAccessKey) {
+      config.accessKeyId = accessKeyId;
+      config.secretAccessKey = secretAccessKey;
+      if (sessionToken) {
+        config.sessionToken = sessionToken;
+      }
+    }
+    
+    // Region is required for AWS credentials but optional for API key
+    if (region) {
+      config.region = region;
+    }
+    
+    // Optional base URL
+    if (baseURL) {
+      config.baseURL = baseURL;
+    }
+    
+    this.provider = createAmazonBedrock(config);
+    this.model = modelName || 'anthropic.claude-sonnet-4-20250514-v1:0';
+    this.apiType = 'bedrock';
+
+    if (this.debug) {
+      const authMethod = apiKey ? 'API Key' : 'AWS Credentials';
+      const regionInfo = region ? ` (Region: ${region})` : '';
+      const baseUrlInfo = baseURL ? ` (Base URL: ${baseURL})` : '';
+      console.log(`Using AWS Bedrock API with model: ${this.model}${regionInfo} [Auth: ${authMethod}]${baseUrlInfo}`);
     }
   }
 
