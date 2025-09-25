@@ -252,6 +252,8 @@ export class ProbeChat {
    * @param {boolean} [options.debug] - Enable debug mode
    * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
    * @param {Array} [options.mcpServers] - MCP server configurations
+   * @param {boolean} [options.enableBash=false] - Enable bash command execution
+   * @param {Object} [options.bashConfig] - Bash configuration options
    */
   constructor(options = {}) {
     this.isNonInteractive = options.isNonInteractive || process.env.PROBE_NON_INTERACTIVE === '1';
