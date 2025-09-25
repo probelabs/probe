@@ -112,6 +112,7 @@ function parseArgs() {
     acp: false,
     question: null,
     path: null,
+    allowedFolders: null,
     prompt: null,
     systemPrompt: null,
     schema: null,
@@ -145,6 +146,8 @@ function parseArgs() {
       config.allowEdit = true;
     } else if (arg === '--path' && i + 1 < args.length) {
       config.path = args[++i];
+    } else if (arg === '--allowed-folders' && i + 1 < args.length) {
+      config.allowedFolders = args[++i].split(',').map(dir => dir.trim());
     } else if (arg === '--prompt' && i + 1 < args.length) {
       config.prompt = args[++i];
     } else if (arg === '--system-prompt' && i + 1 < args.length) {
@@ -201,6 +204,7 @@ Usage:
 
 Options:
   --path <dir>                     Search directory (default: current)
+  --allowed-folders <dirs>         Comma-separated list of allowed directories for file operations
   --prompt <type>                  Persona: code-explorer, engineer, code-review, support, architect
   --system-prompt <text|file>      Custom system prompt (text or file path)
   --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
@@ -308,6 +312,11 @@ class ProbeAgentMcpServer {
                 type: 'string',
                 description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
               },
+              allowed_folders: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional list of allowed directories for file operations. Defaults to current directory if not specified.',
+              },
               prompt: {
                 type: 'string',
                 description: 'Optional persona type: code-explorer, engineer, code-review, support, architect.',
@@ -376,7 +385,7 @@ class ProbeAgentMcpServer {
           
           // Create agent with configuration
           const agentConfig = {
-            path: args.path || process.cwd(),
+            path: args.path || (args.allowed_folders && args.allowed_folders[0]) || process.cwd(),
             promptType: args.prompt || 'code-explorer',
             customPrompt: systemPrompt,
             provider: args.provider,
@@ -615,6 +624,7 @@ async function main() {
     // Create and configure agent
     const agentConfig = {
       path: config.path,
+      allowedFolders: config.allowedFolders,
       promptType: config.prompt,
       customPrompt: systemPrompt,
       allowEdit: config.allowEdit,

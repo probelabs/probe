@@ -92,8 +92,14 @@ export class ProbeAgent {
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
 
-    // Search configuration
-    this.allowedFolders = options.path ? [options.path] : [process.cwd()];
+    // Search configuration - support both path (single) and allowedFolders (array)
+    if (options.allowedFolders && Array.isArray(options.allowedFolders)) {
+      this.allowedFolders = options.allowedFolders;
+    } else if (options.path) {
+      this.allowedFolders = [options.path];
+    } else {
+      this.allowedFolders = [process.cwd()];
+    }
 
     // API configuration
     this.clientApiProvider = options.provider || null;
@@ -1121,7 +1127,7 @@ When troubleshooting:
                 const toolParams = { 
                   ...params, 
                   sessionId: this.sessionId,
-                  workingDirectory: this.allowedFolders[0] || process.cwd()
+                  workingDirectory: (this.allowedFolders && this.allowedFolders[0]) || process.cwd()
                 };
                 
                 // Emit tool start event

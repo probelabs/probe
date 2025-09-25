@@ -212,12 +212,19 @@ export const listFilesTool = {
     // Use the provided working directory, or fall back to process.cwd()
     const baseCwd = workingDirectory || process.cwd();
     
+    // Security: Validate path to prevent traversal attacks
+    const secureBaseDir = path.resolve(baseCwd);
+    const targetDir = path.resolve(secureBaseDir, directory);
+    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      throw new Error('Path traversal attempt detected. Access denied.');
+    }
+    
     try {
       const files = await listFilesByLevel({
-        directory,
+        directory: targetDir,
         maxFiles: 100,
         respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
-        cwd: baseCwd
+        cwd: secureBaseDir
       });
       
       return files;
@@ -236,12 +243,17 @@ export const searchFilesTool = {
       throw new Error('Pattern is required for file search');
     }
     
-    // Use the provided working directory, or fall back to the directory param
-    const searchDir = workingDirectory ? path.resolve(workingDirectory, directory) : directory;
+    // Security: Validate path to prevent traversal attacks
+    const baseCwd = workingDirectory || process.cwd();
+    const secureBaseDir = path.resolve(baseCwd);
+    const targetDir = path.resolve(secureBaseDir, directory);
+    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      throw new Error('Path traversal attempt detected. Access denied.');
+    }
     
     try {
       const options = {
-        cwd: searchDir,
+        cwd: targetDir,
         ignore: ['node_modules/**', '.git/**'],
         absolute: false
       };
