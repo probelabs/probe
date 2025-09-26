@@ -1,9 +1,10 @@
 /**
- * Bash command permission checker
+ * Bash command permission checker with support for complex commands
  * @module agent/bashPermissions
  */
 
 import { DEFAULT_ALLOW_PATTERNS, DEFAULT_DENY_PATTERNS } from './bashDefaults.js';
+import { parseComplexCommand, getAllCommandNames, analyzeDangerLevel } from './bashCommandParser.js';
 
 /**
  * Parse a bash command into command and arguments
@@ -185,7 +186,7 @@ export class BashPermissionChecker {
   }
 
   /**
-   * Check if a command is allowed
+   * Check if a command is allowed (handles complex commands with pipes, operators, etc.)
    * @param {string} command - Command to check
    * @returns {Object} Permission result
    */
@@ -198,77 +199,140 @@ export class BashPermissionChecker {
       };
     }
 
-    const parsed = parseCommand(command);
+    // Parse the complex command
+    const parsed = parseComplexCommand(command);
     
-    if (!parsed.command) {
+    if (!parsed.commands || parsed.commands.length === 0) {
       return {
         allowed: false,
-        reason: 'No command found',
+        reason: 'No valid commands found',
         command: command
       };
     }
 
     if (this.debug) {
       console.log(`[BashPermissions] Checking command: "${command}"`);
-      console.log(`[BashPermissions] Parsed - Command: "${parsed.command}", Args: [${parsed.args.join(', ')}]`);
+      console.log(`[BashPermissions] Complex: ${parsed.isComplex}, Commands found: ${parsed.commands.length}`);
+      if (parsed.isComplex) {
+        console.log(`[BashPermissions] Structure:`, parsed.structure);
+      }
     }
 
-    // Check deny patterns first (deny takes precedence)
-    if (matchesAnyPattern(parsed, this.denyPatterns)) {
-      const result = {
-        allowed: false,
-        reason: `Command '${command}' matches deny pattern`,
-        command: command,
-        parsed: parsed
-      };
-      
+    // Analyze danger level
+    const dangerAnalysis = analyzeDangerLevel(parsed);
+    
+    // For commands with high danger level (including malformed commands), be extra cautious
+    if (dangerAnalysis.dangerLevel === 'high') {
       if (this.debug) {
-        console.log(`[BashPermissions] DENIED - matches deny pattern`);
+        console.log(`[BashPermissions] High danger command detected:`, dangerAnalysis.dangers);
       }
       
-      return result;
+      // Check if this is a structural danger (malformed, unmatched quotes, etc.)
+      const structuralDangers = dangerAnalysis.dangers.filter(d => 
+        d.includes('malformed') || d.includes('Unmatched') || d.includes('parsing failed') || 
+        d.includes('Empty or malformed commands') || d.includes('Incomplete command substitution')
+      );
+      
+      if (structuralDangers.length > 0) {
+        // Block commands with structural dangers immediately
+        return {
+          allowed: false,
+          reason: `Command rejected due to structural issues: ${structuralDangers.join('; ')}`,
+          command: command,
+          parsed: parsed,
+          failedCommands: [],
+          isComplex: parsed.isComplex,
+          dangerAnalysis: dangerAnalysis
+        };
+      }
     }
 
-    // Check allow patterns
-    if (this.allowPatterns.length > 0) {
-      if (matchesAnyPattern(parsed, this.allowPatterns)) {
-        const result = {
-          allowed: true,
-          command: command,
-          parsed: parsed
-        };
+    // Check each individual command in the complex command
+    const failedCommands = [];
+    const checkedCommands = [];
+    
+    for (const cmdParsed of parsed.commands) {
+      if (!cmdParsed.command) {
+        failedCommands.push({
+          command: cmdParsed.full,
+          reason: 'No command found'
+        });
+        continue;
+      }
+      
+      checkedCommands.push(cmdParsed);
+      
+      // Check deny patterns first (deny takes precedence)
+      if (matchesAnyPattern(cmdParsed, this.denyPatterns)) {
+        failedCommands.push({
+          command: cmdParsed.full,
+          reason: `Command '${cmdParsed.command}' matches deny pattern`,
+          parsedCommand: cmdParsed
+        });
         
         if (this.debug) {
-          console.log(`[BashPermissions] ALLOWED - matches allow pattern`);
+          console.log(`[BashPermissions] DENIED - "${cmdParsed.command}" matches deny pattern`);
         }
-        
-        return result;
+        continue;
       }
-      
-      // If allow list exists but command doesn't match, deny
-      const result = {
-        allowed: false,
-        reason: `Command '${command}' not in allow list`,
-        command: command,
-        parsed: parsed
-      };
-      
-      if (this.debug) {
-        console.log(`[BashPermissions] DENIED - not in allow list`);
+
+      // Check allow patterns
+      if (this.allowPatterns.length > 0) {
+        if (!matchesAnyPattern(cmdParsed, this.allowPatterns)) {
+          failedCommands.push({
+            command: cmdParsed.full,
+            reason: `Command '${cmdParsed.command}' not in allow list`,
+            parsedCommand: cmdParsed
+          });
+          
+          if (this.debug) {
+            console.log(`[BashPermissions] DENIED - "${cmdParsed.command}" not in allow list`);
+          }
+        } else {
+          if (this.debug) {
+            console.log(`[BashPermissions] ALLOWED - "${cmdParsed.command}" matches allow pattern`);
+          }
+        }
       }
-      
-      return result;
     }
 
-    // If no allow list (shouldn't happen with defaults), allow
+    // If any command failed, deny the entire complex command
+    if (failedCommands.length > 0) {
+      const firstFailure = failedCommands[0];
+      let reason = firstFailure.reason;
+      
+      if (parsed.isComplex) {
+        const commandNames = getAllCommandNames(parsed);
+        reason += `. Complex command contains: ${commandNames.join(', ')}`;
+        
+        if (dangerAnalysis.dangerLevel === 'high') {
+          reason += `. Security concerns: ${dangerAnalysis.dangers.join('; ')}`;
+        }
+      }
+      
+      return {
+        allowed: false,
+        reason: reason,
+        command: command,
+        parsed: parsed,
+        failedCommands: failedCommands,
+        isComplex: parsed.isComplex,
+        dangerAnalysis: dangerAnalysis
+      };
+    }
+
+    // All commands passed
     const result = {
       allowed: true,
       command: command,
-      parsed: parsed
+      parsed: parsed,
+      checkedCommands: checkedCommands,
+      isComplex: parsed.isComplex,
+      dangerAnalysis: dangerAnalysis
     };
     
     if (this.debug) {
-      console.log(`[BashPermissions] ALLOWED - no restrictions`);
+      console.log(`[BashPermissions] ALLOWED - all ${parsed.commands.length} commands passed`);
     }
     
     return result;

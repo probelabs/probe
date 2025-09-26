@@ -153,7 +153,7 @@ export const DEFAULT_DENY_PATTERNS = [
   
   // Kernel and module operations
   'insmod', 'insmod:*', 'rmmod', 'rmmod:*', 'modprobe', 'modprobe:*',
-  'sysctl:-w:*', 'echo:*:>:/proc/*', 'echo:*:>:/sys/*',
+  'sysctl:-w:*',
   
   // Dangerous git operations
   'git:push', 'git:push:*', 'git:force', 'git:reset:--hard:*',
