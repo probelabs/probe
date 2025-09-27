@@ -201,6 +201,15 @@ export function createWrappedTools(baseTools) {
     );
   }
 
+  // Wrap bash tool
+  if (baseTools.bashTool) {
+    wrappedTools.bashToolInstance = wrapToolWithEmitter(
+      baseTools.bashTool, 
+      'bash', 
+      baseTools.bashTool.execute
+    );
+  }
+
   return wrappedTools;
 }
 

@@ -68,6 +68,13 @@ export function main() {
     .option('--implement-tool-config <path>', 'Path to implementation tool configuration file')
     .option('--implement-tool-list-backends', 'List available implementation tool backends')
     .option('--implement-tool-backend-info <backend>', 'Show information about a specific implementation tool backend')
+    .option('--enable-bash', 'Enable bash command execution for system exploration')
+    .option('--bash-allow <patterns>', 'Additional bash command patterns to allow (comma-separated)')
+    .option('--bash-deny <patterns>', 'Additional bash command patterns to deny (comma-separated)')  
+    .option('--no-default-bash-allow', 'Disable default bash allow list (use only custom patterns)')
+    .option('--no-default-bash-deny', 'Disable default bash deny list (use only custom patterns)')
+    .option('--bash-timeout <ms>', 'Bash command timeout in milliseconds (default: 120000)')
+    .option('--bash-working-dir <path>', 'Default working directory for bash commands')
     .option('--trace-file [path]', 'Enable tracing to file (default: ./traces.jsonl)')
     .option('--trace-remote [endpoint]', 'Enable tracing to remote endpoint (default: http://localhost:4318/v1/traces)')
     .option('--trace-console', 'Enable tracing to console (for debugging)')
@@ -323,6 +330,58 @@ export function main() {
   const googleApiKey = process.env.GOOGLE_API_KEY;
   const hasApiKeys = !!(anthropicApiKey || openaiApiKey || googleApiKey);
 
+  // --- Bash Configuration Processing ---
+  let bashConfig = null;
+  if (options.enableBash) {
+    bashConfig = {};
+    
+    // Parse allow patterns
+    if (options.bashAllow) {
+      bashConfig.allow = options.bashAllow.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      logInfo(chalk.blue(`Bash allow patterns: ${bashConfig.allow.join(', ')}`));
+    }
+    
+    // Parse deny patterns
+    if (options.bashDeny) {
+      bashConfig.deny = options.bashDeny.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      logInfo(chalk.blue(`Bash deny patterns: ${bashConfig.deny.join(', ')}`));
+    }
+    
+    // Handle default list flags
+    if (options.defaultBashAllow === false) {
+      bashConfig.disableDefaultAllow = true;
+      logInfo(chalk.blue('Default bash allow list disabled'));
+    }
+    
+    if (options.defaultBashDeny === false) {
+      bashConfig.disableDefaultDeny = true;
+      logInfo(chalk.blue('Default bash deny list disabled'));
+    }
+    
+    // Parse timeout
+    if (options.bashTimeout) {
+      const timeout = parseInt(options.bashTimeout, 10);
+      if (isNaN(timeout) || timeout < 1000) {
+        logError(chalk.red('Bash timeout must be a number >= 1000 milliseconds'));
+        process.exit(1);
+      }
+      bashConfig.timeout = timeout;
+      logInfo(chalk.blue(`Bash timeout: ${timeout}ms`));
+    }
+    
+    // Set working directory
+    if (options.bashWorkingDir) {
+      if (!existsSync(options.bashWorkingDir)) {
+        logError(chalk.red(`Bash working directory does not exist: ${options.bashWorkingDir}`));
+        process.exit(1);
+      }
+      bashConfig.workingDirectory = realpathSync(options.bashWorkingDir);
+      logInfo(chalk.blue(`Bash working directory: ${bashConfig.workingDirectory}`));
+    }
+    
+    logInfo(chalk.green('Bash command execution enabled'));
+  }
+
   // --- Web Mode (check before non-interactive to override) ---
   if (options.web) {
     if (!hasApiKeys) {
@@ -359,7 +418,9 @@ export function main() {
         isNonInteractive: true,
         customPrompt: customPrompt,
         promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
-        allowEdit: options.allowEdit
+        allowEdit: options.allowEdit,
+        enableBash: options.enableBash,
+        bashConfig: bashConfig
       });
       // Model/Provider info is logged via logInfo above if debug enabled
       logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`)); // Log the actual session ID being used
@@ -468,7 +529,9 @@ export function main() {
       isNonInteractive: false,
       customPrompt: customPrompt,
       promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
-      allowEdit: options.allowEdit
+      allowEdit: options.allowEdit,
+      enableBash: options.enableBash,
+      bashConfig: bashConfig
     });
 
     // Log model/provider info using logInfo

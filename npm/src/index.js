@@ -21,14 +21,17 @@ import {
 	extractSchema,
 	delegateSchema,
 	attemptCompletionSchema,
+	bashSchema,
 	searchToolDefinition,
 	queryToolDefinition,
 	extractToolDefinition,
 	delegateToolDefinition,
 	attemptCompletionToolDefinition,
+	bashToolDefinition,
 	parseXmlToolCall
 } from './tools/common.js';
 import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel.js';
+import { bashTool } from './tools/bash.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
 
@@ -53,18 +56,21 @@ export {
 	queryTool,
 	extractTool,
 	delegateTool,
+	bashTool,
 	// Export schemas
 	searchSchema,
 	querySchema,
 	extractSchema,
 	delegateSchema,
 	attemptCompletionSchema,
+	bashSchema,
 	// Export tool definitions
 	searchToolDefinition,
 	queryToolDefinition,
 	extractToolDefinition,
 	delegateToolDefinition,
 	attemptCompletionToolDefinition,
+	bashToolDefinition,
 	// Export parser function
 	parseXmlToolCall
 };

@@ -128,7 +128,15 @@ function parseArgs() {
     traceConsole: false,
     useStdin: false, // New flag to indicate stdin should be used
     outline: false, // New flag to enable outline format
-    noMermaidValidation: false // New flag to disable mermaid validation
+    noMermaidValidation: false, // New flag to disable mermaid validation
+    // Bash tool configuration
+    enableBash: false,
+    bashAllow: null,
+    bashDeny: null,
+    bashTimeout: null,
+    bashWorkingDir: null,
+    disableDefaultBashAllow: false,
+    disableDefaultBashDeny: false
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -172,6 +180,20 @@ function parseArgs() {
       config.outline = true;
     } else if (arg === '--no-mermaid-validation') {
       config.noMermaidValidation = true;
+    } else if (arg === '--enable-bash') {
+      config.enableBash = true;
+    } else if (arg === '--bash-allow' && i + 1 < args.length) {
+      config.bashAllow = args[++i];
+    } else if (arg === '--bash-deny' && i + 1 < args.length) {
+      config.bashDeny = args[++i];
+    } else if (arg === '--bash-timeout' && i + 1 < args.length) {
+      config.bashTimeout = args[++i];
+    } else if (arg === '--bash-working-dir' && i + 1 < args.length) {
+      config.bashWorkingDir = args[++i];
+    } else if (arg === '--no-default-bash-allow') {
+      config.disableDefaultBashAllow = true;
+    } else if (arg === '--no-default-bash-deny') {
+      config.disableDefaultBashDeny = true;
     } else if (!arg.startsWith('--') && !config.question) {
       // First non-flag argument is the question
       config.question = arg;
@@ -222,6 +244,15 @@ Options:
   --trace-console                  Enable tracing to console output
   --no-mermaid-validation          Disable automatic mermaid diagram validation and fixing
   --help, -h                      Show this help message
+
+Bash Tool Options:
+  --enable-bash                    Enable bash command execution for system exploration
+  --bash-allow <patterns>          Additional bash command patterns to allow (comma-separated)
+  --bash-deny <patterns>           Additional bash command patterns to deny (comma-separated)
+  --no-default-bash-allow          Disable default bash allow list (use only custom patterns)
+  --no-default-bash-deny           Disable default bash deny list (use only custom patterns)  
+  --bash-timeout <ms>              Bash command timeout in milliseconds (default: 120000)
+  --bash-working-dir <path>        Default working directory for bash commands
 
 Environment Variables:
   ANTHROPIC_API_KEY               Anthropic Claude API key
@@ -621,6 +652,54 @@ async function main() {
       }
     }
 
+    // Process bash configuration
+    let bashConfig = null;
+    if (config.enableBash) {
+      bashConfig = {};
+      
+      // Parse allow patterns
+      if (config.bashAllow) {
+        bashConfig.allow = config.bashAllow.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      }
+      
+      // Parse deny patterns
+      if (config.bashDeny) {
+        bashConfig.deny = config.bashDeny.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      }
+      
+      // Handle default list flags
+      if (config.disableDefaultBashAllow) {
+        bashConfig.disableDefaultAllow = true;
+      }
+      
+      if (config.disableDefaultBashDeny) {
+        bashConfig.disableDefaultDeny = true;
+      }
+      
+      // Parse timeout
+      if (config.bashTimeout) {
+        const timeout = parseInt(config.bashTimeout, 10);
+        if (isNaN(timeout) || timeout < 1000) {
+          console.error('Error: Bash timeout must be a number >= 1000 milliseconds');
+          process.exit(1);
+        }
+        bashConfig.timeout = timeout;
+      }
+      
+      // Set working directory
+      if (config.bashWorkingDir) {
+        if (!existsSync(config.bashWorkingDir)) {
+          console.error(`Error: Bash working directory does not exist: ${config.bashWorkingDir}`);
+          process.exit(1);
+        }
+        bashConfig.workingDirectory = config.bashWorkingDir;
+      }
+      
+      if (config.verbose) {
+        console.log('Bash command execution enabled');
+      }
+    }
+
     // Create and configure agent
     const agentConfig = {
       path: config.path,
@@ -632,7 +711,9 @@ async function main() {
       tracer: appTracer,
       outline: config.outline,
       maxResponseTokens: config.maxResponseTokens,
-      disableMermaidValidation: config.noMermaidValidation
+      disableMermaidValidation: config.noMermaidValidation,
+      enableBash: config.enableBash,
+      bashConfig: bashConfig
     };
 
     const agent = new ProbeAgent(agentConfig);
