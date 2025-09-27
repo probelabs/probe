@@ -6,6 +6,7 @@
 import { spawn } from 'child_process';
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
+import { parseCommandForExecution } from './bashCommandUtils.js';
 
 /**
  * Execute a bash command with security controls
@@ -206,47 +207,6 @@ export async function executeBashCommand(command, options = {}) {
   });
 }
 
-/**
- * Parse command string into arguments for execution
- * @param {string} command - Command string to parse
- * @returns {string[]} Array of command and arguments
- */
-function parseCommandForExecution(command) {
-  if (!command || typeof command !== 'string') {
-    return null;
-  }
-
-  // Simple command parsing - split on spaces but respect quotes
-  const args = [];
-  let current = '';
-  let inQuotes = false;
-  let quoteChar = '';
-
-  for (let i = 0; i < command.length; i++) {
-    const char = command[i];
-    
-    if (!inQuotes && (char === '"' || char === "'")) {
-      inQuotes = true;
-      quoteChar = char;
-    } else if (inQuotes && char === quoteChar) {
-      inQuotes = false;
-      quoteChar = '';
-    } else if (!inQuotes && char === ' ') {
-      if (current.trim()) {
-        args.push(current.trim());
-        current = '';
-      }
-    } else {
-      current += char;
-    }
-  }
-  
-  if (current.trim()) {
-    args.push(current.trim());
-  }
-
-  return args.length > 0 ? args : null;
-}
 
 /**
  * Format execution result for display
