@@ -50,7 +50,7 @@ export function parseSimpleCommand(command) {
     />/,            // Redirection >
     /</,            // Redirection <
     /\*\*/,         // Glob patterns (potentially dangerous)
-    /\{.*\}/        // Brace expansion
+    /^\s*\{|\}\s*$/,  // Brace expansion (but not braces inside quoted args)
   ];
 
   for (const pattern of complexPatterns) {

@@ -18,8 +18,10 @@ export const DEFAULT_ALLOW_PATTERNS = [
   'file', 'file:*', 'stat', 'stat:*', 'wc', 'wc:*',
   'du', 'du:*', 'df', 'df:*', 'realpath', 'realpath:*',
   
-  // Search and find commands (read-only)
-  'find', 'find:*', 'grep', 'grep:*', 'egrep', 'egrep:*', 'fgrep', 'fgrep:*',
+  // Search and find commands (read-only) - find restricted to safe operations
+  'find', 'find:-name:*', 'find:-type:*', 'find:-size:*', 'find:-mtime:*', 'find:-newer:*',
+  'find:-path:*', 'find:-iname:*', 'find:-maxdepth:*', 'find:-mindepth:*', 'find:-print',
+  'grep', 'grep:*', 'egrep', 'egrep:*', 'fgrep', 'fgrep:*',
   'rg', 'rg:*', 'ag', 'ag:*', 'ack', 'ack:*',
   'which', 'which:*', 'whereis', 'whereis:*', 'locate', 'locate:*',
   'type', 'type:*', 'command', 'command:*',
@@ -76,8 +78,8 @@ export const DEFAULT_ALLOW_PATTERNS = [
   'ifconfig', 'ip:addr', 'ip:link', 'hostname:-I',
   'ping:-c:*', 'traceroute', 'nslookup', 'dig',
   
-  // Text processing and utilities
-  'awk', 'awk:*', 'sed:-n:*', 'cut', 'cut:*', 'sort', 'sort:*',
+  // Text processing and utilities (awk removed - too powerful)
+  'sed:-n:*', 'cut', 'cut:*', 'sort', 'sort:*',
   'uniq', 'uniq:*', 'tr', 'tr:*', 'column', 'column:*',
   'paste', 'paste:*', 'join', 'join:*', 'comm', 'comm:*',
   'diff', 'diff:*', 'cmp', 'cmp:*', 'patch:--dry-run:*',
@@ -113,6 +115,12 @@ export const DEFAULT_DENY_PATTERNS = [
   'rm:-rf', 'rm:-f:/', 'rm:/', 'rm:-rf:*', 'rmdir', 
   'chmod:777', 'chmod:-R:777', 'chown', 'chgrp',
   'dd', 'dd:*', 'shred', 'shred:*',
+  
+  // Dangerous find operations that can execute arbitrary commands
+  'find:-exec:*', 'find:-execdir:*', 'find:-ok:*', 'find:-okdir:*',
+  
+  // Powerful scripting tools that can execute arbitrary commands
+  'awk', 'awk:*', 'perl', 'perl:*', 'python:-c:*', 'node:-e:*',
   
   // System administration and modification
   'sudo:*', 'su', 'su:*', 'passwd', 'adduser', 'useradd',
