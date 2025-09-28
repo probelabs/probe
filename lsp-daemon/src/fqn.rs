@@ -71,7 +71,7 @@ pub fn get_fqn_from_ast_with_content(
     // Find node at the specified position
     let root = tree.root_node();
     let point = tree_sitter::Point::new(line as usize, column as usize);
-    let node = find_node_at_point(root, point)?;
+    let node = normalize_node_for_declaration(find_node_at_point(root, point)?, point, extension);
 
     // Build FQN by traversing up the AST
     let mut fqn = build_fqn_from_node(node, content.as_bytes(), extension)?;
@@ -250,6 +250,110 @@ fn build_fqn_from_node(
     components.reverse();
 
     Ok(components.join(separator))
+}
+
+/// Determine if the node represents a comment/attribute preceding a declaration
+fn is_leading_comment_or_attribute(node: &tree_sitter::Node<'_>) -> bool {
+    matches!(
+        node.kind(),
+        "comment"
+            | "line_comment"
+            | "block_comment"
+            | "doc_comment"
+            | "attribute_item"
+            | "attribute"
+            | "decorator"
+    )
+}
+
+/// Normalize node to the nearest declaration (method/namespace) if the point landed on leading trivia
+fn normalize_node_for_declaration<'a>(
+    mut node: tree_sitter::Node<'a>,
+    point: tree_sitter::Point,
+    extension: &str,
+) -> tree_sitter::Node<'a> {
+    let original = node;
+
+    if let Some(descendant) = find_declaration_in_descendants(node, point, extension) {
+        return descendant;
+    }
+
+    for _ in 0..16 {
+        if is_method_node(&node, extension) || is_namespace_node(&node, extension) {
+            return node;
+        }
+
+        if is_leading_comment_or_attribute(&node) {
+            if let Some(mut sibling) = node.next_named_sibling() {
+                // skip consecutive comment/attribute siblings
+                loop {
+                    if is_leading_comment_or_attribute(&sibling) {
+                        if let Some(next) = sibling.next_named_sibling() {
+                            sibling = next;
+                            continue;
+                        }
+                        break;
+                    }
+                    if is_method_node(&sibling, extension) || is_namespace_node(&sibling, extension)
+                    {
+                        return sibling;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if let Some(parent) = node.parent() {
+            node = parent;
+            continue;
+        }
+
+        break;
+    }
+
+    find_enclosing_declaration(original, extension).unwrap_or(original)
+}
+
+fn find_enclosing_declaration<'a>(
+    mut node: tree_sitter::Node<'a>,
+    extension: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    for _ in 0..16 {
+        if is_method_node(&node, extension) || is_namespace_node(&node, extension) {
+            return Some(node);
+        }
+        if let Some(parent) = node.parent() {
+            node = parent;
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+fn find_declaration_in_descendants<'a>(
+    node: tree_sitter::Node<'a>,
+    point: tree_sitter::Point,
+    extension: &str,
+) -> Option<tree_sitter::Node<'a>> {
+    if is_method_node(&node, extension) || is_namespace_node(&node, extension) {
+        return Some(node);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        let start = child.start_position();
+        let end = child.end_position();
+        if (start.row < point.row || (start.row == point.row && start.column <= point.column))
+            && (end.row > point.row || (end.row == point.row && end.column >= point.column))
+        {
+            if let Some(found) = find_declaration_in_descendants(child, point, extension) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
 }
 
 /// Get language-specific separator for FQN components
@@ -756,7 +860,24 @@ impl MessageCodec {
         let file_path = PathBuf::from("lsp-daemon/src/protocol.rs");
         // Cursor at start of 'pub fn encode' line (0-based line/col)
         let line = 4u32; // line containing 'pub fn encode'
-        let column = 0u32;
+        let column = 4u32; // column where 'pub' starts within impl block
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .expect("rust grammar");
+        let tree = parser
+            .parse(content.as_bytes(), None)
+            .expect("parse snippet");
+        let root = tree.root_node();
+        let point = tree_sitter::Point::new(line as usize, column as usize);
+        let node = find_node_at_point(root, point).expect("node at point");
+        let normalized = normalize_node_for_declaration(node, point, "rs");
+        assert!(
+            is_method_node(&normalized, "rs"),
+            "expected method node after normalization, got {}",
+            normalized.kind()
+        );
 
         let fqn = get_fqn_from_ast_with_content(&file_path, content, line, column, Some("rust"))
             .expect("FQN extraction should succeed");
@@ -783,5 +904,23 @@ impl MessageCodec {
 
         let prefix = get_javascript_module_prefix(&file_path).expect("module prefix");
         assert_eq!(prefix, "examples.chat.npm");
+    }
+
+    #[test]
+    fn test_rust_function_fqn_includes_identifier() {
+        let file_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("src/extract/formatter.rs");
+        let content = std::fs::read_to_string(&file_path).expect("fixture source");
+
+        // Line/column for `pub fn format_extraction_dry_run` (0-based)
+        let line = 745u32;
+        let column = 0u32;
+
+        let fqn = get_fqn_from_ast_with_content(&file_path, &content, line, column, Some("rust"))
+            .expect("FQN extraction should succeed");
+
+        assert_eq!(fqn, "probe-code::format_extraction_dry_run");
     }
 }
