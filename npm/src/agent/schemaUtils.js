@@ -14,6 +14,7 @@ const HTML_ENTITY_MAP = {
   '&amp;': '&',
   '&quot;': '"',
   '&#39;': "'",
+  '&apos;': "'",  // Also handle XML/HTML5 apostrophe entity
   '&nbsp;': ' '
 };
 
@@ -1195,7 +1196,9 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
               // - HTML entities are the official way to escape quotes in Mermaid
               // - Always use double quotes with square brackets ["..."] for node labels
-              const safeContent = content
+              // IMPORTANT: Decode any existing HTML entities first to avoid double-encoding
+              const decodedContent = decodeHtmlEntities(content);
+              const safeContent = decodedContent
                 .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                 .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
               return `["${safeContent}"]`;
@@ -1220,7 +1223,9 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
               // - HTML entities are the official way to escape quotes in Mermaid
               // - Always use double quotes with curly brackets {"..."} for diamond nodes
-              const safeContent = content
+              // IMPORTANT: Decode any existing HTML entities first to avoid double-encoding
+              const decodedContent = decodeHtmlEntities(content);
+              const safeContent = decodedContent
                 .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                 .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
               return `{"${safeContent}"}`;
@@ -1460,7 +1465,9 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
                 // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
                 // - HTML entities are the official way to escape quotes in Mermaid
                 // - Always use double quotes with square brackets ["..."] for node labels
-                const safeContent = content
+                // IMPORTANT: Decode any existing HTML entities first to avoid double-encoding
+                const decodedContent = decodeHtmlEntities(content);
+                const safeContent = decodedContent
                   .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                   .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
                 return `["${safeContent}"]`;
@@ -1485,7 +1492,9 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
                 // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
                 // - HTML entities are the official way to escape quotes in Mermaid
                 // - Always use double quotes with curly brackets {"..."} for diamond nodes
-                const safeContent = content
+                // IMPORTANT: Decode any existing HTML entities first to avoid double-encoding
+                const decodedContent = decodeHtmlEntities(content);
+                const safeContent = decodedContent
                   .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                   .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
                 return `{"${safeContent}"}`;
