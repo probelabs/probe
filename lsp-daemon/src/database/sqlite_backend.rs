@@ -3104,7 +3104,7 @@ impl DatabaseBackend for SQLiteBackend {
                             "[DEBUG] store_edges: Number of edges in batch: {}",
                             chunk_edges.len()
                         );
-                        let _ = safe_execute(&conn, "ROLLBACK", (), "store_edges rollback").await;
+                        rollback_transaction(&conn, "store_edges batch failure").await;
                         return Err(e);
                     }
                 }
@@ -3118,8 +3118,12 @@ impl DatabaseBackend for SQLiteBackend {
             }
         }
 
-        // Commit transaction
-        safe_execute_with_retry(&conn, "COMMIT", (), "store_edges commit", 3).await?;
+        if let Err(e) = safe_execute_with_retry(&conn, "COMMIT", (), "store_edges commit", 3).await
+        {
+            rollback_transaction(&conn, "store_edges commit failure").await;
+            pool.return_connection(conn);
+            return Err(e);
+        }
 
         pool.return_connection(conn);
         Ok(())
