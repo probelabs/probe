@@ -1191,8 +1191,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             // Check if content needs quoting (contains problematic patterns)
             if (needsQuoting(content)) {
               wasFixed = true;
-              // Replace internal double quotes with single quotes to avoid nesting
-              const safeContent = content.replace(/"/g, "'");
+              // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+              const safeContent = content
+                .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
+                .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
               return `["${safeContent}"]`;
             }
             
@@ -1211,8 +1213,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             // Check if content needs quoting (contains problematic patterns)
             if (needsQuoting(content)) {
               wasFixed = true;
-              // Replace internal double quotes with single quotes to avoid nesting
-              const safeContent = content.replace(/"/g, "'");
+              // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+              const safeContent = content
+                .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
+                .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
               return `{"${safeContent}"}`;
             }
             
@@ -1446,8 +1450,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // Check if content needs quoting (contains problematic patterns)
               if (needsQuoting(content)) {
                 wasFixed = true;
-                // Replace internal double quotes with single quotes to avoid nesting
-                const safeContent = content.replace(/"/g, "'");
+                // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+                const safeContent = content
+                  .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
+                  .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
                 return `["${safeContent}"]`;
               }
               
@@ -1466,8 +1472,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // Check if content needs quoting (contains problematic patterns)
               if (needsQuoting(content)) {
                 wasFixed = true;
-                // Replace internal double quotes with single quotes to avoid nesting
-                const safeContent = content.replace(/"/g, "'");
+                // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+                const safeContent = content
+                  .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
+                  .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
                 return `{"${safeContent}"}`;
               }
               
