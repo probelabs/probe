@@ -7,6 +7,30 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspServerCapabilities {
+    #[serde(default = "default_true")]
+    pub call_hierarchy: bool,
+    #[serde(default = "default_true")]
+    pub references: bool,
+    #[serde(default = "default_true")]
+    pub implementations: bool,
+}
+
+impl Default for LspServerCapabilities {
+    fn default() -> Self {
+        Self {
+            call_hierarchy: true,
+            references: true,
+            implementations: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspServerConfig {
     pub language: Language,
@@ -18,6 +42,8 @@ pub struct LspServerConfig {
     pub root_markers: Vec<String>,
     #[serde(default = "default_initialization_timeout")]
     pub initialization_timeout_secs: u64,
+    #[serde(default)]
+    pub capabilities: LspServerCapabilities,
 }
 
 fn default_initialization_timeout() -> u64 {
@@ -33,6 +59,7 @@ impl Default for LspServerConfig {
             initialization_options: None,
             root_markers: Vec::new(),
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities::default(),
         }
     }
 }
@@ -88,6 +115,7 @@ impl LspRegistry {
             })),
             root_markers: vec!["Cargo.toml".to_string()],
             initialization_timeout_secs: 10, // Reduced from 300s to 10s
+            capabilities: LspServerCapabilities::default(),
         });
 
         // TypeScript/JavaScript
@@ -98,6 +126,7 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["package.json".to_string(), "tsconfig.json".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities::default(),
         });
 
         self.register(LspServerConfig {
@@ -107,6 +136,7 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["package.json".to_string(), "jsconfig.json".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities::default(),
         });
 
         // Python
@@ -121,6 +151,11 @@ impl LspRegistry {
                 "requirements.txt".to_string(),
             ],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Go
@@ -148,6 +183,7 @@ impl LspRegistry {
             })),
             root_markers: vec!["go.mod".to_string(), "go.work".to_string()],
             initialization_timeout_secs: 60,
+            capabilities: LspServerCapabilities::default(),
         });
 
         // Java
@@ -162,6 +198,7 @@ impl LspRegistry {
                 "build.gradle.kts".to_string(),
             ],
             initialization_timeout_secs: 45,
+            capabilities: LspServerCapabilities::default(),
         });
 
         // C/C++
@@ -176,6 +213,7 @@ impl LspRegistry {
                 "Makefile".to_string(),
             ],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities::default(),
         });
 
         self.register(LspServerConfig {
@@ -190,6 +228,7 @@ impl LspRegistry {
                 "Makefile".to_string(),
             ],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities::default(),
         });
 
         // C#
@@ -204,6 +243,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["*.sln".to_string(), "*.csproj".to_string()],
             initialization_timeout_secs: 45,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Ruby
@@ -214,6 +258,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["Gemfile".to_string(), ".solargraph.yml".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // PHP
@@ -224,6 +273,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["composer.json".to_string(), ".git".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Swift
@@ -234,6 +288,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["Package.swift".to_string(), "*.xcodeproj".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Kotlin
@@ -248,6 +307,11 @@ impl LspRegistry {
                 "settings.gradle.kts".to_string(),
             ],
             initialization_timeout_secs: 45,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Scala
@@ -258,6 +322,7 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["build.sbt".to_string(), "build.sc".to_string()],
             initialization_timeout_secs: 60,
+            capabilities: LspServerCapabilities::default(),
         });
 
         // Haskell
@@ -272,6 +337,11 @@ impl LspRegistry {
                 "cabal.project".to_string(),
             ],
             initialization_timeout_secs: 45,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Elixir
@@ -282,6 +352,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["mix.exs".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Clojure
@@ -292,6 +367,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["project.clj".to_string(), "deps.edn".to_string()],
             initialization_timeout_secs: 45,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Lua
@@ -302,6 +382,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec![".luarc.json".to_string(), ".git".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         // Zig
@@ -312,6 +397,11 @@ impl LspRegistry {
             initialization_options: None,
             root_markers: vec!["build.zig".to_string()],
             initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
         });
 
         Ok(())

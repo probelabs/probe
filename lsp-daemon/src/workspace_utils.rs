@@ -4,9 +4,20 @@
 //! manual LSP commands. It replaces the complex WorkspaceResolver that was causing
 //! empty workspace paths in the enrichment workers.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use dashmap::DashSet;
+use once_cell::sync::Lazy;
+use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::debug;
+use std::process::Command;
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
+use tracing::{debug, info, warn};
+
+use crate::language_detector::Language;
+use crate::path_safety;
+use crate::path_safety::safe_canonicalize;
+
+static RUST_MEMBERSHIP_CACHE: Lazy<DashSet<PathBuf>> = Lazy::new(|| DashSet::new());
 
 /// Find workspace root by looking for common project markers
 ///
@@ -146,9 +157,218 @@ pub fn is_workspace_root(path: &Path) -> bool {
     markers.iter().any(|marker| path.join(marker).exists())
 }
 
+/// Resolve the workspace directory that should be used when talking to an LSP server.
+///
+/// For most languages this is equivalent to `find_workspace_root_with_fallback`, but
+/// Rust workspaces require additional handling so that nested crates that are not
+/// explicitly listed in the parent `[workspace]` are still analyzable. When such a
+/// crate is detected, this helper automatically amends the parent workspace manifest
+/// to include the crate as a member.
+pub fn resolve_lsp_workspace_root(language: Language, file_path: &Path) -> Result<PathBuf> {
+    let canonical_file = safe_canonicalize(file_path);
+
+    match language {
+        Language::Rust => {
+            if let Some(crate_root) = find_nearest_with_marker(&canonical_file, "Cargo.toml") {
+                let crate_manifest = crate_root.join("Cargo.toml");
+                if path_safety::exists_no_follow(&crate_manifest) {
+                    // Look for a parent workspace manifest that owns this crate.
+                    if let Some(workspace_root) = find_rust_workspace_root(&crate_root)? {
+                        ensure_rust_workspace_membership(&crate_root, &workspace_root)?;
+                        return Ok(workspace_root);
+                    }
+
+                    return Ok(crate_root);
+                }
+            }
+
+            // Fallback to the generic detection if we couldn't find a crate manifest.
+            find_workspace_root_with_fallback(&canonical_file)
+        }
+        _ => find_workspace_root_with_fallback(&canonical_file),
+    }
+}
+
+fn find_nearest_with_marker(file_path: &Path, marker: &str) -> Option<PathBuf> {
+    let mut current = file_path.parent();
+
+    while let Some(dir) = current {
+        let marker_path = dir.join(marker);
+        if path_safety::exists_no_follow(&marker_path) {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+
+    None
+}
+
+fn find_rust_workspace_root(crate_root: &Path) -> Result<Option<PathBuf>> {
+    let mut current = crate_root.parent();
+
+    while let Some(dir) = current {
+        let manifest_path = dir.join("Cargo.toml");
+        if path_safety::exists_no_follow(&manifest_path) {
+            if has_workspace_section(&manifest_path)? {
+                return Ok(Some(dir.to_path_buf()));
+            }
+        }
+        current = dir.parent();
+    }
+
+    Ok(None)
+}
+
+fn has_workspace_section(manifest_path: &Path) -> Result<bool> {
+    let content = fs::read_to_string(manifest_path)
+        .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
+
+    let doc = content
+        .parse::<DocumentMut>()
+        .with_context(|| format!("Failed to parse manifest: {}", manifest_path.display()))?;
+
+    Ok(doc.get("workspace").is_some())
+}
+
+fn ensure_rust_workspace_membership(crate_root: &Path, workspace_root: &Path) -> Result<()> {
+    // If the crate is the workspace root, nothing to do.
+    if safe_canonicalize(crate_root) == safe_canonicalize(workspace_root) {
+        return Ok(());
+    }
+
+    let crate_real = safe_canonicalize(crate_root);
+    if RUST_MEMBERSHIP_CACHE.contains(&crate_real) {
+        return Ok(());
+    }
+
+    let workspace_real = safe_canonicalize(workspace_root);
+    let manifest_path = workspace_real.join("Cargo.toml");
+
+    let mut content = fs::read_to_string(&manifest_path).with_context(|| {
+        format!(
+            "Failed to read workspace manifest at {}",
+            manifest_path.display()
+        )
+    })?;
+
+    let mut doc = content.parse::<DocumentMut>().with_context(|| {
+        format!(
+            "Failed to parse workspace manifest at {}",
+            manifest_path.display()
+        )
+    })?;
+
+    let workspace_entry = doc.entry("workspace").or_insert(Item::Table(Table::new()));
+
+    let members_item = workspace_entry
+        .as_table_mut()
+        .expect("workspace entry should be a table")
+        .entry("members")
+        .or_insert(Item::Value(Value::Array(Array::new())));
+
+    let members_array = members_item
+        .as_array_mut()
+        .expect("workspace.members should be an array");
+
+    let relative_path =
+        pathdiff::diff_paths(&crate_real, &workspace_real).unwrap_or_else(|| PathBuf::from("."));
+
+    let mut relative_str = relative_path.to_string_lossy().replace('\\', "/");
+    if relative_str.is_empty() {
+        relative_str = ".".to_string();
+    }
+
+    let already_member = members_array
+        .iter()
+        .any(|entry| entry.as_str().map(|s| s == relative_str).unwrap_or(false));
+
+    let mut modified = false;
+    if !already_member {
+        members_array.push(Value::from(relative_str.clone()));
+        modified = true;
+        info!(
+            "Added '{}' to workspace members in {}",
+            relative_str,
+            manifest_path.display()
+        );
+    }
+
+    // If the path is present in workspace.exclude remove it, otherwise the
+    // member we just added will still be ignored by cargo.
+    if let Some(exclude_array) = workspace_entry
+        .as_table_mut()
+        .and_then(|table| table.get_mut("exclude"))
+        .and_then(|item| item.as_array_mut())
+    {
+        let mut indices_to_remove = Vec::new();
+        for (idx, entry) in exclude_array.iter().enumerate() {
+            if entry.as_str().map(|s| s == relative_str).unwrap_or(false) {
+                indices_to_remove.push(idx);
+            }
+        }
+
+        if !indices_to_remove.is_empty() {
+            for idx in indices_to_remove.iter().rev() {
+                exclude_array.remove(*idx);
+            }
+            modified = true;
+            info!(
+                "Removed '{}' from workspace exclude list in {}",
+                relative_str,
+                manifest_path.display()
+            );
+        }
+    }
+
+    if modified {
+        content = doc.to_string();
+        fs::write(&manifest_path, content).with_context(|| {
+            format!(
+                "Failed to update workspace manifest at {}",
+                manifest_path.display()
+            )
+        })?;
+
+        // Run a quick cargo metadata check to ensure the manifest remains valid.
+        match Command::new("cargo")
+            .arg("metadata")
+            .arg("--format-version")
+            .arg("1")
+            .arg("--manifest-path")
+            .arg(&manifest_path)
+            .status()
+        {
+            Ok(status) if status.success() => {
+                debug!(
+                    "cargo metadata succeeded after updating {}",
+                    manifest_path.display()
+                );
+            }
+            Ok(status) => {
+                warn!(
+                    "cargo metadata exited with status {} after updating {}",
+                    status,
+                    manifest_path.display()
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to run cargo metadata after updating {}: {}",
+                    manifest_path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    RUST_MEMBERSHIP_CACHE.insert(crate_real);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::language_detector::Language;
     use std::fs;
     use tempfile::TempDir;
 
@@ -342,5 +562,53 @@ mod tests {
         // Test nonexistent file
         let missing_toml = temp_dir.path().join("missing.toml");
         assert!(!is_cargo_workspace_root(&missing_toml));
+    }
+
+    #[test]
+    fn test_resolve_lsp_workspace_root_adds_missing_member() {
+        let temp_dir = TempDir::new().unwrap();
+        let workspace_root = temp_dir.path().join("workspace");
+        let existing_member = workspace_root.join("existing");
+        let missing_member = workspace_root.join("member");
+        let missing_src = missing_member.join("src");
+
+        fs::create_dir_all(&existing_member.join("src")).unwrap();
+        fs::create_dir_all(&missing_src).unwrap();
+
+        // Workspace manifest with one existing member and exclude containing the missing member.
+        fs::write(
+            workspace_root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"existing\"]\nexclude = [\"member\"]\n",
+        )
+        .unwrap();
+
+        // Existing member manifest (minimal crate)
+        fs::write(
+            existing_member.join("Cargo.toml"),
+            "[package]\nname = \"existing\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(existing_member.join("src/lib.rs"), "pub fn existing() {}\n").unwrap();
+
+        // Missing member manifest (not yet listed in workspace)
+        fs::write(
+            missing_member.join("Cargo.toml"),
+            "[package]\nname = \"member\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(missing_src.join("lib.rs"), "pub fn member() {}\n").unwrap();
+
+        // Clear membership cache to observe behavior in test
+        RUST_MEMBERSHIP_CACHE.clear();
+
+        let file_path = missing_src.join("lib.rs");
+        let result_root = resolve_lsp_workspace_root(Language::Rust, &file_path)
+            .expect("expected workspace resolution to succeed");
+
+        assert_eq!(result_root, workspace_root);
+
+        let manifest = std::fs::read_to_string(workspace_root.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("\"member\""));
+        assert!(!manifest.contains("exclude = [\"member\"]"));
     }
 }

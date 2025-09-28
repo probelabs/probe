@@ -5,7 +5,7 @@ use crate::hash_utils::md5_hex_file;
 use crate::indexing::{IndexingConfig, IndexingManager};
 use crate::ipc::{IpcListener, IpcStream};
 use crate::language_detector::{Language, LanguageDetector};
-use crate::logging::{LogBuffer, MemoryLogLayer};
+use crate::logging::{LogBuffer, MemoryLogLayer, PersistentLogLayer, PersistentLogStorage};
 use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::lsp_registry::LspRegistry;
 use crate::path_safety::safe_canonicalize;
@@ -14,15 +14,16 @@ use crate::pid_lock::PidLock;
 use crate::process_group::ProcessGroup;
 use crate::protocol::{
     parse_call_hierarchy_from_lsp, CallHierarchyItem, CallHierarchyResult, DaemonRequest,
-    DaemonResponse, DaemonStatus, DocumentSymbol, HoverContent, LanguageInfo, Location,
-    MessageCodec, PoolStatus, Position, Range, SymbolInformation,
+    DaemonResponse, DaemonStatus, DocumentSymbol, HoverContent, IndexingQueueInfo, LanguageInfo,
+    Location, MessageCodec, PoolStatus, Position, Range, SymbolInformation,
 };
 use crate::server_manager::SingleServerManager;
 use crate::socket_path::{get_default_socket_path, remove_socket_file};
-use crate::symbol::{generate_version_aware_uid, SymbolUIDGenerator};
+use crate::symbol::{generate_version_aware_uid, get_workspace_relative_path, SymbolUIDGenerator};
 use crate::watchdog::{ProcessMonitor, Watchdog};
 use crate::workspace_database_router::WorkspaceDatabaseRouter;
 use crate::workspace_resolver::WorkspaceResolver;
+use crate::workspace_utils;
 // Position adjustment for different LSP servers
 #[derive(Debug, Clone)]
 enum PositionOffset {
@@ -195,6 +196,7 @@ pub struct LspDaemon {
     request_count: Arc<RwLock<u64>>,
     shutdown: Arc<RwLock<bool>>,
     log_buffer: LogBuffer,
+    persistent_logs: Option<Arc<PersistentLogStorage>>,
     pid_lock: Option<PidLock>,
     #[cfg(unix)]
     process_group: ProcessGroup,
@@ -221,7 +223,7 @@ pub struct LspDaemon {
     workspace_cache_router: Arc<WorkspaceDatabaseRouter>,
     // Indexing configuration and manager
     indexing_config: Arc<RwLock<IndexingConfig>>,
-    indexing_manager: Arc<tokio::sync::Mutex<Option<IndexingManager>>>,
+    indexing_manager: Arc<tokio::sync::Mutex<Option<Arc<IndexingManager>>>>,
     // Database and cache metrics for Step 30.3-30.4
     metrics: Arc<DatabaseMetrics>,
     // Database health tracking for Priority 4
@@ -233,6 +235,63 @@ pub struct LspDaemon {
 impl LspDaemon {
     pub fn new(socket_path: String) -> Result<Self> {
         Self::new_with_config(socket_path, None)
+    }
+
+    /// Get the directory for storing persistent logs
+    fn get_log_directory() -> Result<PathBuf> {
+        // Try to get from environment variable first
+        if let Ok(log_dir) = std::env::var("PROBE_LSP_LOG_DIR") {
+            let path = PathBuf::from(log_dir);
+            std::fs::create_dir_all(&path)?;
+            return Ok(path);
+        }
+
+        // Otherwise use platform-specific default
+        #[cfg(target_os = "macos")]
+        {
+            let home = std::env::var("HOME").context("HOME environment variable not set")?;
+            let log_dir = PathBuf::from(home)
+                .join("Library")
+                .join("Logs")
+                .join("probe")
+                .join("lsp");
+            std::fs::create_dir_all(&log_dir)?;
+            Ok(log_dir)
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            let home = std::env::var("HOME").context("HOME environment variable not set")?;
+            let log_dir = PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("probe")
+                .join("logs")
+                .join("lsp");
+            std::fs::create_dir_all(&log_dir)?;
+            Ok(log_dir)
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            let local_app_data = std::env::var("LOCALAPPDATA")
+                .context("LOCALAPPDATA environment variable not set")?;
+            let log_dir = PathBuf::from(local_app_data)
+                .join("probe")
+                .join("logs")
+                .join("lsp");
+            std::fs::create_dir_all(&log_dir)?;
+            Ok(log_dir)
+        }
+
+        #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+        {
+            // Fallback to temp directory
+            let temp_dir = std::env::temp_dir();
+            let log_dir = temp_dir.join("probe").join("logs").join("lsp");
+            std::fs::create_dir_all(&log_dir)?;
+            Ok(log_dir)
+        }
     }
 
     /// Generate a workspace ID compatible with the current i64 interface
@@ -318,30 +377,107 @@ impl LspDaemon {
         let log_buffer = LogBuffer::new();
         let memory_layer = MemoryLogLayer::new(log_buffer.clone());
 
+        // Create persistent log storage
+        let persistent_logs = match Self::get_log_directory() {
+            Ok(log_dir) => {
+                match PersistentLogStorage::new(log_dir) {
+                    Ok(storage) => {
+                        let storage = Arc::new(storage);
+
+                        // Load and display previous logs if available
+                        if let Ok(previous_entries) = storage.get_previous_entries() {
+                            if !previous_entries.is_empty() {
+                                info!(
+                                    "Loaded {} log entries from previous session",
+                                    previous_entries.len()
+                                );
+                                // Add previous entries to in-memory buffer for immediate access
+                                for entry in previous_entries.iter().take(500) {
+                                    log_buffer.push(entry.clone());
+                                }
+                            }
+                        }
+
+                        Some(storage)
+                    }
+                    Err(e) => {
+                        warn!("Failed to create persistent log storage: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to get log directory: {}", e);
+                None
+            }
+        };
+
         // Set up tracing subscriber with memory layer and optionally stderr
         use tracing_subscriber::EnvFilter;
 
-        // Always use a filter to ensure INFO level is captured
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+        // Always use a filter to ensure INFO level is captured for all modules
+        // Set a base level of 'info' for all modules to capture logs from spawned tasks
+        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            // Use 'info' as the base level for everything to capture all info-level logs
+            EnvFilter::new("info")
+        });
 
-        let subscriber = tracing_subscriber::registry()
-            .with(memory_layer)
-            .with(filter);
-
-        // If PROBE_LOG_LEVEL is set to debug or trace, also add stderr logging
+        // Build the subscriber with layers based on what's available
+        let _has_persistent_layer = persistent_logs.is_some();
         let log_level = std::env::var("PROBE_LOG_LEVEL").unwrap_or_default();
-        if log_level == "debug" || log_level == "trace" {
-            use tracing_subscriber::fmt;
+        let has_stderr = log_level == "debug" || log_level == "trace";
 
-            let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
+        // Build the appropriate subscriber based on available layers
+        if let Some(ref storage) = persistent_logs {
+            let persistent_layer = PersistentLogLayer::new(storage.clone());
 
-            if tracing::subscriber::set_global_default(subscriber.with(fmt_layer)).is_ok() {
-                tracing::info!("Tracing initialized with memory and stderr logging");
+            if has_stderr {
+                use tracing_subscriber::fmt;
+                let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
+
+                let subscriber = tracing_subscriber::registry()
+                    .with(memory_layer)
+                    .with(persistent_layer)
+                    .with(filter)
+                    .with(fmt_layer);
+
+                if tracing::subscriber::set_global_default(subscriber).is_ok() {
+                    tracing::info!(
+                        "Tracing initialized with memory, persistent, and stderr logging"
+                    );
+                }
+            } else {
+                let subscriber = tracing_subscriber::registry()
+                    .with(memory_layer)
+                    .with(persistent_layer)
+                    .with(filter);
+
+                if tracing::subscriber::set_global_default(subscriber).is_ok() {
+                    tracing::info!("Tracing initialized with memory and persistent logging layers");
+                }
             }
         } else {
-            // Memory logging only
-            if tracing::subscriber::set_global_default(subscriber).is_ok() {
-                tracing::info!("Tracing initialized with memory logging layer");
+            // No persistent layer
+            if has_stderr {
+                use tracing_subscriber::fmt;
+                let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
+
+                let subscriber = tracing_subscriber::registry()
+                    .with(memory_layer)
+                    .with(filter)
+                    .with(fmt_layer);
+
+                if tracing::subscriber::set_global_default(subscriber).is_ok() {
+                    tracing::info!("Tracing initialized with memory and stderr logging");
+                }
+            } else {
+                let subscriber = tracing_subscriber::registry()
+                    .with(memory_layer)
+                    .with(filter);
+
+                if tracing::subscriber::set_global_default(subscriber).is_ok() {
+                    tracing::info!("Tracing initialized with memory logging layer");
+                }
             }
         }
 
@@ -431,6 +567,7 @@ impl LspDaemon {
             request_count: Arc::new(RwLock::new(0)),
             shutdown: Arc::new(RwLock::new(false)),
             log_buffer,
+            persistent_logs,
             pid_lock: None,
             #[cfg(unix)]
             process_group: ProcessGroup::new(),
@@ -472,17 +609,22 @@ impl LspDaemon {
 
         // Set up process group for child management
         #[cfg(unix)]
-        self.process_group.become_leader()?;
+        self.process_group
+            .become_leader()
+            .context("Failed to configure process group leader")?;
 
         // Clean up any existing socket
-        remove_socket_file(&self.socket_path)?;
+        remove_socket_file(&self.socket_path)
+            .with_context(|| format!("Failed to remove existing socket {}", self.socket_path))?;
 
         // Migrate existing workspace caches to use git-based naming where possible
         if let Err(e) = self.workspace_cache_router.migrate_workspace_caches().await {
             warn!("Failed to migrate workspace caches: {}", e);
         }
 
-        let listener = IpcListener::bind(&self.socket_path).await?;
+        let listener = IpcListener::bind(&self.socket_path)
+            .await
+            .with_context(|| format!("Failed to bind IPC listener at {}", self.socket_path))?;
         info!("LSP daemon listening on {}", self.socket_path);
 
         // Watchdog is started only when explicitly enabled via --watchdog flag
@@ -493,21 +635,32 @@ impl LspDaemon {
         {
             let daemon_for_signals = self.clone_refs();
             use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm = signal(SignalKind::terminate())?;
-            let mut sigint = signal(SignalKind::interrupt())?;
 
-            tokio::spawn(async move {
-                tokio::select! {
-                    _ = sigterm.recv() => {
-                        info!("Received SIGTERM, shutting down gracefully");
-                        *daemon_for_signals.shutdown.write().await = true;
-                    }
-                    _ = sigint.recv() => {
-                        info!("Received SIGINT, shutting down gracefully");
-                        *daemon_for_signals.shutdown.write().await = true;
-                    }
+            match (
+                signal(SignalKind::terminate()),
+                signal(SignalKind::interrupt()),
+            ) {
+                (Ok(mut sigterm), Ok(mut sigint)) => {
+                    tokio::spawn(async move {
+                        tokio::select! {
+                            _ = sigterm.recv() => {
+                                info!("Received SIGTERM, shutting down gracefully");
+                                *daemon_for_signals.shutdown.write().await = true;
+                            }
+                            _ = sigint.recv() => {
+                                info!("Received SIGINT, shutting down gracefully");
+                                *daemon_for_signals.shutdown.write().await = true;
+                            }
+                        }
+                    });
                 }
-            });
+                (Err(e), _) | (_, Err(e)) => {
+                    warn!(
+                        "Signal handling disabled (failed to register handler): {}",
+                        e
+                    );
+                }
+            }
         }
 
         // Start idle checker
@@ -1756,9 +1909,12 @@ impl LspDaemon {
                     }
 
                     // PHASE 2: Database miss - proceed with LSP call
+                    let lsp_workspace_root =
+                        workspace_utils::resolve_lsp_workspace_root(language, &absolute_file_path)?;
+
                     let server_instance = self
                         .server_manager
-                        .ensure_workspace_registered(language, workspace_root.clone())
+                        .ensure_workspace_registered(language, lsp_workspace_root)
                         .await?;
 
                     // Make the definition request directly without explicit document lifecycle
@@ -1920,9 +2076,12 @@ impl LspDaemon {
                     }
 
                     // PHASE 2: Database miss - proceed with LSP call
+                    let lsp_workspace_root =
+                        workspace_utils::resolve_lsp_workspace_root(language, &absolute_file_path)?;
+
                     let server_instance = self
                         .server_manager
-                        .ensure_workspace_registered(language, workspace_root.clone())
+                        .ensure_workspace_registered(language, lsp_workspace_root)
                         .await?;
 
                     // Ensure document is opened and ready before querying references
@@ -2037,14 +2196,17 @@ impl LspDaemon {
                         ));
                     }
 
-                    let workspace_root = {
+                    let _workspace_root = {
                         let mut resolver = self.workspace_resolver.lock().await;
                         resolver.resolve_workspace(&absolute_file_path, workspace_hint)?
                     };
 
+                    let lsp_workspace_root =
+                        workspace_utils::resolve_lsp_workspace_root(language, &absolute_file_path)?;
+
                     let server_instance = self
                         .server_manager
-                        .ensure_workspace_registered(language, workspace_root)
+                        .ensure_workspace_registered(language, lsp_workspace_root)
                         .await?;
 
                     let server = server_instance.lock().await;
@@ -2443,45 +2605,50 @@ impl LspDaemon {
                 Ok(uid) => uid,
                 Err(e) => {
                     debug!("[UID] Failed to generate consistent UID, falling back to simple format: {}", e);
-                    // Fallback to simple format if UID generation fails
-                    format!(
-                        "{}:{}:{}:{}",
-                        absolute_file_path.to_string_lossy(),
-                        symbol_name,
-                        line,
-                        column
-                    )
+                    // Fallback: still prefer workspace-relative path to avoid machine-dependent keys
+                    let rel = get_workspace_relative_path(&absolute_file_path, &workspace_root)
+                        .unwrap_or_else(|_| absolute_file_path.to_string_lossy().to_string());
+                    format!("{}:{}:{}:{}", rel, symbol_name, line, column)
                 }
             };
 
-            if let Ok(workspace_cache) = self
+            match self
                 .workspace_cache_router
                 .cache_for_workspace(&workspace_root)
                 .await
             {
-                // Generate workspace-specific ID from workspace_root
-                let workspace_id = self.generate_workspace_id_hash(&workspace_root);
+                Ok(workspace_cache) => {
+                    // Generate workspace-specific ID from workspace_root
+                    let workspace_id = self.generate_workspace_id_hash(&workspace_root);
 
-                match workspace_cache
-                    .get_call_hierarchy(workspace_id, &symbol_uid)
-                    .await
-                {
-                    Ok(Some(result)) => {
-                        info!(
-                            "Database HIT for {} at {}:{}:{}",
-                            symbol_name,
-                            absolute_file_path.display(),
-                            line,
-                            column
-                        );
-                        return Ok(result);
+                    match workspace_cache
+                        .get_call_hierarchy(workspace_id, &symbol_uid)
+                        .await
+                    {
+                        Ok(Some(result)) => {
+                            info!(
+                                "Database HIT for {} at {}:{}:{}",
+                                symbol_name,
+                                absolute_file_path.display(),
+                                line,
+                                column
+                            );
+                            return Ok(result);
+                        }
+                        Ok(None) => {
+                            debug!("Database MISS for {} - calling LSP", symbol_name);
+                        }
+                        Err(e) => {
+                            warn!("Database query error: {} - falling back to LSP", e);
+                        }
                     }
-                    Ok(None) => {
-                        debug!("Database MISS for {} - calling LSP", symbol_name);
-                    }
-                    Err(e) => {
-                        warn!("Database query error: {} - falling back to LSP", e);
-                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to create workspace cache for {:?}: {}",
+                        workspace_root, e
+                    );
+                    // Continue without cache - fall back to LSP
                 }
             }
         } else {
@@ -2502,9 +2669,12 @@ impl LspDaemon {
         );
 
         // Ensure workspace is registered with the server for this language
+        let lsp_workspace_root =
+            workspace_utils::resolve_lsp_workspace_root(language, &absolute_file_path)?;
+
         let server_instance = self
             .server_manager
-            .ensure_workspace_registered(language, workspace_root.clone())
+            .ensure_workspace_registered(language, lsp_workspace_root)
             .await?;
 
         // Adaptive timing for Go/TypeScript in CI environments
@@ -3237,9 +3407,12 @@ impl LspDaemon {
             // PHASE 1: Try database first
             // Generate cache key for document symbols (file-level, no position needed)
             let hash_str = blake3::hash(content.as_bytes()).to_hex();
+            let rel_path_for_key =
+                get_workspace_relative_path(&absolute_file_path, &workspace_root)
+                    .unwrap_or_else(|_| absolute_file_path.to_string_lossy().to_string());
             let cache_key = format!(
                 "document_symbols:{}:{}",
-                absolute_file_path.display(),
+                rel_path_for_key,
                 &hash_str.as_str()[..16]
             );
 
@@ -3274,9 +3447,12 @@ impl LspDaemon {
             }
 
             // PHASE 2: Database miss - proceed with LSP call
+            let lsp_workspace_root =
+                workspace_utils::resolve_lsp_workspace_root(language, &absolute_file_path)?;
+
             let server_instance = self
                 .server_manager
-                .ensure_workspace_registered(language, workspace_root.clone())
+                .ensure_workspace_registered(language, lsp_workspace_root)
                 .await?;
 
             // Make the document symbols request directly without explicit document lifecycle
@@ -3440,9 +3616,12 @@ impl LspDaemon {
         }
 
         // PHASE 2: Database miss - proceed with LSP call
+        let lsp_workspace_root =
+            workspace_utils::resolve_lsp_workspace_root(language, &absolute_file_path)?;
+
         let server_instance = self
             .server_manager
-            .ensure_workspace_registered(language, workspace_root.clone())
+            .ensure_workspace_registered(language, lsp_workspace_root)
             .await?;
 
         // Make the implementation request directly without explicit document lifecycle
@@ -3631,13 +3810,12 @@ impl LspDaemon {
                                 "[UID] Failed to generate consistent UID, using fallback: {}",
                                 e
                             );
-                            format!(
-                                "{}:{}:{}:{}",
-                                request_file_path.to_string_lossy(),
-                                symbol_name,
-                                line,
-                                column
-                            )
+                            let rel =
+                                get_workspace_relative_path(request_file_path, workspace_root)
+                                    .unwrap_or_else(|_| {
+                                        request_file_path.to_string_lossy().to_string()
+                                    });
+                            format!("{}:{}:{}:{}", rel, symbol_name, line, column)
                         }
                     };
 
@@ -3709,7 +3887,7 @@ impl LspDaemon {
         match workspace_cache.backend() {
             BackendType::SQLite(db) => {
                 // Convert to database format
-                let edges = adapter
+                let (mut symbols, mut edges) = adapter
                     .convert_references_to_database(
                         locations,
                         request_file_path,
@@ -3747,25 +3925,23 @@ impl LspDaemon {
                                 "[UID] Failed to generate consistent UID, using fallback: {}",
                                 e
                             );
-                            format!(
-                                "{}:{}:{}:{}",
-                                request_file_path.to_string_lossy(),
-                                symbol_name,
-                                line,
-                                column
-                            )
+                            let rel =
+                                get_workspace_relative_path(request_file_path, workspace_root)
+                                    .unwrap_or_else(|_| {
+                                        request_file_path.to_string_lossy().to_string()
+                                    });
+                            format!("{}:{}:{}:{}", rel, symbol_name, line, column)
                         }
                     };
 
                     crate::database::create_none_reference_edges(&symbol_uid)
                 } else {
                     info!("LSP returned {} real reference edges", edges.len());
-                    edges
+                    std::mem::take(&mut edges)
                 };
 
-                // Store in database (references only create edges, no new symbols)
                 adapter
-                    .store_in_database(&**db, Vec::new(), edges_to_store)
+                    .store_in_database(&**db, std::mem::take(&mut symbols), edges_to_store)
                     .await
                     .with_context(|| "Failed to store references edges in database")?;
 
@@ -3845,13 +4021,12 @@ impl LspDaemon {
                                 "[UID] Failed to generate consistent UID, using fallback: {}",
                                 e
                             );
-                            format!(
-                                "{}:{}:{}:{}",
-                                request_file_path.to_string_lossy(),
-                                symbol_name,
-                                line,
-                                column
-                            )
+                            let rel =
+                                get_workspace_relative_path(request_file_path, workspace_root)
+                                    .unwrap_or_else(|_| {
+                                        request_file_path.to_string_lossy().to_string()
+                                    });
+                            format!("{}:{}:{}:{}", rel, symbol_name, line, column)
                         }
                     };
 
@@ -4477,6 +4652,7 @@ impl LspDaemon {
             request_count: self.request_count.clone(),
             shutdown: self.shutdown.clone(),
             log_buffer: self.log_buffer.clone(),
+            persistent_logs: self.persistent_logs.clone(),
             pid_lock: None, // Don't clone the PID lock
             #[cfg(unix)]
             process_group: ProcessGroup::new(), // Create new for cloned instance
@@ -4657,20 +4833,20 @@ impl LspDaemon {
         );
 
         // Create the IndexingManager
-        let indexing_manager = IndexingManager::new(
+        let indexing_manager = Arc::new(IndexingManager::new(
             manager_config,
             self.detector.clone(),
             self.server_manager.clone(),
             definition_cache,
             self.workspace_cache_router.clone(),
-        );
+        ));
 
         let session_id = uuid::Uuid::new_v4().to_string();
 
         // Store the indexing manager
         {
             let mut manager_guard = self.indexing_manager.lock().await;
-            *manager_guard = Some(indexing_manager);
+            *manager_guard = Some(indexing_manager.clone());
         }
 
         // Start indexing in background
@@ -4685,8 +4861,11 @@ impl LspDaemon {
             );
 
             // Get the indexing manager and start indexing
-            let manager_guard = indexing_manager_clone.lock().await;
-            if let Some(manager) = manager_guard.as_ref() {
+            let manager_opt = {
+                let guard = indexing_manager_clone.lock().await;
+                guard.clone()
+            };
+            if let Some(manager) = manager_opt {
                 info!(
                     "Starting file discovery and indexing for workspace: {:?}",
                     workspace_root_clone
@@ -4724,12 +4903,22 @@ impl LspDaemon {
     }
 
     async fn handle_stop_indexing(&self, force: bool) -> Result<bool> {
-        let mut manager_guard = self.indexing_manager.lock().await;
-        if let Some(manager) = manager_guard.as_ref() {
+        let manager_opt = {
+            let guard = self.indexing_manager.lock().await;
+            guard.clone()
+        };
+        if let Some(manager) = manager_opt {
             manager.stop_indexing().await?;
             // Always clear the manager when stopping, regardless of force flag
             // This allows starting a new indexing session
-            *manager_guard = None;
+            let mut guard = self.indexing_manager.lock().await;
+            if guard
+                .as_ref()
+                .map(|existing| Arc::ptr_eq(existing, &manager))
+                .unwrap_or(false)
+            {
+                *guard = None;
+            }
             info!("Stopped indexing (force: {})", force);
             Ok(true)
         } else {
@@ -4738,12 +4927,33 @@ impl LspDaemon {
     }
 
     async fn handle_indexing_status(&self) -> Result<crate::protocol::IndexingStatusInfo> {
-        use crate::protocol::{IndexingProgressInfo, IndexingQueueInfo};
+        use crate::protocol::{IndexingProgressInfo, IndexingQueueInfo, IndexingWorkerInfo};
 
-        let manager_guard = self.indexing_manager.lock().await;
-        if let Some(manager) = manager_guard.as_ref() {
+        let manager_opt = {
+            let guard = self.indexing_manager.lock().await;
+            guard.clone()
+        };
+        if let Some(manager) = manager_opt {
             let status = manager.get_status().await;
             let progress = manager.get_progress().await;
+            let queue_snapshot = manager.get_queue_snapshot().await;
+            let worker_stats = manager.get_worker_stats().await;
+
+            let queue_info = Self::queue_info_from_snapshot(&queue_snapshot);
+
+            let workers: Vec<IndexingWorkerInfo> = worker_stats
+                .into_iter()
+                .map(|worker| IndexingWorkerInfo {
+                    worker_id: worker.worker_id,
+                    is_active: worker.is_active,
+                    current_file: worker.current_file,
+                    files_processed: worker.files_processed,
+                    bytes_processed: worker.bytes_processed,
+                    symbols_extracted: worker.symbols_extracted,
+                    errors_encountered: worker.errors_encountered,
+                    last_activity: worker.last_activity,
+                })
+                .collect();
 
             let status_info = crate::protocol::IndexingStatusInfo {
                 manager_status: format!("{status:?}"),
@@ -4773,16 +4983,8 @@ impl LspDaemon {
                         0.0
                     },
                 },
-                queue: IndexingQueueInfo {
-                    total_items: 0,   // TODO: Get from queue
-                    pending_items: 0, // TODO: Get from queue
-                    high_priority_items: 0,
-                    medium_priority_items: 0,
-                    low_priority_items: 0,
-                    is_paused: false,
-                    memory_pressure: false,
-                },
-                workers: vec![], // TODO: Get worker info
+                queue: queue_info,
+                workers,
                 session_id: Some("current".to_string()),
                 started_at: Some(
                     std::time::SystemTime::now()
@@ -4833,6 +5035,24 @@ impl LspDaemon {
             };
 
             Ok(status_info)
+        }
+    }
+
+    /// Convert the internal queue snapshot into the protocol shape consumed by the CLI.
+    fn queue_info_from_snapshot(snapshot: &crate::indexing::QueueSnapshot) -> IndexingQueueInfo {
+        const MEMORY_PRESSURE_THRESHOLD: f64 = 0.8;
+
+        let high_priority_items = snapshot.high_priority_items + snapshot.critical_priority_items;
+
+        IndexingQueueInfo {
+            total_items: snapshot.total_items,
+            pending_items: snapshot.total_items,
+            high_priority_items,
+            medium_priority_items: snapshot.medium_priority_items,
+            low_priority_items: snapshot.low_priority_items,
+            is_paused: snapshot.is_paused,
+            memory_pressure: snapshot.utilization_ratio >= MEMORY_PRESSURE_THRESHOLD
+                && snapshot.total_items > 0,
         }
     }
 
@@ -6016,6 +6236,56 @@ pub async fn start_daemon_background() -> Result<()> {
 
     info!("Started daemon in background");
     Ok(())
+}
+
+#[cfg(test)]
+mod queue_conversion_tests {
+    use super::LspDaemon;
+    use crate::indexing::QueueSnapshot;
+
+    #[test]
+    fn queue_snapshot_conversion_merges_critical_into_high() {
+        let snapshot = QueueSnapshot {
+            total_items: 5,
+            critical_priority_items: 2,
+            high_priority_items: 1,
+            medium_priority_items: 1,
+            low_priority_items: 1,
+            estimated_total_bytes: 0,
+            is_paused: false,
+            utilization_ratio: 0.5,
+        };
+
+        let info = LspDaemon::queue_info_from_snapshot(&snapshot);
+
+        assert_eq!(info.total_items, 5);
+        assert_eq!(info.pending_items, 5);
+        assert_eq!(info.high_priority_items, 3);
+        assert_eq!(info.medium_priority_items, 1);
+        assert_eq!(info.low_priority_items, 1);
+        assert!(!info.memory_pressure);
+        assert!(!info.is_paused);
+    }
+
+    #[test]
+    fn queue_snapshot_conversion_flags_memory_pressure_when_utilized() {
+        let snapshot = QueueSnapshot {
+            total_items: 10,
+            critical_priority_items: 0,
+            high_priority_items: 7,
+            medium_priority_items: 2,
+            low_priority_items: 1,
+            estimated_total_bytes: 0,
+            is_paused: true,
+            utilization_ratio: 0.95,
+        };
+
+        let info = LspDaemon::queue_info_from_snapshot(&snapshot);
+
+        assert!(info.memory_pressure);
+        assert!(info.is_paused);
+        assert_eq!(info.high_priority_items, 7);
+    }
 }
 
 /// Check if a file path should be excluded from LSP processing

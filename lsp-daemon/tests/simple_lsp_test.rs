@@ -4,7 +4,7 @@ use lsp_daemon::{
     database::sqlite_backend::SQLiteBackend,
     database::{DatabaseBackend, DatabaseConfig},
     language_detector::Language,
-    lsp_registry::{LspRegistry, LspServerConfig},
+    lsp_registry::{LspRegistry, LspServerCapabilities, LspServerConfig},
     server_manager::SingleServerManager,
 };
 use std::sync::Arc;
@@ -70,6 +70,7 @@ async fn test_lsp_server_config() -> Result<()> {
         initialization_options: None,
         root_markers: vec!["Cargo.toml".to_string()],
         initialization_timeout_secs: 30,
+        capabilities: LspServerCapabilities::default(),
     };
 
     println!("✓ LSP server config created successfully");

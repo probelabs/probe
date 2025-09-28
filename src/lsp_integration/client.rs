@@ -1,12 +1,14 @@
 use anyhow::{anyhow, Result};
 use lsp_daemon::{
-    get_default_socket_path, protocol::InitializedWorkspace, remove_socket_file,
-    CallHierarchyResult, DaemonRequest, DaemonResponse, DaemonStatus, IpcStream, Language,
-    LanguageDetector, LanguageInfo, LogEntry, MessageCodec,
+    get_default_socket_path, pid_lock::is_process_running, protocol::InitializedWorkspace,
+    remove_socket_file, CallHierarchyResult, DaemonRequest, DaemonResponse, DaemonStatus,
+    IpcStream, Language, LanguageDetector, LanguageInfo, LogEntry, MessageCodec,
 };
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
@@ -149,6 +151,9 @@ impl LspClient {
             }
             Ok(Err(e)) => {
                 debug!("No LSP daemon running: {}", e);
+                if !self.config.auto_start {
+                    return Err(anyhow!("LSP daemon not available"));
+                }
                 // Try to start daemon in background but don't wait
                 let _ = start_embedded_daemon_background().await;
                 info!("LSP daemon starting in background, skipping LSP operations");
@@ -230,6 +235,10 @@ impl LspClient {
             Err(_) => {
                 debug!("Connection attempt timed out");
             }
+        }
+
+        if !self.config.auto_start {
+            return Err(anyhow!("LSP daemon is not running"));
         }
 
         // Auto-start daemon
@@ -1411,14 +1420,65 @@ async fn shutdown_existing_daemon() -> Result<()> {
     }
 }
 
-use std::fs::{File, OpenOptions};
-use std::io::Write;
-use std::time::Instant;
-
 /// Wrapper for client startup lock file that cleans up on drop
 struct ClientStartupLock {
     _file: File,
     path: String,
+}
+
+const CLIENT_LOCK_STALE_THRESHOLD: Duration = Duration::from_secs(30);
+
+fn read_pid_from_lock(lock_path: &str) -> Option<u32> {
+    std::fs::read_to_string(lock_path)
+        .ok()
+        .and_then(|contents| contents.trim().parse::<u32>().ok())
+}
+
+fn lock_file_age(lock_path: &str) -> Option<Duration> {
+    let metadata = std::fs::metadata(lock_path).ok()?;
+    let modified = metadata.modified().ok()?;
+    SystemTime::now().duration_since(modified).ok()
+}
+
+fn cleanup_stale_client_lock(lock_path: &str) -> Result<bool> {
+    let age = lock_file_age(lock_path);
+    let pid = read_pid_from_lock(lock_path);
+
+    if let Some(pid) = pid {
+        if is_process_running(pid) {
+            debug!(
+                "Client startup lock at {} currently held by running PID {}",
+                lock_path, pid
+            );
+            return Ok(false);
+        }
+
+        if age.map_or(true, |age| age > CLIENT_LOCK_STALE_THRESHOLD) {
+            debug!(
+                "Removing stale client startup lock at {} left by PID {}",
+                lock_path, pid
+            );
+            std::fs::remove_file(lock_path)?;
+            return Ok(true);
+        }
+
+        debug!(
+            "Client startup lock at {} has PID {} but is still recent, waiting",
+            lock_path, pid
+        );
+        return Ok(false);
+    }
+
+    if age.map_or(false, |age| age > CLIENT_LOCK_STALE_THRESHOLD) {
+        debug!(
+            "Removing stale client startup lock at {} with no PID information",
+            lock_path
+        );
+        std::fs::remove_file(lock_path)?;
+        return Ok(true);
+    }
+
+    Ok(false)
 }
 
 impl Drop for ClientStartupLock {
@@ -1507,7 +1567,7 @@ pub(crate) async fn start_embedded_daemon_background() -> Result<()> {
 /// Acquire a file-based lock for client startup coordination
 fn acquire_client_startup_lock() -> Result<ClientStartupLock> {
     let lock_path = get_client_lock_path();
-    let start_time = Instant::now();
+    let mut start_time = Instant::now();
     let max_wait = Duration::from_secs(10);
 
     loop {
@@ -1527,14 +1587,31 @@ fn acquire_client_startup_lock() -> Result<ClientStartupLock> {
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                // Another client is starting the daemon
+                if cleanup_stale_client_lock(&lock_path)? {
+                    // Stale lock removed, restart wait window and retry immediately
+                    start_time = Instant::now();
+                    continue;
+                }
+
                 if start_time.elapsed() > max_wait {
-                    // Clean up potentially stale lock
-                    let _ = std::fs::remove_file(&lock_path);
+                    if let Some(pid) = read_pid_from_lock(&lock_path) {
+                        return Err(anyhow!(
+                            "Timeout waiting for client startup lock held by PID {}",
+                            pid
+                        ));
+                    }
                     return Err(anyhow!("Timeout waiting for client startup lock"));
                 }
 
-                debug!("Another client is starting daemon, waiting...");
+                if let Some(pid) = read_pid_from_lock(&lock_path) {
+                    debug!(
+                        "Another client (PID {}) is starting the daemon, waiting...",
+                        pid
+                    );
+                } else {
+                    debug!("Another client is starting daemon, waiting...");
+                }
+
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => return Err(anyhow!("Failed to acquire client startup lock: {}", e)),
@@ -2190,363 +2267,10 @@ impl LspClient {
         }
     }
 
-    /// Extract FQN using tree-sitter AST parsing
+    /// Extract FQN using centralized daemon logic
     fn get_fqn_from_ast(file_path: &Path, line: u32, column: u32) -> Result<String> {
-        use crate::language::parser_pool::{get_pooled_parser, return_pooled_parser};
-        use std::fs;
-
-        // Read file content
-        let content = fs::read_to_string(file_path)?;
-        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        // Acquire a parser for this file type from the pool
-        let mut parser = get_pooled_parser(extension)?;
-
-        // Parse the file
-        let tree = parser
-            .parse(content.as_bytes(), None)
-            .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
-
-        // Return the parser to the pool as soon as possible
-        return_pooled_parser(extension, parser);
-
-        // Find node at the specified position
-        let root = tree.root_node();
-        let point = tree_sitter::Point::new(line as usize, column as usize);
-        let node = Self::find_node_at_point(root, point)?;
-
-        // Build FQN by traversing up the AST
-        let mut fqn = Self::build_fqn_from_node(node, content.as_bytes(), extension)?;
-
-        // Prepend the path-based package/module information
-        if let Some(path_prefix) = Self::get_path_based_prefix(file_path, extension) {
-            if !path_prefix.is_empty() {
-                if fqn.is_empty() {
-                    fqn = path_prefix;
-                } else {
-                    fqn = format!("{}::{}", path_prefix, fqn);
-                }
-            }
-        }
-
-        Ok(fqn)
-    }
-
-    /// Find the most specific node at the given point
-    fn find_node_at_point<'a>(
-        node: tree_sitter::Node<'a>,
-        point: tree_sitter::Point,
-    ) -> Result<tree_sitter::Node<'a>> {
-        let mut current = node;
-
-        // Traverse down to find the most specific node containing the point
-        loop {
-            let mut found_child = false;
-
-            // Walk children with a temporary cursor to avoid borrow issues
-            let mut tmp_cursor = current.walk();
-            let mut selected_child: Option<tree_sitter::Node<'a>> = None;
-            for child in current.children(&mut tmp_cursor) {
-                let start = child.start_position();
-                let end = child.end_position();
-
-                // Check if point is within this child's range
-                if (start.row < point.row
-                    || (start.row == point.row && start.column <= point.column))
-                    && (end.row > point.row || (end.row == point.row && end.column >= point.column))
-                {
-                    selected_child = Some(child);
-                    found_child = true;
-                    break;
-                }
-            }
-
-            if let Some(child) = selected_child {
-                current = child;
-            }
-
-            if !found_child {
-                break;
-            }
-        }
-
-        Ok(current)
-    }
-
-    /// Build FQN by traversing up the AST and collecting namespace/class/module names
-    fn build_fqn_from_node(
-        node: tree_sitter::Node,
-        content: &[u8],
-        extension: &str,
-    ) -> Result<String> {
-        let mut components = Vec::new();
-        let mut current_node = Some(node);
-        let mut method_name_added = false;
-
-        // Detect the language-specific separator
-        let separator = Self::get_language_separator(extension);
-
-        // Traverse up from the current node
-        while let Some(node) = current_node {
-            // Check if this is a method node
-            if Self::is_method_node(&node, extension) && !method_name_added {
-                // For methods, we want: StructName.MethodName
-                // So collect method name first (will be reversed later)
-                if let Some(method_name) = Self::extract_node_name(node, content) {
-                    components.push(method_name);
-                    method_name_added = true;
-                }
-                if let Some(receiver_type) =
-                    Self::extract_method_receiver(&node, content, extension)
-                {
-                    components.push(receiver_type);
-                }
-            }
-            // Check if this node represents a namespace/module/class/struct
-            else if Self::is_namespace_node(&node, extension) {
-                if let Some(name) = Self::extract_node_name(node, content) {
-                    components.push(name);
-                }
-            }
-            // If we haven't added any name yet and this is the initial node
-            else if components.is_empty() && current_node == Some(node) {
-                // Get the name of the current node if it's a named entity
-                if let Some(name) = Self::extract_node_name(node, content) {
-                    components.push(name);
-                }
-            }
-
-            current_node = node.parent();
-        }
-
-        // Reverse to get top-down order and join with separator
-        components.reverse();
-        Ok(components.join(separator))
-    }
-
-    /// Check if a node represents a method/function
-    fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
-        let kind = node.kind();
-        match extension {
-            "rs" => kind == "function_item" || kind == "impl_item",
-            "go" => kind == "method_declaration",
-            "py" => kind == "function_definition",
-            "js" | "ts" | "tsx" => kind == "method_definition" || kind == "function_declaration",
-            "java" => kind == "method_declaration",
-            "cpp" | "cc" | "cxx" | "hpp" => kind == "function_definition",
-            "cs" => kind == "method_declaration",
-            "rb" => kind == "method",
-            "php" => kind == "method_declaration",
-            _ => false,
-        }
-    }
-
-    /// Extract the receiver type from a method node
-    fn extract_method_receiver(
-        node: &tree_sitter::Node,
-        content: &[u8],
-        extension: &str,
-    ) -> Option<String> {
-        match extension {
-            "go" => {
-                // For Go, look for the receiver parameter
-                if let Some(receiver) = node.child_by_field_name("receiver") {
-                    let mut cursor = receiver.walk();
-                    for child in receiver.children(&mut cursor) {
-                        if child.kind() == "parameter_declaration" {
-                            if let Some(type_node) = child.child_by_field_name("type") {
-                                // Handle pointer types like *BusinessLogic
-                                let mut type_cursor = type_node.walk();
-                                for type_child in type_node.children(&mut type_cursor) {
-                                    if type_child.kind() == "type_identifier" {
-                                        return type_child
-                                            .utf8_text(content)
-                                            .ok()
-                                            .map(|s| s.to_string());
-                                    } else if type_child.kind() == "pointer_type" {
-                                        if let Some(pointee) =
-                                            type_child.child_by_field_name("type")
-                                        {
-                                            return pointee
-                                                .utf8_text(content)
-                                                .ok()
-                                                .map(|s| s.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                None
-            }
-            "rs" => {
-                // For Rust, if we're in an impl block, get the type being implemented
-                if node.kind() == "impl_item" {
-                    if let Some(type_node) = node.child_by_field_name("type") {
-                        return type_node.utf8_text(content).ok().map(|s| s.to_string());
-                    }
-                }
-                None
-            }
-            _ => None, // For other languages, the parent class/struct should be caught by is_namespace_node
-        }
-    }
-
-    /// Get the namespace separator (using :: universally)
-    fn get_language_separator(_extension: &str) -> &'static str {
-        "::"
-    }
-
-    /// Get path-based package/module prefix based on file location
-    fn get_path_based_prefix(file_path: &Path, _extension: &str) -> Option<String> {
-        // Try to find the workspace root (where we typically have Cargo.toml, package.json, go.mod, etc.)
-        let workspace_root = Self::find_workspace_root(file_path)?;
-
-        // Get the path relative to workspace root
-        let relative_path = file_path.strip_prefix(&workspace_root).ok()?;
-
-        // Convert the path components into a module/package hierarchy
-        let mut components = Vec::new();
-
-        for component in relative_path.parent()?.components() {
-            if let std::path::Component::Normal(name) = component {
-                if let Some(name_str) = name.to_str() {
-                    // Skip common directory names that don't contribute to package structure
-                    if !matches!(
-                        name_str,
-                        "src"
-                            | "lib"
-                            | "test"
-                            | "tests"
-                            | "examples"
-                            | "benches"
-                            | "target"
-                            | "dist"
-                            | "build"
-                            | "out"
-                    ) {
-                        // Convert to snake_case for consistency
-                        let normalized =
-                            name_str.replace('-', "_").replace(' ', "_").to_lowercase();
-                        components.push(normalized);
-                    }
-                }
-            }
-        }
-
-        if components.is_empty() {
-            None
-        } else {
-            Some(components.join("::"))
-        }
-    }
-
-    /// Find the workspace root by looking for common project markers
-    fn find_workspace_root(file_path: &Path) -> Option<std::path::PathBuf> {
-        let markers = vec![
-            "Cargo.toml",
-            "package.json",
-            "go.mod",
-            "pyproject.toml",
-            "setup.py",
-            "pom.xml",
-            "build.gradle",
-            ".git",
-        ];
-
-        let mut current = file_path.parent()?;
-
-        while current.parent().is_some() {
-            for marker in &markers {
-                if current.join(marker).exists() {
-                    return Some(current.to_path_buf());
-                }
-            }
-            current = current.parent()?;
-        }
-
-        None
-    }
-
-    /// Check if a node represents a namespace/module/class
-    fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
-        let kind = node.kind();
-        match extension {
-            "rs" => matches!(
-                kind,
-                "mod_item" | "impl_item" | "struct_item" | "enum_item" | "trait_item"
-            ),
-            "go" => matches!(kind, "type_declaration" | "method_declaration"),
-            "py" => matches!(kind, "class_definition" | "function_definition"),
-            "js" | "ts" | "tsx" => matches!(
-                kind,
-                "class_declaration" | "namespace_declaration" | "object"
-            ),
-            "java" => matches!(
-                kind,
-                "class_declaration" | "interface_declaration" | "enum_declaration"
-            ),
-            "cpp" | "cc" | "cxx" | "hpp" => matches!(
-                kind,
-                "namespace_definition" | "class_specifier" | "struct_specifier"
-            ),
-            "cs" => matches!(
-                kind,
-                "namespace_declaration" | "class_declaration" | "interface_declaration"
-            ),
-            "rb" => matches!(kind, "module" | "class"),
-            "php" => matches!(kind, "namespace_definition" | "class_declaration"),
-            _ => false,
-        }
-    }
-
-    /// Extract the name from a tree-sitter node
-    fn extract_node_name(node: tree_sitter::Node, content: &[u8]) -> Option<String> {
-        // Try to find an identifier or name child node
-        let mut cursor = node.walk();
-
-        // First try field-based name lookup
-        if let Some(name_node) = node.child_by_field_name("name") {
-            return name_node.utf8_text(content).ok().map(|s| s.to_string());
-        }
-
-        // Look for common identifier node types
-        for child in node.children(&mut cursor) {
-            match child.kind() {
-                "identifier"
-                | "field_identifier"
-                | "type_identifier"
-                | "property_identifier"
-                | "constant"
-                | "string" => {
-                    if let Ok(text) = child.utf8_text(content) {
-                        // Skip keywords and operators
-                        if !matches!(
-                            text,
-                            "pub"
-                                | "const"
-                                | "let"
-                                | "var"
-                                | "function"
-                                | "class"
-                                | "struct"
-                                | "enum"
-                                | "impl"
-                                | "mod"
-                                | "namespace"
-                                | "interface"
-                                | "trait"
-                        ) {
-                            return Some(text.to_string());
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        None
+        lsp_daemon::fqn::get_fqn_from_ast(file_path, line, column, None)
+            .map_err(|e| anyhow::anyhow!("FQN extraction failed: {}", e))
     }
 
     /// Send cache list keys request

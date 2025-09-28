@@ -168,6 +168,7 @@ async fn main() -> Result<()> {
         workspace_hint: None,
         timeout_ms: args.timeout * 1000,
         include_stdlib: false,
+        auto_start: true,
     };
 
     let mut lsp_client = match LspClient::new(config).await {

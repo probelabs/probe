@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "lsp-daemon", "examples/lsp-client", "test_project/test_project", "lsp-test-project"]
+members = [".", "lsp-daemon", "examples/lsp-client", "test_project/test_project", "lsp-test-project", "examples/reranker", "examples/reranker/rust_bert_test"]
 resolver = "2"
 
 [package]

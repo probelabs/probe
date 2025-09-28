@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -29,49 +29,107 @@ pub trait IpcStreamTrait: AsyncRead + AsyncWrite + Send + Sync + Unpin {
 #[cfg(unix)]
 mod unix_impl {
     use super::*;
-    use fs2::FileExt;
-    use std::fs::{File, OpenOptions};
+    use crate::socket_path;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    use socket2::{Domain, Socket, Type};
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    use std::io;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    use std::mem::{size_of, zeroed};
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
     use std::path::Path;
     use std::time::Duration;
     use tokio::net::{UnixListener as TokioUnixListener, UnixStream as TokioUnixStream};
 
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn create_abstract_addr(name: &[u8]) -> io::Result<(libc::sockaddr_un, libc::socklen_t)> {
+        let mut addr: libc::sockaddr_un = unsafe { zeroed() };
+        addr.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        let max_len = addr.sun_path.len();
+        if name.len() + 1 > max_len {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "abstract socket name too long",
+            ));
+        }
+        addr.sun_path[0] = 0;
+        for (idx, byte) in name.iter().enumerate() {
+            addr.sun_path[idx + 1] = *byte as libc::c_char;
+        }
+
+        let len = (size_of::<libc::sa_family_t>() + 1 + name.len()) as libc::socklen_t;
+
+        Ok((addr, len))
+    }
+
     pub struct IpcListener {
         listener: TokioUnixListener,
         path: String,
-        _lock_file: Option<File>, // Keep lock file open to maintain the lock
     }
 
     impl IpcListener {
         pub async fn bind(path: &str) -> Result<Self> {
-            // Use a lock file to coordinate socket binding across multiple processes
-            let lock_path = format!("{path}.bind.lock");
-            let lock_file = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&lock_path)
-                .map_err(|e| anyhow::anyhow!("Failed to open socket bind lock file: {}", e))?;
-
-            // Acquire exclusive lock for the socket binding operation
-            lock_file.try_lock_exclusive().map_err(|_| {
-                anyhow::anyhow!("Another process is currently binding to socket {}", path)
-            })?;
-
-            // Now we have exclusive access to check and bind the socket
-            let result = Self::bind_internal(path, lock_file).await;
-
-            // The lock will be released when the lock_file is dropped (either on success or error)
-            result
+            Self::bind_internal(path).await
         }
 
-        async fn bind_internal(path: &str, lock_file: File) -> Result<Self> {
+        async fn bind_internal(path: &str) -> Result<Self> {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if let Some(name) = socket_path::unix_abstract_name(path) {
+                let (addr, len) = create_abstract_addr(&name)
+                    .map_err(|e| anyhow!("Failed to construct abstract socket address: {}", e))?;
+                let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
+                    .map_err(|e| anyhow!("Failed to create abstract socket: {}", e))?;
+                socket
+                    .set_cloexec(true)
+                    .map_err(|e| anyhow!("Failed to set CLOEXEC on abstract socket: {}", e))?;
+                let bind_result = unsafe {
+                    libc::bind(
+                        socket.as_raw_fd(),
+                        &addr as *const _ as *const libc::sockaddr,
+                        len,
+                    )
+                };
+                if bind_result != 0 {
+                    return Err(anyhow!(
+                        "Failed to bind abstract socket: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                if unsafe { libc::listen(socket.as_raw_fd(), 256) } != 0 {
+                    return Err(anyhow!(
+                        "Failed to listen on abstract socket: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                if unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } != 0
+                {
+                    return Err(anyhow!(
+                        "Failed to set nonblocking on abstract socket: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                let fd = socket.into_raw_fd();
+                let std_listener = unsafe { StdUnixListener::from_raw_fd(fd) };
+                let listener = TokioUnixListener::from_std(std_listener).map_err(|e| {
+                    anyhow!("Failed to integrate abstract listener with Tokio: {}", e)
+                })?;
+
+                return Ok(Self {
+                    listener,
+                    path: path.to_string(),
+                });
+            }
+
             // Check if socket file exists and if a daemon is listening
             if Path::new(path).exists() {
                 // Try to connect to see if a daemon is actually running
                 match TokioUnixStream::connect(path).await {
                     Ok(_) => {
                         // Another daemon is running on this socket
-                        return Err(anyhow::anyhow!(
+                        return Err(anyhow!(
                             "Socket {} is already in use by another daemon",
                             path
                         ));
@@ -100,13 +158,18 @@ mod unix_impl {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     TokioUnixListener::bind(path)?
                 }
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    return Err(anyhow!(
+                        "Permission denied binding UNIX socket at {}. This environment may restrict creating UNIX sockets; set PROBE_LSP_SOCKET_PATH to an allowed location or run outside the sandbox.",
+                        path
+                    ));
+                }
                 Err(e) => return Err(e.into()),
             };
 
             Ok(Self {
                 listener,
                 path: path.to_string(),
-                _lock_file: Some(lock_file), // Keep the lock file open
             })
         }
 
@@ -122,15 +185,10 @@ mod unix_impl {
 
     impl Drop for IpcListener {
         fn drop(&mut self) {
-            // Release the lock file first
-            if let Some(lock_file) = self._lock_file.take() {
-                let _ = FileExt::unlock(&lock_file);
-                drop(lock_file);
-                // Clean up the lock file
-                let lock_path = format!("{}.bind.lock", self.path);
-                let _ = std::fs::remove_file(&lock_path);
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if socket_path::unix_abstract_name(&self.path).is_some() {
+                return;
             }
-
             // Clean up socket file
             if let Err(e) = std::fs::remove_file(&self.path) {
                 // Only log at trace level since this is cleanup code and the file might not exist
@@ -147,6 +205,41 @@ mod unix_impl {
 
     impl IpcStream {
         pub async fn connect(path: &str) -> Result<Self> {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            if let Some(name) = socket_path::unix_abstract_name(path) {
+                let (addr, len) = create_abstract_addr(&name)
+                    .map_err(|e| anyhow!("Failed to construct abstract socket address: {}", e))?;
+                let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
+                    .map_err(|e| anyhow!("Failed to create abstract stream socket: {}", e))?;
+                socket.set_cloexec(true).map_err(|e| {
+                    anyhow!("Failed to set CLOEXEC on abstract stream socket: {}", e)
+                })?;
+                let connect_result = unsafe {
+                    libc::connect(
+                        socket.as_raw_fd(),
+                        &addr as *const _ as *const libc::sockaddr,
+                        len,
+                    )
+                };
+                if connect_result != 0 {
+                    let err = io::Error::last_os_error();
+                    return Err(anyhow!("Failed to connect to abstract socket: {}", err));
+                }
+                if unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } != 0
+                {
+                    return Err(anyhow!(
+                        "Failed to set nonblocking on abstract stream: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                let fd = socket.into_raw_fd();
+                let std_stream = unsafe { StdUnixStream::from_raw_fd(fd) };
+                let stream = TokioUnixStream::from_std(std_stream).map_err(|e| {
+                    anyhow!("Failed to integrate abstract stream with Tokio: {}", e)
+                })?;
+                return Ok(Self { stream });
+            }
+
             let stream = TokioUnixStream::connect(path).await?;
             Ok(Self { stream })
         }
@@ -320,7 +413,7 @@ mod windows_impl {
                     stream: IpcStreamInner::Server(server),
                 })
             } else {
-                Err(anyhow::anyhow!("No server available"))
+                Err(anyhow!("No server available"))
             }
         }
 

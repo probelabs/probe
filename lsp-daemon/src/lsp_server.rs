@@ -31,6 +31,12 @@ pub struct LspServer {
     opened_documents: Arc<Mutex<HashSet<PathBuf>>>,
     // Readiness tracking
     readiness_tracker: Arc<ReadinessTracker>,
+    // Capability support (defaults from config, updated after initialize)
+    supports_call_hierarchy: AtomicBool,
+    supports_references: AtomicBool,
+    supports_implementations: AtomicBool,
+    // Keep the raw advertised capabilities for debugging / future checks
+    advertised_capabilities: Arc<Mutex<Option<Value>>>,
 }
 
 impl std::fmt::Debug for LspServer {
@@ -276,6 +282,10 @@ impl LspServer {
             server_name: config.command.clone(),
             opened_documents: Arc::new(Mutex::new(HashSet::new())),
             readiness_tracker,
+            supports_call_hierarchy: AtomicBool::new(config.capabilities.call_hierarchy),
+            supports_references: AtomicBool::new(config.capabilities.references),
+            supports_implementations: AtomicBool::new(config.capabilities.implementations),
+            advertised_capabilities: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -368,6 +378,8 @@ impl LspServer {
         if response.get("error").is_some() {
             return Err(anyhow!("Initialize failed: {:?}", response["error"]));
         }
+
+        self.update_capabilities_from_response(&response).await;
 
         // Send initialized notification
         debug!("Sending initialized notification...");
@@ -493,6 +505,8 @@ impl LspServer {
             return Err(anyhow!("Initialize failed: {:?}", response["error"]));
         }
 
+        self.update_capabilities_from_response(&response).await;
+
         // Send initialized notification
         debug!("Sending initialized notification...");
         self.send_notification("initialized", json!({})).await?;
@@ -564,7 +578,10 @@ impl LspServer {
                     cargo_toml_path
                 );
             } else {
-                warn!("No Cargo.toml found in {:?}, rust-analyzer may not recognize files as part of a crate", project_root);
+                warn!(
+                    "No Cargo.toml found in {:?}, rust-analyzer may not recognize files as part of a crate",
+                    project_root
+                );
             }
         }
 
@@ -644,6 +661,8 @@ impl LspServer {
             }
         }
 
+        self.update_capabilities_from_response(&response).await;
+
         // Send initialized notification
         debug!("Sending initialized notification...");
         self.send_notification("initialized", json!({})).await?;
@@ -663,7 +682,7 @@ impl LspServer {
         // This method monitors LSP server messages to determine when it's ready
         // Similar to the original implementation but adapted for async
 
-        eprintln!("[DEBUG] Starting wait_until_ready...");
+        debug!("[DEBUG] Starting wait_until_ready...");
         let start = Instant::now();
         let max_wait = Duration::from_secs(180); // Reduced to 3 minutes to detect stuck indexing faster
         let required_silence = Duration::from_secs(3); // Longer silence period
@@ -674,7 +693,7 @@ impl LspServer {
         let mut last_progress_time = Instant::now();
         let mut last_progress_percentage: Option<u32> = None;
 
-        eprintln!("[DEBUG] Starting message reading loop...");
+        debug!("[DEBUG] Starting message reading loop...");
         while start.elapsed() < max_wait {
             // Try to read a message with timeout
             match self.read_message_timeout(Duration::from_millis(100)).await {
@@ -690,7 +709,10 @@ impl LspServer {
                                     .handle_custom_notification(method, params)
                                     .await
                                 {
-                                    warn!("Failed to handle custom notification {} in readiness tracker: {}", method, e);
+                                    warn!(
+                                        "Failed to handle custom notification {} in readiness tracker: {}",
+                                        method, e
+                                    );
                                 }
                             }
                         }
@@ -722,7 +744,10 @@ impl LspServer {
                                             value.get("kind").and_then(|k| k.as_str())
                                         {
                                             // Track progress for debugging
-                                            debug!("Progress notification - token: {}, kind: {}, value: {:?}", token, kind, value);
+                                            debug!(
+                                                "Progress notification - token: {}, kind: {}, value: {:?}",
+                                                token, kind, value
+                                            );
 
                                             // Check for end of work
                                             if kind == "end" {
@@ -797,13 +822,24 @@ impl LspServer {
                                                     if last_progress_time.elapsed()
                                                         > progress_stall_timeout
                                                     {
-                                                        debug!("Indexing appears to be stalled at {}% for {:?}", percentage, last_progress_time.elapsed());
+                                                        debug!(
+                                                            "Indexing appears to be stalled at {}% for {:?}",
+                                                            percentage,
+                                                            last_progress_time.elapsed()
+                                                        );
                                                         if percentage >= 80 {
                                                             // If we're at 80%+ and stalled, consider it "good enough"
-                                                            debug!("Proceeding with partial indexing ({}%)", percentage);
+                                                            debug!(
+                                                                "Proceeding with partial indexing ({}%)",
+                                                                percentage
+                                                            );
                                                             cache_priming_completed = true;
                                                         } else {
-                                                            return Err(anyhow!("rust-analyzer indexing stalled at {}% for {:?}", percentage, last_progress_time.elapsed()));
+                                                            return Err(anyhow!(
+                                                                "rust-analyzer indexing stalled at {}% for {:?}",
+                                                                percentage,
+                                                                last_progress_time.elapsed()
+                                                            ));
                                                         }
                                                     }
                                                 }
@@ -836,7 +872,10 @@ impl LspServer {
                                     if let Err(e) =
                                         self.readiness_tracker.handle_progress_create(params).await
                                     {
-                                        warn!("Failed to handle progress create in readiness tracker: {}", e);
+                                        warn!(
+                                            "Failed to handle progress create in readiness tracker: {}",
+                                            e
+                                        );
                                     }
                                 }
 
@@ -1104,7 +1143,10 @@ impl LspServer {
                                         .handle_custom_notification(method, params)
                                         .await
                                     {
-                                        warn!("Failed to handle custom notification {} in readiness tracker: {}", method, e);
+                                        warn!(
+                                            "Failed to handle custom notification {} in readiness tracker: {}",
+                                            method, e
+                                        );
                                     }
                                 }
                             }
@@ -1114,14 +1156,20 @@ impl LspServer {
                         // This is a request FROM the server (has both id and method)
                         if method == "window/workDoneProgress/create" {
                             if let Some(server_request_id) = msg_id {
-                                debug!("Received window/workDoneProgress/create request from server with id: {}", server_request_id);
+                                debug!(
+                                    "Received window/workDoneProgress/create request from server with id: {}",
+                                    server_request_id
+                                );
 
                                 // Handle with readiness tracker
                                 if let Some(params) = msg.get("params") {
                                     if let Err(e) =
                                         self.readiness_tracker.handle_progress_create(params).await
                                     {
-                                        warn!("Failed to handle progress create in readiness tracker: {}", e);
+                                        warn!(
+                                            "Failed to handle progress create in readiness tracker: {}",
+                                            e
+                                        );
                                     }
                                 }
 
@@ -1141,7 +1189,10 @@ impl LspServer {
                         // Handle workspace/configuration requests (critical for gopls)
                         if method == "workspace/configuration" {
                             if let Some(server_request_id) = msg_id {
-                                debug!("Received workspace/configuration request from server with id: {}", server_request_id);
+                                debug!(
+                                    "Received workspace/configuration request from server with id: {}",
+                                    server_request_id
+                                );
 
                                 // Return empty configurations to let gopls use its defaults.
                                 // This matches how the VS Code Go extension behaves and avoids
@@ -1495,6 +1546,14 @@ impl LspServer {
         debug!(target: "lsp_call_hierarchy", "Starting call hierarchy for {:?} at {}:{}", 
             file_path, line, column);
 
+        if !self.supports_call_hierarchy() {
+            debug!(
+                "Skipping call hierarchy request for {:?}:{},{} — server does not advertise support",
+                file_path, line, column
+            );
+            return Err(anyhow!("Call hierarchy not supported by server"));
+        }
+
         // For gopls, ensure document is open and ready
         if self.is_gopls() {
             self.ensure_document_ready(file_path).await?;
@@ -1754,6 +1813,14 @@ impl LspServer {
         column: u32,
         include_declaration: bool,
     ) -> Result<Value> {
+        if !self.supports_references() {
+            debug!(
+                "Skipping references request for {:?}:{},{} — server does not advertise support",
+                file_path, line, column
+            );
+            return Err(anyhow!("References not supported by server"));
+        }
+
         let canon = Self::canonicalize_for_uri(file_path);
         let uri = Url::from_file_path(&canon)
             .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
@@ -1872,10 +1939,11 @@ impl LspServer {
             // This indicates the language server doesn't support call hierarchy
             if let Some(code) = error.get("code") {
                 if code == -32601 {
-                    debug!("Language server doesn't support call hierarchy, falling back to references");
-                    return self
-                        .call_hierarchy_from_references(file_path, line, column)
-                        .await;
+                    warn!(
+                        "Language server does not support call hierarchy (method not found). Disabling feature for this session."
+                    );
+                    self.mark_call_hierarchy_unsupported();
+                    return Err(anyhow!("Call hierarchy not supported by language server"));
                 }
             }
             return Err(anyhow!("Call hierarchy prepare failed: {:?}", error));
@@ -2256,7 +2324,9 @@ impl LspServer {
                 Value::Object(map) => {
                     for (key, val) in map.iter_mut() {
                         if key == "failureHandling" && val.as_str() == Some("static") {
-                            warn!("Found phpactor's non-standard 'static' value in failureHandling, converting to 'abort'");
+                            warn!(
+                                "Found phpactor's non-standard 'static' value in failureHandling, converting to 'abort'"
+                            );
                             *val = Value::String("abort".to_string());
                         } else {
                             fix_failure_handling(val);
@@ -2289,59 +2359,154 @@ impl LspServer {
         debug!("Phpactor capabilities normalization completed");
     }
 
-    /// Fallback method to simulate call hierarchy using textDocument/references
-    /// This is used when the language server doesn't support call hierarchy
-    async fn call_hierarchy_from_references(
-        &self,
+    async fn update_capabilities_from_response(&self, response: &Value) {
+        if let Some(result) = response.get("result") {
+            if let Some(capabilities) = result.get("capabilities") {
+                {
+                    let mut guard = self.advertised_capabilities.lock().await;
+                    *guard = Some(capabilities.clone());
+                }
+
+                let call_supported =
+                    Self::capability_flag(capabilities.get("callHierarchyProvider"));
+                let references_supported =
+                    Self::capability_flag(capabilities.get("referencesProvider"));
+                let implementations_supported =
+                    Self::capability_flag(capabilities.get("implementationProvider"));
+
+                self.supports_call_hierarchy
+                    .store(call_supported, Ordering::Relaxed);
+                self.supports_references
+                    .store(references_supported, Ordering::Relaxed);
+                self.supports_implementations
+                    .store(implementations_supported, Ordering::Relaxed);
+
+                info!(
+                    "Server capabilities updated: call_hierarchy={}, references={}, implementations={}",
+                    call_supported, references_supported, implementations_supported
+                );
+            }
+        }
+    }
+
+    fn capability_flag(value: Option<&Value>) -> bool {
+        match value {
+            Some(Value::Bool(b)) => *b,
+            Some(Value::Object(obj)) => !obj.is_empty(),
+            Some(Value::Null) => false,
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    pub fn supports_call_hierarchy(&self) -> bool {
+        self.supports_call_hierarchy.load(Ordering::Relaxed)
+    }
+
+    pub fn supports_references(&self) -> bool {
+        self.supports_references.load(Ordering::Relaxed)
+    }
+
+    pub fn supports_implementations(&self) -> bool {
+        self.supports_implementations.load(Ordering::Relaxed)
+    }
+
+    pub async fn advertised_capabilities(&self) -> Option<Value> {
+        self.advertised_capabilities.lock().await.clone()
+    }
+
+    fn mark_call_hierarchy_unsupported(&self) {
+        self.supports_call_hierarchy.store(false, Ordering::Relaxed);
+    }
+
+    #[allow(dead_code)]
+    async fn infer_symbol_at_position(
         file_path: &Path,
         line: u32,
         column: u32,
-    ) -> Result<Value> {
-        debug!(
-            "Simulating call hierarchy using references for {:?} at {}:{}",
-            file_path, line, column
-        );
+    ) -> Option<(String, u32, u32)> {
+        let content = tokio::fs::read_to_string(file_path).await.ok()?;
+        let target_line = content.lines().nth(line as usize)?;
 
-        // Get references to this symbol (these are the "incoming calls")
-        let references_result = self.references(file_path, line, column, false).await;
+        let chars: Vec<char> = target_line.chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
 
-        match references_result {
-            Ok(refs_value) => {
-                // Convert references response to call hierarchy format
-                let incoming_calls =
-                    if let Some(refs_array) = refs_value.get("result").and_then(|r| r.as_array()) {
-                        refs_array.iter().map(|ref_item| {
-                        json!({
-                            "from": {
-                                "name": "reference", // We don't have the actual symbol name from references
-                                "kind": 12, // Function kind as default
-                                "uri": ref_item.get("uri").unwrap_or(&json!("")),
-                                "range": ref_item.get("range").unwrap_or(&json!({})),
-                                "selectionRange": ref_item.get("range").unwrap_or(&json!({}))
-                            },
-                            "fromRanges": [ref_item.get("range").unwrap_or(&json!({}))]
-                        })
-                    }).collect::<Vec<_>>()
-                    } else {
-                        vec![]
-                    };
+        let mut idx = column as usize;
+        if idx >= chars.len() {
+            idx = chars.len().saturating_sub(1);
+        }
 
-                // For outgoing calls, we would need definition + references, which is complex
-                // For now, return empty outgoing calls since references mainly give us incoming calls
-                Ok(json!({
-                    "incoming": incoming_calls,
-                    "outgoing": []
-                }))
-            }
-            Err(e) => {
-                debug!("References fallback also failed: {}", e);
-                // Return empty result rather than error to avoid completely failing
-                Ok(json!({
-                    "incoming": [],
-                    "outgoing": []
-                }))
+        if !Self::is_identifier_char(chars.get(idx).copied().unwrap_or(' ')) {
+            if idx > 0 && Self::is_identifier_char(chars[idx - 1]) {
+                idx -= 1;
+            } else if idx + 1 < chars.len() && Self::is_identifier_char(chars[idx + 1]) {
+                idx += 1;
+            } else {
+                return None;
             }
         }
+
+        let mut start = idx;
+        while start > 0 && Self::is_identifier_char(chars[start - 1]) {
+            start -= 1;
+        }
+
+        let mut end = idx + 1;
+        while end < chars.len() && Self::is_identifier_char(chars[end]) {
+            end += 1;
+        }
+
+        if start >= end {
+            return None;
+        }
+
+        let mut name: String = chars[start..end].iter().collect();
+        if name.is_empty() {
+            return None;
+        }
+
+        if Self::is_language_keyword(&name) {
+            let mut scan = end;
+            while scan < chars.len() && !Self::is_identifier_char(chars[scan]) {
+                scan += 1;
+            }
+            if scan < chars.len() {
+                let mut keyword_end = scan;
+                while keyword_end < chars.len() && Self::is_identifier_char(chars[keyword_end]) {
+                    keyword_end += 1;
+                }
+                if keyword_end > scan {
+                    name = chars[scan..keyword_end].iter().collect();
+                    start = scan;
+                    end = keyword_end;
+                }
+            }
+        }
+
+        Some((name, start as u32, end as u32))
+    }
+
+    #[allow(dead_code)]
+    fn is_identifier_char(c: char) -> bool {
+        c == '_' || c == '$' || c.is_ascii_alphanumeric()
+    }
+
+    fn is_language_keyword(name: &str) -> bool {
+        matches!(
+            name,
+            "fn" | "function"
+                | "struct"
+                | "class"
+                | "impl"
+                | "enum"
+                | "interface"
+                | "trait"
+                | "def"
+                | "lambda"
+                | "async"
+        )
     }
 }
 
@@ -2408,6 +2573,8 @@ impl Drop for LspServer {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use tempfile::NamedTempFile;
+    use tokio::fs;
     use tokio::io::BufReader;
 
     #[tokio::test]
@@ -2607,5 +2774,52 @@ mod tests {
         assert_eq!(msg["jsonrpc"], "2.0");
         assert_eq!(msg["id"], 1);
         assert_eq!(msg["result"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_infer_symbol_at_position_extracts_identifier() {
+        let temp = NamedTempFile::new().unwrap();
+        fs::write(temp.path(), "fn greet_user() {}\n")
+            .await
+            .unwrap();
+
+        let (name, start, end) = LspServer::infer_symbol_at_position(temp.path(), 0, 5)
+            .await
+            .expect("should locate identifier");
+
+        assert_eq!(name, "greet_user");
+        assert_eq!(start, 3);
+        assert_eq!(end, 13);
+    }
+
+    #[tokio::test]
+    async fn test_infer_symbol_at_position_handles_offset_after_symbol() {
+        let temp = NamedTempFile::new().unwrap();
+        fs::write(temp.path(), "let value = compute();\n")
+            .await
+            .unwrap();
+
+        let result = LspServer::infer_symbol_at_position(temp.path(), 0, 14).await;
+        let (name, start, end) = result.expect("should snap back to identifier");
+
+        assert_eq!(name, "compute");
+        assert_eq!(start, 12);
+        assert_eq!(end, 19);
+    }
+
+    #[tokio::test]
+    async fn test_infer_symbol_at_position_skips_keywords() {
+        let temp = NamedTempFile::new().unwrap();
+        fs::write(temp.path(), "struct CLanguage {}\n")
+            .await
+            .unwrap();
+
+        let (name, start, end) = LspServer::infer_symbol_at_position(temp.path(), 0, 4)
+            .await
+            .expect("should move to identifier after keyword");
+
+        assert_eq!(name, "CLanguage");
+        assert_eq!(start, 7);
+        assert_eq!(end, 16);
     }
 }

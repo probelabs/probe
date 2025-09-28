@@ -897,8 +897,21 @@ impl AstSymbolExtractor {
             .generate_uid(&symbol_info, &context)
             .unwrap_or_else(|_| format!("{}:{}:{}", name, start_point.row, start_point.column));
 
-        // Create the symbol
-        let symbol = ExtractedSymbol::new(uid, name.clone(), symbol_kind, location);
+        // Attempt to compute FQN using centralized implementation
+        let mut symbol = ExtractedSymbol::new(uid, name.clone(), symbol_kind, location);
+        if let Ok(content_str) = std::str::from_utf8(content) {
+            if let Ok(fqn) = crate::fqn::get_fqn_from_ast_with_content(
+                file_path,
+                content_str,
+                start_point.row as u32,
+                start_point.column as u32,
+                Some(language.as_str()),
+            ) {
+                if !fqn.is_empty() {
+                    symbol.qualified_name = Some(fqn);
+                }
+            }
+        }
 
         Ok(Some(symbol))
     }

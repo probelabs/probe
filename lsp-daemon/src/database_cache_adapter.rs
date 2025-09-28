@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::SystemTime;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::database::{DatabaseBackend, DatabaseConfig, DatabaseTree, SQLiteBackend};
 
@@ -148,17 +148,17 @@ impl DatabaseCacheAdapter {
                 }
             };
 
-            eprintln!("🏗️ DATABASE_CACHE_ADAPTER: Creating workspace cache database for '{}' at path: {:?}", workspace_id, sqlite_config.path);
+            info!("🏗️ DATABASE_CACHE_ADAPTER: Creating workspace cache database for '{}' at path: {:?}", workspace_id, sqlite_config.path);
 
             let db = match SQLiteBackend::with_sqlite_config(database_config, sqlite_config).await {
                 Ok(backend) => {
-                    eprintln!("✅ DATABASE_CACHE_ADAPTER: Successfully created SQLite backend for workspace '{}'", workspace_id);
+                    info!("✅ DATABASE_CACHE_ADAPTER: Successfully created SQLite backend for workspace '{}'", workspace_id);
 
                     let backend_arc = Arc::new(backend);
 
                     // Start periodic checkpoint task (every 5 seconds)
                     let checkpoint_handle = backend_arc.clone().start_periodic_checkpoint(5);
-                    eprintln!("✅ DATABASE_CACHE_ADAPTER: Started periodic WAL checkpoint task (5s interval) for workspace '{}'", workspace_id);
+                    debug!("✅ DATABASE_CACHE_ADAPTER: Started periodic WAL checkpoint task (5s interval) for workspace '{}'", workspace_id);
 
                     // We don't need to keep the handle unless we want to cancel it later
                     // The task will run for the lifetime of the daemon
@@ -167,7 +167,7 @@ impl DatabaseCacheAdapter {
                     backend_arc
                 }
                 Err(e) => {
-                    eprintln!("❌ DATABASE_CACHE_ADAPTER: Failed to create SQLite backend for workspace '{}': {}", workspace_id, e);
+                    warn!("❌ DATABASE_CACHE_ADAPTER: Failed to create SQLite backend for workspace '{}': {}", workspace_id, e);
                     return Err(anyhow::anyhow!("Database error: {}", e).context(format!(
                         "Failed to create SQLite backend for workspace '{workspace_id}'. \
                                  Check database path permissions and disk space."
@@ -177,7 +177,7 @@ impl DatabaseCacheAdapter {
             BackendType::SQLite(db)
         };
 
-        eprintln!("✅ DATABASE_CACHE_ADAPTER: Successfully created DatabaseCacheAdapter for workspace '{}'", workspace_id);
+        info!("✅ DATABASE_CACHE_ADAPTER: Successfully created DatabaseCacheAdapter for workspace '{}'", workspace_id);
         Ok(Self { database })
     }
 
@@ -185,7 +185,7 @@ impl DatabaseCacheAdapter {
     /// Now queries structured tables instead of blob cache
     pub async fn get_universal_entry(&self, key: &str) -> Result<Option<Vec<u8>>> {
         debug!("Getting structured data for key: {}", key);
-        eprintln!(
+        info!(
             "🔍 DATABASE_CACHE_ADAPTER: get_universal_entry called for key: {} (structured query)",
             key
         );
@@ -216,7 +216,7 @@ impl DatabaseCacheAdapter {
             key,
             value.len()
         );
-        eprintln!("💾 DATABASE_CACHE_ADAPTER: set_universal_entry called for key: {} (size: {} bytes) (structured storage)", key, value.len());
+        info!("💾 DATABASE_CACHE_ADAPTER: set_universal_entry called for key: {} (size: {} bytes) (structured storage)", key, value.len());
 
         // Parse the key and deserialize the LSP response
         let parsed = self.parse_cache_key(key)?;
@@ -247,7 +247,7 @@ impl DatabaseCacheAdapter {
     /// Now removes from structured tables instead of blob cache
     pub async fn remove_universal_entry(&self, key: &str) -> Result<bool> {
         debug!("Removing structured data for key: {}", key);
-        eprintln!("🗑️ DATABASE_CACHE_ADAPTER: remove_universal_entry called for key: {} (structured removal)", key);
+        info!("🗑️ DATABASE_CACHE_ADAPTER: remove_universal_entry called for key: {} (structured removal)", key);
 
         // Parse the key to understand what data to remove
         let parsed = match self.parse_cache_key(key) {
@@ -301,7 +301,7 @@ impl DatabaseCacheAdapter {
     /// Now clears structured tables instead of blob cache
     pub async fn clear(&self) -> Result<()> {
         debug!("Clearing all structured data in database");
-        eprintln!("🧹 DATABASE_CACHE_ADAPTER: Clearing all structured data");
+        info!("🧹 DATABASE_CACHE_ADAPTER: Clearing all structured data");
 
         // For now, clearing structured data is not implemented
         // This would require clearing symbol_state and edge tables
@@ -451,7 +451,7 @@ impl DatabaseCacheAdapter {
     /// Now queries structured tables instead of blob cache
     pub async fn get_by_file(&self, file_path: &Path) -> Result<Vec<CacheNode>> {
         debug!("Getting structured data for file: {}", file_path.display());
-        eprintln!(
+        info!(
             "🔍 DATABASE_CACHE_ADAPTER: get_by_file called for file: {} (structured query)",
             file_path.display()
         );
@@ -479,7 +479,7 @@ impl DatabaseCacheAdapter {
     /// Now operates on structured tables instead of blob cache
     pub async fn clear_universal_entries_by_prefix(&self, prefix: &str) -> Result<u64> {
         debug!("Clearing structured data by prefix: {}", prefix);
-        eprintln!("🧹 DATABASE_CACHE_ADAPTER: clear_universal_entries_by_prefix called for prefix: {} (structured clearing)", prefix);
+        info!("🧹 DATABASE_CACHE_ADAPTER: clear_universal_entries_by_prefix called for prefix: {} (structured clearing)", prefix);
 
         // For now, prefix-based clearing of structured data is not implemented
         // This would require analyzing the prefix to determine which symbols/edges to remove
@@ -496,9 +496,7 @@ impl DatabaseCacheAdapter {
     /// Now queries structured tables instead of blob cache
     pub async fn iter_universal_entries(&self) -> Result<Vec<(String, Vec<u8>)>> {
         debug!("Iterating over structured data entries");
-        eprintln!(
-            "🔄 DATABASE_CACHE_ADAPTER: iter_universal_entries called (structured iteration)"
-        );
+        info!("🔄 DATABASE_CACHE_ADAPTER: iter_universal_entries called (structured iteration)");
 
         // For now, iteration over structured data is not implemented
         // This would require querying symbol_state and edge tables,
@@ -513,7 +511,7 @@ impl DatabaseCacheAdapter {
     /// Now queries structured tables instead of blob cache
     pub async fn iter_nodes(&self) -> Result<Vec<CacheNode>> {
         debug!("Iterating over structured data nodes");
-        eprintln!("🔄 DATABASE_CACHE_ADAPTER: iter_nodes called (structured iteration)");
+        info!("🔄 DATABASE_CACHE_ADAPTER: iter_nodes called (structured iteration)");
 
         // For now, node iteration over structured data is not implemented
         // This would require querying symbol_state and edge tables,
@@ -565,21 +563,21 @@ impl DatabaseCacheAdapter {
             Ok(tree) => {
                 match tree.get(key.as_bytes()).await {
                     Ok(Some(data)) => {
-                        eprintln!("DEBUG: Database cache HIT for key: {}", key);
+                        debug!("DEBUG: Database cache HIT for key: {}", key);
                         Ok(Some(data))
                     }
                     Ok(None) => {
-                        eprintln!("DEBUG: Database cache MISS for key: {}", key);
+                        debug!("DEBUG: Database cache MISS for key: {}", key);
                         Ok(None)
                     }
                     Err(e) => {
-                        eprintln!("DEBUG: Database cache lookup failed for key {}: {}", key, e);
+                        warn!("DEBUG: Database cache lookup failed for key {}: {}", key, e);
                         Ok(None) // Graceful fallback on error
                     }
                 }
             }
             Err(e) => {
-                eprintln!("DEBUG: Failed to open cache tree: {}", e);
+                warn!("DEBUG: Failed to open cache tree: {}", e);
                 Ok(None) // Graceful fallback on error
             }
         }
@@ -599,21 +597,21 @@ impl DatabaseCacheAdapter {
             Ok(tree) => {
                 match tree.get(key.as_bytes()).await {
                     Ok(Some(data)) => {
-                        eprintln!("🎯 DATABASE HIT for hover key: {}", key);
+                        debug!("🎯 DATABASE HIT for hover key: {}", key);
                         Ok(Some(data))
                     }
                     Ok(None) => {
-                        eprintln!("❌ DATABASE MISS for hover key: {}", key);
+                        debug!("❌ DATABASE MISS for hover key: {}", key);
                         Ok(None)
                     }
                     Err(e) => {
-                        eprintln!("❌ Database hover lookup failed for key {}: {}", key, e);
+                        warn!("❌ Database hover lookup failed for key {}: {}", key, e);
                         Ok(None) // Graceful fallback on error
                     }
                 }
             }
             Err(e) => {
-                eprintln!("❌ Failed to open cache tree for hover lookup: {}", e);
+                warn!("❌ Failed to open cache tree for hover lookup: {}", e);
                 Ok(None) // Graceful fallback on error
             }
         }
@@ -633,15 +631,15 @@ impl DatabaseCacheAdapter {
             Ok(tree) => {
                 match tree.get(key.as_bytes()).await {
                     Ok(Some(data)) => {
-                        eprintln!("🎯 DATABASE HIT for definition key: {}", key);
+                        debug!("🎯 DATABASE HIT for definition key: {}", key);
                         Ok(Some(data))
                     }
                     Ok(None) => {
-                        eprintln!("❌ DATABASE MISS for definition key: {}", key);
+                        debug!("❌ DATABASE MISS for definition key: {}", key);
                         Ok(None)
                     }
                     Err(e) => {
-                        eprintln!(
+                        warn!(
                             "❌ Database definition lookup failed for key {}: {}",
                             key, e
                         );
@@ -650,7 +648,7 @@ impl DatabaseCacheAdapter {
                 }
             }
             Err(e) => {
-                eprintln!("❌ Failed to open cache tree for definition lookup: {}", e);
+                warn!("❌ Failed to open cache tree for definition lookup: {}", e);
                 Ok(None) // Graceful fallback on error
             }
         }
@@ -675,7 +673,7 @@ impl DatabaseCacheAdapter {
             Ok(tree) => {
                 match tree.set(key.as_bytes(), &serialized_data).await {
                     Ok(_) => {
-                        eprintln!(
+                        debug!(
                             "DEBUG: Database cache STORED for key: {} ({} bytes)",
                             key,
                             serialized_data.len()
@@ -683,7 +681,7 @@ impl DatabaseCacheAdapter {
                         Ok(())
                     }
                     Err(e) => {
-                        eprintln!(
+                        warn!(
                             "DEBUG: Database cache storage failed for key {}: {}",
                             key, e
                         );
@@ -692,7 +690,7 @@ impl DatabaseCacheAdapter {
                 }
             }
             Err(e) => {
-                eprintln!("DEBUG: Failed to open cache tree for storage: {}", e);
+                warn!("DEBUG: Failed to open cache tree for storage: {}", e);
                 Ok(()) // Graceful fallback on error - don't fail the request
             }
         }
@@ -717,7 +715,7 @@ impl DatabaseCacheAdapter {
             Ok(tree) => {
                 match tree.set(key.as_bytes(), &serialized_data).await {
                     Ok(_) => {
-                        eprintln!(
+                        debug!(
                             "💾 DATABASE STORED for hover key: {} ({} bytes)",
                             key,
                             serialized_data.len()
@@ -725,13 +723,13 @@ impl DatabaseCacheAdapter {
                         Ok(())
                     }
                     Err(e) => {
-                        eprintln!("❌ Database hover storage failed for key {}: {}", key, e);
+                        warn!("❌ Database hover storage failed for key {}: {}", key, e);
                         Ok(()) // Graceful fallback on error - don't fail the request
                     }
                 }
             }
             Err(e) => {
-                eprintln!("❌ Failed to open cache tree for hover storage: {}", e);
+                warn!("❌ Failed to open cache tree for hover storage: {}", e);
                 Ok(()) // Graceful fallback on error - don't fail the request
             }
         }
@@ -756,7 +754,7 @@ impl DatabaseCacheAdapter {
             Ok(tree) => {
                 match tree.set(key.as_bytes(), &serialized_data).await {
                     Ok(_) => {
-                        eprintln!(
+                        debug!(
                             "💾 DATABASE STORED for definition key: {} ({} bytes)",
                             key,
                             serialized_data.len()
@@ -764,7 +762,7 @@ impl DatabaseCacheAdapter {
                         Ok(())
                     }
                     Err(e) => {
-                        eprintln!(
+                        warn!(
                             "❌ Database definition storage failed for key {}: {}",
                             key, e
                         );
@@ -773,7 +771,7 @@ impl DatabaseCacheAdapter {
                 }
             }
             Err(e) => {
-                eprintln!("❌ Failed to open cache tree for definition storage: {}", e);
+                warn!("❌ Failed to open cache tree for definition storage: {}", e);
                 Ok(()) // Graceful fallback on error - don't fail the request
             }
         }

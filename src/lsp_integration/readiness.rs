@@ -66,6 +66,7 @@ pub async fn check_lsp_readiness_for_file<P: AsRef<Path>>(
             .and_then(|p| p.to_str().map(|s| s.to_string())),
         timeout_ms: 5000, // Short timeout for readiness checks
         include_stdlib: false,
+        auto_start: config.auto_start_daemon,
     };
 
     // Try to connect to LSP daemon (auto-start if needed)

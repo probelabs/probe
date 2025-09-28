@@ -6,7 +6,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,9 +24,13 @@ use turso::{Builder, Connection, Database};
 use crate::database::{
     migrations::{all_migrations, MigrationRunner},
     AnalysisProgress, CallDirection, DatabaseBackend, DatabaseConfig, DatabaseError, DatabaseStats,
-    DatabaseTree, Edge, EdgeInterpretation, EdgeRelation, GraphPath, SymbolState, Workspace,
+    DatabaseTree, Edge, EdgeInterpretation, EdgeRelation, GraphPath, PendingEnrichmentCounts,
+    SymbolEnrichmentPlan, SymbolState, Workspace,
 };
 use crate::protocol::{CallHierarchyResult, Location};
+use crate::symbol::{is_absolute_like, normalize_uid_with_hint};
+use crate::workspace_utils;
+use pathdiff::diff_paths;
 
 /// Execute a turso query and map errors consistently (async, no blocking)
 async fn safe_query<P>(
@@ -38,18 +42,18 @@ async fn safe_query<P>(
 where
     P: turso::params::IntoParams + Send + 'static + std::panic::UnwindSafe,
 {
-    eprintln!(
+    debug!(
         "🔍 SQL_DEBUG: About to execute QUERY: '{}' (context: {})",
         sql, context
     );
 
     match conn.query(sql, params).await {
         Ok(rows) => {
-            eprintln!("✅ SQL_DEBUG: Query completed successfully: '{}'", sql);
+            debug!("✅ SQL_DEBUG: Query completed successfully: '{}'", sql);
             Ok(rows)
         }
         Err(e) => {
-            eprintln!("❌ SQL_DEBUG: Query failed: '{}' - Error: {}", sql, e);
+            warn!("❌ SQL_DEBUG: Query failed: '{}' - Error: {}", sql, e);
             Err(DatabaseError::OperationFailed {
                 message: format!("{}: {}", context, e),
             })
@@ -67,7 +71,7 @@ async fn safe_execute<P>(
 where
     P: turso::params::IntoParams + Send + 'static + std::panic::UnwindSafe,
 {
-    eprintln!(
+    debug!(
         "🔍 SQL_DEBUG: About to EXECUTE: '{}' (context: {})",
         sql, context
     );
@@ -75,11 +79,11 @@ where
     // Execute the async call directly without blocking operations
     match conn.execute(sql, params).await {
         Ok(result) => {
-            eprintln!("✅ SQL_DEBUG: Execute completed successfully: '{}'", sql);
+            debug!("✅ SQL_DEBUG: Execute completed successfully: '{}'", sql);
             Ok(result)
         }
         Err(e) => {
-            eprintln!("❌ SQL_DEBUG: Execute failed: '{}' - Error: {}", sql, e);
+            warn!("❌ SQL_DEBUG: Execute failed: '{}' - Error: {}", sql, e);
             Err(DatabaseError::OperationFailed {
                 message: format!("{}: {}", context, e),
             })
@@ -1293,17 +1297,249 @@ impl SQLiteBackend {
         Ok(())
     }
 
+    fn normalize_symbol_for_storage(symbol: &SymbolState) -> SymbolState {
+        let mut normalized = symbol.clone();
+        let normalized_uid = normalize_uid_with_hint(&normalized.symbol_uid, None);
+        let sanitized_path =
+            Self::determine_file_path_for_uid(&normalized_uid, &normalized.file_path);
+        normalized.file_path = sanitized_path.clone();
+        normalized.symbol_uid = Self::rebuild_uid_with_path(&normalized_uid, &sanitized_path);
+        normalized
+    }
+
+    fn normalize_edge_for_storage(edge: &Edge) -> Edge {
+        let mut normalized = edge.clone();
+        let workspace_hint = normalized.file_path.as_ref().and_then(|path_str| {
+            let path = Path::new(path_str);
+            let canonical = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                std::env::current_dir().ok()?.join(path)
+            };
+            workspace_utils::find_workspace_root_with_fallback(&canonical).ok()
+        });
+
+        let normalized_source =
+            normalize_uid_with_hint(&normalized.source_symbol_uid, workspace_hint.as_deref());
+        let normalized_target =
+            normalize_uid_with_hint(&normalized.target_symbol_uid, workspace_hint.as_deref());
+        let fallback_path = normalized
+            .file_path
+            .as_deref()
+            .unwrap_or_default()
+            .to_string();
+        let source_canonical = normalized
+            .file_path
+            .as_ref()
+            .and_then(|p| Path::new(p).canonicalize().ok());
+        let sanitized_source_path = if let (Some(root), Some(canonical)) =
+            (workspace_hint.as_ref(), source_canonical.as_ref())
+        {
+            if let Some(rel) = diff_paths(canonical, root) {
+                Self::sanitize_path_string(rel.to_string_lossy().as_ref())
+            } else {
+                Self::determine_file_path_for_uid(&normalized_source, &fallback_path)
+            }
+        } else {
+            Self::determine_file_path_for_uid(&normalized_source, &fallback_path)
+        };
+
+        let target_canonical = Self::uid_path_component(&normalized_target)
+            .filter(|path| is_absolute_like(path))
+            .and_then(|path| Path::new(path).canonicalize().ok());
+        let sanitized_target_path = if let (Some(root), Some(canonical)) =
+            (workspace_hint.as_ref(), target_canonical.as_ref())
+        {
+            if let Some(rel) = diff_paths(canonical, root) {
+                Self::sanitize_path_string(rel.to_string_lossy().as_ref())
+            } else {
+                Self::determine_file_path_for_uid(&normalized_target, &fallback_path)
+            }
+        } else {
+            Self::determine_file_path_for_uid(&normalized_target, &fallback_path)
+        };
+        normalized.source_symbol_uid =
+            Self::rebuild_uid_with_path(&normalized_source, &sanitized_source_path);
+        normalized.target_symbol_uid =
+            Self::rebuild_uid_with_path(&normalized_target, &sanitized_target_path);
+        if let Some(path) = normalized.file_path.as_ref() {
+            normalized.file_path = Some(Self::sanitize_path_string(path));
+        }
+        normalized
+    }
+
+    fn sanitize_path_string(path: &str) -> String {
+        if path.is_empty() {
+            return String::new();
+        }
+
+        if path.starts_with("EXTERNAL:") || path.starts_with("UNRESOLVED:") {
+            return path.replace('\\', "/");
+        }
+
+        let mut normalized = path.replace('\\', "/");
+
+        while normalized.starts_with("./") {
+            normalized = normalized.trim_start_matches("./").to_string();
+        }
+
+        while normalized.contains("//") {
+            normalized = normalized.replace("//", "/");
+        }
+
+        if is_absolute_like(&normalized) {
+            if normalized.starts_with('/') {
+                normalized = normalized.trim_start_matches('/').to_string();
+            } else if normalized.len() > 2 && normalized.as_bytes()[1] == b':' {
+                normalized = normalized[2..].to_string();
+                normalized = normalized
+                    .trim_start_matches('/')
+                    .trim_start_matches('\\')
+                    .to_string();
+            }
+        }
+
+        normalized
+    }
+
+    fn determine_file_path_for_uid(uid: &str, fallback: &str) -> String {
+        if let Some(path_part) = Self::uid_path_component(uid) {
+            if !path_part.is_empty()
+                && !path_part.starts_with("EXTERNAL:")
+                && !path_part.starts_with("UNRESOLVED:")
+            {
+                return Self::sanitize_path_string(path_part);
+            }
+        }
+
+        Self::sanitize_path_string(fallback)
+    }
+
+    fn uid_path_component(uid: &str) -> Option<&str> {
+        uid.splitn(2, ':').next()
+    }
+
+    fn rebuild_uid_with_path(uid: &str, new_path: &str) -> String {
+        if uid.is_empty()
+            || uid.starts_with("EXTERNAL:")
+            || uid.starts_with("UNRESOLVED:")
+            || uid.starts_with("fallback_")
+        {
+            return uid.to_string();
+        }
+
+        let mut parts = uid.splitn(4, ':');
+        let _ = parts.next();
+        let hash_part = parts.next().unwrap_or_default();
+        let name_part = parts.next().unwrap_or_default();
+        let line_part = parts.next().unwrap_or_default();
+
+        format!("{}:{}:{}:{}", new_path, hash_part, name_part, line_part)
+    }
+
     /// Perform a manual WAL checkpoint (turso/libSQL aware)
     pub async fn perform_checkpoint(&self) -> Result<(), DatabaseError> {
-        // IMPORTANT: turso v0.1.4 has a critical bug where ANY form of PRAGMA wal_checkpoint
-        // causes a panic in the SQL parser with "Successful parse on nonempty input string should produce a command"
-        // This affects both PRAGMA wal_checkpoint and PRAGMA wal_checkpoint(PASSIVE)
-        //
-        // Since we're using the turso library for all SQLite connections to avoid compilation issues,
-        // we must skip checkpoint operations entirely. Turso/libSQL handles WAL management automatically
-        // through its virtual WAL system, so manual checkpoints are not necessary.
-        eprintln!("📋 CHECKPOINT: Skipping manual WAL checkpoint - turso/libSQL handles WAL management automatically");
-        Ok(())
+        // Note: turso v0.1.4 had a critical bug with PRAGMA wal_checkpoint, but
+        // we're now using turso v0.2.0-pre.7 which should support it.
+        // Let's try to perform the checkpoint and handle any errors gracefully.
+
+        let pool_arc = self.pool.clone();
+        let mut pool = pool_arc.lock().await;
+
+        // Clear all idle connections from the pool to ensure checkpoint can proceed
+        // SQLite checkpoint requires no other connections to be active
+        pool.available.clear();
+
+        let conn = pool.get_connection().await?;
+
+        // Try to execute PRAGMA wal_checkpoint(TRUNCATE) to force checkpoint and truncate WAL
+        // Note: turso may be managing WAL internally, so we'll try but not fail if it doesn't work
+
+        // First, let's try using prepare and query on the statement
+        debug!("📋 CHECKPOINT: Attempting to prepare checkpoint statement");
+        match conn.prepare("PRAGMA wal_checkpoint(TRUNCATE)").await {
+            Ok(mut stmt) => {
+                debug!("📋 CHECKPOINT: Statement prepared, executing query");
+                match stmt.query(()).await {
+                    Ok(mut rows) => {
+                        debug!("📋 CHECKPOINT: Query executed, reading results");
+                        let mut busy = -1i64;
+                        let mut checkpointed = -1i64;
+                        let mut total = -1i64;
+                        let mut row_count = 0;
+
+                        // Read the checkpoint result
+                        while let Ok(Some(row)) = rows.next().await {
+                            row_count += 1;
+                            debug!("📋 CHECKPOINT: Reading row #{}", row_count);
+
+                            // Try to get values and log what we get
+                            match (row.get_value(0), row.get_value(1), row.get_value(2)) {
+                                (Ok(v0), Ok(v1), Ok(v2)) => {
+                                    debug!(
+                                        "📋 CHECKPOINT: Got values: {:?}, {:?}, {:?}",
+                                        v0, v1, v2
+                                    );
+                                    if let (
+                                        turso::Value::Integer(b),
+                                        turso::Value::Integer(cp),
+                                        turso::Value::Integer(tot),
+                                    ) = (v0, v1, v2)
+                                    {
+                                        busy = b;
+                                        checkpointed = cp;
+                                        total = tot;
+                                    }
+                                }
+                                (Err(e0), _, _) => {
+                                    debug!("📋 CHECKPOINT: Error getting value 0: {}", e0)
+                                }
+                                (_, Err(e1), _) => {
+                                    debug!("📋 CHECKPOINT: Error getting value 1: {}", e1)
+                                }
+                                (_, _, Err(e2)) => {
+                                    debug!("📋 CHECKPOINT: Error getting value 2: {}", e2)
+                                }
+                            }
+                        }
+
+                        debug!(
+                            "📋 CHECKPOINT: Read {} rows. busy={}, checkpointed={}, total={}",
+                            row_count, busy, checkpointed, total
+                        );
+
+                        if row_count == 0 {
+                            debug!("📋 CHECKPOINT: No rows returned from checkpoint pragma");
+                        } else if busy == 0 && total > 0 {
+                            info!("📋 CHECKPOINT: WAL checkpoint completed successfully (checkpointed {}/{} frames)", checkpointed, total);
+                        } else if busy != 0 && busy != -1 {
+                            // This is expected with turso's connection pooling - log at debug level
+                            debug!("📋 CHECKPOINT: WAL checkpoint blocked (database busy={}, checkpointed={}/{})", busy, checkpointed, total);
+                        } else if total == 0 {
+                            debug!("📋 CHECKPOINT: No WAL frames to checkpoint (WAL is empty or doesn't exist)");
+                        } else if busy == -1 || total == -1 {
+                            // This happens when turso returns (1, Null, Null) - expected behavior
+                            debug!("📋 CHECKPOINT: Checkpoint skipped - database busy (turso connection pool active)");
+                        } else {
+                            debug!("📋 CHECKPOINT: Unexpected checkpoint result: busy={}, checkpointed={}, total={}", busy, checkpointed, total);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("📋 CHECKPOINT: Failed to execute checkpoint query: {}", e);
+                    }
+                }
+                pool.return_connection(conn);
+                Ok(())
+            }
+            Err(e) => {
+                warn!(
+                    "📋 CHECKPOINT: Failed to prepare checkpoint statement: {}",
+                    e
+                );
+                pool.return_connection(conn);
+                Ok(())
+            }
+        }
     }
 
     /// Start a periodic checkpoint task that runs every N seconds
@@ -1311,17 +1547,36 @@ impl SQLiteBackend {
         self: Arc<Self>,
         interval_secs: u64,
     ) -> tokio::task::JoinHandle<()> {
+        debug!(
+            "📋 CHECKPOINT: Starting periodic WAL checkpoint task (interval: {}s)",
+            interval_secs
+        );
+
         tokio::spawn(async move {
             let mut interval =
                 tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+            let mut checkpoint_count = 0u64;
 
             loop {
                 interval.tick().await;
+                checkpoint_count += 1;
+
+                debug!(
+                    "📋 CHECKPOINT: Running periodic checkpoint #{}",
+                    checkpoint_count
+                );
 
                 if let Err(e) = self.perform_checkpoint().await {
-                    warn!("Periodic checkpoint failed: {}", e);
+                    warn!(
+                        "📋 CHECKPOINT: Periodic checkpoint #{} failed: {}",
+                        checkpoint_count, e
+                    );
                 } else {
-                    debug!("Periodic checkpoint completed successfully");
+                    // Log at debug level to avoid polluting logs (checkpoints usually fail with turso)
+                    debug!(
+                        "📋 CHECKPOINT: Periodic checkpoint #{} completed",
+                        checkpoint_count
+                    );
                 }
             }
         })
@@ -1527,6 +1782,29 @@ impl SQLiteBackend {
 
         pool.return_connection(conn);
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct EdgeDedupKey {
+    relation: String,
+    source: String,
+    target: String,
+    language: String,
+    start_line: i64,
+    start_char: i64,
+}
+
+impl EdgeDedupKey {
+    fn from_edge(edge: &Edge) -> Self {
+        Self {
+            relation: edge.relation.to_string().to_owned(),
+            source: edge.source_symbol_uid.clone(),
+            target: edge.target_symbol_uid.clone(),
+            language: edge.language.clone(),
+            start_line: edge.start_line.map(|v| v as i64).unwrap_or(-1),
+            start_char: edge.start_char.map(|v| v as i64).unwrap_or(-1),
+        }
     }
 }
 
@@ -2114,23 +2392,51 @@ impl DatabaseBackend for SQLiteBackend {
             return Ok(());
         }
 
+        let normalized_symbols: Vec<SymbolState> = symbols
+            .iter()
+            .map(Self::normalize_symbol_for_storage)
+            .collect();
+
+        let mut seen_symbols: HashSet<String> = HashSet::new();
+        let mut unique_symbols: Vec<SymbolState> = Vec::with_capacity(normalized_symbols.len());
+        for symbol in normalized_symbols {
+            if seen_symbols.insert(symbol.symbol_uid.clone()) {
+                unique_symbols.push(symbol);
+            } else {
+                debug!(
+                    "[DEBUG] store_symbols: Skipping duplicate symbol {}",
+                    symbol.symbol_uid
+                );
+            }
+        }
+
+        if unique_symbols.is_empty() {
+            return Ok(());
+        }
+
         debug!(
             "[DEBUG] store_symbols: Attempting to store {} symbols",
-            symbols.len()
+            unique_symbols.len()
         );
 
         let mut pool = self.pool.lock().await;
         let conn = pool.get_connection().await?;
 
         // Use transaction for batch operations with rollback on error
-        conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
-            DatabaseError::OperationFailed {
-                message: format!("Failed to begin transaction for symbols: {}", e),
-            }
+        safe_execute_with_retry(
+            &conn,
+            "BEGIN TRANSACTION",
+            (),
+            "begin symbol transaction",
+            5,
+        )
+        .await
+        .map_err(|e| DatabaseError::OperationFailed {
+            message: format!("Failed to begin transaction for symbols: {}", e),
         })?;
 
         // Insert directly into symbol_state table with the correct schema
-        for symbol in symbols {
+        for symbol in &unique_symbols {
             // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
             let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
             let mut check_rows = safe_query(
@@ -2198,7 +2504,7 @@ impl DatabaseBackend for SQLiteBackend {
                 let mut update_params = params.clone();
                 update_params.push(turso::Value::Text(symbol.symbol_uid.clone()));
 
-                safe_execute(&conn, update_query, update_params, "update symbol")
+                safe_execute_with_retry(&conn, update_query, update_params, "update symbol", 5)
                     .await
                     .map_err(|e| DatabaseError::OperationFailed {
                         message: format!("Failed to update symbol {}: {}", symbol.symbol_uid, e),
@@ -2213,7 +2519,7 @@ impl DatabaseBackend for SQLiteBackend {
                 let mut insert_params = vec![turso::Value::Text(symbol.symbol_uid.clone())];
                 insert_params.extend(params);
 
-                safe_execute(&conn, insert_query, insert_params, "insert symbol")
+                safe_execute_with_retry(&conn, insert_query, insert_params, "insert symbol", 5)
                     .await
                     .map_err(|e| DatabaseError::OperationFailed {
                         message: format!("Failed to insert symbol {}: {}", symbol.symbol_uid, e),
@@ -2222,7 +2528,7 @@ impl DatabaseBackend for SQLiteBackend {
         }
 
         // Commit transaction
-        conn.execute("COMMIT", ())
+        safe_execute_with_retry(&conn, "COMMIT", (), "commit symbol transaction", 5)
             .await
             .map_err(|e| DatabaseError::OperationFailed {
                 message: format!("Failed to commit symbol transaction: {}", e),
@@ -2231,7 +2537,7 @@ impl DatabaseBackend for SQLiteBackend {
         pool.return_connection(conn);
         debug!(
             "[DEBUG] store_symbols: Successfully stored {} symbols",
-            symbols.len()
+            unique_symbols.len()
         );
         Ok(())
     }
@@ -2551,6 +2857,32 @@ impl DatabaseBackend for SQLiteBackend {
     // ===================
 
     async fn store_edges(&self, edges: &[Edge]) -> Result<(), DatabaseError> {
+        let normalized_edges: Vec<Edge> =
+            edges.iter().map(Self::normalize_edge_for_storage).collect();
+
+        let mut seen_signatures: HashSet<EdgeDedupKey> = HashSet::new();
+        let mut unique_edges: Vec<Edge> = Vec::with_capacity(normalized_edges.len());
+        let mut duplicates_pruned = 0usize;
+
+        for edge in normalized_edges {
+            let signature = EdgeDedupKey::from_edge(&edge);
+            if seen_signatures.insert(signature) {
+                unique_edges.push(edge);
+            } else {
+                duplicates_pruned += 1;
+            }
+        }
+
+        if duplicates_pruned > 0 {
+            info!(
+                "[DEBUG] store_edges: Pruned {} duplicate edge candidates before storage",
+                duplicates_pruned
+            );
+        }
+
+        let edges = unique_edges;
+        let edges_len = edges.len();
+
         // Don't exit early for empty arrays - we need to process transactions consistently
         // Empty arrays are valid and might be used to store "none" edges
 
@@ -2568,77 +2900,126 @@ impl DatabaseBackend for SQLiteBackend {
         .await?;
 
         // Check if we have any edges to store
-        if edges.is_empty() {
-            info!("[DEBUG] store_edges: No edges to store (empty array) - this is valid for marking analyzed-but-empty state");
+        if edges_len == 0 {
+            info!("[DEBUG] store_edges: No edges to store (empty array after normalization) - this is valid for marking analyzed-but-empty state");
         } else {
-            info!("[DEBUG] store_edges: Storing {} edges", edges.len());
-            // Log details of the first few edges for debugging
+            info!("[DEBUG] store_edges: Storing {} edges", edges_len);
             for (i, edge) in edges.iter().take(3).enumerate() {
-                info!("[DEBUG] store_edges: Edge[{}]: source='{}', target='{}', relation='{}', metadata={:?}", 
-                     i, edge.source_symbol_uid, edge.target_symbol_uid, edge.relation.to_string(), edge.metadata);
+                info!("[DEBUG] store_edges: Edge[{}]: source='{}', target='{}', relation='{}', metadata={:?}",
+                      i,
+                      edge.source_symbol_uid,
+                      edge.target_symbol_uid,
+                      edge.relation.to_string(),
+                      edge.metadata);
             }
 
             // Batch size for optimal performance - edges are smaller so we can handle more
             const BATCH_SIZE: usize = 200;
 
-            for chunk in edges.chunks(BATCH_SIZE) {
-                // Filter out duplicates before inserting
-                // Check each edge individually - turso doesn't support tuple IN clause
-                let mut edges_to_insert = Vec::new();
+            let mut offset = 0usize;
+            while offset < edges_len {
+                let end = usize::min(offset + BATCH_SIZE, edges_len);
+                let chunk_edges = &edges[offset..end];
+                let chunk_keys: Vec<EdgeDedupKey> =
+                    chunk_edges.iter().map(EdgeDedupKey::from_edge).collect();
 
-                for edge in chunk.iter() {
-                    // Check if this specific edge exists
-                    let check_sql = "SELECT 1 FROM edge WHERE source_symbol_uid = ? AND target_symbol_uid = ? AND relation = ? AND start_line = ? AND start_char = ? LIMIT 1";
+                let mut existing_keys: HashSet<EdgeDedupKey> = HashSet::new();
+                if !chunk_keys.is_empty() {
+                    let mut query = String::from(
+                        "SELECT relation, source_symbol_uid, target_symbol_uid, IFNULL(start_line, -1) AS start_line_key, IFNULL(start_char, -1) AS start_char_key, language FROM edge WHERE ",
+                    );
+                    let mut params: Vec<turso::Value> = Vec::with_capacity(chunk_keys.len() * 6);
 
-                    let check_params = vec![
-                        turso::Value::Text(edge.source_symbol_uid.clone()),
-                        turso::Value::Text(edge.target_symbol_uid.clone()),
-                        turso::Value::Text(edge.relation.to_string().to_string()),
-                        edge.start_line
-                            .map(|l| turso::Value::Integer((if l >= 1 { l } else { 1 }) as i64))
-                            .unwrap_or(turso::Value::Null),
-                        edge.start_char
-                            .map(|c| turso::Value::Integer(c as i64))
-                            .unwrap_or(turso::Value::Null),
-                    ];
-
-                    // Check if edge exists
-                    let exists = match conn.query(check_sql, check_params).await {
-                        Ok(mut rows) => match rows.next().await {
-                            Ok(Some(_)) => true,
-                            _ => false,
-                        },
-                        Err(_) => false, // Assume doesn't exist if we can't check
-                    };
-
-                    if !exists {
-                        edges_to_insert.push(edge);
-                    } else {
-                        info!(
-                            "[DEBUG] store_edges: Skipping duplicate edge: {} -> {}",
-                            edge.source_symbol_uid, edge.target_symbol_uid
+                    for (idx, key) in chunk_keys.iter().enumerate() {
+                        if idx > 0 {
+                            query.push_str(" OR ");
+                        }
+                        query.push_str(
+                            "(relation = ? AND source_symbol_uid = ? AND target_symbol_uid = ? AND IFNULL(start_line, -1) = ? AND IFNULL(start_char, -1) = ? AND language = ?)",
                         );
+                        params.push(turso::Value::Text(key.relation.clone()));
+                        params.push(turso::Value::Text(key.source.clone()));
+                        params.push(turso::Value::Text(key.target.clone()));
+                        params.push(turso::Value::Integer(key.start_line));
+                        params.push(turso::Value::Integer(key.start_char));
+                        params.push(turso::Value::Text(key.language.clone()));
+                    }
+
+                    let mut rows =
+                        safe_query(&conn, &query, params, "store_edges dedup lookup").await?;
+                    while let Some(row) =
+                        rows.next()
+                            .await
+                            .map_err(|e| DatabaseError::OperationFailed {
+                                message: format!("Failed to iterate dedup lookup rows: {e}"),
+                            })?
+                    {
+                        let relation = match row.get_value(0) {
+                            Ok(turso::Value::Text(val)) => val,
+                            _ => continue,
+                        };
+                        let source = match row.get_value(1) {
+                            Ok(turso::Value::Text(val)) => val,
+                            _ => continue,
+                        };
+                        let target = match row.get_value(2) {
+                            Ok(turso::Value::Text(val)) => val,
+                            _ => continue,
+                        };
+                        let start_line = match row.get_value(3) {
+                            Ok(turso::Value::Integer(val)) => val,
+                            _ => -1,
+                        };
+                        let start_char = match row.get_value(4) {
+                            Ok(turso::Value::Integer(val)) => val,
+                            _ => -1,
+                        };
+                        let language = match row.get_value(5) {
+                            Ok(turso::Value::Text(val)) => val,
+                            _ => continue,
+                        };
+
+                        existing_keys.insert(EdgeDedupKey {
+                            relation,
+                            source,
+                            target,
+                            language,
+                            start_line,
+                            start_char,
+                        });
                     }
                 }
 
-                // Skip if no new edges to insert
+                let mut edges_to_insert: Vec<&Edge> = Vec::new();
+                for (edge, key) in chunk_edges.iter().zip(chunk_keys.iter()) {
+                    if existing_keys.contains(key) {
+                        info!(
+                            "[DEBUG] store_edges: Skipping duplicate edge (db exists): {} -> {} ({})",
+                            edge.source_symbol_uid,
+                            edge.target_symbol_uid,
+                            edge.relation.to_string()
+                        );
+                    } else {
+                        edges_to_insert.push(edge);
+                    }
+                }
+
                 if edges_to_insert.is_empty() {
                     info!(
-                        "[DEBUG] store_edges: All {} edges in batch already exist, skipping",
-                        chunk.len()
+                        "[DEBUG] store_edges: All {} edges in batch already exist or were duplicates, skipping",
+                        chunk_edges.len()
                     );
+                    offset = end;
                     continue;
                 }
 
-                // Prepare batch insert query for non-duplicate edges
                 let placeholders = edges_to_insert
                     .iter()
                     .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?)")
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                // Prepare batch parameters
-                let mut params = Vec::new();
+                let mut params = Vec::with_capacity(edges_to_insert.len() * 8);
 
                 for edge in edges_to_insert.iter() {
                     params.extend(vec![
@@ -2660,16 +3041,15 @@ impl DatabaseBackend for SQLiteBackend {
                     ]);
                 }
 
-                // Execute batch insert - note: turso doesn't support INSERT OR IGNORE
                 let batch_sql = format!(
-                "INSERT INTO edge (relation, source_symbol_uid, target_symbol_uid, start_line, start_char, confidence, language, metadata) VALUES {}",
-                placeholders
-            );
+                    "INSERT INTO edge (relation, source_symbol_uid, target_symbol_uid, start_line, start_char, confidence, language, metadata) VALUES {}",
+                    placeholders
+                );
 
                 info!(
                     "[DEBUG] store_edges: Executing batch insert with {} values (filtered from {})",
                     edges_to_insert.len(),
-                    chunk.len()
+                    chunk_edges.len()
                 );
 
                 match safe_execute_with_retry(
@@ -2687,9 +3067,8 @@ impl DatabaseBackend for SQLiteBackend {
                         error!("[DEBUG] store_edges: Failed SQL: {}", batch_sql);
                         error!(
                             "[DEBUG] store_edges: Number of edges in batch: {}",
-                            chunk.len()
+                            chunk_edges.len()
                         );
-                        // Rollback on error
                         let _ = safe_execute(&conn, "ROLLBACK", (), "store_edges rollback").await;
                         return Err(e);
                     }
@@ -2699,6 +3078,8 @@ impl DatabaseBackend for SQLiteBackend {
                     "[DEBUG] store_edges: Successfully inserted {} edges",
                     edges_to_insert.len()
                 );
+
+                offset = end;
             }
         }
 
@@ -3222,13 +3603,13 @@ impl DatabaseBackend for SQLiteBackend {
     // Missing trait methods - temporary placeholder implementations
     async fn get_all_symbols(&self) -> Result<Vec<SymbolState>, DatabaseError> {
         // Placeholder implementation - would return all symbols from all workspaces
-        eprintln!("DEBUG: get_all_symbols not yet implemented, returning empty list");
+        debug!("DEBUG: get_all_symbols not yet implemented, returning empty list");
         Ok(Vec::new())
     }
 
     async fn get_all_edges(&self) -> Result<Vec<Edge>, DatabaseError> {
         // Placeholder implementation - would return all edges from all workspaces
-        eprintln!("DEBUG: get_all_edges not yet implemented, returning empty list");
+        debug!("DEBUG: get_all_edges not yet implemented, returning empty list");
         Ok(Vec::new())
     }
 
@@ -3328,7 +3709,7 @@ impl DatabaseBackend for SQLiteBackend {
                     _ => "unknown".to_string(),
                 },
                 fqn: match row.get_value(4) {
-                    Ok(turso::Value::Text(fqn)) => Some(fqn),
+                    Ok(turso::Value::Text(fqn)) if !fqn.is_empty() => Some(fqn),
                     _ => None,
                 },
                 kind: match row.get_value(5) {
@@ -4019,157 +4400,540 @@ impl DatabaseBackend for SQLiteBackend {
     // LSP Enrichment Support
     // ===================
 
-    async fn find_orphan_symbols(&self, limit: usize) -> Result<Vec<SymbolState>, DatabaseError> {
-        info!("[DEBUG] find_orphan_symbols ENTRY: limit={}", limit);
+    async fn find_symbols_pending_enrichment(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<SymbolEnrichmentPlan>, DatabaseError> {
+        self.find_symbols_pending_enrichment_internal(limit).await
+    }
+}
 
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+impl SQLiteBackend {
+    /// Convert a database row into a SymbolState, returning None for malformed rows
+    fn symbol_state_from_row(row: &turso::Row) -> Option<SymbolState> {
+        let symbol_uid = match row.get_value(0) {
+            Ok(turso::Value::Text(uid)) if !uid.is_empty() => uid,
+            _ => return None,
+        };
 
-        // Query to find symbols without outgoing edges, prioritized by symbol kind
+        let file_path = match row.get_value(1) {
+            Ok(turso::Value::Text(path)) if !path.trim().is_empty() => path,
+            _ => return None,
+        };
+
+        let language = match row.get_value(2) {
+            Ok(turso::Value::Text(lang)) if !lang.is_empty() => lang,
+            _ => return None,
+        };
+
+        let name = match row.get_value(3) {
+            Ok(turso::Value::Text(name)) if !name.is_empty() => name,
+            _ => return None,
+        };
+
+        let fqn = match row.get_value(4) {
+            Ok(turso::Value::Text(fqn)) if !fqn.is_empty() => Some(fqn),
+            _ => None,
+        };
+
+        let kind = match row.get_value(5) {
+            Ok(turso::Value::Text(kind)) if !kind.is_empty() => kind,
+            _ => return None,
+        };
+
+        let signature = match row.get_value(6) {
+            Ok(turso::Value::Text(sig)) if !sig.is_empty() => Some(sig),
+            _ => None,
+        };
+
+        let visibility = match row.get_value(7) {
+            Ok(turso::Value::Text(vis)) if !vis.is_empty() => Some(vis),
+            _ => None,
+        };
+
+        let def_start_line = match row.get_value(8) {
+            Ok(turso::Value::Integer(line)) => line as u32,
+            Ok(turso::Value::Text(line)) => line.parse::<u32>().unwrap_or(0),
+            _ => 0,
+        };
+
+        let def_start_char = match row.get_value(9) {
+            Ok(turso::Value::Integer(ch)) => ch as u32,
+            Ok(turso::Value::Text(ch)) => ch.parse::<u32>().unwrap_or(0),
+            _ => 0,
+        };
+
+        let def_end_line = match row.get_value(10) {
+            Ok(turso::Value::Integer(line)) => line as u32,
+            Ok(turso::Value::Text(line)) => line.parse::<u32>().unwrap_or(0),
+            _ => 0,
+        };
+
+        let def_end_char = match row.get_value(11) {
+            Ok(turso::Value::Integer(ch)) => ch as u32,
+            Ok(turso::Value::Text(ch)) => ch.parse::<u32>().unwrap_or(0),
+            _ => 0,
+        };
+
+        let is_definition = match row.get_value(12) {
+            Ok(turso::Value::Integer(val)) => val != 0,
+            Ok(turso::Value::Text(val)) => val != "0",
+            _ => true,
+        };
+
+        let documentation = match row.get_value(13) {
+            Ok(turso::Value::Text(doc)) if !doc.is_empty() => Some(doc),
+            _ => None,
+        };
+
+        let metadata = match row.get_value(14) {
+            Ok(turso::Value::Text(meta)) if !meta.is_empty() => Some(meta),
+            _ => None,
+        };
+
+        Some(SymbolState {
+            symbol_uid,
+            file_path,
+            language,
+            name,
+            fqn,
+            kind,
+            signature,
+            visibility,
+            def_start_line,
+            def_start_char,
+            def_end_line,
+            def_end_char,
+            is_definition,
+            documentation,
+            metadata,
+        })
+    }
+
+    fn enrichment_priority(kind: &str) -> u8 {
+        match kind {
+            "function" | "method" => 0,
+            "class" | "struct" | "enum" | "interface" | "trait" => 1,
+            _ => 2,
+        }
+    }
+
+    async fn query_symbols_missing_references(
+        &self,
+        conn: &Connection,
+        limit: usize,
+    ) -> Result<Vec<SymbolState>, DatabaseError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
         let query = r#"
             SELECT s.symbol_uid, s.file_path, s.language, s.name, s.fqn, s.kind,
                    s.signature, s.visibility, s.def_start_line, s.def_start_char,
                    s.def_end_line, s.def_end_char, s.is_definition, s.documentation,
                    s.metadata
             FROM symbol_state s
-            LEFT JOIN edge e ON s.symbol_uid = e.source_symbol_uid
-            WHERE e.source_symbol_uid IS NULL
-            AND s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
-            AND s.file_path IS NOT NULL
-            AND trim(s.file_path) != ''
-            ORDER BY
-              CASE s.kind
-                WHEN 'function' THEN 1
-                WHEN 'method' THEN 2
-                WHEN 'class' THEN 3
-                WHEN 'struct' THEN 3
-                WHEN 'enum' THEN 3
-                WHEN 'interface' THEN 3
-                WHEN 'trait' THEN 3
-                ELSE 4
-              END,
-              s.name
+            LEFT JOIN edge e
+              ON e.source_symbol_uid = s.symbol_uid
+             AND e.relation = 'references'
+            WHERE s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
+              AND s.file_path IS NOT NULL
+              AND trim(s.file_path) != ''
+              AND e.source_symbol_uid IS NULL
             LIMIT ?
         "#;
 
-        debug!(
-            "[DEBUG] Executing orphan symbols query with limit: {}",
-            limit
-        );
-
         let mut rows = safe_query(
-            &conn,
+            conn,
             query,
             [turso::Value::Integer(limit as i64)],
-            "find orphan symbols",
+            "find symbols missing references",
         )
         .await?;
 
         let mut symbols = Vec::new();
-
-        while let Some(row) = rows.next().await.map_err(|e| {
-            error!("[DEBUG] Failed to read orphan symbol row: {}", e);
-            DatabaseError::OperationFailed {
-                message: format!("Failed to read orphan symbol row: {}", e),
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to read references-missing row: {e}"),
+            })?
+        {
+            if let Some(symbol) = Self::symbol_state_from_row(&row) {
+                symbols.push(symbol);
             }
-        })? {
-            let symbol = SymbolState {
-                symbol_uid: match row.get_value(0) {
-                    Ok(turso::Value::Text(uid)) => uid,
-                    _ => continue, // Skip invalid rows
-                },
-                file_path: match row.get_value(1) {
-                    Ok(turso::Value::Text(path)) => path,
-                    _ => continue,
-                },
-                language: match row.get_value(2) {
-                    Ok(turso::Value::Text(lang)) => lang,
-                    _ => continue,
-                },
-                name: match row.get_value(3) {
-                    Ok(turso::Value::Text(name)) => name,
-                    _ => continue,
-                },
-                fqn: match row.get_value(4) {
-                    Ok(turso::Value::Text(fqn)) => Some(fqn),
-                    Ok(turso::Value::Null) => None,
-                    _ => None,
-                },
-                kind: match row.get_value(5) {
-                    Ok(turso::Value::Text(kind)) => kind,
-                    _ => continue,
-                },
-                signature: match row.get_value(6) {
-                    Ok(turso::Value::Text(sig)) => Some(sig),
-                    Ok(turso::Value::Null) => None,
-                    _ => None,
-                },
-                visibility: match row.get_value(7) {
-                    Ok(turso::Value::Text(vis)) => Some(vis),
-                    Ok(turso::Value::Null) => None,
-                    _ => None,
-                },
-                def_start_line: match row.get_value(8) {
-                    Ok(turso::Value::Integer(line)) => line as u32,
-                    _ => 0,
-                },
-                def_start_char: match row.get_value(9) {
-                    Ok(turso::Value::Integer(char)) => char as u32,
-                    _ => 0,
-                },
-                def_end_line: match row.get_value(10) {
-                    Ok(turso::Value::Integer(line)) => line as u32,
-                    _ => 0,
-                },
-                def_end_char: match row.get_value(11) {
-                    Ok(turso::Value::Integer(char)) => char as u32,
-                    _ => 0,
-                },
-                is_definition: match row.get_value(12) {
-                    Ok(turso::Value::Integer(val)) => val != 0,
-                    _ => false,
-                },
-                documentation: match row.get_value(13) {
-                    Ok(turso::Value::Text(doc)) => Some(doc),
-                    Ok(turso::Value::Null) => None,
-                    _ => None,
-                },
-                metadata: match row.get_value(14) {
-                    Ok(turso::Value::Text(attrs)) => Some(attrs),
-                    Ok(turso::Value::Null) => None,
-                    _ => None,
-                },
-            };
-
-            // Skip symbols with empty file paths to prevent empty workspace registration issues
-            if symbol.file_path.trim().is_empty() {
-                debug!(
-                    "[DEBUG] Skipping orphan symbol with empty file path: {} ({})",
-                    symbol.name, symbol.kind
-                );
-                continue;
-            }
-
-            debug!(
-                "[DEBUG] Found orphan symbol: {} ({}) at {}:{}",
-                symbol.name, symbol.kind, symbol.file_path, symbol.def_start_line
-            );
-
-            symbols.push(symbol);
         }
-
-        pool.return_connection(conn);
-
-        info!(
-            "[DEBUG] find_orphan_symbols SUCCESS: found {} orphan symbols",
-            symbols.len()
-        );
 
         Ok(symbols)
     }
-}
 
-impl SQLiteBackend {
+    async fn query_symbols_missing_implementations(
+        &self,
+        conn: &Connection,
+        limit: usize,
+    ) -> Result<Vec<SymbolState>, DatabaseError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let query = r#"
+            SELECT s.symbol_uid, s.file_path, s.language, s.name, s.fqn, s.kind,
+                   s.signature, s.visibility, s.def_start_line, s.def_start_char,
+                   s.def_end_line, s.def_end_char, s.is_definition, s.documentation,
+                   s.metadata
+            FROM symbol_state s
+            LEFT JOIN edge e
+              ON e.source_symbol_uid = s.symbol_uid
+             AND e.relation IN ('implementation', 'implements')
+            WHERE s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
+              AND s.file_path IS NOT NULL
+              AND trim(s.file_path) != ''
+              AND e.source_symbol_uid IS NULL
+            LIMIT ?
+        "#;
+
+        let mut rows = safe_query(
+            conn,
+            query,
+            [turso::Value::Integer(limit as i64)],
+            "find symbols missing implementations",
+        )
+        .await?;
+
+        let mut symbols = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to read implementations-missing row: {e}"),
+            })?
+        {
+            if let Some(symbol) = Self::symbol_state_from_row(&row) {
+                symbols.push(symbol);
+            }
+        }
+
+        Ok(symbols)
+    }
+
+    async fn query_symbols_missing_call_hierarchy(
+        &self,
+        conn: &Connection,
+        limit: usize,
+    ) -> Result<Vec<SymbolState>, DatabaseError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let query = r#"
+            SELECT s.symbol_uid, s.file_path, s.language, s.name, s.fqn, s.kind,
+                   s.signature, s.visibility, s.def_start_line, s.def_start_char,
+                   s.def_end_line, s.def_end_char, s.is_definition, s.documentation,
+                   s.metadata
+            FROM symbol_state s
+            LEFT JOIN edge e
+              ON e.relation IN ('calls', 'incoming_call', 'outgoing_call')
+             AND (e.source_symbol_uid = s.symbol_uid OR e.target_symbol_uid = s.symbol_uid)
+            WHERE s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
+              AND s.file_path IS NOT NULL
+              AND trim(s.file_path) != ''
+              AND e.relation IS NULL
+            LIMIT ?
+        "#;
+
+        let mut rows = safe_query(
+            conn,
+            query,
+            [turso::Value::Integer(limit as i64)],
+            "find symbols missing call hierarchy",
+        )
+        .await?;
+
+        let mut symbols = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to read call-hierarchy-missing row: {e}"),
+            })?
+        {
+            if let Some(symbol) = Self::symbol_state_from_row(&row) {
+                symbols.push(symbol);
+            }
+        }
+
+        Ok(symbols)
+    }
+
+    pub async fn find_symbols_pending_enrichment_internal(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<SymbolEnrichmentPlan>, DatabaseError> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let fetch_limit = usize::max(limit * 3, limit);
+
+        let mut pool = self.pool.lock().await;
+        let conn = pool.get_connection().await?;
+
+        let references = self
+            .query_symbols_missing_references(&conn, fetch_limit)
+            .await?;
+        let implementations = self
+            .query_symbols_missing_implementations(&conn, fetch_limit)
+            .await?;
+        let call_hierarchy = self
+            .query_symbols_missing_call_hierarchy(&conn, fetch_limit)
+            .await?;
+
+        pool.return_connection(conn);
+
+        let mut plans: Vec<SymbolEnrichmentPlan> = Vec::new();
+        let mut index: HashMap<String, usize> = HashMap::new();
+
+        for symbol in references {
+            let uid = symbol.symbol_uid.clone();
+            if let Some(&idx) = index.get(&uid) {
+                plans[idx].needs_references = true;
+            } else {
+                index.insert(uid, plans.len());
+                plans.push(SymbolEnrichmentPlan {
+                    symbol,
+                    needs_references: true,
+                    needs_implementations: false,
+                    needs_call_hierarchy: false,
+                });
+            }
+        }
+
+        for symbol in implementations {
+            let uid = symbol.symbol_uid.clone();
+            if let Some(&idx) = index.get(&uid) {
+                plans[idx].needs_implementations = true;
+            } else {
+                index.insert(uid, plans.len());
+                plans.push(SymbolEnrichmentPlan {
+                    symbol,
+                    needs_references: false,
+                    needs_implementations: true,
+                    needs_call_hierarchy: false,
+                });
+            }
+        }
+
+        for symbol in call_hierarchy {
+            let uid = symbol.symbol_uid.clone();
+            if let Some(&idx) = index.get(&uid) {
+                plans[idx].needs_call_hierarchy = true;
+            } else {
+                index.insert(uid, plans.len());
+                plans.push(SymbolEnrichmentPlan {
+                    symbol,
+                    needs_references: false,
+                    needs_implementations: false,
+                    needs_call_hierarchy: true,
+                });
+            }
+        }
+
+        plans.retain(|plan| plan.has_operations());
+
+        plans.sort_by(|a, b| {
+            let pa = Self::enrichment_priority(&a.symbol.kind);
+            let pb = Self::enrichment_priority(&b.symbol.kind);
+            pa.cmp(&pb)
+                .then_with(|| a.symbol.name.cmp(&b.symbol.name))
+                .then_with(|| a.symbol.file_path.cmp(&b.symbol.file_path))
+        });
+
+        if plans.len() > limit {
+            plans.truncate(limit);
+        }
+
+        Ok(plans)
+    }
+
+    /// Convert a Turso value into u64 for count extraction
+    fn value_to_u64(value: turso::Value, context: &str) -> Result<u64, DatabaseError> {
+        match value {
+            turso::Value::Integer(val) => Ok(val.max(0) as u64),
+            turso::Value::Real(val) => Ok(val.max(0.0) as u64),
+            turso::Value::Text(text) => {
+                text.parse::<u64>()
+                    .map_err(|e| DatabaseError::OperationFailed {
+                        message: format!(
+                            "{}: failed to parse integer value '{}' ({})",
+                            context, text, e
+                        ),
+                    })
+            }
+            other => Err(DatabaseError::OperationFailed {
+                message: format!(
+                    "{}: unsupported value type for count extraction: {:?}",
+                    context, other
+                ),
+            }),
+        }
+    }
+
+    async fn fetch_pending_symbols_with_kind(
+        conn: &Connection,
+        sql: &str,
+        context: &str,
+    ) -> Result<Vec<(String, String)>, DatabaseError> {
+        let mut rows = safe_query(conn, sql, (), context).await?;
+        let mut results = Vec::new();
+
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("{}: failed to read row: {}", context, e),
+            })?
+        {
+            let symbol_uid = match row.get_value(0) {
+                Ok(turso::Value::Text(uid)) => uid,
+                Ok(other) => {
+                    debug!(
+                        "{}: skipping row with non-text symbol_uid value: {:?}",
+                        context, other
+                    );
+                    continue;
+                }
+                Err(e) => {
+                    debug!(
+                        "{}: failed to read symbol_uid column ({}); skipping row",
+                        context, e
+                    );
+                    continue;
+                }
+            };
+
+            let kind = match row.get_value(1) {
+                Ok(turso::Value::Text(kind)) => kind,
+                Ok(other) => {
+                    debug!(
+                        "{}: symbol '{}' has non-text kind value {:?}; defaulting to 'unknown'",
+                        context, symbol_uid, other
+                    );
+                    "unknown".to_string()
+                }
+                Err(e) => {
+                    debug!(
+                        "{}: failed to read kind column for symbol '{}': {}; defaulting to 'unknown'",
+                        context, symbol_uid, e
+                    );
+                    "unknown".to_string()
+                }
+            };
+
+            results.push((symbol_uid, kind));
+        }
+
+        Ok(results)
+    }
+
+    /// Retrieve aggregated counts of pending enrichment work from the database.
+    pub async fn get_pending_enrichment_counts(
+        &self,
+    ) -> Result<PendingEnrichmentCounts, DatabaseError> {
+        let conn = self.get_direct_connection().await?;
+
+        let references_sql = r#"
+            SELECT s.symbol_uid, s.kind
+            FROM symbol_state s
+            LEFT JOIN edge e
+              ON e.source_symbol_uid = s.symbol_uid
+             AND e.relation = 'references'
+            WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
+              AND s.file_path IS NOT NULL
+              AND trim(s.file_path) != ''
+              AND e.source_symbol_uid IS NULL
+        "#;
+
+        let implementations_sql = r#"
+            SELECT s.symbol_uid, s.kind
+            FROM symbol_state s
+            LEFT JOIN edge e
+              ON e.source_symbol_uid = s.symbol_uid
+             AND e.relation IN ('implementation','implements')
+            WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
+              AND s.file_path IS NOT NULL
+              AND trim(s.file_path) != ''
+              AND e.source_symbol_uid IS NULL
+        "#;
+
+        let call_hierarchy_sql = r#"
+            SELECT s.symbol_uid, s.kind
+            FROM symbol_state s
+            LEFT JOIN edge e
+              ON e.relation IN ('calls','incoming_call','outgoing_call')
+             AND (e.source_symbol_uid = s.symbol_uid OR e.target_symbol_uid = s.symbol_uid)
+            WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
+              AND s.file_path IS NOT NULL
+              AND trim(s.file_path) != ''
+              AND e.relation IS NULL
+        "#;
+
+        let references = Self::fetch_pending_symbols_with_kind(
+            &conn,
+            references_sql,
+            "fetch pending references",
+        )
+        .await?;
+        let implementations = Self::fetch_pending_symbols_with_kind(
+            &conn,
+            implementations_sql,
+            "fetch pending implementations",
+        )
+        .await?;
+        let call_hierarchy = Self::fetch_pending_symbols_with_kind(
+            &conn,
+            call_hierarchy_sql,
+            "fetch pending call hierarchy",
+        )
+        .await?;
+
+        let references_pending = references.len() as u64;
+        let implementations_pending = implementations.len() as u64;
+        let call_hierarchy_pending = call_hierarchy.len() as u64;
+
+        let mut combined: std::collections::HashMap<String, String> = HashMap::new();
+        for (uid, kind) in references
+            .iter()
+            .chain(implementations.iter())
+            .chain(call_hierarchy.iter())
+        {
+            combined.entry(uid.clone()).or_insert_with(|| kind.clone());
+        }
+
+        let symbols_pending = combined.len() as u64;
+
+        let mut high_priority_pending = 0u64;
+        let mut medium_priority_pending = 0u64;
+        let mut low_priority_pending = 0u64;
+
+        for kind in combined.values() {
+            match Self::enrichment_priority(kind) {
+                0 => high_priority_pending += 1,
+                1 => medium_priority_pending += 1,
+                _ => low_priority_pending += 1,
+            }
+        }
+
+        Ok(PendingEnrichmentCounts {
+            symbols_pending,
+            references_pending,
+            implementations_pending,
+            call_hierarchy_pending,
+            high_priority_pending,
+            medium_priority_pending,
+            low_priority_pending,
+        })
+    }
+
     // NOTE: get_file_path_by_version_id method removed - now using direct file_path from symbol_state
 
     /// Helper method to generate unique IDs
@@ -4433,12 +5197,12 @@ impl SQLiteBackend {
                     .as_ref()
                     .map_or(false, |p| p == "unknown_file")
             {
-                eprintln!("🔍 DEBUG: Reference edge file path resolution issue:");
-                eprintln!("   - source_uid: {}", source_uid);
-                eprintln!("   - target_uid: {}", target_uid);
-                eprintln!("   - coalesced_path: {:?}", coalesced_path);
-                eprintln!("   - raw_path: {:?}", raw_path);
-                eprintln!("   => This symbol UID may not follow expected format or symbol missing from symbol_state");
+                debug!("🔍 DEBUG: Reference edge file path resolution issue:");
+                debug!("   - source_uid: {}", source_uid);
+                debug!("   - target_uid: {}", target_uid);
+                debug!("   - coalesced_path: {:?}", coalesced_path);
+                debug!("   - raw_path: {:?}", raw_path);
+                debug!("   => This symbol UID may not follow expected format or symbol missing from symbol_state");
             }
 
             edges.push(Edge {
@@ -4514,6 +5278,143 @@ impl SQLiteBackend {
                 }
             }
         }
+    }
+
+    async fn interpret_relation_status(
+        &self,
+        symbol_uid: &str,
+        relations: &[&str],
+    ) -> Result<EdgeInterpretation<Edge>, DatabaseError> {
+        if relations.is_empty() {
+            return Ok(EdgeInterpretation::AnalyzedEmpty);
+        }
+
+        let mut pool = self.pool.lock().await;
+        let conn = pool.get_connection().await?;
+        let edges = self
+            .fetch_edges_for_relations(&conn, symbol_uid, relations)
+            .await?;
+        pool.return_connection(conn);
+
+        Ok(self.interpret_edges_for_relation(edges))
+    }
+
+    async fn fetch_edges_for_relations(
+        &self,
+        conn: &Connection,
+        symbol_uid: &str,
+        relations: &[&str],
+    ) -> Result<Vec<Edge>, DatabaseError> {
+        if relations.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let placeholders = relations.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+
+        let sql = format!(
+            "SELECT source_symbol_uid, target_symbol_uid, relation, start_line, start_char, confidence, language, metadata \
+             FROM edge WHERE (source_symbol_uid = ? OR target_symbol_uid = ?) AND relation IN ({})",
+            placeholders
+        );
+
+        let mut params: Vec<turso::Value> = Vec::with_capacity(2 + relations.len());
+        params.push(turso::Value::Text(symbol_uid.to_string()));
+        params.push(turso::Value::Text(symbol_uid.to_string()));
+        for rel in relations {
+            params.push(turso::Value::Text(rel.to_string()));
+        }
+
+        let mut rows = safe_query(conn, &sql, params, "fetch edges for relation").await?;
+        let mut edges = Vec::new();
+
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to iterate relation edges: {}", e),
+            })?
+        {
+            let relation_str = match row.get_value(2) {
+                Ok(turso::Value::Text(rel)) => rel,
+                _ => continue,
+            };
+
+            let relation = match EdgeRelation::from_string(&relation_str) {
+                Ok(rel) => rel,
+                Err(_) => continue,
+            };
+
+            let source_uid = match row.get_value(0) {
+                Ok(turso::Value::Text(uid)) => uid,
+                _ => continue,
+            };
+            let target_uid = match row.get_value(1) {
+                Ok(turso::Value::Text(uid)) => uid,
+                _ => continue,
+            };
+
+            let start_line = match row.get_value(3) {
+                Ok(turso::Value::Integer(v)) => Some(v as u32),
+                Ok(turso::Value::Text(v)) => v.parse::<u32>().ok(),
+                _ => None,
+            };
+            let start_char = match row.get_value(4) {
+                Ok(turso::Value::Integer(v)) => Some(v as u32),
+                Ok(turso::Value::Text(v)) => v.parse::<u32>().ok(),
+                _ => None,
+            };
+            let confidence = match row.get_value(5) {
+                Ok(turso::Value::Real(v)) => v as f32,
+                Ok(turso::Value::Integer(v)) => v as f32,
+                _ => 1.0,
+            };
+            let language = match row.get_value(6) {
+                Ok(turso::Value::Text(lang)) => lang,
+                _ => "unknown".to_string(),
+            };
+            let metadata = match row.get_value(7) {
+                Ok(turso::Value::Text(meta)) => Some(meta),
+                _ => None,
+            };
+
+            edges.push(Edge {
+                relation,
+                source_symbol_uid: source_uid,
+                target_symbol_uid: target_uid,
+                file_path: None,
+                start_line,
+                start_char,
+                confidence,
+                language,
+                metadata,
+            });
+        }
+
+        Ok(edges)
+    }
+
+    pub async fn references_status(
+        &self,
+        symbol_uid: &str,
+    ) -> Result<EdgeInterpretation<Edge>, DatabaseError> {
+        self.interpret_relation_status(symbol_uid, &["references"])
+            .await
+    }
+
+    pub async fn implementations_status(
+        &self,
+        symbol_uid: &str,
+    ) -> Result<EdgeInterpretation<Edge>, DatabaseError> {
+        self.interpret_relation_status(symbol_uid, &["implements", "implementation"])
+            .await
+    }
+
+    pub async fn call_hierarchy_status(
+        &self,
+        symbol_uid: &str,
+    ) -> Result<EdgeInterpretation<Edge>, DatabaseError> {
+        self.interpret_relation_status(symbol_uid, &["calls", "incoming_call", "outgoing_call"])
+            .await
     }
 
     /// Validate database integrity with comprehensive checks
@@ -4982,7 +5883,17 @@ impl SQLiteBackend {
 mod tests {
     use super::*;
     use crate::database::DatabaseConfig;
-    use tempfile::tempdir;
+    use std::fs;
+    use tempfile::{tempdir, TempDir};
+
+    async fn create_backend(temp_dir: &TempDir, name: &str) -> SQLiteBackend {
+        let db_path = temp_dir.path().join(name);
+        let config = DatabaseConfig {
+            path: Some(db_path),
+            ..Default::default()
+        };
+        SQLiteBackend::new(config).await.unwrap()
+    }
 
     #[tokio::test]
     async fn test_sqlite_backend_basic_operations() {
@@ -5004,6 +5915,164 @@ mod tests {
 
         let value = backend.get(b"test_key").await.unwrap();
         assert_eq!(value, None);
+    }
+
+    #[tokio::test]
+    async fn test_store_symbols_normalizes_uid_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let temp_dir = TempDir::new()?;
+        let backend = create_backend(&temp_dir, "symbols.db").await;
+
+        let file_path = temp_dir.path().join("src/lib.rs");
+        fs::create_dir_all(file_path.parent().unwrap())?;
+        fs::write(&file_path, "fn foo() {}\n")?;
+
+        let absolute_uid = format!("{}:deadbeef:Foo:1", file_path.display());
+        let symbol = SymbolState {
+            symbol_uid: absolute_uid,
+            file_path: file_path.display().to_string(),
+            language: "rust".to_string(),
+            name: "Foo".to_string(),
+            fqn: None,
+            kind: "function".to_string(),
+            signature: None,
+            visibility: None,
+            def_start_line: 1,
+            def_start_char: 0,
+            def_end_line: 1,
+            def_end_char: 3,
+            is_definition: true,
+            documentation: None,
+            metadata: None,
+        };
+
+        backend.store_symbols(&[symbol]).await?;
+
+        let conn = backend.get_direct_connection().await?;
+        let mut rows = conn
+            .query(
+                "SELECT symbol_uid, file_path FROM symbol_state",
+                [] as [turso::Value; 0],
+            )
+            .await?;
+
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let uid = match row.get_value(0) {
+                Ok(turso::Value::Text(val)) => val,
+                _ => continue,
+            };
+            let path = match row.get_value(1) {
+                Ok(turso::Value::Text(val)) => val,
+                _ => continue,
+            };
+            entries.push((uid, path));
+        }
+
+        if entries.len() != 1 {
+            panic!("edges {:?}", entries);
+        }
+        let (stored_uid, stored_path) = &entries[0];
+        let temp_dir_str = temp_dir.path().to_string_lossy().into_owned();
+        assert!(stored_uid.contains("src/lib.rs"));
+        assert!(!stored_uid.starts_with('/'));
+        assert!(!stored_uid.contains(&temp_dir_str));
+        assert!(stored_path.contains("src/lib.rs"));
+        assert!(!stored_path.starts_with('/'));
+        assert!(!stored_path.contains(&temp_dir_str));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_store_edges_normalizes_and_deduplicates() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp_dir = TempDir::new()?;
+        let backend = create_backend(&temp_dir, "edges.db").await;
+
+        let file_path = temp_dir.path().join("src/lib.rs");
+        fs::create_dir_all(file_path.parent().unwrap())?;
+        fs::write(&file_path, "fn foo() {}\n")?;
+
+        let absolute_uid = format!("{}:deadbeef:Foo:1", file_path.display());
+        let relative_uid = "src/lib.rs:deadbeef:Foo:1".to_string();
+
+        let symbol = SymbolState {
+            symbol_uid: relative_uid.clone(),
+            file_path: "src/lib.rs".to_string(),
+            language: "rust".to_string(),
+            name: "Foo".to_string(),
+            fqn: None,
+            kind: "function".to_string(),
+            signature: None,
+            visibility: None,
+            def_start_line: 1,
+            def_start_char: 0,
+            def_end_line: 1,
+            def_end_char: 3,
+            is_definition: true,
+            documentation: None,
+            metadata: None,
+        };
+        backend.store_symbols(&[symbol]).await?;
+
+        let edge_absolute = Edge {
+            relation: EdgeRelation::References,
+            source_symbol_uid: absolute_uid,
+            target_symbol_uid: relative_uid.clone(),
+            file_path: Some(file_path.display().to_string()),
+            start_line: Some(10),
+            start_char: Some(2),
+            confidence: 1.0,
+            language: "rust".to_string(),
+            metadata: None,
+        };
+
+        let edge_duplicate = Edge {
+            relation: EdgeRelation::References,
+            source_symbol_uid: edge_absolute.source_symbol_uid.clone(),
+            target_symbol_uid: edge_absolute.target_symbol_uid.clone(),
+            file_path: edge_absolute.file_path.clone(),
+            start_line: edge_absolute.start_line,
+            start_char: edge_absolute.start_char,
+            confidence: edge_absolute.confidence,
+            language: edge_absolute.language.clone(),
+            metadata: edge_absolute.metadata.clone(),
+        };
+
+        backend
+            .store_edges(&[edge_absolute, edge_duplicate])
+            .await?;
+
+        let conn = backend.get_direct_connection().await?;
+        let mut rows = conn
+            .query(
+                "SELECT source_symbol_uid, target_symbol_uid FROM edge",
+                [] as [turso::Value; 0],
+            )
+            .await?;
+
+        let mut entries = Vec::new();
+        while let Some(row) = rows.next().await? {
+            let source = match row.get_value(0) {
+                Ok(turso::Value::Text(val)) => val,
+                _ => continue,
+            };
+            let target = match row.get_value(1) {
+                Ok(turso::Value::Text(val)) => val,
+                _ => continue,
+            };
+            entries.push((source, target));
+        }
+
+        assert_eq!(entries.len(), 1);
+        let (source_uid, target_uid) = &entries[0];
+        let temp_dir_str = temp_dir.path().to_string_lossy().into_owned();
+        assert!(source_uid.contains("src/lib.rs"));
+        assert!(target_uid.contains("src/lib.rs"));
+        assert!(!source_uid.contains(&temp_dir_str));
+        assert!(!target_uid.contains(&temp_dir_str));
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -5385,6 +6454,60 @@ mod tests {
             .await
             .unwrap();
         assert!(!paths.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_store_edges_deduplicates_duplicates() {
+        let config = DatabaseConfig {
+            temporary: true,
+            ..Default::default()
+        };
+
+        let backend = SQLiteBackend::new(config).await.unwrap();
+
+        let duplicate_edge = Edge {
+            relation: EdgeRelation::References,
+            source_symbol_uid: "dup_source".to_string(),
+            target_symbol_uid: "dup_target".to_string(),
+            file_path: Some("src/main.rs".to_string()),
+            start_line: Some(42),
+            start_char: Some(5),
+            confidence: 1.0,
+            language: "rust".to_string(),
+            metadata: Some("dedup_test".to_string()),
+        };
+
+        let edges = vec![duplicate_edge.clone(), duplicate_edge.clone()];
+
+        backend.store_edges(&edges).await.unwrap();
+        // Replaying the same edges should not create new rows.
+        backend.store_edges(&edges).await.unwrap();
+
+        let mut pool_guard = backend.pool.lock().await;
+        let conn = pool_guard.get_connection().await.unwrap();
+
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM edge WHERE relation = ? AND source_symbol_uid = ? AND target_symbol_uid = ?",
+                [
+                    turso::Value::Text(duplicate_edge.relation.to_string().to_string()),
+                    turso::Value::Text(duplicate_edge.source_symbol_uid.clone()),
+                    turso::Value::Text(duplicate_edge.target_symbol_uid.clone()),
+                ],
+            )
+            .await
+            .unwrap();
+
+        let count = match rows.next().await.unwrap() {
+            Some(row) => match row.get_value(0).unwrap() {
+                turso::Value::Integer(val) => val,
+                _ => 0,
+            },
+            None => 0,
+        };
+
+        pool_guard.return_connection(conn);
+        assert_eq!(count, 1, "duplicate edges should be stored only once");
     }
 
     #[tokio::test]

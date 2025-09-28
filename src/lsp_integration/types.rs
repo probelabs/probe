@@ -168,6 +168,7 @@ pub struct LspConfig {
     pub timeout_ms: u64,
     /// If true, do NOT filter out standard library entries in call hierarchy results.
     pub include_stdlib: bool,
+    pub auto_start: bool,
 }
 
 impl Default for LspConfig {
@@ -177,6 +178,7 @@ impl Default for LspConfig {
             workspace_hint: None,
             timeout_ms: 30000,
             include_stdlib: false, // Default to filtering out stdlib
+            auto_start: true,
         }
     }
 }

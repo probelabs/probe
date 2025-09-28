@@ -348,6 +348,7 @@ impl LspManager {
             workspace_hint,
             timeout_ms: 10000, // 10 seconds for status command
             include_stdlib: false,
+            auto_start: true,
         };
 
         // On first run, daemon needs to start which can take up to 10s
@@ -581,6 +582,7 @@ impl LspManager {
             workspace_hint,
             timeout_ms: 5000, // 5 seconds for ping
             include_stdlib: false,
+            auto_start: true,
         };
 
         let start_time = std::time::Instant::now();
@@ -654,6 +656,7 @@ impl LspManager {
             workspace_hint: workspace_hint.clone(),
             timeout_ms: 30000, // Increased for rust-analyzer
             include_stdlib: false,
+            auto_start: true,
         };
 
         let mut client = LspClient::new(config).await;
@@ -672,6 +675,7 @@ impl LspManager {
             workspace_hint,
             timeout_ms: 240000, // Increased to 4 minutes for full rust-analyzer indexing (90s) + call hierarchy (60s)
             include_stdlib: false,
+            auto_start: true,
         };
 
         let mut client = LspClient::new(config).await?;
@@ -742,12 +746,37 @@ impl LspManager {
             return Ok(());
         }
 
-        // Connect to daemon to get logs (without auto-starting)
+        // Quick check: attempt a fast connection so we can fail fast without loading
+        // the full LSP client (avoids 10s wait when daemon is down).
+        let socket_path = if let Ok(path) = std::env::var("PROBE_LSP_SOCKET_PATH") {
+            path
+        } else {
+            lsp_daemon::get_default_socket_path()
+        };
+
+        match tokio::time::timeout(
+            Duration::from_millis(300),
+            lsp_daemon::IpcStream::connect(&socket_path),
+        )
+        .await
+        {
+            Ok(Ok(stream)) => drop(stream),
+            _ => {
+                println!("{}", "LSP daemon is not running".red());
+                println!("Start the daemon with: {}", "probe lsp start".cyan());
+                return Ok(());
+            }
+        }
+
+        // Connection is available; drop the probe stream and create full client without auto-starting
+        // (the quick check ensures the daemon is already up).
+
         let config = LspConfig {
             use_daemon: true,
             workspace_hint: None,
             timeout_ms: 10000, // Short timeout for logs
             include_stdlib: false,
+            auto_start: false, // Don't auto-start daemon for simple log inspection
         };
         let mut client = match LspClient::new(config).await {
             Ok(client) => client,
@@ -1175,6 +1204,7 @@ impl LspManager {
             workspace_hint: Some(workspace_root.to_string_lossy().to_string()),
             timeout_ms: 60000, // 60 seconds for initialization
             include_stdlib: false,
+            auto_start: true,
         };
 
         let mut client = LspClient::new(config).await?;
@@ -2722,6 +2752,14 @@ impl LspManager {
                         }
 
                         println!(
+                            "  {}: refs:{} impls:{} calls:{}",
+                            "Ops Attempted".bold(),
+                            lsp_enrichment.references_attempted,
+                            lsp_enrichment.implementations_attempted,
+                            lsp_enrichment.call_hierarchy_attempted
+                        );
+
+                        println!(
                             "  {}: {}",
                             "Edges Created".bold(),
                             lsp_enrichment.edges_created
@@ -2736,6 +2774,16 @@ impl LspManager {
                                 queue.high_priority_items,
                                 queue.medium_priority_items,
                                 queue.low_priority_items
+                            );
+                        }
+                        if queue.total_operations > 0 {
+                            println!(
+                                "    {}: {} (refs:{} impls:{} calls:{})",
+                                "Operations".bold(),
+                                queue.total_operations,
+                                queue.references_operations,
+                                queue.implementations_operations,
+                                queue.call_hierarchy_operations
                             );
                         }
                     }

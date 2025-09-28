@@ -1,5 +1,15 @@
 use std::path::PathBuf;
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn abstract_socket_disabled() -> bool {
+    std::env::var("PROBE_DISABLE_ABSTRACT_SOCKET").is_ok()
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn custom_socket_override() -> Option<String> {
+    std::env::var("PROBE_LSP_SOCKET_PATH").ok()
+}
+
 /// Get the default socket/pipe path for the current platform
 pub fn get_default_socket_path() -> String {
     // Check for environment variable override first
@@ -25,6 +35,9 @@ pub fn get_default_socket_path() -> String {
 pub fn socket_exists(path: &str) -> bool {
     #[cfg(unix)]
     {
+        if unix_abstract_name(path).is_some() {
+            return false;
+        }
         std::path::Path::new(path).exists()
     }
 
@@ -63,6 +76,9 @@ pub fn socket_exists(path: &str) -> bool {
 pub fn remove_socket_file(path: &str) -> std::io::Result<()> {
     #[cfg(unix)]
     {
+        if unix_abstract_name(path).is_some() {
+            return Ok(());
+        }
         if std::path::Path::new(path).exists() {
             std::fs::remove_file(path)?;
         }
@@ -81,6 +97,9 @@ pub fn remove_socket_file(path: &str) -> std::io::Result<()> {
 pub fn get_socket_parent_dir(path: &str) -> Option<PathBuf> {
     #[cfg(unix)]
     {
+        if unix_abstract_name(path).is_some() {
+            return None;
+        }
         std::path::Path::new(path).parent().map(|p| p.to_path_buf())
     }
 
@@ -160,4 +179,40 @@ mod tests {
             assert_eq!(normalize_executable("script.sh"), "script.sh");
         }
     }
+}
+
+/// Determine the abstract socket name for the provided path, if enabled on this platform.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+pub fn unix_abstract_name(path: &str) -> Option<Vec<u8>> {
+    if abstract_socket_disabled() {
+        return None;
+    }
+
+    if path.starts_with("unix:@") {
+        return Some(path[6..].as_bytes().to_vec());
+    }
+    if path.starts_with('@') {
+        return Some(path[1..].as_bytes().to_vec());
+    }
+
+    if let Some(ref override_path) = custom_socket_override() {
+        if override_path.starts_with("unix:@") {
+            return Some(override_path[6..].as_bytes().to_vec());
+        }
+        if override_path.starts_with('@') {
+            return Some(override_path[1..].as_bytes().to_vec());
+        }
+        // Respect explicit filesystem override
+        return None;
+    }
+
+    // Generate deterministic abstract name based on requested path
+    let hash = blake3::hash(path.as_bytes());
+    let name = format!("probe-lsp-{}", &hash.to_hex()[..16]);
+    Some(name.as_bytes().to_vec())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+pub fn unix_abstract_name(_path: &str) -> Option<Vec<u8>> {
+    None
 }

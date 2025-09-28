@@ -894,6 +894,9 @@ pub struct LspEnrichmentInfo {
     /// Total reference edges persisted by workers
     #[serde(default)]
     pub reference_edges_created: u64,
+    /// Total implementation edges persisted by workers
+    #[serde(default)]
+    pub implementation_edges_created: u64,
     /// Positions adjusted (snapped to identifier)
     #[serde(default)]
     pub positions_adjusted: u64,
@@ -903,6 +906,18 @@ pub struct LspEnrichmentInfo {
     /// Total references found across symbols
     #[serde(default)]
     pub references_found: u64,
+    /// Total implementations found across symbols
+    #[serde(default)]
+    pub implementations_found: u64,
+    /// Reference operations attempted (including empty results)
+    #[serde(default)]
+    pub references_attempted: u64,
+    /// Implementation operations attempted (including empty results)
+    #[serde(default)]
+    pub implementations_attempted: u64,
+    /// Call hierarchy operations attempted (including empty results)
+    #[serde(default)]
+    pub call_hierarchy_attempted: u64,
     pub success_rate: f64, // Percentage of successfully enriched symbols
 }
 
@@ -912,6 +927,14 @@ pub struct LspEnrichmentQueueInfo {
     pub high_priority_items: usize,
     pub medium_priority_items: usize,
     pub low_priority_items: usize,
+    #[serde(default)]
+    pub total_operations: usize,
+    #[serde(default)]
+    pub references_operations: usize,
+    #[serde(default)]
+    pub implementations_operations: usize,
+    #[serde(default)]
+    pub call_hierarchy_operations: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

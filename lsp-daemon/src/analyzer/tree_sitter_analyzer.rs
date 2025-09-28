@@ -406,8 +406,17 @@ impl TreeSitterAnalyzer {
         let is_callable = symbol_kind.is_callable();
         let mut symbol_info = SymbolInfo::new(name, symbol_kind, language.to_string(), location);
 
-        // Extract qualified name if in scope
-        if !scope_stack.is_empty() {
+        // Use sophisticated AST-based FQN extraction instead of simple scope stack
+        if let Some(fqn) = self.build_fqn_from_ast(node, content, file_path, language) {
+            // If FQN doesn't already end with the symbol name, append it
+            let symbol_name = symbol_info.name.clone();
+            if !fqn.ends_with(&symbol_name) {
+                symbol_info = symbol_info.with_qualified_name(format!("{}::{}", fqn, symbol_name));
+            } else {
+                symbol_info = symbol_info.with_qualified_name(fqn);
+            }
+        } else if !scope_stack.is_empty() {
+            // Fallback to scope stack if AST extraction fails (shouldn't happen)
             let mut fqn_parts = scope_stack.to_vec();
             fqn_parts.push(symbol_info.name.clone());
             symbol_info = symbol_info.with_qualified_name(fqn_parts.join("::"));
@@ -446,7 +455,8 @@ impl TreeSitterAnalyzer {
     fn map_rust_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
         match node_kind {
             "function_item" => Some(SymbolKind::Function),
-            "impl_item" => Some(SymbolKind::Method), // Impl block methods
+            // Do not treat impl blocks as symbols themselves; methods are function_item within impl
+            "impl_item" => None,
             "struct_item" => Some(SymbolKind::Struct),
             "enum_item" => Some(SymbolKind::Enum),
             "trait_item" => Some(SymbolKind::Trait),
@@ -795,6 +805,33 @@ impl TreeSitterAnalyzer {
         self.extract_symbol_name(node, content)
             .ok()
             .filter(|name| !name.is_empty())
+    }
+
+    /// Build sophisticated FQN from AST node position using tree-sitter
+    /// Delegates to the centralized FQN implementation using in-memory content
+    fn build_fqn_from_ast(
+        &self,
+        node: tree_sitter::Node,
+        content: &[u8],
+        file_path: &Path,
+        language: &str,
+    ) -> Option<String> {
+        // Get the node's position and use the shared FQN extraction with provided content
+        let start_pos = node.start_position();
+        let content_str = match std::str::from_utf8(content) {
+            Ok(s) => s,
+            Err(_) => return None,
+        };
+        match crate::fqn::get_fqn_from_ast_with_content(
+            file_path,
+            content_str,
+            start_pos.row as u32,
+            start_pos.column as u32,
+            Some(language),
+        ) {
+            Ok(fqn) if !fqn.is_empty() => Some(fqn),
+            _ => None,
+        }
     }
 
     /// Extract relationships from AST using the advanced relationship extractor
