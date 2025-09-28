@@ -261,6 +261,12 @@ export function formatExecutionResult(result, includeMetadata = false) {
     output += `Error: ${result.error}`;
   }
 
+  // Add exit code for failed commands
+  if (!result.success && result.exitCode !== undefined && result.exitCode !== 0) {
+    if (output) output += '\n';
+    output += `Exit code: ${result.exitCode}`;
+  }
+
   return output || (result.success ? 'Command completed successfully (no output)' : 'Command failed (no output)');
 }
 
@@ -292,8 +298,12 @@ export function validateExecutionOptions(options = {}) {
   }
 
   // Check working directory
-  if (options.workingDirectory && typeof options.workingDirectory !== 'string') {
-    errors.push('workingDirectory must be a string');
+  if (options.workingDirectory) {
+    if (typeof options.workingDirectory !== 'string') {
+      errors.push('workingDirectory must be a string');
+    } else if (!existsSync(options.workingDirectory)) {
+      errors.push(`workingDirectory does not exist: ${options.workingDirectory}`);
+    }
   }
 
   // Check environment

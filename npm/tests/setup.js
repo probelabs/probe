@@ -32,33 +32,3 @@ afterEach(() => {
     console.warn = originalConsole.warn;
   }
 });
-
-// Global test helpers
-global.testHelpers = {
-  // Helper to create mock responses
-  createMockResponse: (content, schema = null) => ({
-    content,
-    schema,
-    timestamp: new Date().toISOString()
-  }),
-  
-  // Helper to wait for async operations
-  waitFor: (ms) => new Promise(resolve => setTimeout(resolve, ms)),
-  
-  // Helper to suppress console during specific operations
-  withSuppressedConsole: async (fn) => {
-    const originalMethods = {
-      log: console.log,
-      error: console.error,
-      warn: console.warn
-    };
-    
-    console.log = console.error = console.warn = () => {};
-    
-    try {
-      return await fn();
-    } finally {
-      Object.assign(console, originalMethods);
-    }
-  }
-};

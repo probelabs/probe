@@ -4,6 +4,7 @@
  */
 
 import { tool } from 'ai';
+import { resolve } from 'path';
 import { BashPermissionChecker } from '../agent/bashPermissions.js';
 import { executeBashCommand, formatExecutionResult, validateExecutionOptions } from '../agent/bashExecutor.js';
 
@@ -147,9 +148,9 @@ For code exploration, try these safe alternatives:
 
         // Validate working directory is within allowed folders if specified
         if (allowedFolders && allowedFolders.length > 0) {
-          const resolvedWorkingDir = require('path').resolve(workingDir);
+          const resolvedWorkingDir = resolve(workingDir);
           const isAllowed = allowedFolders.some(folder => {
-            const resolvedFolder = require('path').resolve(folder);
+            const resolvedFolder = resolve(folder);
             return resolvedWorkingDir.startsWith(resolvedFolder);
           });
 

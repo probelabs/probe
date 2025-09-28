@@ -156,7 +156,7 @@ describe('Bash Command Executor', () => {
 
       const result = validateExecutionOptions(options);
       expect(result.valid).toBe(false);
-      expect(result.error).toContain('directory');
+      expect(result.errors[0]).toContain('does not exist');
     });
 
     test('should validate timeout', () => {
@@ -166,7 +166,7 @@ describe('Bash Command Executor', () => {
 
       const result = validateExecutionOptions(options);
       expect(result.valid).toBe(false);
-      expect(result.error).toContain('timeout');
+      expect(result.errors[0]).toContain('timeout');
     });
 
     test('should accept valid options', () => {
