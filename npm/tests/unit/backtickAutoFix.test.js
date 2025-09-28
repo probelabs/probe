@@ -66,9 +66,9 @@ flowchart TD
       
       expect(result.wasFixed).toBe(true);
       
-      // Check all patterns are fixed
+      // Check all patterns are fixed with HTML entities
       expect(result.fixedResponse).toContain('A["File (config.yaml)"]'); // parentheses
-      expect(result.fixedResponse).toContain('B{"Has \'extends\' key?"}'); // single quotes
+      expect(result.fixedResponse).toContain('B{"Has &#39;extends&#39; key?"}'); // single quotes converted to HTML entity
       expect(result.fixedResponse).toContain('C["Process `type: ai` default"]'); // backticks
       expect(result.fixedResponse).toContain('D["Output <br>result"]'); // HTML tags
     });
