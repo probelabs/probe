@@ -27,6 +27,18 @@ import chalk from 'chalk';
 
 // Parse command line arguments
 const args = process.argv.slice(2);
+
+// Check for unknown options and typos
+const knownOptions = ['--verbose', '-v', '--strict', '-s', '--fix', '-f'];
+const unknownOptions = args.filter(arg => arg.startsWith('-') && !knownOptions.includes(arg));
+if (unknownOptions.length > 0) {
+  console.error(chalk.red(`Unknown option(s): ${unknownOptions.join(', ')}`));
+  if (unknownOptions.some(opt => opt.includes('stict'))) {
+    console.error(chalk.yellow('Did you mean --strict instead of --stict?'));
+  }
+  process.exit(1);
+}
+
 const verbose = args.includes('--verbose') || args.includes('-v');
 const strict = args.includes('--strict') || args.includes('-s');
 const autoFix = args.includes('--fix') || args.includes('-f');
