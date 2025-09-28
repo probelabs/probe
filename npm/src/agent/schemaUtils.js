@@ -1191,7 +1191,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             // Check if content needs quoting (contains problematic patterns)
             if (needsQuoting(content)) {
               wasFixed = true;
-              // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+              // Use HTML entities for quotes as per Mermaid best practices:
+              // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
+              // - HTML entities are the official way to escape quotes in Mermaid
+              // - Always use double quotes with square brackets ["..."] for node labels
               const safeContent = content
                 .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                 .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
@@ -1213,7 +1216,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
             // Check if content needs quoting (contains problematic patterns)
             if (needsQuoting(content)) {
               wasFixed = true;
-              // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+              // Use HTML entities for quotes as per Mermaid best practices:
+              // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
+              // - HTML entities are the official way to escape quotes in Mermaid
+              // - Always use double quotes with curly brackets {"..."} for diamond nodes
               const safeContent = content
                 .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                 .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
@@ -1450,7 +1456,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // Check if content needs quoting (contains problematic patterns)
               if (needsQuoting(content)) {
                 wasFixed = true;
-                // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+                // Use HTML entities for quotes as per Mermaid best practices:
+                // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
+                // - HTML entities are the official way to escape quotes in Mermaid
+                // - Always use double quotes with square brackets ["..."] for node labels
                 const safeContent = content
                   .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                   .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
@@ -1472,7 +1481,10 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
               // Check if content needs quoting (contains problematic patterns)
               if (needsQuoting(content)) {
                 wasFixed = true;
-                // Replace internal quotes with HTML entities to avoid nesting and GitHub issues
+                // Use HTML entities for quotes as per Mermaid best practices:
+                // - GitHub doesn't support single quotes in node labels (causes 'got PS' error)
+                // - HTML entities are the official way to escape quotes in Mermaid
+                // - Always use double quotes with curly brackets {"..."} for diamond nodes
                 const safeContent = content
                   .replace(/"/g, '&quot;')  // Replace double quotes with HTML entity
                   .replace(/'/g, '&#39;');  // Replace single quotes with HTML entity
