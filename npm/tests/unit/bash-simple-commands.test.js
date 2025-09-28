@@ -186,7 +186,7 @@ describe('Simplified Permission Checker', () => {
     test('should reject commands with no matching allow pattern', () => {
       const result = checker.check('unknown-command');
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('No matching allow pattern');
+      expect(result.reason).toContain('Command not in allow list');
     });
   });
 

@@ -109,7 +109,7 @@ Dangerous commands are blocked by default (rm -rf, sudo, npm install, etc.)`,
     execute: async ({ command, workingDirectory, timeout, env }) => {
       try {
         // Validate command
-        if (!command || typeof command !== 'string') {
+        if (command === null || command === undefined || typeof command !== 'string') {
           return 'Error: Command is required and must be a string';
         }
 

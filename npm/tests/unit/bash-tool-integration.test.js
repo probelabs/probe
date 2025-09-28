@@ -116,13 +116,13 @@ describe('Bash Tool Integration', () => {
     }, 10000);
 
     test('should handle command execution errors gracefully', async () => {
-      const result = await tool.execute({ command: 'nonexistentcommand123456' });
+      const result = await tool.execute({ command: 'ls /nonexistent/path/12345' });
       
       // Should not be a permission error
       expect(result).not.toContain('Permission denied');
       
       // Should indicate execution failure
-      expect(result).toContain('Command failed') || expect(result).toContain('Error executing');
+      expect(result).toMatch(/Command failed|Error executing/);
     });
   });
 
@@ -202,7 +202,7 @@ describe('Bash Tool Integration', () => {
 
     test('should handle env parameter', async () => {
       const result = await tool.execute({ 
-        command: 'echo $TEST_VAR',
+        command: 'printenv TEST_VAR',
         env: { TEST_VAR: 'test_value' }
       });
       

@@ -224,7 +224,7 @@ export function formatExecutionResult(result, includeMetadata = false) {
   // Add command info if metadata requested
   if (includeMetadata) {
     output += `Command: ${result.command}\n`;
-    output += `Working Directory: ${result.workingDirectory}\n`;
+    output += `Working directory: ${result.workingDirectory}\n`;
     output += `Duration: ${result.duration}ms\n`;
     output += `Exit Code: ${result.exitCode}\n`;
     if (result.signal) {

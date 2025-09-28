@@ -189,7 +189,7 @@ export class BashPermissionChecker {
       if (!matchesAnyPattern(parsed, this.allowPatterns)) {
         return {
           allowed: false,
-          reason: 'No matching allow pattern found',
+          reason: 'Command not in allow list',
           command: command,
           parsed: parsed
         };

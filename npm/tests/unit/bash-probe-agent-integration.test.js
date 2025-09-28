@@ -19,21 +19,7 @@ jest.mock('ai', () => ({
   }))
 }));
 
-// Mock the tools that depend on external binaries
-jest.mock('../../src/search.js', () => ({
-  search: jest.fn().mockResolvedValue('mock search result')
-}));
-jest.mock('../../src/query.js', () => ({
-  query: jest.fn().mockResolvedValue('mock query result')
-}));
-jest.mock('../../src/extract.js', () => ({
-  extract: jest.fn().mockResolvedValue('mock extract result')
-}));
-jest.mock('../../src/delegate.js', () => ({
-  delegate: jest.fn().mockResolvedValue('mock delegate result')
-}));
-
-// Import after mocking
+// Import ProbeAgent
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 describe('Bash Tool ProbeAgent Integration', () => {

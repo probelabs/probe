@@ -43,14 +43,14 @@ export function parseSimpleCommand(command) {
     /\|/,           // Pipes
     /&&/,           // Logical AND
     /\|\|/,         // Logical OR
-    /;/,            // Command separator
+    /(?<!\\);/,     // Command separator (but not escaped \;)
     /&$/,           // Background execution
     /\$\(/,         // Command substitution $()
     /`/,            // Command substitution ``
     />/,            // Redirection >
     /</,            // Redirection <
     /\*\*/,         // Glob patterns (potentially dangerous)
-    /^\s*\{|\}\s*$/,  // Brace expansion (but not braces inside quoted args)
+    /^\s*\{.*,.*\}|\{.*\.\.\.*\}/,  // Brace expansion like {a,b} or {1..10} (but not find {} placeholders)
   ];
 
   for (const pattern of complexPatterns) {

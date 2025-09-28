@@ -8,7 +8,7 @@
  */
 export const DEFAULT_ALLOW_PATTERNS = [
   // Basic navigation and listing
-  'ls', 'ls:*', 'dir', 'pwd', 'cd', 'cd:*',
+  'ls', 'dir', 'pwd', 'cd', 'cd:*',
   
   // File reading commands
   'cat', 'cat:*', 'head', 'head:*', 'tail', 'tail:*',
@@ -65,7 +65,7 @@ export const DEFAULT_ALLOW_PATTERNS = [
   
   // System information
   'uname', 'uname:*', 'hostname', 'whoami', 'id', 'groups',
-  'date', 'cal', 'uptime', 'w', 'users',
+  'date', 'cal', 'uptime', 'w', 'users', 'sleep', 'sleep:*',
   
   // Environment and shell
   'env', 'printenv', 'echo', 'echo:*', 'printf', 'printf:*',
@@ -117,7 +117,8 @@ export const DEFAULT_DENY_PATTERNS = [
   'dd', 'dd:*', 'shred', 'shred:*',
   
   // Dangerous find operations that can execute arbitrary commands
-  'find:-exec:*', 'find:-execdir:*', 'find:-ok:*', 'find:-okdir:*',
+  'find:-exec:*', 'find:*:-exec:*', 'find:-execdir:*', 'find:*:-execdir:*', 
+  'find:-ok:*', 'find:*:-ok:*', 'find:-okdir:*', 'find:*:-okdir:*',
   
   // Powerful scripting tools that can execute arbitrary commands
   'awk', 'awk:*', 'perl', 'perl:*', 'python:-c:*', 'node:-e:*',

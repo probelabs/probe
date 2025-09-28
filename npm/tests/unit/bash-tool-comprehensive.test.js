@@ -167,9 +167,9 @@ describe('Bash Tool - End-to-End Integration', () => {
     test('should match patterns precisely', () => {
       const checker = new BashPermissionChecker({ debug: false });
 
-      // Test exact patterns
+      // Test exact patterns  
       expect(checker.check('ls').allowed).toBe(true);
-      expect(checker.check('ls -la').allowed).toBe(false); // ls without args only
+      expect(checker.check('ls -la').allowed).toBe(true); // ls pattern allows any ls args
 
       // Test wildcard patterns  
       expect(checker.check('git status').allowed).toBe(true);
