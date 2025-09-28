@@ -137,6 +137,21 @@ where
     }
 }
 
+/// Attempt to rollback the current transaction, logging but ignoring failures.
+async fn rollback_transaction(conn: &Connection, context: &str) {
+    match conn.execute("ROLLBACK", ()).await {
+        Ok(_) => {
+            debug!("🔄 SQL_DEBUG: Transaction rollback succeeded ({})", context);
+        }
+        Err(e) => {
+            warn!(
+                "⚠️ SQL_DEBUG: Transaction rollback failed for {}: {}",
+                context, e
+            );
+        }
+    }
+}
+
 /// Extract panic message from panic payload
 fn extract_panic_message(panic_err: Box<dyn std::any::Any + Send>) -> String {
     if let Some(s) = panic_err.downcast_ref::<String>() {
@@ -2435,104 +2450,124 @@ impl DatabaseBackend for SQLiteBackend {
             message: format!("Failed to begin transaction for symbols: {}", e),
         })?;
 
-        // Insert directly into symbol_state table with the correct schema
-        for symbol in &unique_symbols {
-            // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
-            let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
-            let mut check_rows = safe_query(
-                &conn,
-                check_query,
-                [turso::Value::Text(symbol.symbol_uid.clone())],
-                "check symbol existence",
-            )
-            .await?;
+        let transaction_result: Result<(), DatabaseError> = async {
+            // Insert directly into symbol_state table with the correct schema
+            for symbol in &unique_symbols {
+                // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
+                let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
+                let mut check_rows = safe_query(
+                    &conn,
+                    check_query,
+                    [turso::Value::Text(symbol.symbol_uid.clone())],
+                    "check symbol existence",
+                )
+                .await?;
 
-            let symbol_exists = check_rows
-                .next()
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to check symbol existence: {}", e),
-                })?
-                .is_some();
-
-            let params = vec![
-                turso::Value::Text(symbol.file_path.clone()),
-                turso::Value::Text(symbol.language.clone()),
-                turso::Value::Text(symbol.name.clone()),
-                symbol
-                    .fqn
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                turso::Value::Text(symbol.kind.clone()),
-                symbol
-                    .signature
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                symbol
-                    .visibility
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                turso::Value::Integer(symbol.def_start_line as i64),
-                turso::Value::Integer(symbol.def_start_char as i64),
-                turso::Value::Integer(symbol.def_end_line as i64),
-                turso::Value::Integer(symbol.def_end_char as i64),
-                turso::Value::Integer(if symbol.is_definition { 1 } else { 0 }),
-                symbol
-                    .documentation
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                symbol
-                    .metadata
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-            ];
-
-            if symbol_exists {
-                // Update existing symbol
-                let update_query = "UPDATE symbol_state SET 
-                    file_path = ?, language = ?, name = ?, fqn = ?, kind = ?,
-                    signature = ?, visibility = ?, def_start_line = ?, def_start_char = ?,
-                    def_end_line = ?, def_end_char = ?, is_definition = ?,
-                    documentation = ?, metadata = ?
-                    WHERE symbol_uid = ?";
-
-                let mut update_params = params.clone();
-                update_params.push(turso::Value::Text(symbol.symbol_uid.clone()));
-
-                safe_execute_with_retry(&conn, update_query, update_params, "update symbol", 5)
+                let symbol_exists = check_rows
+                    .next()
                     .await
                     .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to update symbol {}: {}", symbol.symbol_uid, e),
-                    })?;
-            } else {
-                // Insert new symbol
-                let insert_query = "INSERT INTO symbol_state 
-                    (symbol_uid, file_path, language, name, fqn, kind, signature, visibility, 
-                     def_start_line, def_start_char, def_end_line, def_end_char, is_definition, documentation, metadata) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        message: format!("Failed to check symbol existence: {}", e),
+                    })?
+                    .is_some();
 
-                let mut insert_params = vec![turso::Value::Text(symbol.symbol_uid.clone())];
-                insert_params.extend(params);
+                let params = vec![
+                    turso::Value::Text(symbol.file_path.clone()),
+                    turso::Value::Text(symbol.language.clone()),
+                    turso::Value::Text(symbol.name.clone()),
+                    symbol
+                        .fqn
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    turso::Value::Text(symbol.kind.clone()),
+                    symbol
+                        .signature
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    symbol
+                        .visibility
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    turso::Value::Integer(symbol.def_start_line as i64),
+                    turso::Value::Integer(symbol.def_start_char as i64),
+                    turso::Value::Integer(symbol.def_end_line as i64),
+                    turso::Value::Integer(symbol.def_end_char as i64),
+                    turso::Value::Integer(if symbol.is_definition { 1 } else { 0 }),
+                    symbol
+                        .documentation
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    symbol
+                        .metadata
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                ];
 
-                safe_execute_with_retry(&conn, insert_query, insert_params, "insert symbol", 5)
-                    .await
-                    .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to insert symbol {}: {}", symbol.symbol_uid, e),
-                    })?;
+                if symbol_exists {
+                    // Update existing symbol
+                    let update_query = "UPDATE symbol_state SET 
+                        file_path = ?, language = ?, name = ?, fqn = ?, kind = ?,
+                        signature = ?, visibility = ?, def_start_line = ?, def_start_char = ?,
+                        def_end_line = ?, def_end_char = ?, is_definition = ?,
+                        documentation = ?, metadata = ?
+                        WHERE symbol_uid = ?";
+
+                    let mut update_params = params.clone();
+                    update_params.push(turso::Value::Text(symbol.symbol_uid.clone()));
+
+                    safe_execute_with_retry(&conn, update_query, update_params, "update symbol", 5)
+                        .await
+                        .map_err(|e| DatabaseError::OperationFailed {
+                            message: format!(
+                                "Failed to update symbol {}: {}",
+                                symbol.symbol_uid, e
+                            ),
+                        })?;
+                } else {
+                    // Insert new symbol
+                    let insert_query = "INSERT INTO symbol_state 
+                        (symbol_uid, file_path, language, name, fqn, kind, signature, visibility, 
+                         def_start_line, def_start_char, def_end_line, def_end_char, is_definition, documentation, metadata) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+                    let mut insert_params = vec![turso::Value::Text(symbol.symbol_uid.clone())];
+                    insert_params.extend(params);
+
+                    safe_execute_with_retry(&conn, insert_query, insert_params, "insert symbol", 5)
+                        .await
+                        .map_err(|e| DatabaseError::OperationFailed {
+                            message: format!(
+                                "Failed to insert symbol {}: {}",
+                                symbol.symbol_uid, e
+                            ),
+                        })?;
+                }
             }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = transaction_result {
+            rollback_transaction(&conn, "store_symbols").await;
+            pool.return_connection(conn);
+            return Err(err);
         }
 
-        // Commit transaction
-        safe_execute_with_retry(&conn, "COMMIT", (), "commit symbol transaction", 5)
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
+        if let Err(e) =
+            safe_execute_with_retry(&conn, "COMMIT", (), "commit symbol transaction", 5).await
+        {
+            rollback_transaction(&conn, "store_symbols commit failure").await;
+            pool.return_connection(conn);
+            return Err(DatabaseError::OperationFailed {
                 message: format!("Failed to commit symbol transaction: {}", e),
-            })?;
+            });
+        }
 
         pool.return_connection(conn);
         debug!(
@@ -5002,112 +5037,128 @@ impl SQLiteBackend {
             }
         })?;
 
-        // Insert directly into symbol_state table with the correct schema
-        for symbol in symbols {
-            // CRITICAL: Reject symbols with empty/null file paths to prevent workspace resolution issues
-            if symbol.file_path.trim().is_empty() {
-                warn!(
-                    "[VALIDATION] Rejecting symbol '{}' ({}) with empty file path - this would cause empty workspace registration!",
-                    symbol.name, symbol.kind
-                );
-                continue;
-            }
-            // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
-            let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
-            let mut check_rows = safe_query(
-                &conn,
-                check_query,
-                [turso::Value::Text(symbol.symbol_uid.clone())],
-                "check symbol existence",
-            )
-            .await?;
+        let transaction_result: Result<(), DatabaseError> = async {
+            // Insert directly into symbol_state table with the correct schema
+            for symbol in symbols {
+                // CRITICAL: Reject symbols with empty/null file paths to prevent workspace resolution issues
+                if symbol.file_path.trim().is_empty() {
+                    warn!(
+                        "[VALIDATION] Rejecting symbol '{}' ({}) with empty file path - this would cause empty workspace registration!",
+                        symbol.name, symbol.kind
+                    );
+                    continue;
+                }
+                // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
+                let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
+                let mut check_rows = safe_query(
+                    &conn,
+                    check_query,
+                    [turso::Value::Text(symbol.symbol_uid.clone())],
+                    "check symbol existence",
+                )
+                .await?;
 
-            let symbol_exists = check_rows
-                .next()
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to check symbol existence: {}", e),
-                })?
-                .is_some();
-
-            let params = vec![
-                turso::Value::Text(symbol.file_path.clone()),
-                turso::Value::Text(symbol.language.clone()),
-                turso::Value::Text(symbol.name.clone()),
-                symbol
-                    .fqn
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                turso::Value::Text(symbol.kind.clone()),
-                symbol
-                    .signature
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                symbol
-                    .visibility
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                turso::Value::Integer(symbol.def_start_line as i64),
-                turso::Value::Integer(symbol.def_start_char as i64),
-                turso::Value::Integer(symbol.def_end_line as i64),
-                turso::Value::Integer(symbol.def_end_char as i64),
-                turso::Value::Integer(if symbol.is_definition { 1 } else { 0 }),
-                symbol
-                    .documentation
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-                symbol
-                    .metadata
-                    .as_ref()
-                    .map(|s| turso::Value::Text(s.clone()))
-                    .unwrap_or(turso::Value::Null),
-            ];
-
-            if symbol_exists {
-                // Update existing symbol
-                let update_query = "UPDATE symbol_state SET 
-                    file_path = ?, language = ?, name = ?, fqn = ?, kind = ?,
-                    signature = ?, visibility = ?, def_start_line = ?, def_start_char = ?,
-                    def_end_line = ?, def_end_char = ?, is_definition = ?,
-                    documentation = ?, metadata = ?
-                    WHERE symbol_uid = ?";
-
-                let mut update_params = params.clone();
-                update_params.push(turso::Value::Text(symbol.symbol_uid.clone()));
-
-                safe_execute(&conn, update_query, update_params, "update symbol")
+                let symbol_exists = check_rows
+                    .next()
                     .await
                     .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to update symbol {}: {}", symbol.symbol_uid, e),
-                    })?;
-            } else {
-                // Insert new symbol
-                let insert_query = "INSERT INTO symbol_state 
-                    (symbol_uid, file_path, language, name, fqn, kind, signature, visibility, 
-                     def_start_line, def_start_char, def_end_line, def_end_char, is_definition, documentation, metadata) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        message: format!("Failed to check symbol existence: {}", e),
+                    })?
+                    .is_some();
 
-                let mut insert_params = vec![turso::Value::Text(symbol.symbol_uid.clone())];
-                insert_params.extend(params);
+                let params = vec![
+                    turso::Value::Text(symbol.file_path.clone()),
+                    turso::Value::Text(symbol.language.clone()),
+                    turso::Value::Text(symbol.name.clone()),
+                    symbol
+                        .fqn
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    turso::Value::Text(symbol.kind.clone()),
+                    symbol
+                        .signature
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    symbol
+                        .visibility
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    turso::Value::Integer(symbol.def_start_line as i64),
+                    turso::Value::Integer(symbol.def_start_char as i64),
+                    turso::Value::Integer(symbol.def_end_line as i64),
+                    turso::Value::Integer(symbol.def_end_char as i64),
+                    turso::Value::Integer(if symbol.is_definition { 1 } else { 0 }),
+                    symbol
+                        .documentation
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                    symbol
+                        .metadata
+                        .as_ref()
+                        .map(|s| turso::Value::Text(s.clone()))
+                        .unwrap_or(turso::Value::Null),
+                ];
 
-                safe_execute(&conn, insert_query, insert_params, "insert symbol")
-                    .await
-                    .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to insert symbol {}: {}", symbol.symbol_uid, e),
-                    })?;
+                if symbol_exists {
+                    // Update existing symbol
+                    let update_query = "UPDATE symbol_state SET 
+                        file_path = ?, language = ?, name = ?, fqn = ?, kind = ?,
+                        signature = ?, visibility = ?, def_start_line = ?, def_start_char = ?,
+                        def_end_line = ?, def_end_char = ?, is_definition = ?,
+                        documentation = ?, metadata = ?
+                        WHERE symbol_uid = ?";
+
+                    let mut update_params = params.clone();
+                    update_params.push(turso::Value::Text(symbol.symbol_uid.clone()));
+
+                    safe_execute(&conn, update_query, update_params, "update symbol")
+                        .await
+                        .map_err(|e| DatabaseError::OperationFailed {
+                            message: format!(
+                                "Failed to update symbol {}: {}",
+                                symbol.symbol_uid, e
+                            ),
+                        })?;
+                } else {
+                    // Insert new symbol
+                    let insert_query = "INSERT INTO symbol_state 
+                        (symbol_uid, file_path, language, name, fqn, kind, signature, visibility, 
+                         def_start_line, def_start_char, def_end_line, def_end_char, is_definition, documentation, metadata) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+                    let mut insert_params = vec![turso::Value::Text(symbol.symbol_uid.clone())];
+                    insert_params.extend(params);
+
+                    safe_execute(&conn, insert_query, insert_params, "insert symbol")
+                        .await
+                        .map_err(|e| DatabaseError::OperationFailed {
+                            message: format!(
+                                "Failed to insert symbol {}: {}",
+                                symbol.symbol_uid, e
+                            ),
+                        })?;
+                }
             }
+
+            Ok(())
+        }
+        .await;
+
+        if let Err(err) = transaction_result {
+            rollback_transaction(&conn, "store_symbols_with_conn").await;
+            return Err(err);
         }
 
-        // Commit transaction
-        conn.execute("COMMIT", ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
+        if let Err(e) = conn.execute("COMMIT", ()).await {
+            rollback_transaction(&conn, "store_symbols_with_conn commit failure").await;
+            return Err(DatabaseError::OperationFailed {
                 message: format!("Failed to commit symbol transaction: {}", e),
-            })?;
+            });
+        }
 
         debug!(
             "[DIRECT_CONNECTION] store_symbols_with_conn: Successfully stored {} symbols",
