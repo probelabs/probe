@@ -27,6 +27,7 @@ async fn test_client_drop_no_spurious_connections() -> Result<()> {
         timeout_ms: 5000,
         workspace_hint: None,
         include_stdlib: false,
+        auto_start: false,
     };
 
     // Create and drop multiple clients rapidly
@@ -91,6 +92,7 @@ async fn test_version_compatibility_check() -> Result<()> {
         timeout_ms: 5000,
         workspace_hint: None,
         include_stdlib: false,
+        auto_start: false,
     };
 
     // Call client creation multiple times rapidly - this triggers version checks
@@ -121,6 +123,7 @@ async fn test_concurrent_client_creation() -> Result<()> {
         timeout_ms: 10000,
         workspace_hint: None,
         include_stdlib: false,
+        auto_start: false,
     };
 
     const NUM_CLIENTS: usize = 5;
@@ -191,6 +194,7 @@ async fn test_daemon_status_multiple_calls() -> Result<()> {
         timeout_ms: 5000,
         workspace_hint: None,
         include_stdlib: false,
+        auto_start: false,
     };
 
     // Try to create a client and call status multiple times

@@ -15,7 +15,11 @@ impl MockBertReranker {
     /// Mock reranking using simple text similarity heuristics
     /// In a real implementation, this would use the BERT model
     pub fn rerank(&self, query: &str, documents: &[&str]) -> Result<Vec<RankedDocument>> {
-        println!("Mock reranking {} documents for query: '{}'", documents.len(), query);
+        println!(
+            "Mock reranking {} documents for query: '{}'",
+            documents.len(),
+            query
+        );
 
         let mut ranked_docs = Vec::new();
 
@@ -70,7 +74,13 @@ pub struct RankedDocument {
 
 impl std::fmt::Display for RankedDocument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{}: {:.4} - {}", self.index + 1, self.score, self.document)
+        write!(
+            f,
+            "#{}: {:.4} - {}",
+            self.index + 1,
+            self.score,
+            self.document
+        )
     }
 }
 
@@ -85,7 +95,7 @@ fn main() -> Result<()> {
                 .short('q')
                 .value_name("QUERY")
                 .help("Search query")
-                .required(true)
+                .required(true),
         )
         .arg(
             Arg::new("documents")
@@ -93,14 +103,14 @@ fn main() -> Result<()> {
                 .short('d')
                 .value_name("DOCS")
                 .help("Comma-separated list of documents to rerank")
-                .required(false)
+                .required(false),
         )
         .arg(
             Arg::new("interactive")
                 .long("interactive")
                 .short('i')
                 .help("Run in interactive mode")
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
         .get_matches();
 

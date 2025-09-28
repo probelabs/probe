@@ -456,7 +456,7 @@ impl Default for IndexingConfig {
             auto_index: false, // Auto-index DISABLED by default to prevent infinite loops
             watch_files: true, // File watching enabled by default
             default_depth: 3,
-            max_workers: num_cpus::get().min(8), // Reasonable default
+            max_workers: 1, // Single worker for both Phase 1 and Phase 2
             max_queue_size: 10000,
             global_exclude_patterns: vec![
                 // Only exclude version control and truly non-source directories

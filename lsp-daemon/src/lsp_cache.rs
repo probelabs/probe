@@ -572,6 +572,7 @@ mod tests {
     use super::*;
     use crate::cache_types::{DefinitionInfo, LocationInfo, RangeInfo};
     use tempfile::tempdir;
+    use tracing::warn;
 
     #[tokio::test]
     async fn test_lsp_cache_basic_operations() {
@@ -694,8 +695,8 @@ mod tests {
         let result = cache
             .get_or_compute(key.clone(), || async {
                 // DuckDB backend might have issues loading from persistent storage
-                eprintln!("Warning: Had to recompute - persistent storage not working with DuckDB backend");
-                eprintln!("Key: file={}, line={}, col={}", key.file.display(), key.line, key.column);
+                warn!("Warning: Had to recompute - persistent storage not working with DuckDB backend");
+                warn!("Key: file={}, line={}, col={}", key.file.display(), key.line, key.column);
                 Ok(test_data.clone())
             })
             .await

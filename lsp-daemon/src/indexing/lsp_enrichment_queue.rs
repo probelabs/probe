@@ -37,6 +37,14 @@ impl EnrichmentPriority {
     }
 }
 
+/// Individual LSP enrichment operations that can be executed for a symbol
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum EnrichmentOperation {
+    References,
+    Implementations,
+    CallHierarchy,
+}
+
 /// Item in the LSP enrichment queue
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueueItem {
@@ -56,6 +64,8 @@ pub struct QueueItem {
     pub kind: String,
     /// Processing priority
     pub priority: EnrichmentPriority,
+    /// Pending enrichment operations for this symbol
+    pub operations: Vec<EnrichmentOperation>,
 }
 
 impl QueueItem {
@@ -80,7 +90,14 @@ impl QueueItem {
             language,
             kind,
             priority,
+            operations: Vec::new(),
         }
+    }
+
+    /// Attach pending operations to this queue item
+    pub fn with_operations(mut self, operations: Vec<EnrichmentOperation>) -> Self {
+        self.operations = operations;
+        self
     }
 }
 
@@ -192,12 +209,25 @@ impl LspEnrichmentQueue {
         let mut high_count = 0;
         let mut medium_count = 0;
         let mut low_count = 0;
+        let mut total_operations = 0;
+        let mut references_operations = 0;
+        let mut implementations_operations = 0;
+        let mut call_hierarchy_operations = 0;
 
         for item in queue.iter() {
             match item.item.priority {
                 EnrichmentPriority::High => high_count += 1,
                 EnrichmentPriority::Medium => medium_count += 1,
                 EnrichmentPriority::Low => low_count += 1,
+            }
+
+            total_operations += item.item.operations.len();
+            for op in &item.item.operations {
+                match op {
+                    EnrichmentOperation::References => references_operations += 1,
+                    EnrichmentOperation::Implementations => implementations_operations += 1,
+                    EnrichmentOperation::CallHierarchy => call_hierarchy_operations += 1,
+                }
             }
         }
 
@@ -206,6 +236,10 @@ impl LspEnrichmentQueue {
             high_priority_items: high_count,
             medium_priority_items: medium_count,
             low_priority_items: low_count,
+            total_operations,
+            references_operations,
+            implementations_operations,
+            call_hierarchy_operations,
         }
     }
 
@@ -235,6 +269,14 @@ pub struct EnrichmentQueueStats {
     pub medium_priority_items: usize,
     /// Number of low priority items
     pub low_priority_items: usize,
+    /// Total pending operations across all queue items
+    pub total_operations: usize,
+    /// Pending reference operations
+    pub references_operations: usize,
+    /// Pending implementation operations
+    pub implementations_operations: usize,
+    /// Pending call hierarchy operations
+    pub call_hierarchy_operations: usize,
 }
 
 impl EnrichmentQueueStats {

@@ -47,19 +47,13 @@ impl LspClientWrapper {
         timeout_ms: u64,
     ) -> Result<Vec<Location>, LspEnhancementError> {
         let language = self.detect_language(file_path)?;
-        let workspace_root = self.resolve_workspace(file_path).await?;
+        let _workspace_root = self.resolve_workspace(file_path).await?;
 
         // Call LSP references with timeout
         let json_result = timeout(
             Duration::from_millis(timeout_ms),
-            self.server_manager.references(
-                language,
-                workspace_root,
-                file_path,
-                line,
-                column,
-                include_declaration,
-            ),
+            self.server_manager
+                .references(language, file_path, line, column, include_declaration),
         )
         .await
         .map_err(|_| LspEnhancementError::LspTimeout {
@@ -99,13 +93,13 @@ impl LspClientWrapper {
         timeout_ms: u64,
     ) -> Result<Vec<Location>, LspEnhancementError> {
         let language = self.detect_language(file_path)?;
-        let workspace_root = self.resolve_workspace(file_path).await?;
+        let _workspace_root = self.resolve_workspace(file_path).await?;
 
         // Call LSP definition with timeout
         let json_result = timeout(
             Duration::from_millis(timeout_ms),
             self.server_manager
-                .definition(language, workspace_root, file_path, line, column),
+                .definition(language, file_path, line, column),
         )
         .await
         .map_err(|_| LspEnhancementError::LspTimeout {
@@ -145,13 +139,12 @@ impl LspClientWrapper {
         timeout_ms: u64,
     ) -> Result<Option<serde_json::Value>, LspEnhancementError> {
         let language = self.detect_language(file_path)?;
-        let workspace_root = self.resolve_workspace(file_path).await?;
+        let _workspace_root = self.resolve_workspace(file_path).await?;
 
         // Call LSP hover with timeout
         let result = timeout(
             Duration::from_millis(timeout_ms),
-            self.server_manager
-                .hover(language, workspace_root, file_path, line, column),
+            self.server_manager.hover(language, file_path, line, column),
         )
         .await
         .map_err(|_| LspEnhancementError::LspTimeout {
@@ -182,13 +175,13 @@ impl LspClientWrapper {
         timeout_ms: u64,
     ) -> Result<CallHierarchyResult, LspEnhancementError> {
         let language = self.detect_language(file_path)?;
-        let workspace_root = self.resolve_workspace(file_path).await?;
+        let _workspace_root = self.resolve_workspace(file_path).await?;
 
         // Call LSP call hierarchy with timeout
         let result = timeout(
             Duration::from_millis(timeout_ms),
             self.server_manager
-                .call_hierarchy(language, workspace_root, file_path, line, column),
+                .call_hierarchy(language, file_path, line, column),
         )
         .await
         .map_err(|_| LspEnhancementError::LspTimeout {
@@ -221,13 +214,13 @@ impl LspClientWrapper {
         timeout_ms: u64,
     ) -> Result<Vec<Location>, LspEnhancementError> {
         let language = self.detect_language(file_path)?;
-        let workspace_root = self.resolve_workspace(file_path).await?;
+        let _workspace_root = self.resolve_workspace(file_path).await?;
 
         // Call LSP implementation with timeout
         let json_result = timeout(
             Duration::from_millis(timeout_ms),
             self.server_manager
-                .implementation(language, workspace_root, file_path, line, column),
+                .implementation(language, file_path, line, column),
         )
         .await
         .map_err(|_| LspEnhancementError::LspTimeout {

@@ -2,6 +2,7 @@ use crate::language_detector::Language;
 use crate::lsp_registry::LspServerConfig;
 use crate::lsp_server::LspServer;
 use crate::protocol::{ServerReadinessInfo, WorkspaceInfo};
+use crate::workspace_utils;
 // Removed unused imports - readiness types are used in method implementations
 use crate::watchdog::ProcessMonitor;
 use anyhow::{anyhow, Context, Result};
@@ -9,10 +10,85 @@ use dashmap::DashMap;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, RwLock, Semaphore};
 // Provide a grace period where health checks won't restart new, CPU-heavy servers
 const STARTUP_HEALTH_GRACE_SECS: u64 = 180;
+
+// Configuration constants for per-language concurrency control
+const DEFAULT_MAX_CONCURRENT_REQUESTS_PER_SERVER: usize = 3;
+const DEFAULT_MAX_CONSECUTIVE_FAILURES: u32 = 5;
+
+/// Health tracking information for a language server
+#[derive(Debug)]
+struct ServerHealth {
+    consecutive_failures: AtomicU32,
+    last_success: RwLock<Option<Instant>>,
+    is_healthy: AtomicBool,
+}
+
+impl ServerHealth {
+    fn new() -> Self {
+        Self {
+            consecutive_failures: AtomicU32::new(0),
+            last_success: RwLock::new(None),
+            is_healthy: AtomicBool::new(true),
+        }
+    }
+
+    fn record_success(&self) {
+        self.consecutive_failures.store(0, Ordering::Relaxed);
+        self.is_healthy.store(true, Ordering::Relaxed);
+        // Update last_success timestamp
+        if let Ok(mut last_success) = self.last_success.try_write() {
+            *last_success = Some(Instant::now());
+        }
+    }
+
+    fn record_failure(&self, max_consecutive_failures: u32) {
+        let failures = self.consecutive_failures.fetch_add(1, Ordering::Relaxed) + 1;
+        if failures >= max_consecutive_failures {
+            self.is_healthy.store(false, Ordering::Relaxed);
+        }
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.is_healthy.load(Ordering::Relaxed)
+    }
+
+    fn get_consecutive_failures(&self) -> u32 {
+        self.consecutive_failures.load(Ordering::Relaxed)
+    }
+
+    async fn get_last_success(&self) -> Option<Instant> {
+        *self.last_success.read().await
+    }
+}
+
+/// Configuration for per-language concurrency control
+#[derive(Debug, Clone)]
+struct ConcurrencyConfig {
+    max_concurrent_requests_per_server: usize,
+    max_consecutive_failures: u32,
+}
+
+impl Default for ConcurrencyConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent_requests_per_server: std::env::var(
+                "PROBE_LSP_MAX_CONCURRENT_REQUESTS_PER_SERVER",
+            )
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(DEFAULT_MAX_CONCURRENT_REQUESTS_PER_SERVER),
+            max_consecutive_failures: std::env::var("PROBE_LSP_MAX_CONSECUTIVE_FAILURES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(DEFAULT_MAX_CONSECUTIVE_FAILURES),
+        }
+    }
+}
 use tokio::sync::Mutex;
 use tokio::time::{Duration, Instant};
 use tracing::{debug, info, warn};
@@ -246,6 +322,12 @@ pub struct SingleServerManager {
     process_monitor: Arc<ProcessMonitor>,
     /// Singleflight for workspace initialization to prevent race conditions
     workspace_init_singleflight: Arc<WorkspaceInitSingleflight>,
+    /// Per-language semaphores for concurrency control
+    language_semaphores: Arc<DashMap<Language, Arc<Semaphore>>>,
+    /// Per-language health tracking
+    language_health: Arc<DashMap<Language, Arc<ServerHealth>>>,
+    /// Configuration for concurrency control and health tracking
+    concurrency_config: ConcurrencyConfig,
 }
 
 impl SingleServerManager {
@@ -258,18 +340,130 @@ impl SingleServerManager {
         child_processes: Arc<tokio::sync::Mutex<Vec<u32>>>,
     ) -> Self {
         let process_monitor = Arc::new(ProcessMonitor::with_limits(95.0, 2048)); // 95% CPU, 2GB memory (TSServer-friendly)
+        let concurrency_config = ConcurrencyConfig::default();
+
         Self {
             servers: Arc::new(DashMap::new()),
             registry,
             child_processes,
             process_monitor,
             workspace_init_singleflight: Arc::new(WorkspaceInitSingleflight::new()),
+            language_semaphores: Arc::new(DashMap::new()),
+            language_health: Arc::new(DashMap::new()),
+            concurrency_config,
         }
     }
 
     /// Get the process monitor instance
     pub fn process_monitor(&self) -> Arc<ProcessMonitor> {
         self.process_monitor.clone()
+    }
+
+    /// Get or create a semaphore for the specified language
+    fn get_language_semaphore(&self, language: Language) -> Arc<Semaphore> {
+        if let Some(semaphore) = self.language_semaphores.get(&language) {
+            return semaphore.clone();
+        }
+
+        // Create new semaphore for this language
+        let semaphore = Arc::new(Semaphore::new(
+            self.concurrency_config.max_concurrent_requests_per_server,
+        ));
+        self.language_semaphores.insert(language, semaphore.clone());
+        debug!(
+            "Created new semaphore for {:?} with {} permits",
+            language, self.concurrency_config.max_concurrent_requests_per_server
+        );
+        semaphore
+    }
+
+    /// Get or create health tracking for the specified language
+    fn get_language_health(&self, language: Language) -> Arc<ServerHealth> {
+        if let Some(health) = self.language_health.get(&language) {
+            return health.clone();
+        }
+
+        // Create new health tracker for this language
+        let health = Arc::new(ServerHealth::new());
+        self.language_health.insert(language, health.clone());
+        debug!("Created new health tracker for {:?}", language);
+        health
+    }
+
+    /// Check if a language server is healthy and can handle requests
+    fn is_server_healthy(&self, language: Language) -> bool {
+        if let Some(health) = self.language_health.get(&language) {
+            health.is_healthy()
+        } else {
+            // No health record means server hasn't been used yet - assume healthy
+            true
+        }
+    }
+
+    /// Execute an LSP request with semaphore control and health tracking
+    async fn execute_with_semaphore<F, T>(&self, language: Language, operation: F) -> Result<T>
+    where
+        F: std::future::Future<Output = Result<T>>,
+    {
+        // Check circuit breaker - fail fast if server is unhealthy
+        if !self.is_server_healthy(language) {
+            let health = self.get_language_health(language);
+            let failures = health.get_consecutive_failures();
+            return Err(anyhow!(
+                "Server for {:?} is unhealthy ({} consecutive failures). Failing fast.",
+                language,
+                failures
+            ));
+        }
+
+        // Get semaphore for this language
+        let semaphore = self.get_language_semaphore(language);
+        let health = self.get_language_health(language);
+
+        // Acquire semaphore permit
+        let _permit = semaphore.acquire().await.map_err(|e| {
+            anyhow!(
+                "Failed to acquire semaphore permit for {:?}: {}",
+                language,
+                e
+            )
+        })?;
+
+        debug!(
+            "Acquired semaphore permit for {:?} ({} permits remaining)",
+            language,
+            semaphore.available_permits()
+        );
+
+        // Execute the operation
+        match operation.await {
+            Ok(result) => {
+                health.record_success();
+                debug!(
+                    "LSP operation succeeded for {:?}, health restored",
+                    language
+                );
+                Ok(result)
+            }
+            Err(err) => {
+                health.record_failure(self.concurrency_config.max_consecutive_failures);
+                let failures = health.get_consecutive_failures();
+                warn!(
+                    "LSP operation failed for {:?} ({} consecutive failures): {}",
+                    language, failures, err
+                );
+
+                if !health.is_healthy() {
+                    warn!(
+                        "Server for {:?} marked unhealthy after {} consecutive failures",
+                        language, failures
+                    );
+                }
+
+                Err(err)
+            }
+        }
+        // Semaphore permit is automatically released when _permit is dropped
     }
 
     /// Check and handle unhealthy processes
@@ -445,7 +639,10 @@ impl SingleServerManager {
                 return Ok(server_instance);
             } else {
                 // Server may be busy (e.g., indexing). This is normal and not a failure.
-                debug!("Server {:?} lock busy, but returning instance anyway - this is normal during indexing", language);
+                debug!(
+                    "Server {:?} lock busy, but returning instance anyway - this is normal during indexing",
+                    language
+                );
                 // Return the existing instance - being busy is not a problem
                 return Ok(server_instance);
             }
@@ -515,6 +712,16 @@ impl SingleServerManager {
         Ok(result.server_instance)
     }
 
+    async fn ensure_workspace_for_file(
+        &self,
+        language: Language,
+        file_path: &Path,
+    ) -> Result<Arc<Mutex<ServerInstance>>> {
+        let workspace_root = workspace_utils::resolve_lsp_workspace_root(language, file_path)?;
+        self.ensure_workspace_registered(language, workspace_root)
+            .await
+    }
+
     /// Internal implementation of workspace registration without singleflight
     async fn ensure_workspace_registered_internal(
         servers: Arc<DashMap<Language, Arc<Mutex<ServerInstance>>>>,
@@ -570,7 +777,10 @@ impl SingleServerManager {
                     {
                         Ok(guard) => guard,
                         Err(_) => {
-                            warn!("Failed to acquire lock for {:?} server workspace registration within 30s timeout", language);
+                            warn!(
+                                "Failed to acquire lock for {:?} server workspace registration within 30s timeout",
+                                language
+                            );
                             return Err(anyhow!(
                                 "Server lock acquisition timeout for {:?}",
                                 language
@@ -1042,6 +1252,45 @@ impl SingleServerManager {
                         ServerStatus::Initializing
                     };
 
+                    // Get health information for this language
+                    let health_status = if let Some(health) = self.language_health.get(&language) {
+                        ServerHealthStatus {
+                            is_healthy: health.is_healthy(),
+                            consecutive_failures: health.get_consecutive_failures(),
+                            last_success: health.get_last_success().await,
+                        }
+                    } else {
+                        ServerHealthStatus {
+                            is_healthy: true,
+                            consecutive_failures: 0,
+                            last_success: None,
+                        }
+                    };
+
+                    // Get semaphore information for this language
+                    let semaphore_info =
+                        if let Some(semaphore) = self.language_semaphores.get(&language) {
+                            let available = semaphore.available_permits();
+                            let total = self.concurrency_config.max_concurrent_requests_per_server;
+                            SemaphoreInfo {
+                                max_concurrent_requests: total,
+                                available_permits: available,
+                                total_permits: total,
+                            }
+                        } else {
+                            SemaphoreInfo {
+                                max_concurrent_requests: self
+                                    .concurrency_config
+                                    .max_concurrent_requests_per_server,
+                                available_permits: self
+                                    .concurrency_config
+                                    .max_concurrent_requests_per_server,
+                                total_permits: self
+                                    .concurrency_config
+                                    .max_concurrent_requests_per_server,
+                            }
+                        };
+
                     stats.push(ServerStats {
                         language,
                         workspace_count: server.registered_workspaces.len(),
@@ -1050,12 +1299,54 @@ impl SingleServerManager {
                         workspaces: server.registered_workspaces.iter().cloned().collect(),
                         uptime: server.start_time.elapsed(),
                         status,
+                        health_status,
+                        semaphore_info,
                     });
                 }
                 Err(_) => {
                     // Server is busy (likely initializing), return partial stats immediately
                     // This prevents the status command from hanging
                     debug!("Server {:?} is busy, returning partial stats", language);
+
+                    // Get health information even when server is busy
+                    let health_status = if let Some(health) = self.language_health.get(&language) {
+                        ServerHealthStatus {
+                            is_healthy: health.is_healthy(),
+                            consecutive_failures: health.get_consecutive_failures(),
+                            last_success: health.get_last_success().await,
+                        }
+                    } else {
+                        ServerHealthStatus {
+                            is_healthy: true,
+                            consecutive_failures: 0,
+                            last_success: None,
+                        }
+                    };
+
+                    // Get semaphore information even when server is busy
+                    let semaphore_info =
+                        if let Some(semaphore) = self.language_semaphores.get(&language) {
+                            let available = semaphore.available_permits();
+                            let total = self.concurrency_config.max_concurrent_requests_per_server;
+                            SemaphoreInfo {
+                                max_concurrent_requests: total,
+                                available_permits: available,
+                                total_permits: total,
+                            }
+                        } else {
+                            SemaphoreInfo {
+                                max_concurrent_requests: self
+                                    .concurrency_config
+                                    .max_concurrent_requests_per_server,
+                                available_permits: self
+                                    .concurrency_config
+                                    .max_concurrent_requests_per_server,
+                                total_permits: self
+                                    .concurrency_config
+                                    .max_concurrent_requests_per_server,
+                            }
+                        };
+
                     stats.push(ServerStats {
                         language,
                         workspace_count: 0,                     // Unknown
@@ -1064,6 +1355,8 @@ impl SingleServerManager {
                         workspaces: Vec::new(), // Unknown
                         uptime: Duration::from_secs(0), // Unknown
                         status: ServerStatus::Initializing, // Most likely initializing if busy
+                        health_status,
+                        semaphore_info,
                     });
                 }
             }
@@ -1142,7 +1435,10 @@ impl SingleServerManager {
                 }
                 Err(_) => {
                     // Cannot check if server is idle because it's currently busy
-                    tracing::debug!("Could not check idle status for {:?} server - server is busy, skipping cleanup", language);
+                    tracing::debug!(
+                        "Could not check idle status for {:?} server - server is busy, skipping cleanup",
+                        language
+                    );
                 }
             }
         }
@@ -1160,7 +1456,10 @@ impl SingleServerManager {
                     Err(_) => {
                         // Server is busy, we removed it from the map but couldn't shut it down cleanly
                         // The server will be orphaned but should shut down when dropped
-                        warn!("Could not acquire lock to shutdown idle {:?} server - server is busy. Server instance has been removed from pool and will be orphaned.", language);
+                        warn!(
+                            "Could not acquire lock to shutdown idle {:?} server - server is busy. Server instance has been removed from pool and will be orphaned.",
+                            language
+                        );
                     }
                 }
             }
@@ -1171,64 +1470,74 @@ impl SingleServerManager {
     pub async fn definition(
         &self,
         language: Language,
-        workspace_root: PathBuf,
         file_path: &std::path::Path,
         line: u32,
         column: u32,
     ) -> Result<serde_json::Value> {
-        // Get or create server for this language and workspace
-        let server_instance = self
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
+        // Execute with semaphore control and health tracking
+        self.execute_with_semaphore(language, async {
+            // Get or create server for this language and workspace
+            let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
 
-        let server = server_instance.lock().await;
+            let server = server_instance.lock().await;
 
-        // Delegate to the underlying LspServer
-        server.server.definition(file_path, line, column).await
+            // Delegate to the underlying LspServer
+            server.server.definition(file_path, line, column).await
+        })
+        .await
     }
 
     /// Execute textDocument/references request for the given file and position
     pub async fn references(
         &self,
         language: Language,
-        workspace_root: PathBuf,
         file_path: &std::path::Path,
         line: u32,
         column: u32,
         include_declaration: bool,
     ) -> Result<serde_json::Value> {
-        // Get or create server for this language and workspace
-        let server_instance = self
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
+        // Execute with semaphore control and health tracking
+        self.execute_with_semaphore(language, async {
+            // Get or create server for this language and workspace
+            let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
 
-        let server = server_instance.lock().await;
+            let server = server_instance.lock().await;
 
-        // Delegate to the underlying LspServer
-        server
-            .server
-            .references(file_path, line, column, include_declaration)
-            .await
+            if !server.server.supports_references() {
+                return Err(anyhow!(
+                    "References not supported by {:?} language server",
+                    language
+                ));
+            }
+
+            // Delegate to the underlying LspServer
+            server
+                .server
+                .references(file_path, line, column, include_declaration)
+                .await
+        })
+        .await
     }
 
     /// Execute textDocument/hover request for the given file and position
     pub async fn hover(
         &self,
         language: Language,
-        workspace_root: PathBuf,
         file_path: &std::path::Path,
         line: u32,
         column: u32,
     ) -> Result<serde_json::Value> {
-        // Get or create server for this language and workspace
-        let server_instance = self
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
+        // Execute with semaphore control and health tracking
+        self.execute_with_semaphore(language, async {
+            // Get or create server for this language and workspace
+            let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
 
-        let server = server_instance.lock().await;
+            let server = server_instance.lock().await;
 
-        // Delegate to the underlying LspServer
-        server.server.hover(file_path, line, column).await
+            // Delegate to the underlying LspServer
+            server.server.hover(file_path, line, column).await
+        })
+        .await
     }
 
     /// Execute call hierarchy request for the given file and position
@@ -1236,108 +1545,124 @@ impl SingleServerManager {
     pub async fn call_hierarchy(
         &self,
         language: Language,
-        workspace_root: PathBuf,
         file_path: &std::path::Path,
         line: u32,
         column: u32,
     ) -> Result<crate::protocol::CallHierarchyResult> {
-        // Unused imports removed: CallHierarchyResult, CallHierarchyItem, Position, Range
+        // Execute with semaphore control and health tracking
+        self.execute_with_semaphore(language, async {
+            // Get or create server for this language and workspace
+            let server_instance = self
+                .ensure_workspace_for_file(language, file_path)
+                .await?;
 
-        // Get or create server for this language and workspace
-        let server_instance = self
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
+            let server = server_instance.lock().await;
 
-        let server = server_instance.lock().await;
+            if !server.server.supports_call_hierarchy() {
+                return Err(anyhow!(
+                    "Call hierarchy not supported by {:?} language server",
+                    language
+                ));
+            }
 
-        // Delegate to the underlying LspServer's call_hierarchy method
-        let lsp_result = server
-            .server
-            .call_hierarchy(file_path, line, column)
-            .await
-            .with_context(|| format!(
-                "Call hierarchy request failed for {:?} LSP server at {}:{}:{}. \
-                Server may not be installed, responding, or the position may not be valid for call hierarchy.",
-                language,
-                file_path.display(),
-                line,
-                column
-            ))?;
+            // Delegate to the underlying LspServer's call_hierarchy method
+            let lsp_result = server
+                .server
+                .call_hierarchy(file_path, line, column)
+                .await
+                .with_context(|| format!(
+                    "Call hierarchy request failed for {:?} LSP server at {}:{}:{}. \
+                    Server may not be installed, responding, or the position may not be valid for call hierarchy.",
+                    language,
+                    file_path.display(),
+                    line,
+                    column
+                ))?;
 
-        // Parse the call hierarchy result using the existing protocol parser
-        crate::protocol::parse_call_hierarchy_from_lsp(&lsp_result).with_context(|| {
-            format!(
-                "Failed to parse call hierarchy response from {:?} LSP server for {}:{}:{}",
-                language,
-                file_path.display(),
-                line,
-                column
-            )
-        })
+            // Parse the call hierarchy result using the existing protocol parser
+            crate::protocol::parse_call_hierarchy_from_lsp(&lsp_result).with_context(|| {
+                format!(
+                    "Failed to parse call hierarchy response from {:?} LSP server for {}:{}:{}",
+                    language,
+                    file_path.display(),
+                    line,
+                    column
+                )
+            })
+        }).await
     }
 
     /// Execute textDocument/implementation request for the given file and position
     pub async fn implementation(
         &self,
         language: Language,
-        workspace_root: PathBuf,
         file_path: &std::path::Path,
         line: u32,
         column: u32,
     ) -> Result<serde_json::Value> {
-        // Get or create server for this language and workspace
-        let server_instance = self
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
+        // Execute with semaphore control and health tracking
+        self.execute_with_semaphore(language, async {
+            // Get or create server for this language and workspace
+            let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
 
-        let server = server_instance.lock().await;
+            let server = server_instance.lock().await;
 
-        // Delegate to the underlying LspServer's implementation method
-        server
-            .server
-            .implementation(file_path, line, column)
-            .await
-            .with_context(|| {
-                format!(
-                    "Implementation request failed for {:?} LSP server at {}:{}:{}",
-                    language,
-                    file_path.display(),
-                    line,
-                    column
-                )
-            })
+            if !server.server.supports_implementations() {
+                return Err(anyhow!(
+                    "Implementations not supported by {:?} language server",
+                    language
+                ));
+            }
+
+            // Delegate to the underlying LspServer's implementation method
+            server
+                .server
+                .implementation(file_path, line, column)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Implementation request failed for {:?} LSP server at {}:{}:{}",
+                        language,
+                        file_path.display(),
+                        line,
+                        column
+                    )
+                })
+        })
+        .await
     }
 
     /// Execute textDocument/typeDefinition request for the given file and position
     pub async fn type_definition(
         &self,
         language: Language,
-        workspace_root: PathBuf,
         file_path: &std::path::Path,
         line: u32,
         column: u32,
     ) -> Result<serde_json::Value> {
-        // Get or create server for this language and workspace
-        let server_instance = self
-            .ensure_workspace_registered(language, workspace_root)
-            .await?;
+        // Execute with semaphore control and health tracking
+        self.execute_with_semaphore(language, async {
+            // Get or create server for this language and workspace
+            let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
 
-        let server = server_instance.lock().await;
+            let server = server_instance.lock().await;
 
-        // Delegate to the underlying LspServer's type_definition method
-        server
-            .server
-            .type_definition(file_path, line, column)
-            .await
-            .with_context(|| {
-                format!(
-                    "Type definition request failed for {:?} LSP server at {}:{}:{}",
-                    language,
-                    file_path.display(),
-                    line,
-                    column
-                )
-            })
+            // Delegate to the underlying LspServer's type_definition method
+            server
+                .server
+                .type_definition(file_path, line, column)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Type definition request failed for {:?} LSP server at {}:{}:{}",
+                        language,
+                        file_path.display(),
+                        line,
+                        column
+                    )
+                })
+        })
+        .await
     }
 
     /// Check readiness of a specific server for a workspace
@@ -1450,6 +1775,22 @@ pub struct ServerStats {
     pub workspaces: Vec<PathBuf>,
     pub uptime: Duration,
     pub status: ServerStatus,
+    pub health_status: ServerHealthStatus,
+    pub semaphore_info: SemaphoreInfo,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerHealthStatus {
+    pub is_healthy: bool,
+    pub consecutive_failures: u32,
+    pub last_success: Option<Instant>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemaphoreInfo {
+    pub max_concurrent_requests: usize,
+    pub available_permits: usize,
+    pub total_permits: usize,
 }
 
 #[derive(Debug, Clone)]

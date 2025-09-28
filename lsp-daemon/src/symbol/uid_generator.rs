@@ -258,8 +258,12 @@ impl SymbolUIDGenerator {
         // Format: lang::class::method_name#signature_hash
         let mut components = vec![symbol.language.clone()];
 
-        // Add class/struct context from FQN or scope
-        if let Some(fqn) = &symbol.qualified_name {
+        // Add class/struct context from FQN or scope (ignore empty/whitespace FQNs)
+        if let Some(fqn) = symbol
+            .qualified_name
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+        {
             let fqn_parts = self
                 .normalizer
                 .split_qualified_name(fqn, &symbol.language)?;
@@ -300,8 +304,12 @@ impl SymbolUIDGenerator {
         // Format: lang::fqn or lang::scope::name
         let mut components = vec![symbol.language.clone()];
 
-        // Prefer FQN if available
-        if let Some(fqn) = &symbol.qualified_name {
+        // Prefer FQN if available (ignore empty/whitespace FQNs)
+        if let Some(fqn) = symbol
+            .qualified_name
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+        {
             let fqn_parts = self
                 .normalizer
                 .split_qualified_name(fqn, &symbol.language)?;

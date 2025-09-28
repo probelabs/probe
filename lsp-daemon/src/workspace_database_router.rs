@@ -11,7 +11,7 @@ use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::database_cache_adapter::{DatabaseCacheAdapter, DatabaseCacheConfig};
@@ -61,6 +61,8 @@ pub struct WorkspaceDatabaseRouter {
     config: WorkspaceDatabaseRouterConfig,
     /// Open cache instances: workspace_id -> cache
     open_caches: Arc<RwLock<HashMap<String, Arc<DatabaseCacheAdapter>>>>,
+    /// Guards to ensure only one cache creation per workspace at a time
+    cache_creation_guards: Arc<TokioMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
     /// Server manager for workspace resolution
     #[allow(dead_code)]
     server_manager: Arc<SingleServerManager>,
@@ -103,6 +105,7 @@ impl WorkspaceDatabaseRouter {
         Self {
             config,
             open_caches: Arc::new(RwLock::new(HashMap::new())),
+            cache_creation_guards: Arc::new(TokioMutex::new(HashMap::new())),
             server_manager,
             workspace_cache: Arc::new(RwLock::new(HashMap::new())),
             workspace_resolver,
@@ -119,6 +122,15 @@ impl WorkspaceDatabaseRouter {
 
         let workspace_id = self.workspace_id_for(&workspace_root)?;
 
+        let creation_mutex = {
+            let mut guards = self.cache_creation_guards.lock().await;
+            guards
+                .entry(workspace_id.clone())
+                .or_insert_with(|| Arc::new(TokioMutex::new(())))
+                .clone()
+        };
+        let creation_guard = creation_mutex.lock().await;
+
         // Check if cache is already open
         {
             let caches = self.open_caches.read().await;
@@ -128,11 +140,18 @@ impl WorkspaceDatabaseRouter {
                     workspace_id,
                     workspace_root.display()
                 );
+                drop(creation_guard);
+                let mut guards = self.cache_creation_guards.lock().await;
+                if let Some(existing) = guards.get(&workspace_id) {
+                    if Arc::ptr_eq(existing, &creation_mutex) {
+                        guards.remove(&workspace_id);
+                    }
+                }
                 return Ok(cache.clone());
             }
         }
 
-        debug!(
+        info!(
             "Cache miss for workspace '{}' ({}), creating new cache",
             workspace_id,
             workspace_root.display()
@@ -168,11 +187,19 @@ impl WorkspaceDatabaseRouter {
         }
 
         // Create the cache instance
-        let cache = DatabaseCacheAdapter::new_with_workspace_id(cache_config, &workspace_id)
-            .await
-            .context(format!(
-                "Failed to create cache for workspace '{workspace_id}' at {cache_dir:?}"
-            ))?;
+        let cache =
+            match DatabaseCacheAdapter::new_with_workspace_id(cache_config, &workspace_id).await {
+                Ok(cache) => cache,
+                Err(err) => {
+                    warn!(
+                        "Workspace cache creation failed for '{}': {:?}",
+                        workspace_id, err
+                    );
+                    return Err(err.context(format!(
+                        "Failed to create cache for workspace '{workspace_id}' at {cache_dir:?}"
+                    )));
+                }
+            };
 
         let cache_arc = Arc::new(cache);
 
@@ -192,6 +219,14 @@ impl WorkspaceDatabaseRouter {
             workspace_id,
             workspace_root.display()
         );
+
+        drop(creation_guard);
+        let mut guards = self.cache_creation_guards.lock().await;
+        if let Some(existing) = guards.get(&workspace_id) {
+            if Arc::ptr_eq(existing, &creation_mutex) {
+                guards.remove(&workspace_id);
+            }
+        }
 
         Ok(cache_arc)
     }

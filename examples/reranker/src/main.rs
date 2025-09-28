@@ -21,11 +21,7 @@ impl BertReranker {
     /// * `model_id` - The HuggingFace model ID (e.g., "cross-encoder/ms-marco-MiniLM-L-2-v2")
     /// * `revision` - The model revision/branch to use
     /// * `use_pth` - Whether to use PyTorch weights (.pth) instead of SafeTensors
-    pub fn new(
-        model_id: &str,
-        _revision: &str,
-        use_pth: bool,
-    ) -> Result<Self> {
+    pub fn new(model_id: &str, _revision: &str, use_pth: bool) -> Result<Self> {
         println!("Loading BERT reranker model: {}", model_id);
         let device = Device::Cpu;
 
@@ -79,7 +75,11 @@ impl BertReranker {
     /// * `query` - The search query
     /// * `documents` - List of candidate documents to rerank
     pub fn rerank(&self, query: &str, documents: &[&str]) -> Result<Vec<RankedDocument>> {
-        println!("Reranking {} documents for query: '{}'", documents.len(), query);
+        println!(
+            "Reranking {} documents for query: '{}'",
+            documents.len(),
+            query
+        );
 
         let mut ranked_docs = Vec::new();
 
@@ -107,31 +107,21 @@ impl BertReranker {
         let input_text = format!("{} [SEP] {}", query, document);
 
         // Tokenize the input
-        let encoding = self
-            .tokenizer
-            .encode(input_text, true)
-            .map_err(E::msg)?;
+        let encoding = self.tokenizer.encode(input_text, true).map_err(E::msg)?;
 
         let tokens = encoding.get_ids();
-        let token_ids = Tensor::new(
-            tokens,
-            &self.device,
-        )?.unsqueeze(0)?; // Add batch dimension
+        let token_ids = Tensor::new(tokens, &self.device)?.unsqueeze(0)?; // Add batch dimension
 
         let token_type_ids = encoding.get_type_ids();
-        let token_type_ids = Tensor::new(
-            token_type_ids,
-            &self.device,
-        )?.unsqueeze(0)?; // Add batch dimension
+        let token_type_ids = Tensor::new(token_type_ids, &self.device)?.unsqueeze(0)?; // Add batch dimension
 
         let attention_mask = encoding.get_attention_mask();
-        let attention_mask = Tensor::new(
-            attention_mask,
-            &self.device,
-        )?.unsqueeze(0)?; // Add batch dimension
+        let attention_mask = Tensor::new(attention_mask, &self.device)?.unsqueeze(0)?; // Add batch dimension
 
         // Forward pass through BERT
-        let embeddings = self.model.forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
+        let embeddings = self
+            .model
+            .forward(&token_ids, &token_type_ids, Some(&attention_mask))?;
 
         // For cross-encoder, we typically use the [CLS] token embedding
         // and pass it through a classification head. For simplicity, we'll
@@ -153,7 +143,13 @@ pub struct RankedDocument {
 
 impl std::fmt::Display for RankedDocument {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "#{}: {:.4} - {}", self.index + 1, self.score, self.document)
+        write!(
+            f,
+            "#{}: {:.4} - {}",
+            self.index + 1,
+            self.score,
+            self.document
+        )
     }
 }
 
@@ -168,7 +164,7 @@ fn main() -> Result<()> {
                 .short('m')
                 .value_name("MODEL_ID")
                 .help("HuggingFace model ID to use")
-                .default_value("cross-encoder/ms-marco-MiniLM-L-2-v2")
+                .default_value("cross-encoder/ms-marco-MiniLM-L-2-v2"),
         )
         .arg(
             Arg::new("revision")
@@ -176,13 +172,13 @@ fn main() -> Result<()> {
                 .short('r')
                 .value_name("REVISION")
                 .help("Model revision/branch")
-                .default_value("main")
+                .default_value("main"),
         )
         .arg(
             Arg::new("use-pth")
                 .long("use-pth")
                 .help("Use PyTorch weights instead of SafeTensors")
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
         .arg(
             Arg::new("query")
@@ -190,7 +186,7 @@ fn main() -> Result<()> {
                 .short('q')
                 .value_name("QUERY")
                 .help("Search query")
-                .required(true)
+                .required(true),
         )
         .arg(
             Arg::new("documents")
@@ -198,14 +194,14 @@ fn main() -> Result<()> {
                 .short('d')
                 .value_name("DOCS")
                 .help("Comma-separated list of documents to rerank")
-                .required(false)
+                .required(false),
         )
         .arg(
             Arg::new("interactive")
                 .long("interactive")
                 .short('i')
                 .help("Run in interactive mode")
-                .action(clap::ArgAction::SetTrue)
+                .action(clap::ArgAction::SetTrue),
         )
         .get_matches();
 

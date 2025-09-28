@@ -58,6 +58,7 @@
 pub mod language_support;
 pub mod normalization;
 pub mod uid_generator;
+pub mod uid_normalization;
 pub mod version_aware_uid;
 
 // Test module
@@ -68,6 +69,7 @@ mod tests;
 pub use language_support::*;
 pub use normalization::*;
 pub use uid_generator::*;
+pub use uid_normalization::*;
 pub use version_aware_uid::*;
 
 use serde::{Deserialize, Serialize};
@@ -117,6 +119,8 @@ pub enum SymbolKind {
     Struct,
     Interface,
     Trait,
+    TraitImpl,
+    Impl,
     Enum,
     EnumVariant,
     Union,
@@ -166,6 +170,8 @@ impl SymbolKind {
                 | SymbolKind::Struct
                 | SymbolKind::Interface
                 | SymbolKind::Trait
+                | SymbolKind::TraitImpl
+                | SymbolKind::Impl
                 | SymbolKind::Enum
                 | SymbolKind::Union
         )
@@ -196,6 +202,8 @@ impl std::fmt::Display for SymbolKind {
             SymbolKind::Struct => "struct",
             SymbolKind::Interface => "interface",
             SymbolKind::Trait => "trait",
+            SymbolKind::TraitImpl => "trait_impl",
+            SymbolKind::Impl => "impl",
             SymbolKind::Enum => "enum",
             SymbolKind::EnumVariant => "enum_variant",
             SymbolKind::Union => "union",
@@ -230,6 +238,8 @@ impl From<&str> for SymbolKind {
             "struct" | "structure" => SymbolKind::Struct,
             "interface" | "iface" => SymbolKind::Interface,
             "trait" => SymbolKind::Trait,
+            "trait_impl" | "impl_trait" | "traitimpl" => SymbolKind::TraitImpl,
+            "impl" | "impl_block" => SymbolKind::Impl,
             "enum" | "enumeration" => SymbolKind::Enum,
             "enumvariant" | "enum_variant" | "variant" => SymbolKind::EnumVariant,
             "union" => SymbolKind::Union,

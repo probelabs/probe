@@ -3,7 +3,7 @@ use anyhow::Result;
 use lsp_daemon::database::{DatabaseBackend, DatabaseConfig, SQLiteBackend};
 use lsp_daemon::lsp_database_adapter::LspDatabaseAdapter;
 use lsp_daemon::protocol::{Location, Position, Range};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Integration test to verify that references can be converted and stored in database
@@ -63,17 +63,20 @@ async fn test_references_database_integration() -> Result<()> {
     let adapter = LspDatabaseAdapter::new();
 
     // This is the same call that the daemon makes
-    let edges = adapter.convert_references_to_database(
-        &locations,
-        &target_file,
-        target_position,
-        "rust",
-        1, // file_version_id
-    );
+    let conversion = adapter
+        .convert_references_to_database(
+            &locations,
+            &target_file,
+            target_position,
+            "rust",
+            1, // file_version_id
+            Path::new("/tmp"),
+        )
+        .await;
 
     // Verify that conversion works (might fail due to missing files, which is expected in test)
-    match edges {
-        Ok(edges) => {
+    match conversion {
+        Ok((symbols, edges)) => {
             println!(
                 "Successfully converted {} references to {} edges",
                 locations.len(),
@@ -84,13 +87,13 @@ async fn test_references_database_integration() -> Result<()> {
                 // Verify edge properties
                 for edge in &edges {
                     assert_eq!(edge.relation.to_string(), "references");
-                    assert_eq!(edge.confidence, 0.9);
+                    assert_eq!(edge.confidence, 1.0);
                     assert_eq!(edge.language, "rust");
                     assert_eq!(edge.metadata, Some("lsp_references".to_string()));
                 }
 
                 // Test database storage (symbols will be empty, only edges)
-                match adapter.store_in_database(&backend, vec![], edges).await {
+                match adapter.store_in_database(&backend, symbols, edges).await {
                     Ok(()) => {
                         println!("Successfully stored references in database");
                     }
@@ -140,20 +143,27 @@ async fn test_references_follows_call_hierarchy_pattern() -> Result<()> {
     let target_file = PathBuf::from("/tmp/example.rs");
 
     // Test the same method signature used in daemon.rs
-    let result = adapter.convert_references_to_database(
-        &locations,
-        &target_file,
-        (0, 0), // line, column
-        "rust",
-        1, // file_version_id
-    );
+    let result = adapter
+        .convert_references_to_database(
+            &locations,
+            &target_file,
+            (0, 0), // line, column
+            "rust",
+            1, // file_version_id
+            Path::new("/tmp"),
+        )
+        .await;
 
     // Should return a result (even if it fails due to missing files)
     assert!(result.is_ok() || result.is_err());
 
     match result {
-        Ok(edges) => {
-            println!("References conversion succeeded, got {} edges", edges.len());
+        Ok((symbols, edges)) => {
+            println!(
+                "References conversion succeeded, got {} edges and {} symbols",
+                edges.len(),
+                symbols.len()
+            );
         }
         Err(e) => {
             println!("References conversion failed as expected: {}", e);

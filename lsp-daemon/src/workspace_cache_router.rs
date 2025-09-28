@@ -427,8 +427,8 @@ impl WorkspaceCacheRouter {
         }
 
         // Create the cache instance with workspace-specific tree name for proper isolation
-        eprintln!("🏗️ WORKSPACE_CACHE_ROUTER: About to create DatabaseCacheAdapter for workspace_id='{}' at path: {:?}", workspace_id, cache_dir);
-        eprintln!(
+        info!("🏗️ WORKSPACE_CACHE_ROUTER: About to create DatabaseCacheAdapter for workspace_id='{}' at path: {:?}", workspace_id, cache_dir);
+        info!(
             "🏗️ WORKSPACE_CACHE_ROUTER: cache_config.database_config.path = {:?}",
             cache_config.database_config.path
         );
@@ -859,6 +859,33 @@ impl WorkspaceCacheRouter {
         hash.to_hex().to_string()[..8].to_string()
     }
 
+    fn sanitize_identifier_string(&self, value: &str) -> String {
+        let mut sanitized = value.replace(['\\', '/'], "_");
+        sanitized = sanitized.replace(':', "_");
+
+        sanitized = sanitized
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>();
+
+        while sanitized.contains("__") {
+            sanitized = sanitized.replace("__", "_");
+        }
+
+        sanitized.trim_matches('_').to_string()
+    }
+
+    fn sanitize_identifier_from_path<P: AsRef<Path>>(&self, path: P) -> String {
+        let value = path.as_ref().to_string_lossy();
+        self.sanitize_identifier_string(&value)
+    }
+
     /// Find the nearest workspace root for a given file path
     async fn find_nearest_workspace(&self, file_path: &Path) -> Result<PathBuf> {
         // Check cache first
@@ -1007,38 +1034,42 @@ impl WorkspaceCacheRouter {
 
             if path.is_dir() {
                 if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Parse workspace ID format: {8-char-hash}_{folder-name}
-                    if let Some((hash, folder_name)) = dir_name.split_once('_') {
-                        if hash.len() == 8 {
-                            // Get directory metadata
-                            let (size_bytes, file_count) =
-                                self.calculate_directory_size(&path).await?;
+                    let workspace_id = dir_name.to_string();
 
-                            // Get last accessed time from metadata
-                            let metadata = fs::metadata(&path).await?;
-                            let last_accessed = metadata
-                                .accessed()
-                                .or_else(|_| metadata.modified())
-                                .unwrap_or_else(|_| SystemTime::now());
-                            let created_at = metadata
-                                .created()
-                                .or_else(|_| metadata.modified())
-                                .unwrap_or_else(|_| SystemTime::now());
-
-                            // Try to reconstruct workspace root from folder name
-                            let workspace_root = PathBuf::from(folder_name);
-
-                            entries.push(crate::protocol::WorkspaceCacheEntry {
-                                workspace_id: dir_name.to_string(),
-                                workspace_root,
-                                cache_path: path.clone(),
-                                size_bytes,
-                                file_count,
-                                last_accessed: self.format_timestamp(last_accessed),
-                                created_at: self.format_timestamp(created_at),
-                            });
+                    let workspace_root = match self.workspace_root_for(&workspace_id).await {
+                        Ok(root) => root,
+                        Err(_) => {
+                            if let Some((_hash, folder_name)) = dir_name.split_once('_') {
+                                PathBuf::from(folder_name)
+                            } else {
+                                PathBuf::from(dir_name)
+                            }
                         }
-                    }
+                    };
+
+                    // Get directory metadata
+                    let (size_bytes, file_count) = self.calculate_directory_size(&path).await?;
+
+                    // Get last accessed time from metadata
+                    let metadata = fs::metadata(&path).await?;
+                    let last_accessed = metadata
+                        .accessed()
+                        .or_else(|_| metadata.modified())
+                        .unwrap_or_else(|_| SystemTime::now());
+                    let created_at = metadata
+                        .created()
+                        .or_else(|_| metadata.modified())
+                        .unwrap_or_else(|_| SystemTime::now());
+
+                    entries.push(crate::protocol::WorkspaceCacheEntry {
+                        workspace_id,
+                        workspace_root,
+                        cache_path: path.clone(),
+                        size_bytes,
+                        file_count,
+                        last_accessed: self.format_timestamp(last_accessed),
+                        created_at: self.format_timestamp(created_at),
+                    });
                 }
             }
         }
@@ -1058,8 +1089,17 @@ impl WorkspaceCacheRouter {
 
         if let Some(workspace_path) = workspace_path {
             // Get info for specific workspace
-            let workspace_id = self.workspace_id_for(&workspace_path)?;
-            let cache_path = self.config.base_cache_dir.join(&workspace_id);
+            let mut workspace_id = self.workspace_id_for(&workspace_path)?;
+            let mut cache_path = self.config.base_cache_dir.join(&workspace_id);
+
+            if !cache_path.exists() {
+                let sanitized_id = self.sanitize_identifier_from_path(&workspace_path);
+                let sanitized_path = self.config.base_cache_dir.join(&sanitized_id);
+                if sanitized_path.exists() {
+                    workspace_id = sanitized_id;
+                    cache_path = sanitized_path;
+                }
+            }
 
             if cache_path.exists() {
                 let info = self
@@ -1099,8 +1139,26 @@ impl WorkspaceCacheRouter {
 
         if let Some(workspace_path) = workspace_path {
             // Clear specific workspace
+            let canonical_workspace_path = self.canonicalize_path(&workspace_path);
+            let mut workspace_id = self.workspace_id_for(&canonical_workspace_path)?;
+            let mut cache_path = self.config.base_cache_dir.join(&workspace_id);
+
+            if !cache_path.exists() {
+                let sanitized_id = self.sanitize_identifier_from_path(&canonical_workspace_path);
+                let sanitized_path = self.config.base_cache_dir.join(&sanitized_id);
+                if sanitized_path.exists() {
+                    workspace_id = sanitized_id;
+                    cache_path = sanitized_path;
+                }
+            }
+
             let result = self
-                .clear_single_workspace(&workspace_path, older_than_seconds)
+                .clear_workspace_directory(
+                    &workspace_id,
+                    &canonical_workspace_path,
+                    &cache_path,
+                    older_than_seconds,
+                )
                 .await;
             match result {
                 Ok((entry, size_freed, files_removed)) => {
@@ -1109,13 +1167,10 @@ impl WorkspaceCacheRouter {
                     cleared_workspaces.push(entry);
                 }
                 Err(e) => {
-                    let workspace_id = self
-                        .workspace_id_for(&workspace_path)
-                        .unwrap_or_else(|_| "unknown".to_string());
-                    errors.push(format!("Failed to clear workspace {workspace_id}: {e}"));
+                    errors.push(format!("Failed to clear workspace {}: {}", workspace_id, e));
                     cleared_workspaces.push(crate::protocol::WorkspaceClearEntry {
                         workspace_id,
-                        workspace_root: workspace_path,
+                        workspace_root: canonical_workspace_path,
                         success: false,
                         size_freed_bytes: 0,
                         files_removed: 0,
@@ -1129,7 +1184,12 @@ impl WorkspaceCacheRouter {
 
             for entry in entries {
                 let result = self
-                    .clear_single_workspace(&entry.workspace_root, older_than_seconds)
+                    .clear_workspace_directory(
+                        &entry.workspace_id,
+                        &entry.workspace_root,
+                        &entry.cache_path,
+                        older_than_seconds,
+                    )
                     .await;
                 match result {
                     Ok((clear_entry, size_freed, files_removed)) => {
@@ -1284,19 +1344,31 @@ impl WorkspaceCacheRouter {
         })
     }
 
-    /// Clear a single workspace cache
-    async fn clear_single_workspace(
+    /// Clear a single workspace cache using explicit identifiers
+    async fn clear_workspace_directory(
         &self,
+        workspace_id: &str,
         workspace_root: &Path,
+        cache_path: &Path,
         older_than_seconds: Option<u64>,
     ) -> Result<(crate::protocol::WorkspaceClearEntry, u64, usize)> {
-        let workspace_id = self.workspace_id_for(workspace_root)?;
-        let cache_path = self.config.base_cache_dir.join(&workspace_id);
+        let hashed_workspace_id = self
+            .workspace_id_for(workspace_root)
+            .unwrap_or_else(|_| workspace_id.to_string());
+        let hashed_cache_path = self.config.base_cache_dir.join(&hashed_workspace_id);
 
-        if !cache_path.exists() {
+        let mut paths_to_consider: Vec<(String, PathBuf)> = Vec::new();
+        if cache_path.exists() {
+            paths_to_consider.push((workspace_id.to_string(), cache_path.to_path_buf()));
+        }
+        if hashed_cache_path.exists() && hashed_cache_path != cache_path {
+            paths_to_consider.push((hashed_workspace_id.clone(), hashed_cache_path.clone()));
+        }
+
+        if paths_to_consider.is_empty() {
             return Ok((
                 crate::protocol::WorkspaceClearEntry {
-                    workspace_id,
+                    workspace_id: workspace_id.to_string(),
                     workspace_root: workspace_root.to_path_buf(),
                     success: true,
                     size_freed_bytes: 0,
@@ -1308,58 +1380,80 @@ impl WorkspaceCacheRouter {
             ));
         }
 
-        let (size_freed_bytes, files_removed) = if let Some(age_seconds) = older_than_seconds {
-            // Age-based selective clearing
-            if let Some(cache_ref) = self.open_caches.get(&workspace_id) {
-                let cache = cache_ref.value();
-                // If cache is open, delegate to the cache store for age-based clearing
-                match cache.clear_entries_older_than(age_seconds).await {
-                    Ok((size_freed, files_count)) => (size_freed, files_count),
-                    Err(e) => {
-                        return Err(anyhow::anyhow!(
-                            "Failed to clear aged entries from open cache: {}",
-                            e
-                        ));
+        let mut candidate_keys = Vec::new();
+        candidate_keys.push(hashed_workspace_id.clone());
+        if hashed_workspace_id != workspace_id {
+            candidate_keys.push(workspace_id.to_string());
+        }
+        candidate_keys.sort();
+        candidate_keys.dedup();
+
+        let mut size_freed_bytes = 0u64;
+        let mut files_removed = 0usize;
+
+        if let Some(age_seconds) = older_than_seconds {
+            let mut cleared_via_cache = false;
+            for key in &candidate_keys {
+                if let Some(cache_ref) = self.open_caches.get(key) {
+                    let cache = cache_ref.value();
+                    match cache.clear_entries_older_than(age_seconds).await {
+                        Ok((size_freed, files_count)) => {
+                            size_freed_bytes += size_freed;
+                            files_removed += files_count;
+                            cleared_via_cache = true;
+                            break;
+                        }
+                        Err(e) => {
+                            return Err(anyhow::anyhow!(
+                                "Failed to clear aged entries from open cache '{}': {}",
+                                key,
+                                e
+                            ));
+                        }
                     }
                 }
-            } else {
-                // Cache is not open, need to handle selective file clearing
-                // For now, we'll implement a basic file-based age filtering
-                self.clear_old_files_from_directory(&cache_path, age_seconds)
-                    .await?
+            }
+
+            if !cleared_via_cache {
+                for (_id, path) in &paths_to_consider {
+                    let (size, files) = self
+                        .clear_old_files_from_directory(path, age_seconds)
+                        .await?;
+                    size_freed_bytes += size;
+                    files_removed += files;
+                }
             }
         } else {
-            // Clear everything (original behavior)
-            let (total_size, total_files) = self.calculate_directory_size(&cache_path).await?;
-
-            // Close the cache if it's currently open
-            if let Some((_key, _cache)) = self.open_caches.remove(&workspace_id) {
-                // Cache will be automatically closed when Arc is dropped
-                info!(
-                    "Closed open cache for workspace '{}' before clearing",
-                    workspace_id
-                );
+            for key in &candidate_keys {
+                if let Some((_k, _cache)) = self.open_caches.remove(key) {
+                    info!("Closed open cache for workspace '{}' before clearing", key);
+                }
             }
 
-            // Remove from metadata tracking
             {
                 let mut metadata = self.access_metadata.write().await;
-                metadata.remove(&workspace_id);
+                for key in &candidate_keys {
+                    metadata.remove(key);
+                }
             }
 
-            // Remove from the dedicated reverse mapping
             {
                 let mut workspace_mapping = self.workspace_id_to_root.write().await;
-                workspace_mapping.remove(&workspace_id);
+                for key in &candidate_keys {
+                    workspace_mapping.remove(key);
+                }
             }
 
-            // Remove the cache directory
-            self.remove_directory_safely(&cache_path).await?;
-            (total_size, total_files)
-        };
+            for (_id, path) in &paths_to_consider {
+                let (size, files) = self.calculate_directory_size(path).await?;
+                self.remove_directory_safely(&path.clone()).await?;
+                size_freed_bytes += size;
+                files_removed += files;
+            }
+        }
 
         let entry = crate::protocol::WorkspaceClearEntry {
-            workspace_id,
+            workspace_id: workspace_id.to_string(),
             workspace_root: workspace_root.to_path_buf(),
             success: true,
             size_freed_bytes,
@@ -2251,6 +2345,30 @@ mod tests {
             .iter()
             .all(|entry| entry.success));
         assert!(clear_all_result.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_clearing_legacy_sanitized_workspace_directory() {
+        let (router, _temp_dir) = create_test_router().await;
+
+        let legacy_dir_name = "github_com_probelabs_probe";
+        let legacy_dir = router.config.base_cache_dir.join(legacy_dir_name);
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        std::fs::write(legacy_dir.join("cache.db"), b"legacy").unwrap();
+
+        // Listing should surface the legacy directory
+        let entries = router.list_all_workspace_caches().await.unwrap();
+        assert!(entries
+            .iter()
+            .any(|entry| entry.workspace_id == legacy_dir_name));
+
+        let clear_result = router.clear_workspace_cache(None, None).await.unwrap();
+
+        assert!(clear_result
+            .cleared_workspaces
+            .iter()
+            .any(|entry| entry.workspace_id == legacy_dir_name && entry.success));
+        assert!(!legacy_dir.exists());
     }
 
     // === Edge Case Tests ===

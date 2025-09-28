@@ -48,9 +48,11 @@ use std::sync::Arc;
 use crate::protocol::{CallHierarchyResult, Location};
 
 pub mod converters;
+pub mod enrichment_tracking;
 pub mod migrations;
 pub mod sqlite_backend;
 pub use converters::ProtocolConverter;
+pub use enrichment_tracking::{EnrichmentStatus, EnrichmentTracker, EnrichmentTracking};
 pub use sqlite_backend::SQLiteBackend;
 // Using Turso (native SQLite implementation) as the primary backend
 
@@ -167,6 +169,34 @@ pub struct SymbolState {
     pub is_definition: bool,
     pub documentation: Option<String>,
     pub metadata: Option<String>,
+}
+
+/// Description of outstanding LSP enrichment operations for a symbol
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SymbolEnrichmentPlan {
+    pub symbol: SymbolState,
+    pub needs_references: bool,
+    pub needs_implementations: bool,
+    pub needs_call_hierarchy: bool,
+}
+
+/// Aggregated counts of pending LSP enrichment operations persisted in the database.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct PendingEnrichmentCounts {
+    pub symbols_pending: u64,
+    pub references_pending: u64,
+    pub implementations_pending: u64,
+    pub call_hierarchy_pending: u64,
+    pub high_priority_pending: u64,
+    pub medium_priority_pending: u64,
+    pub low_priority_pending: u64,
+}
+
+impl SymbolEnrichmentPlan {
+    /// Returns true if any LSP operation still needs to run for this symbol
+    pub fn has_operations(&self) -> bool {
+        self.needs_references || self.needs_implementations || self.needs_call_hierarchy
+    }
 }
 
 /// Edge relationship types
@@ -623,9 +653,11 @@ pub trait DatabaseBackend: Send + Sync {
     // LSP Enrichment Support
     // ===================
 
-    /// Find orphan symbols (symbols without outgoing edges) that need LSP enrichment
-    /// Returns symbols ordered by priority (functions first, then classes, etc.)
-    async fn find_orphan_symbols(&self, limit: usize) -> Result<Vec<SymbolState>, DatabaseError>;
+    /// Find symbols that still require LSP enrichment operations along with pending operation flags
+    async fn find_symbols_pending_enrichment(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<SymbolEnrichmentPlan>, DatabaseError>;
 }
 
 /// Convenience functions for serializable types

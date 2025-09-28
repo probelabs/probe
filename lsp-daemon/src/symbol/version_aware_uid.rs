@@ -130,7 +130,27 @@ pub fn get_workspace_relative_path(file_path: &Path, workspace_root: &Path) -> R
     if let Ok(relative) = canonical_file.strip_prefix(&canonical_workspace) {
         Ok(relative.to_string_lossy().to_string())
     } else {
-        // File is outside workspace - use absolute path with prefix
+        // Fallback: attempt non-canonical strip_prefix in case canonicalization changed roots (e.g., symlinks)
+        if let Ok(relative) = file_path.strip_prefix(workspace_root) {
+            return Ok(relative.to_string_lossy().to_string());
+        }
+
+        // Last resort: try string-based prefix if paths are on the same drive but canonicalization differed
+        let file_str = canonical_file.to_string_lossy();
+        let ws_str = canonical_workspace.to_string_lossy();
+        if file_str.starts_with(&*ws_str) {
+            // Safe because starts_with guarantees ws_str length <= file_str length
+            let mut rel = file_str[ws_str.len()..].to_string();
+            // Trim any leading path separator
+            if rel.starts_with('/') || rel.starts_with('\\') {
+                rel.remove(0);
+            }
+            if !rel.is_empty() {
+                return Ok(rel);
+            }
+        }
+
+        // File is outside workspace - use absolute path with prefix to make it explicit
         debug!(
             "[VERSION_AWARE_UID] File {} is outside workspace {}, using external path",
             file_path.display(),

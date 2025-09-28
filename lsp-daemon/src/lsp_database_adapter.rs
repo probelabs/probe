@@ -5,22 +5,42 @@
 //! This replaces the universal cache approach with direct database storage.
 
 use anyhow::{Context, Result};
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use crate::database::{DatabaseBackend, Edge, EdgeRelation, SymbolState};
+use crate::database::{
+    create_none_edge, create_none_implementation_edges, create_none_reference_edges,
+    DatabaseBackend, Edge, EdgeRelation, SymbolState,
+};
 use crate::path_resolver::PathResolver;
 use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
 use crate::symbol::{
-    generate_version_aware_uid, uid_generator::SymbolUIDGenerator, SymbolInfo, SymbolKind,
-    SymbolLocation,
+    generate_version_aware_uid, normalize_uid_with_hint, uid_generator::SymbolUIDGenerator,
+    SymbolInfo, SymbolKind, SymbolLocation,
 };
+use crate::workspace_utils;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RustReferenceContext {
+    TraitBound,
+    TraitImplTrait,
+    ImplBodyOrType,
+    Other,
+}
 
 /// LSP to Database Adapter
 ///
 /// Converts LSP call hierarchy responses to structured database entries
 pub struct LspDatabaseAdapter {
     uid_generator: SymbolUIDGenerator,
+}
+
+/// Resolved symbol information including UID and canonical location.
+#[derive(Clone, Debug)]
+pub struct ResolvedSymbol {
+    pub uid: String,
+    pub info: SymbolInfo,
 }
 
 impl LspDatabaseAdapter {
@@ -106,54 +126,45 @@ impl LspDatabaseAdapter {
 
         let mut symbols = Vec::new();
         let mut edges = Vec::new();
+        let mut main_symbol_uid: Option<String> = None;
 
         // Process the main item (the symbol that was requested)
-        if !result.item.name.is_empty() && result.item.name != "unknown" {
-            if let Some(symbol) = self.convert_call_hierarchy_item_to_symbol(
-                &result.item,
-                language,
-                _file_version_id,
-                workspace_root,
-                true, // is_definition
-            )? {
-                debug!("Main symbol: {} ({})", symbol.name, symbol.symbol_uid);
-                symbols.push(symbol);
-            }
+        if result.item.name.is_empty() || result.item.name == "unknown" {
+            debug!(
+                "Skipping main call hierarchy item with unresolved name (name='{}', uri='{}')",
+                result.item.name, result.item.uri
+            );
+        } else if let Some(symbol) = self.convert_call_hierarchy_item_to_symbol(
+            &result.item,
+            language,
+            _file_version_id,
+            workspace_root,
+            true, // is_definition
+        )? {
+            debug!("Main symbol: {} ({})", symbol.name, symbol.symbol_uid);
+            main_symbol_uid = Some(symbol.symbol_uid.clone());
+            symbols.push(symbol);
         }
 
         // Process incoming calls (symbols that call the main symbol)
         if result.incoming.is_empty() {
-            // LSP found no incoming calls - store null edge to remember this
-            if !result.item.name.is_empty() && result.item.name != "unknown" {
-                let main_symbol_uid =
-                    self.generate_symbol_uid(&result.item, language, workspace_root)?;
-                let null_edge = Edge {
-                    relation: EdgeRelation::Calls,
-                    source_symbol_uid: "null".to_string(), // Special marker for incoming
-                    target_symbol_uid: main_symbol_uid,
-                    file_path: None, // Null edges don't need file path resolution
-                    start_line: None,
-                    start_char: None,
-                    confidence: 1.0, // High confidence - this is from LSP
-                    language: language.to_string(),
-                    metadata: Some("lsp_analyzed_empty_incoming".to_string()),
-                };
+            if let Some(main_symbol_uid) = &main_symbol_uid {
+                let mut sentinel = create_none_edge(main_symbol_uid, EdgeRelation::IncomingCall);
+                sentinel.metadata = Some("lsp_call_hierarchy_empty_incoming".to_string());
                 debug!(
-                    "Storing null edge for empty incoming calls: {} <- null",
-                    null_edge.target_symbol_uid
+                    "Storing sentinel edge for empty incoming calls: {}",
+                    main_symbol_uid
                 );
-                edges.push(null_edge);
+                edges.push(sentinel);
             }
         } else {
-            // LSP found real incoming calls - store them
             for incoming in &result.incoming {
-                // Add the caller symbol
                 if let Some(caller_symbol) = self.convert_call_hierarchy_item_to_symbol(
                     &incoming.from,
                     language,
                     _file_version_id,
                     workspace_root,
-                    false, // not necessarily definition
+                    false,
                 )? {
                     debug!(
                         "Incoming caller: {} ({})",
@@ -161,18 +172,15 @@ impl LspDatabaseAdapter {
                     );
                     symbols.push(caller_symbol.clone());
 
-                    // Create edge: caller -> main symbol
-                    if !result.item.name.is_empty() && result.item.name != "unknown" {
-                        let main_symbol_uid =
-                            self.generate_symbol_uid(&result.item, language, workspace_root)?;
+                    if let Some(main_symbol_uid) = &main_symbol_uid {
                         let edge = Edge {
                             relation: EdgeRelation::Calls,
                             source_symbol_uid: caller_symbol.symbol_uid.clone(),
-                            target_symbol_uid: main_symbol_uid,
+                            target_symbol_uid: main_symbol_uid.clone(),
                             file_path: Some(caller_symbol.file_path.clone()),
                             start_line: Some(std::cmp::max(1, caller_symbol.def_start_line)),
                             start_char: Some(caller_symbol.def_start_char),
-                            confidence: 1.0, // Perfect confidence from LSP server
+                            confidence: 1.0,
                             language: language.to_string(),
                             metadata: Some("lsp_call_hierarchy_incoming".to_string()),
                         };
@@ -188,37 +196,23 @@ impl LspDatabaseAdapter {
 
         // Process outgoing calls (symbols that the main symbol calls)
         if result.outgoing.is_empty() {
-            // LSP found no outgoing calls - store null edge to remember this
-            if !result.item.name.is_empty() && result.item.name != "unknown" {
-                let main_symbol_uid =
-                    self.generate_symbol_uid(&result.item, language, workspace_root)?;
-                let null_edge = Edge {
-                    relation: EdgeRelation::Calls,
-                    source_symbol_uid: main_symbol_uid,
-                    target_symbol_uid: "null".to_string(), // Special marker for outgoing
-                    file_path: None, // Null edges don't need file path resolution
-                    start_line: None,
-                    start_char: None,
-                    confidence: 1.0, // High confidence - this is from LSP
-                    language: language.to_string(),
-                    metadata: Some("lsp_analyzed_empty_outgoing".to_string()),
-                };
+            if let Some(main_symbol_uid) = &main_symbol_uid {
+                let mut sentinel = create_none_edge(main_symbol_uid, EdgeRelation::OutgoingCall);
+                sentinel.metadata = Some("lsp_call_hierarchy_empty_outgoing".to_string());
                 debug!(
-                    "Storing null edge for empty outgoing calls: {} -> null",
-                    null_edge.source_symbol_uid
+                    "Storing sentinel edge for empty outgoing calls: {}",
+                    main_symbol_uid
                 );
-                edges.push(null_edge);
+                edges.push(sentinel);
             }
         } else {
-            // LSP found real outgoing calls - store them
             for outgoing in &result.outgoing {
-                // Add the callee symbol
                 if let Some(callee_symbol) = self.convert_call_hierarchy_item_to_symbol(
                     &outgoing.from,
                     language,
                     _file_version_id,
                     workspace_root,
-                    false, // not necessarily definition
+                    false,
                 )? {
                     debug!(
                         "Outgoing callee: {} ({})",
@@ -226,23 +220,19 @@ impl LspDatabaseAdapter {
                     );
                     symbols.push(callee_symbol.clone());
 
-                    // Create edge: main symbol -> callee
-                    if !result.item.name.is_empty() && result.item.name != "unknown" {
-                        let main_symbol_uid =
-                            self.generate_symbol_uid(&result.item, language, workspace_root)?;
-                        // Get the source file path (where the call is made from)
+                    if let Some(main_symbol_uid) = &main_symbol_uid {
                         let path_resolver = PathResolver::new();
                         let source_file_path =
                             path_resolver.get_relative_path(request_file_path, workspace_root);
 
                         let edge = Edge {
                             relation: EdgeRelation::Calls,
-                            source_symbol_uid: main_symbol_uid,
+                            source_symbol_uid: main_symbol_uid.clone(),
                             target_symbol_uid: callee_symbol.symbol_uid.clone(),
                             file_path: Some(source_file_path),
                             start_line: Some(std::cmp::max(1, callee_symbol.def_start_line)),
                             start_char: Some(callee_symbol.def_start_char),
-                            confidence: 1.0, // Perfect confidence from LSP server
+                            confidence: 1.0,
                             language: language.to_string(),
                             metadata: Some("lsp_call_hierarchy_outgoing".to_string()),
                         };
@@ -287,7 +277,15 @@ impl LspDatabaseAdapter {
         let file_uri = item.uri.strip_prefix("file://").unwrap_or(&item.uri);
         let file_path = PathBuf::from(file_uri);
         let path_resolver = PathResolver::new();
-        let relative_file_path = path_resolver.get_relative_path(&file_path, workspace_root);
+        let mut relative_file_path = path_resolver.get_relative_path(&file_path, workspace_root);
+        if let Some((normalized_path, _)) = symbol_uid.split_once(':') {
+            if !normalized_path.is_empty()
+                && !normalized_path.starts_with("EXTERNAL")
+                && !normalized_path.starts_with("UNRESOLVED")
+            {
+                relative_file_path = normalized_path.to_string();
+            }
+        }
 
         // Extract FQN using AST parsing
         let fqn = Self::extract_fqn_from_call_hierarchy_item(&file_path, item, language);
@@ -371,7 +369,7 @@ impl LspDatabaseAdapter {
             "[VERSION_AWARE_UID] LspDatabaseAdapter generated version-aware UID for '{}': {}",
             item.name, uid
         );
-        Ok(uid)
+        Ok(normalize_uid_with_hint(&uid, Some(workspace_root)))
     }
 
     /// Parse LSP symbol kind to internal SymbolKind
@@ -401,17 +399,14 @@ impl LspDatabaseAdapter {
         }
     }
 
-    /// Resolve or create a symbol at a given location
-    ///
-    /// Uses tree-sitter to find the symbol at the specified position and generates
-    /// a consistent UID using the SymbolUIDGenerator.
-    pub async fn resolve_symbol_at_location(
+    /// Resolve or create a symbol at a given location, returning full symbol metadata.
+    pub async fn resolve_symbol_details_at_location(
         &self,
         file_path: &Path,
         line: u32,
         column: u32,
         language: &str,
-    ) -> Result<String> {
+    ) -> Result<ResolvedSymbol> {
         debug!(
             "[SYMBOL_RESOLVE] Starting resolution at {}:{}:{} in language {}",
             file_path.display(),
@@ -420,7 +415,6 @@ impl LspDatabaseAdapter {
             language
         );
 
-        // Verify file exists and is readable
         if !file_path.exists() {
             return Err(anyhow::anyhow!(
                 "File does not exist: {}",
@@ -428,13 +422,26 @@ impl LspDatabaseAdapter {
             ));
         }
 
-        // Read the file content synchronously to avoid requiring a Tokio reactor
         let content = std::fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read file: {}", file_path.display()))?;
-
         debug!("[SYMBOL_RESOLVE] Read {} bytes from file", content.len());
 
-        // Fallback approach: if tree-sitter fails, generate a simple UID
+        let line_count = content.lines().count() as u32;
+        if line_count == 0 || line >= line_count {
+            return Err(anyhow::anyhow!(
+                "Requested position {}:{} is outside file with {} lines",
+                line,
+                column,
+                line_count
+            ));
+        }
+
+        let canonical_file = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.to_path_buf());
+        let workspace_root = workspace_utils::find_workspace_root_with_fallback(&canonical_file)
+            .unwrap_or_else(|_| file_path.parent().unwrap_or(file_path).to_path_buf());
+
         let symbol_info =
             match self.find_symbol_at_position(&content, file_path, line, column, language) {
                 Ok(Some(info)) => {
@@ -454,149 +461,82 @@ impl LspDatabaseAdapter {
                 }
             };
 
-        if let Some(symbol) = symbol_info {
+        let resolved_symbol = if let Some(info) = symbol_info {
+            info
+        } else if let Some(nearby_symbol) =
+            self.find_nearby_symbol_regex(&content, line, column, file_path)
+        {
             debug!(
-                "[SYMBOL_RESOLVE] Found symbol '{}' at position",
-                symbol.name
+                "[SYMBOL_RESOLVE] Using regex fallback symbol: '{}'",
+                nearby_symbol
             );
 
-            // FIXED: Use the same UID generation as daemon to ensure consistency
-            // Determine workspace root for consistent UID generation
-            let workspace_root = file_path
-                .parent()
-                .and_then(|p| {
-                    // Walk up directory tree looking for workspace markers
-                    let mut current = p;
-                    loop {
-                        if current.join("Cargo.toml").exists()
-                            || current.join("package.json").exists()
-                            || current.join("go.mod").exists()
-                            || current.join("pyproject.toml").exists()
-                            || current.join(".git").exists()
-                        {
-                            return Some(current);
-                        }
-                        current = current.parent()?;
-                    }
-                })
-                .unwrap_or_else(|| file_path.parent().unwrap_or(file_path));
-
-            // Use the same version-aware UID generation as the daemon
-            let uid =
-                generate_version_aware_uid(workspace_root, file_path, &content, &symbol.name, line)
-                    .with_context(|| {
-                        format!(
-                            "Failed to generate version-aware UID for symbol: {}",
-                            symbol.name
-                        )
-                    })?;
-
-            debug!(
-                "[SYMBOL_RESOLVE] Generated UID for '{}': {}",
-                symbol.name, uid
-            );
-            Ok(uid)
-        } else {
-            // FALLBACK APPROACH 1: Try to find nearby symbols using regex patterns
-            debug!("[SYMBOL_RESOLVE] Tree-sitter failed, trying regex fallback");
-            if let Some(nearby_symbol) =
-                self.find_nearby_symbol_regex(&content, line, column, file_path)
-            {
-                debug!(
-                    "[SYMBOL_RESOLVE] Found nearby symbol with regex: '{}'",
-                    nearby_symbol
-                );
-
-                // Create basic SymbolInfo for the nearby symbol
-                let _symbol_info = SymbolInfo::new(
-                    nearby_symbol.clone(),
-                    crate::symbol::SymbolKind::Function, // Default to function
-                    language.to_string(),
-                    crate::symbol::SymbolLocation::new(
-                        file_path.to_path_buf(),
-                        line,
-                        column,
-                        line,
-                        column + nearby_symbol.len() as u32,
-                    ),
-                );
-
-                // FIXED: Use consistent UID generation for fallback too
-                let workspace_root = file_path
-                    .parent()
-                    .and_then(|p| {
-                        let mut current = p;
-                        loop {
-                            if current.join("Cargo.toml").exists()
-                                || current.join("package.json").exists()
-                                || current.join("go.mod").exists()
-                                || current.join("pyproject.toml").exists()
-                                || current.join(".git").exists()
-                            {
-                                return Some(current);
-                            }
-                            current = current.parent()?;
-                        }
-                    })
-                    .unwrap_or_else(|| file_path.parent().unwrap_or(file_path));
-
-                let uid = generate_version_aware_uid(
-                    workspace_root,
-                    file_path,
-                    &content,
-                    &nearby_symbol,
-                    line,
-                )
-                .with_context(|| {
-                    format!(
-                        "Failed to generate version-aware UID for nearby symbol: {}",
-                        nearby_symbol
-                    )
-                })?;
-
-                debug!(
-                    "[SYMBOL_RESOLVE] Generated UID for nearby symbol '{}': {}",
-                    nearby_symbol, uid
-                );
-                return Ok(uid);
-            }
-
-            // FALLBACK APPROACH 2: Generate a positional UID using consistent format when all else fails
-            let workspace_root = file_path
-                .parent()
-                .and_then(|p| {
-                    let mut current = p;
-                    loop {
-                        if current.join("Cargo.toml").exists()
-                            || current.join("package.json").exists()
-                            || current.join("go.mod").exists()
-                            || current.join("pyproject.toml").exists()
-                            || current.join(".git").exists()
-                        {
-                            return Some(current);
-                        }
-                        current = current.parent()?;
-                    }
-                })
-                .unwrap_or_else(|| file_path.parent().unwrap_or(file_path));
-
-            // Use a positional symbol name when we can't determine the actual symbol
-            let position_symbol = format!("pos_{}_{}", line, column);
-            let fallback_uid = generate_version_aware_uid(
-                workspace_root,
-                file_path,
-                &content,
-                &position_symbol,
+            let location = SymbolLocation::new(
+                file_path.to_path_buf(),
                 line,
-            )
-            .with_context(|| "Failed to generate positional fallback UID")?;
-
-            debug!(
-                "[SYMBOL_RESOLVE] Using positional fallback UID: {}",
-                fallback_uid
+                column,
+                line,
+                column.saturating_add(nearby_symbol.len() as u32),
             );
-            Ok(fallback_uid)
-        }
+
+            SymbolInfo::new(
+                nearby_symbol.clone(),
+                SymbolKind::Function,
+                language.to_string(),
+                location,
+            )
+        } else {
+            debug!("[SYMBOL_RESOLVE] No AST symbol found; using positional fallback");
+            let fallback_location = SymbolLocation::point(file_path.to_path_buf(), line, column);
+            let fallback_name = format!("pos_{}_{}", line.saturating_add(1), column);
+
+            SymbolInfo::new(
+                fallback_name,
+                SymbolKind::Function,
+                language.to_string(),
+                fallback_location,
+            )
+        };
+
+        let uid_line = resolved_symbol.location.start_line.saturating_add(1).max(1);
+        let uid = generate_version_aware_uid(
+            &workspace_root,
+            file_path,
+            &content,
+            &resolved_symbol.name,
+            uid_line,
+        )
+        .with_context(|| {
+            format!(
+                "Failed to generate version-aware UID for symbol: {}",
+                resolved_symbol.name
+            )
+        })?;
+
+        let normalized_uid = normalize_uid_with_hint(&uid, Some(&workspace_root));
+        debug!(
+            "[SYMBOL_RESOLVE] Generated UID for '{}' at canonical line {}: {}",
+            resolved_symbol.name, uid_line, normalized_uid
+        );
+
+        Ok(ResolvedSymbol {
+            uid: normalized_uid,
+            info: resolved_symbol,
+        })
+    }
+
+    /// Resolve or create a symbol at a given location, returning only the UID.
+    pub async fn resolve_symbol_at_location(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+        language: &str,
+    ) -> Result<String> {
+        let resolved = self
+            .resolve_symbol_details_at_location(file_path, line, column, language)
+            .await?;
+        Ok(resolved.uid)
     }
 
     /// Find symbol at position using tree-sitter
@@ -791,6 +731,14 @@ impl LspDatabaseAdapter {
         file_path: &Path,
         language: &str,
     ) -> Result<Option<SymbolInfo>> {
+        if language.eq_ignore_ascii_case("rust") && node.kind() == "impl_item" {
+            if let Some(symbol) =
+                self.extract_rust_impl_symbol(node, content, file_path, language)?
+            {
+                return Ok(Some(symbol));
+            }
+        }
+
         // Find the identifier within this node
         let identifier_node = self.find_identifier_in_node(node, content)?;
 
@@ -839,12 +787,126 @@ impl LspDatabaseAdapter {
         }
     }
 
+    fn extract_rust_impl_symbol(
+        &self,
+        node: tree_sitter::Node,
+        content: &[u8],
+        file_path: &Path,
+        language: &str,
+    ) -> Result<Option<SymbolInfo>> {
+        let type_node = node.child_by_field_name("type");
+        let trait_node = node.child_by_field_name("trait");
+
+        let type_identifier = if let Some(type_node) = type_node {
+            self.find_identifier_in_node(type_node, content)?
+        } else {
+            None
+        };
+
+        let type_identifier = match type_identifier {
+            Some(node) => node,
+            None => return Ok(None),
+        };
+
+        let type_name = type_identifier
+            .utf8_text(content)
+            .map_err(|e| anyhow::anyhow!("Failed to extract impl type identifier: {}", e))?
+            .to_string();
+
+        let trait_identifier = if let Some(trait_node) = trait_node {
+            self.find_identifier_in_node(trait_node, content)?
+        } else {
+            None
+        };
+
+        let impl_header = node
+            .utf8_text(content)
+            .unwrap_or("")
+            .split('{')
+            .next()
+            .unwrap_or("")
+            .replace('\n', " ");
+
+        let inferred_trait_name = if trait_identifier.is_none() {
+            let header_trimmed = impl_header.trim();
+            if header_trimmed.contains(" for ") {
+                header_trimmed
+                    .split(" for ")
+                    .next()
+                    .and_then(|before_for| before_for.trim().split_whitespace().last())
+                    .map(|candidate| candidate.trim_matches(|c: char| c == ','))
+                    .map(|candidate| candidate.trim().to_string())
+                    .filter(|candidate| !candidate.is_empty() && candidate != "impl")
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let (symbol_name, symbol_kind, anchor_node, trait_name) =
+            if let Some(trait_identifier) = trait_identifier {
+                let trait_name = trait_identifier
+                    .utf8_text(content)
+                    .map_err(|e| anyhow::anyhow!("Failed to extract impl trait identifier: {}", e))?
+                    .to_string();
+
+                (
+                    format!("impl {} for {}", trait_name, type_name),
+                    SymbolKind::TraitImpl,
+                    type_identifier,
+                    Some(trait_name),
+                )
+            } else if let Some(trait_name) = inferred_trait_name {
+                (
+                    format!("impl {} for {}", trait_name, type_name),
+                    SymbolKind::TraitImpl,
+                    type_identifier,
+                    Some(trait_name),
+                )
+            } else {
+                (
+                    format!("impl {}", type_name),
+                    SymbolKind::Impl,
+                    type_identifier,
+                    None,
+                )
+            };
+
+        let location = SymbolLocation::new(
+            file_path.to_path_buf(),
+            anchor_node.start_position().row as u32,
+            anchor_node.start_position().column as u32,
+            anchor_node.end_position().row as u32,
+            anchor_node.end_position().column as u32,
+        );
+
+        let mut symbol_info =
+            SymbolInfo::new(symbol_name, symbol_kind, language.to_string(), location);
+        symbol_info
+            .metadata
+            .insert("impl_type".to_string(), type_name);
+
+        if let Some(trait_name) = trait_name {
+            symbol_info.metadata.insert("trait".to_string(), trait_name);
+        }
+
+        Ok(Some(symbol_info))
+    }
+
     /// Find the identifier node within a symbol-defining node
     fn find_identifier_in_node<'a>(
         &self,
         node: tree_sitter::Node<'a>,
         content: &[u8],
     ) -> Result<Option<tree_sitter::Node<'a>>> {
+        if self.is_identifier_node(&node) {
+            let text = node.utf8_text(content).unwrap_or("");
+            if !text.is_empty() && !self.is_keyword_or_invalid(text) {
+                return Ok(Some(node));
+            }
+        }
+
         let mut cursor = node.walk();
 
         // Look for identifier nodes in immediate children first
@@ -940,7 +1002,7 @@ impl LspDatabaseAdapter {
             "enum_item" | "enum_specifier" | "enum_declaration" => SymbolKind::Enum,
             "trait_item" => SymbolKind::Trait,
             "interface_declaration" => SymbolKind::Interface,
-            "impl_item" => SymbolKind::Class, // Rust impl blocks are similar to classes
+            "impl_item" => SymbolKind::Impl,
             "mod_item" | "namespace" => SymbolKind::Module,
             "type_declaration" | "type_alias_declaration" => SymbolKind::Type,
             "variable_declarator" | "variable_declaration" => SymbolKind::Variable,
@@ -1129,7 +1191,7 @@ impl LspDatabaseAdapter {
         language: &str,
         _file_version_id: i64,
         workspace_root: &Path,
-    ) -> Result<Vec<Edge>> {
+    ) -> Result<(Vec<SymbolState>, Vec<Edge>)> {
         debug!(
             "Converting {} reference locations to database format for target {}:{}:{}",
             locations.len(),
@@ -1139,10 +1201,18 @@ impl LspDatabaseAdapter {
         );
 
         let mut edges = Vec::new();
+        let mut symbol_map: HashMap<String, SymbolState> = HashMap::new();
+        let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
+        let path_resolver = PathResolver::new();
 
         // Generate target symbol UID (the symbol being referenced)
-        let target_symbol_uid = self
-            .resolve_symbol_at_location(target_file, target_position.0, target_position.1, language)
+        let target_symbol = self
+            .resolve_symbol_details_at_location(
+                target_file,
+                target_position.0,
+                target_position.1,
+                language,
+            )
             .await
             .with_context(|| {
                 format!(
@@ -1153,7 +1223,17 @@ impl LspDatabaseAdapter {
                 )
             })?;
 
-        debug!("Target symbol UID: {}", target_symbol_uid);
+        let target_symbol_uid = target_symbol.uid.clone();
+        symbol_map
+            .entry(target_symbol_uid.clone())
+            .or_insert_with(|| {
+                self.resolved_symbol_to_symbol_state(&target_symbol, workspace_root)
+            });
+
+        debug!(
+            "Target symbol UID: {} (line {})",
+            target_symbol_uid, target_symbol.info.location.start_line
+        );
 
         // Convert each reference location to an edge
         for location in locations {
@@ -1166,6 +1246,43 @@ impl LspDatabaseAdapter {
             // Convert URI to file path
             let reference_file = PathBuf::from(location.uri.replace("file://", ""));
 
+            if language.eq_ignore_ascii_case("rust") {
+                match self.classify_rust_reference_context(
+                    &reference_file,
+                    location.range.start.line,
+                    location.range.start.character,
+                ) {
+                    Ok(RustReferenceContext::TraitBound) => {
+                        debug!(
+                            "Skipping trait-bound reference at {}:{}:{}",
+                            reference_file.display(),
+                            location.range.start.line,
+                            location.range.start.character
+                        );
+                        continue;
+                    }
+                    Ok(RustReferenceContext::TraitImplTrait) => {
+                        debug!(
+                            "Skipping trait-impl header reference at {}:{}:{}",
+                            reference_file.display(),
+                            location.range.start.line,
+                            location.range.start.character
+                        );
+                        continue;
+                    }
+                    Ok(RustReferenceContext::ImplBodyOrType | RustReferenceContext::Other) => {}
+                    Err(err) => {
+                        warn!(
+                            "Failed to analyze reference context at {}:{}:{}: {}",
+                            reference_file.display(),
+                            location.range.start.line,
+                            location.range.start.character,
+                            err
+                        );
+                    }
+                }
+            }
+
             // Warn if LSP returned a 0-based line (we normalize to 1-based for storage/display)
             if location.range.start.line == 0 {
                 warn!(
@@ -1175,9 +1292,8 @@ impl LspDatabaseAdapter {
             }
 
             // Generate source symbol UID (the symbol that references the target)
-            let stored_start_line = location.range.start.line.saturating_add(1);
-            let source_symbol_uid = match self
-                .resolve_symbol_at_location(
+            let source_symbol = match self
+                .resolve_symbol_details_at_location(
                     &reference_file,
                     location.range.start.line,
                     location.range.start.character,
@@ -1185,7 +1301,7 @@ impl LspDatabaseAdapter {
                 )
                 .await
             {
-                Ok(uid) => uid,
+                Ok(symbol) => symbol,
                 Err(e) => {
                     warn!(
                         "Failed to resolve source symbol at {}:{}:{}: {}",
@@ -1198,9 +1314,28 @@ impl LspDatabaseAdapter {
                 }
             };
 
-            // Get the source file path (where the reference is made from)
-            let path_resolver = PathResolver::new();
-            let source_file_path = path_resolver.get_relative_path(&reference_file, workspace_root);
+            let source_symbol_uid = source_symbol.uid.clone();
+            symbol_map
+                .entry(source_symbol_uid.clone())
+                .or_insert_with(|| {
+                    self.resolved_symbol_to_symbol_state(&source_symbol, workspace_root)
+                });
+            if !seen_pairs.insert((source_symbol_uid.clone(), target_symbol_uid.clone())) {
+                debug!(
+                    "Skipping duplicate reference edge {} -> {}",
+                    source_symbol_uid, target_symbol_uid
+                );
+                continue;
+            }
+
+            let stored_start_line = source_symbol
+                .info
+                .location
+                .start_line
+                .saturating_add(1)
+                .max(1);
+            let source_file_path = path_resolver
+                .get_relative_path(&source_symbol.info.location.file_path, workspace_root);
 
             // Create edge: source symbol references target symbol
             let edge = Edge {
@@ -1209,31 +1344,169 @@ impl LspDatabaseAdapter {
                 target_symbol_uid: target_symbol_uid.clone(),
                 file_path: Some(source_file_path),
                 start_line: Some(stored_start_line),
-                start_char: Some(location.range.start.character),
+                start_char: Some(source_symbol.info.location.start_char),
                 confidence: 1.0, // Perfect confidence from LSP server
                 language: language.to_string(),
                 metadata: Some("lsp_references".to_string()),
             };
 
             debug!(
-                "References edge: {} references {} at {}:{}:{}",
+                "References edge: {} references {} (symbol start at {}:{})",
                 edge.source_symbol_uid,
                 edge.target_symbol_uid,
-                reference_file.display(),
-                stored_start_line,
-                location.range.start.character
+                edge.file_path.as_deref().unwrap_or("<unknown>"),
+                stored_start_line
             );
 
             edges.push(edge);
         }
 
+        if edges.is_empty() {
+            debug!(
+                "No concrete references found for {} — storing sentinel none edge",
+                target_symbol_uid
+            );
+            let mut sentinel_edges = create_none_reference_edges(&target_symbol_uid);
+            for edge in &mut sentinel_edges {
+                edge.metadata = Some("lsp_references_empty".to_string());
+            }
+            edges.extend(sentinel_edges);
+        }
+
         info!(
-            "Converted {} reference locations to {} edges",
+            "Converted {} reference locations to {} unique symbol edges and {} symbols",
             locations.len(),
-            edges.len()
+            edges.len(),
+            symbol_map.len()
         );
 
-        Ok(edges)
+        Ok((symbol_map.into_values().collect(), edges))
+    }
+
+    fn is_rust_trait_bound_reference(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<bool> {
+        Ok(matches!(
+            self.classify_rust_reference_context(file_path, line, column)?,
+            RustReferenceContext::TraitBound
+        ))
+    }
+
+    fn classify_rust_reference_context(
+        &self,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<RustReferenceContext> {
+        let source = std::fs::read_to_string(file_path).with_context(|| {
+            format!(
+                "Failed to read reference file for trait-bound analysis: {}",
+                file_path.display()
+            )
+        })?;
+
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .map_err(|e| anyhow::anyhow!("Failed to configure rust parser: {}", e))?;
+
+        let tree = parser.parse(&source, None).ok_or_else(|| {
+            anyhow::anyhow!("Failed to parse Rust source when detecting trait bounds")
+        })?;
+
+        let point = tree_sitter::Point::new(line as usize, column as usize);
+        let Some(node) = tree.root_node().descendant_for_point_range(point, point) else {
+            return Ok(RustReferenceContext::Other);
+        };
+
+        let mut current = Some(node);
+        while let Some(n) = current {
+            match n.kind() {
+                "trait_bound"
+                | "type_bound"
+                | "trait_bounds"
+                | "type_parameters"
+                | "where_clause"
+                | "where_predicate"
+                | "bounded_type"
+                | "higher_ranked_trait_bounds"
+                | "generic_type"
+                | "lifetime_bound"
+                | "constraint" => return Ok(RustReferenceContext::TraitBound),
+                "impl_item" => {
+                    if let Some(trait_child) = n.child_by_field_name("trait") {
+                        let range = trait_child.range();
+                        if range.start_point <= point && point <= range.end_point {
+                            return Ok(RustReferenceContext::TraitImplTrait);
+                        }
+                    }
+
+                    return Ok(RustReferenceContext::ImplBodyOrType);
+                }
+                "call_expression"
+                | "method_call_expression"
+                | "field_expression"
+                | "macro_invocation"
+                | "path_expression"
+                | "scoped_identifier"
+                | "attribute_item" => return Ok(RustReferenceContext::Other),
+                "function_item" | "struct_item" | "enum_item" | "trait_item" | "mod_item" => {
+                    return Ok(RustReferenceContext::Other)
+                }
+                _ => {
+                    current = n.parent();
+                }
+            }
+        }
+
+        Ok(RustReferenceContext::Other)
+    }
+
+    fn resolved_symbol_to_symbol_state(
+        &self,
+        resolved: &ResolvedSymbol,
+        workspace_root: &Path,
+    ) -> SymbolState {
+        let path_resolver = PathResolver::new();
+        let relative_path =
+            path_resolver.get_relative_path(&resolved.info.location.file_path, workspace_root);
+        let normalized_path = if relative_path.is_empty() {
+            resolved
+                .info
+                .location
+                .file_path
+                .to_string_lossy()
+                .to_string()
+        } else {
+            relative_path
+        };
+
+        let metadata = if resolved.info.metadata.is_empty() {
+            Some("lsp_reference_autocreate".to_string())
+        } else {
+            serde_json::to_string(&resolved.info.metadata).ok()
+        };
+
+        SymbolState {
+            symbol_uid: resolved.uid.clone(),
+            file_path: normalized_path,
+            language: resolved.info.language.clone(),
+            name: resolved.info.name.clone(),
+            fqn: resolved.info.qualified_name.clone(),
+            kind: resolved.info.kind.to_string(),
+            signature: resolved.info.signature.clone(),
+            visibility: resolved.info.visibility.as_ref().map(|v| v.to_string()),
+            def_start_line: resolved.info.location.start_line,
+            def_start_char: resolved.info.location.start_char,
+            def_end_line: resolved.info.location.end_line,
+            def_end_char: resolved.info.location.end_char,
+            is_definition: resolved.info.is_definition,
+            documentation: None,
+            metadata,
+        }
     }
 
     /// Convert LSP definitions response to database edges
@@ -1474,6 +1747,18 @@ impl LspDatabaseAdapter {
             edges.push(edge);
         }
 
+        if edges.is_empty() {
+            debug!(
+                "No concrete implementations found for {} — storing sentinel none edge",
+                target_symbol_uid
+            );
+            let mut sentinel_edges = create_none_implementation_edges(&target_symbol_uid);
+            for edge in &mut sentinel_edges {
+                edge.metadata = Some("lsp_implementations_empty".to_string());
+            }
+            edges.extend(sentinel_edges);
+        }
+
         info!(
             "Converted {} implementation locations to {} edges",
             locations.len(),
@@ -1536,7 +1821,7 @@ impl LspDatabaseAdapter {
                 &extracted.name,
                 extracted.location.start_line,
             ) {
-                Ok(uid) => uid,
+                Ok(uid) => normalize_uid_with_hint(&uid, Some(workspace_root)),
                 Err(e) => {
                     warn!(
                         "Failed to generate version-aware UID for symbol '{}': {}",
@@ -1546,11 +1831,20 @@ impl LspDatabaseAdapter {
                 }
             };
 
-            // Convert file path to relative path
-            let relative_path = match extracted.location.file_path.strip_prefix(workspace_root) {
+            // Convert file path to relative path consistent with normalized UID
+            let mut relative_path = match extracted.location.file_path.strip_prefix(workspace_root)
+            {
                 Ok(relative) => relative.to_string_lossy().to_string(),
                 Err(_) => extracted.location.file_path.to_string_lossy().to_string(),
             };
+            if let Some((normalized_path, _)) = symbol_uid.split_once(':') {
+                if !normalized_path.is_empty()
+                    && !normalized_path.starts_with("EXTERNAL")
+                    && !normalized_path.starts_with("UNRESOLVED")
+                {
+                    relative_path = normalized_path.to_string();
+                }
+            }
 
             // Create SymbolState directly
             let symbol_state = SymbolState {
@@ -1638,8 +1932,14 @@ impl LspDatabaseAdapter {
             );
             // Log the first few edges for debugging
             for (i, edge) in edges.iter().take(3).enumerate() {
-                info!("[DEBUG] LspDatabaseAdapter: Edge[{}]: source='{}', target='{}', relation='{}', metadata={:?}", 
-                     i, edge.source_symbol_uid, edge.target_symbol_uid, edge.relation.to_string(), edge.metadata);
+                info!(
+                    "[DEBUG] LspDatabaseAdapter: Edge[{}]: source='{}', target='{}', relation='{}', metadata={:?}",
+                    i,
+                    edge.source_symbol_uid,
+                    edge.target_symbol_uid,
+                    edge.relation.to_string(),
+                    edge.metadata
+                );
             }
             database
                 .store_edges(&edges)
@@ -1673,7 +1973,10 @@ impl LspDatabaseAdapter {
         symbol_uid: &str,
         relation: EdgeRelation,
     ) -> Result<()> {
-        debug!("Should clean up existing {:?} edges for symbol: {} (currently skipped - database handles duplicates)", relation, symbol_uid);
+        debug!(
+            "Should clean up existing {:?} edges for symbol: {} (currently skipped - database handles duplicates)",
+            relation, symbol_uid
+        );
 
         // TODO: Implement proper edge cleanup once we have a method to execute custom SQL
         // For now, the database's REPLACE or INSERT OR REPLACE behavior should handle duplicates
@@ -1762,61 +2065,7 @@ impl LspDatabaseAdapter {
         column: u32,
         language: &str,
     ) -> anyhow::Result<String> {
-        use std::fs;
-
-        // Read file content
-        let content = fs::read_to_string(file_path)?;
-        let extension = Self::language_to_extension(language);
-
-        // Create a simple parser for FQN extraction
-        let mut parser = tree_sitter::Parser::new();
-
-        // Set the language based on file extension
-        let language_fn = match extension {
-            "rs" => Some(tree_sitter_rust::LANGUAGE),
-            "py" => Some(tree_sitter_python::LANGUAGE),
-            "js" | "jsx" => Some(tree_sitter_javascript::LANGUAGE),
-            "ts" | "tsx" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
-            "java" => Some(tree_sitter_java::LANGUAGE),
-            "go" => Some(tree_sitter_go::LANGUAGE),
-            "cpp" | "cc" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
-            _ => None,
-        };
-
-        if let Some(lang_fn) = language_fn {
-            parser
-                .set_language(&lang_fn.into())
-                .map_err(|e| anyhow::anyhow!("Failed to set parser language: {}", e))?;
-        } else {
-            // If we don't have a parser for this language, just return empty FQN
-            return Ok(String::new());
-        }
-
-        // Parse the file
-        let tree = parser
-            .parse(content.as_bytes(), None)
-            .ok_or_else(|| anyhow::anyhow!("Failed to parse file"))?;
-
-        // Find node at the specified position
-        let root = tree.root_node();
-        let point = tree_sitter::Point::new(line as usize, column as usize);
-        let node = Self::find_node_at_point(root, point)?;
-
-        // Build FQN by traversing up the AST
-        let mut fqn = Self::build_fqn_from_node(node, content.as_bytes(), extension)?;
-
-        // Prepend the path-based package/module information
-        if let Some(path_prefix) = Self::get_path_based_prefix(file_path, extension) {
-            if !path_prefix.is_empty() {
-                if fqn.is_empty() {
-                    fqn = path_prefix;
-                } else {
-                    fqn = format!("{}::{}", path_prefix, fqn);
-                }
-            }
-        }
-
-        Ok(fqn)
+        crate::fqn::get_fqn_from_ast(file_path, line, column, Some(language))
     }
 
     /// Convert language string to file extension
@@ -2255,6 +2504,7 @@ impl Default for LspDatabaseAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::{Location, Position, Range};
     use std::io::Write;
     use std::path::PathBuf;
     use tempfile::NamedTempFile;
@@ -2336,6 +2586,40 @@ fn main() {
     }
 
     #[tokio::test]
+    async fn test_resolve_symbol_at_location_rust_trait_impl_kind() {
+        let adapter = create_test_adapter();
+
+        let rust_code = r#"struct Widget;
+
+impl Default for Widget {
+    fn default() -> Self {
+        Widget
+    }
+}
+"#;
+
+        let temp_file = create_temp_file_with_content(rust_code, "rs");
+        let lines: Vec<&str> = rust_code.lines().collect();
+        let impl_line = lines
+            .iter()
+            .position(|line| line.contains("impl Default for Widget"))
+            .expect("impl line present") as u32;
+        let impl_char = lines[impl_line as usize]
+            .find("Default")
+            .expect("Default keyword present") as u32;
+
+        let resolved = adapter
+            .resolve_symbol_details_at_location(&temp_file, impl_line, impl_char, "rust")
+            .await
+            .expect("Should resolve impl symbol");
+
+        assert_eq!(resolved.info.kind, SymbolKind::TraitImpl);
+        assert_eq!(resolved.info.name, "impl Default for Widget");
+
+        std::fs::remove_file(temp_file).ok();
+    }
+
+    #[tokio::test]
     async fn test_resolve_symbol_at_location_python_function() {
         let adapter = create_test_adapter();
 
@@ -2384,6 +2668,47 @@ if __name__ == "__main__":
 
         // Clean up
         std::fs::remove_file(temp_file).ok();
+    }
+
+    #[tokio::test]
+    async fn test_resolve_symbol_at_location_uses_workspace_relative_uid() {
+        let adapter = LspDatabaseAdapter::new();
+        let project_root = std::env::current_dir().expect("Failed to get current dir");
+        let repo_root = if project_root.join("src/simd_ranking.rs").exists() {
+            project_root.clone()
+        } else {
+            project_root
+                .parent()
+                .expect("Expected crate to live inside workspace")
+                .to_path_buf()
+        };
+
+        let file_path = repo_root.join("src/simd_ranking.rs");
+        assert!(file_path.exists(), "Expected {:?} to exist", file_path);
+
+        let uid = adapter
+            .resolve_symbol_at_location(&file_path, 7, 11, "rust")
+            .await
+            .expect("Failed to resolve symbol at location");
+
+        assert!(
+            uid.starts_with("src/"),
+            "Expected workspace-relative UID, got: {}",
+            uid
+        );
+
+        let prompt_path = repo_root.join("src/extract/prompts.rs");
+        assert!(prompt_path.exists(), "Expected {:?} to exist", prompt_path);
+
+        let prompt_uid = adapter
+            .resolve_symbol_at_location(&prompt_path, 129, 5, "rust")
+            .await
+            .expect("Failed to resolve prompt symbol");
+        assert!(
+            prompt_uid.starts_with("src/"),
+            "Expected workspace-relative UID, got: {}",
+            prompt_uid
+        );
     }
 
     #[tokio::test]
@@ -2452,16 +2777,21 @@ function main(): void {
         let empty_file = create_temp_file_with_content("", "rs");
         let result = adapter
             .resolve_symbol_at_location(&empty_file, 0, 0, "rust")
-            .await;
-        assert!(result.is_err(), "Should fail for empty file");
+            .await
+            .expect("Empty file should use positional fallback UID");
+        assert!(
+            result.contains("pos_1_0"),
+            "Fallback UID should encode normalized line/column"
+        );
         std::fs::remove_file(empty_file).ok();
 
         // Test with unsupported language
         let test_file = create_temp_file_with_content("func test() {}", "unknown");
         let result = adapter
             .resolve_symbol_at_location(&test_file, 0, 5, "unknown")
-            .await;
-        assert!(result.is_err(), "Should fail for unsupported language");
+            .await
+            .expect("Unknown language should fall back to a synthesized UID");
+        assert!(!result.is_empty(), "Fallback UID should not be empty");
         std::fs::remove_file(test_file).ok();
 
         // Test with invalid file path
@@ -2715,19 +3045,26 @@ pub fn main() {
             result.is_ok(),
             "convert_references_to_database should succeed"
         );
-        let edges = result.unwrap();
+        let (ref_symbols, edges) = result.unwrap();
 
         // Should have created edges for valid reference locations
         assert!(
             !edges.is_empty(),
             "Should create at least one edge for valid references"
         );
+        assert!(
+            !ref_symbols.is_empty(),
+            "Should create symbol state entries for referenced symbols"
+        );
+
+        let expected_path =
+            PathResolver::new().get_relative_path(&target_file, Path::new("/workspace"));
 
         // Check edge properties
         for edge in &edges {
             assert_eq!(edge.relation, crate::database::EdgeRelation::References);
             assert_eq!(edge.language, "rust");
-            assert_eq!(edge.file_path, Some("test_file.rs".to_string()));
+            assert_eq!(edge.file_path, Some(expected_path.clone()));
             assert_eq!(edge.confidence, 1.0);
             assert_eq!(edge.metadata, Some("lsp_references".to_string()));
             assert!(!edge.source_symbol_uid.is_empty());
@@ -2736,6 +3073,159 @@ pub fn main() {
 
         // Clean up
         std::fs::remove_file(target_file).ok();
+    }
+
+    #[tokio::test]
+    async fn test_convert_references_to_database_skips_trait_bounds() {
+        let adapter = create_test_adapter();
+
+        let target_code = r#"struct BertSimulator;
+
+impl Default for BertSimulator {
+    fn default() -> Self {
+        BertSimulator
+    }
+}
+"#;
+        let target_file = create_temp_file_with_content(target_code, "rs");
+        let target_lines: Vec<&str> = target_code.lines().collect();
+        let target_line = target_lines
+            .iter()
+            .position(|line| line.contains("impl Default for BertSimulator"))
+            .expect("impl line present") as u32;
+        let target_char = target_lines[target_line as usize]
+            .find("Default")
+            .expect("Default keyword present") as u32;
+
+        let reference_code = r#"impl<T: Default> ArcSwapAny<T> {
+    fn with_default() -> T {
+        T::default()
+    }
+}
+"#;
+        let reference_file = create_temp_file_with_content(reference_code, "rs");
+        let reference_lines: Vec<&str> = reference_code.lines().collect();
+        let reference_line = reference_lines
+            .iter()
+            .position(|line| line.contains("impl<T: Default> ArcSwapAny"))
+            .expect("trait bound line present") as u32;
+        let reference_char = reference_lines[reference_line as usize]
+            .find("Default")
+            .expect("Default in trait bound") as u32;
+
+        let locations = vec![Location {
+            uri: format!("file://{}", reference_file.display()),
+            range: Range {
+                start: Position {
+                    line: reference_line,
+                    character: reference_char,
+                },
+                end: Position {
+                    line: reference_line,
+                    character: reference_char + 7,
+                },
+            },
+        }];
+
+        let (symbols, edges) = adapter
+            .convert_references_to_database(
+                &locations,
+                &target_file,
+                (target_line, target_char),
+                "rust",
+                1,
+                target_file.parent().unwrap_or_else(|| Path::new("/")),
+            )
+            .await
+            .expect("reference conversion succeeds");
+
+        assert!(
+            !symbols.is_empty(),
+            "target symbol should still be captured despite filtered references"
+        );
+        assert!(edges.is_empty(), "trait-bound references must be skipped");
+
+        std::fs::remove_file(target_file).ok();
+        std::fs::remove_file(reference_file).ok();
+    }
+
+    #[tokio::test]
+    async fn test_convert_references_to_database_skips_trait_impl_headers() {
+        let adapter = create_test_adapter();
+
+        let target_code = r#"struct ArcSwapAny;
+
+impl Default for ArcSwapAny {
+    fn default() -> Self {
+        ArcSwapAny
+    }
+}
+"#;
+        let target_file = create_temp_file_with_content(target_code, "rs");
+        let target_lines: Vec<&str> = target_code.lines().collect();
+        let target_line = target_lines
+            .iter()
+            .position(|line| line.contains("impl Default for ArcSwapAny"))
+            .expect("impl line present") as u32;
+        let target_char = target_lines[target_line as usize]
+            .find("Default")
+            .expect("Default keyword present") as u32;
+
+        let reference_code = r#"struct BertSimulator;
+
+impl Default for BertSimulator {
+    fn default() -> Self {
+        BertSimulator
+    }
+}
+"#;
+        let reference_file = create_temp_file_with_content(reference_code, "rs");
+        let reference_lines: Vec<&str> = reference_code.lines().collect();
+        let reference_line = reference_lines
+            .iter()
+            .position(|line| line.contains("impl Default for BertSimulator"))
+            .expect("impl header present") as u32;
+        let reference_char = reference_lines[reference_line as usize]
+            .find("Default")
+            .expect("Default keyword present") as u32;
+
+        let locations = vec![Location {
+            uri: format!("file://{}", reference_file.display()),
+            range: Range {
+                start: Position {
+                    line: reference_line,
+                    character: reference_char,
+                },
+                end: Position {
+                    line: reference_line,
+                    character: reference_char + 7,
+                },
+            },
+        }];
+
+        let (symbols, edges) = adapter
+            .convert_references_to_database(
+                &locations,
+                &target_file,
+                (target_line, target_char),
+                "rust",
+                1,
+                target_file.parent().unwrap_or_else(|| Path::new("/")),
+            )
+            .await
+            .expect("reference conversion succeeds");
+
+        assert!(
+            !symbols.is_empty(),
+            "target symbol should still be stored when skipping impl header references"
+        );
+        assert!(
+            edges.is_empty(),
+            "trait impl header references must be skipped"
+        );
+
+        std::fs::remove_file(target_file).ok();
+        std::fs::remove_file(reference_file).ok();
     }
 
     #[tokio::test]
@@ -2764,10 +3254,19 @@ pub fn test_function() -> i32 {
             .await;
 
         assert!(result.is_ok(), "Should handle empty locations gracefully");
-        let edges = result.unwrap();
-        assert!(
-            edges.is_empty(),
-            "Should return empty edges for empty locations"
+        let (ref_symbols, edges) = result.unwrap();
+        assert_eq!(
+            ref_symbols.len(),
+            1,
+            "Target symbol should still be recorded"
+        );
+        assert_eq!(edges.len(), 1, "Should persist sentinel edge when empty");
+        assert_eq!(edges[0].target_symbol_uid, "none");
+        assert_eq!(edges[0].relation, EdgeRelation::References);
+        assert_eq!(
+            edges[0].metadata.as_deref(),
+            Some("lsp_references_empty"),
+            "Sentinel edge should be tagged with references metadata"
         );
 
         // Clean up
@@ -2826,7 +3325,6 @@ pub fn test_function() -> i32 {
         use crate::protocol::{
             CallHierarchyCall, CallHierarchyItem, CallHierarchyResult, Position, Range,
         };
-        use std::path::Path;
 
         let temp_dir = tempfile::tempdir().unwrap();
         let workspace_root = temp_dir.path().to_path_buf();
@@ -2975,10 +3473,16 @@ pub fn test_function() -> i32 {
                 },
             },
         ];
-        let ref_edges = adapter
+        let (ref_symbols, ref_edges) = adapter
             .convert_references_to_database(&refs, &main_path, (1, 3), "rust", 1, &workspace_root)
             .await
             .expect("convert refs");
+        if !ref_symbols.is_empty() {
+            sqlite
+                .store_symbols(&ref_symbols)
+                .await
+                .expect("store ref symbols");
+        }
         if !ref_edges.is_empty() {
             sqlite
                 .store_edges(&ref_edges)
@@ -3050,7 +3554,11 @@ pub fn test_function() -> i32 {
             result.is_ok(),
             "Should succeed even with invalid references"
         );
-        let edges = result.unwrap();
+        let (ref_symbols, edges) = result.unwrap();
+        assert!(
+            !ref_symbols.is_empty(),
+            "Target symbol should still be recorded"
+        );
         // Should have no edges because all references were invalid and skipped
         assert!(
             edges.is_empty(),
@@ -3102,13 +3610,15 @@ class Calculator:
 
         let result = result.await;
         assert!(result.is_ok(), "Should work with Python code");
-        let edges = result.unwrap();
+        let (_ref_symbols, edges) = result.unwrap();
 
         if !edges.is_empty() {
+            let expected_path =
+                PathResolver::new().get_relative_path(&python_file, Path::new("/workspace"));
             // Check Python-specific properties
             for edge in &edges {
                 assert_eq!(edge.language, "python");
-                assert_eq!(edge.file_path, Some("test_file.py".to_string()));
+                assert_eq!(edge.file_path, Some(expected_path.clone()));
                 assert_eq!(edge.relation, crate::database::EdgeRelation::References);
             }
         }
@@ -3125,7 +3635,9 @@ class Calculator:
 pub fn defined_function() -> i32 { 1 }
 pub fn usage() { let _ = defined_function(); }
 "#;
-        let source_file = create_temp_file_with_content(rust_code, "rs");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_file = temp_dir.path().join("test_file.rs");
+        std::fs::write(&source_file, rust_code).unwrap();
 
         // Simulate LSP location with 0-based line number at the first line
         let locations = vec![crate::protocol::Location {
@@ -3142,7 +3654,7 @@ pub fn usage() { let _ = defined_function(); }
             },
         }];
 
-        let result = adapter
+        let (_ref_symbols, result) = adapter
             .convert_references_to_database(
                 &locations,
                 &source_file,
@@ -3205,7 +3717,7 @@ pub fn main() {
 
         let result = result.await;
         assert!(result.is_ok(), "Should succeed");
-        let edges = result.unwrap();
+        let (_ref_symbols, edges) = result.unwrap();
 
         if !edges.is_empty() {
             let edge = &edges[0];
@@ -3215,10 +3727,82 @@ pub fn main() {
             assert!(edge.start_line.is_some());
             assert!(edge.start_char.is_some());
             assert_eq!(edge.start_line.unwrap(), 6);
-            assert_eq!(edge.start_char.unwrap(), 20);
+            assert_eq!(edge.start_char.unwrap(), 7);
         }
 
         // Clean up
+        std::fs::remove_file(target_file).ok();
+    }
+
+    #[tokio::test]
+    async fn test_convert_references_to_database_deduplicates_sources() {
+        let adapter = create_test_adapter();
+
+        let rust_code = r#"
+pub fn callee() {}
+
+pub fn caller() {
+    callee();
+    callee();
+}
+"#;
+        let target_file = create_temp_file_with_content(rust_code, "rs");
+
+        let locations = vec![
+            crate::protocol::Location {
+                uri: format!("file://{}", target_file.display()),
+                range: crate::protocol::Range {
+                    start: crate::protocol::Position {
+                        line: 4,
+                        character: 4,
+                    },
+                    end: crate::protocol::Position {
+                        line: 4,
+                        character: 11,
+                    },
+                },
+            },
+            crate::protocol::Location {
+                uri: format!("file://{}", target_file.display()),
+                range: crate::protocol::Range {
+                    start: crate::protocol::Position {
+                        line: 5,
+                        character: 4,
+                    },
+                    end: crate::protocol::Position {
+                        line: 5,
+                        character: 11,
+                    },
+                },
+            },
+        ];
+
+        let (ref_symbols, edges) = adapter
+            .convert_references_to_database(
+                &locations,
+                &target_file,
+                (1, 7), // Position of "callee" definition (line 2)
+                "rust",
+                1,
+                Path::new("/workspace"),
+            )
+            .await
+            .expect("convert refs");
+
+        assert!(
+            !ref_symbols.is_empty(),
+            "target symbol should be recorded even when edges are deduplicated"
+        );
+        assert_eq!(
+            edges.len(),
+            1,
+            "duplicate call sites should collapse to one edge"
+        );
+        let edge = &edges[0];
+        assert!(edge.start_line.is_some());
+        assert!(edge.file_path.is_some());
+        assert_ne!(edge.source_symbol_uid, edge.target_symbol_uid);
+
         std::fs::remove_file(target_file).ok();
     }
 
@@ -3272,8 +3856,7 @@ pub fn caller() {
         assert!(edge.start_line.is_some());
         assert!(edge.start_char.is_some());
 
-        // Clean up
-        std::fs::remove_file(source_file).ok();
+        // temp_dir cleans up automatically
     }
 
     #[test]
@@ -3696,7 +4279,9 @@ impl Drawable for Square {
     }
 }
 "#;
-        let interface_file = create_temp_file_with_content(interface_code, "rs");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let interface_file = temp_dir.path().join("test_file.rs");
+        std::fs::write(&interface_file, interface_code).unwrap();
 
         // Create implementation locations (simulated LSP response)
         // Implementations of Drawable trait
@@ -3738,7 +4323,7 @@ impl Drawable for Square {
             (0, 15), // Position of "Drawable" trait
             "rust",
             1,
-            Path::new("/workspace"),
+            temp_dir.path(),
         );
 
         assert!(
@@ -3770,8 +4355,7 @@ impl Drawable for Square {
             );
         }
 
-        // Clean up
-        std::fs::remove_file(interface_file).ok();
+        // temp_dir cleanup handled automatically
     }
 
     #[test]
@@ -3807,7 +4391,9 @@ class Circle implements Shape {
     }
 }
 "#;
-        let interface_file = create_temp_file_with_content(typescript_code, "ts");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let interface_file = temp_dir.path().join("shape.ts");
+        std::fs::write(&interface_file, typescript_code).unwrap();
 
         // Create implementation locations
         let locations = vec![
@@ -3861,7 +4447,7 @@ class Circle implements Shape {
             (0, 10), // Position of "Shape" interface
             "typescript",
             1,
-            Path::new("/workspace"),
+            temp_dir.path(),
         );
 
         assert!(result.is_ok(), "Should succeed: {:?}", result.err());
@@ -3875,8 +4461,7 @@ class Circle implements Shape {
             assert_eq!(edge.language, "typescript");
         }
 
-        // Clean up
-        std::fs::remove_file(interface_file).ok();
+        // temp_dir cleanup handled automatically
     }
 
     #[test]
@@ -3903,9 +4488,13 @@ class Circle implements Shape {
 
         assert!(result.is_ok(), "Should handle empty locations gracefully");
         let edges = result.unwrap();
-        assert!(
-            edges.is_empty(),
-            "Should return empty edges for empty locations"
+        assert_eq!(edges.len(), 1, "Should persist sentinel edge when empty");
+        assert_eq!(edges[0].target_symbol_uid, "none");
+        assert_eq!(edges[0].relation, EdgeRelation::Implementation);
+        assert_eq!(
+            edges[0].metadata.as_deref(),
+            Some("lsp_implementations_empty"),
+            "Sentinel edge should be tagged with implementation metadata"
         );
 
         // Clean up
@@ -4066,7 +4655,9 @@ impl Clone for Point {
     }
 }
 "#;
-        let rust_file = create_temp_file_with_content(rust_code, "rs");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let rust_file = temp_dir.path().join("test_file.rs");
+        std::fs::write(&rust_file, rust_code).unwrap();
 
         let locations = vec![crate::protocol::Location {
             uri: format!("file://{}", rust_file.display()),
@@ -4088,7 +4679,7 @@ impl Clone for Point {
             (0, 15), // Position of "Clone" trait
             "rust",
             42, // Custom file version ID
-            Path::new("/workspace"),
+            temp_dir.path(),
         );
 
         assert!(result.is_ok(), "Should succeed: {:?}", result.err());
@@ -4115,8 +4706,48 @@ impl Clone for Point {
         assert!(edge.source_symbol_uid.starts_with("rust::"));
         assert!(edge.target_symbol_uid.starts_with("rust::"));
 
-        // Clean up
-        std::fs::remove_file(rust_file).ok();
+        // temp_dir cleanup handled automatically
+    }
+
+    #[tokio::test]
+    async fn test_trait_impl_symbol_uids_anchor_on_type() {
+        let adapter = create_test_adapter();
+
+        let rust_code = r#"trait MyTrait {}
+
+struct Alpha;
+struct Beta;
+
+impl MyTrait for Alpha {}
+impl MyTrait for Beta {}
+"#;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_file = temp_dir.path().join("types.rs");
+        std::fs::write(&source_file, rust_code).unwrap();
+
+        // Lines where the impl blocks start (0-based)
+        let alpha_impl_line = 5u32; // `impl MyTrait for Alpha {}`
+        let beta_impl_line = 6u32; // `impl MyTrait for Beta {}`
+
+        let alpha_uid = adapter
+            .resolve_symbol_at_location(&source_file, alpha_impl_line, 10, "rust")
+            .await
+            .expect("resolve alpha impl");
+        let beta_uid = adapter
+            .resolve_symbol_at_location(&source_file, beta_impl_line, 10, "rust")
+            .await
+            .expect("resolve beta impl");
+
+        assert_ne!(alpha_uid, beta_uid, "Impl UIDs should differ per type");
+        assert!(
+            alpha_uid.contains("Alpha"),
+            "UID should encode implementing type name"
+        );
+        assert!(
+            beta_uid.contains("Beta"),
+            "UID should encode implementing type name"
+        );
     }
 
     #[test]

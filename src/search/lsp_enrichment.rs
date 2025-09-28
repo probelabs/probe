@@ -59,10 +59,16 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                         workspace_hint: None,
                         timeout_ms: 8000,
                         include_stdlib: false,
+                        auto_start: true,
+                    };
+
+                    let non_blocking_config = LspConfig {
+                        auto_start: false,
+                        ..config.clone()
                     };
 
                     // Fast path: try non-blocking connection to running daemon
-                    if let Some(client) = LspClient::new_non_blocking(config.clone()).await {
+                    if let Some(client) = LspClient::new_non_blocking(non_blocking_config).await {
                         if debug_mode {
                             println!("[DEBUG] Connected to running LSP daemon for enrichment (fast path)");
                         }
@@ -222,6 +228,7 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                     workspace_hint: None,
                     timeout_ms: 8000,
                     include_stdlib: false,
+                    auto_start: true,
                 };
                 match LspClient::new(config).await {
                     Ok(client) => {

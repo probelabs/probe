@@ -184,14 +184,14 @@ impl Drop for PidLock {
 
 /// Check if a process with the given PID is running
 #[cfg(unix)]
-fn is_process_running(pid: u32) -> bool {
+pub fn is_process_running(pid: u32) -> bool {
     // On Unix, we can check if a process exists by sending signal 0
     // This doesn't actually send a signal, just checks if we could
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 #[cfg(windows)]
-fn is_process_running(pid: u32) -> bool {
+pub fn is_process_running(pid: u32) -> bool {
     use winapi::um::handleapi::CloseHandle;
     use winapi::um::processthreadsapi::OpenProcess;
     use winapi::um::winnt::PROCESS_QUERY_LIMITED_INFORMATION;

@@ -56,7 +56,9 @@ pub use lsp_enrichment_worker::{
     LspEnrichmentWorkerPool,
 };
 pub use manager::{IndexingManager, ManagerConfig, ManagerStatus, WorkerStats};
-pub use pipelines::{IndexingPipeline, LanguagePipeline, PipelineConfig, PipelineResult};
+pub use pipelines::{
+    get_fqn_from_ast, IndexingPipeline, LanguagePipeline, PipelineConfig, PipelineResult,
+};
 pub use progress::{IndexingProgress, ProgressMetrics, ProgressSnapshot};
 pub use queue::{IndexingQueue, Priority, QueueItem, QueueMetrics, QueueSnapshot};
 pub use symbol_conversion::{

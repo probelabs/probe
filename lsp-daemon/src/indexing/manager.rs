@@ -8,9 +8,11 @@
 //! - Progress reporting and status monitoring
 
 use crate::cache_types::DefinitionInfo;
-use crate::database::DatabaseBackend;
+use crate::database::{DatabaseBackend, PendingEnrichmentCounts, SymbolEnrichmentPlan};
 use crate::indexing::{
-    lsp_enrichment_queue::{LspEnrichmentQueue, QueueItem as EnrichmentQueueItem},
+    lsp_enrichment_queue::{
+        EnrichmentOperation, LspEnrichmentQueue, QueueItem as EnrichmentQueueItem,
+    },
     lsp_enrichment_worker::{EnrichmentWorkerConfig, LspEnrichmentWorkerPool},
     pipelines::SymbolInfo,
     IndexingConfig, IndexingPipeline, IndexingProgress, IndexingQueue, LanguageStrategyFactory,
@@ -33,6 +35,7 @@ use anyhow::{anyhow, Result};
 use ignore::WalkBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
@@ -142,8 +145,8 @@ pub struct ManagerConfig {
 impl Default for ManagerConfig {
     fn default() -> Self {
         Self {
-            max_workers: num_cpus::get().max(2), // At least 2 workers
-            max_queue_size: 10000,               // 10k files max
+            max_workers: 1,        // Single worker for both Phase 1 and Phase 2
+            max_queue_size: 10000, // 10k files max
             exclude_patterns: vec![
                 "*.git/*".to_string(),
                 "*/node_modules/*".to_string(),
@@ -223,6 +226,13 @@ pub struct WorkerStats {
     pub current_file: Option<PathBuf>,
     pub is_active: bool,
     pub last_activity: Option<u64>, // Unix timestamp
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LanguageCapabilities {
+    references: bool,
+    implementations: bool,
+    call_hierarchy: bool,
 }
 
 /// Main indexing manager that orchestrates all indexing operations
@@ -400,10 +410,23 @@ impl IndexingManager {
     ) -> anyhow::Result<Vec<crate::protocol::Location>> {
         let mut locations = Vec::new();
 
-        if let Some(array) = json_result.as_array() {
-            for item in array {
+        match json_result {
+            serde_json::Value::Array(array) => {
+                for item in array {
+                    if let (Some(uri), Some(range)) =
+                        (item.get("uri").and_then(|v| v.as_str()), item.get("range"))
+                    {
+                        let range = Self::parse_lsp_range(range)?;
+                        locations.push(crate::protocol::Location {
+                            uri: uri.to_string(),
+                            range,
+                        });
+                    }
+                }
+            }
+            serde_json::Value::Object(obj) => {
                 if let (Some(uri), Some(range)) =
-                    (item.get("uri").and_then(|v| v.as_str()), item.get("range"))
+                    (obj.get("uri").and_then(|v| v.as_str()), obj.get("range"))
                 {
                     let range = Self::parse_lsp_range(range)?;
                     locations.push(crate::protocol::Location {
@@ -412,6 +435,8 @@ impl IndexingManager {
                     });
                 }
             }
+            serde_json::Value::Null => {}
+            _ => {}
         }
 
         Ok(locations)
@@ -677,6 +702,47 @@ impl IndexingManager {
         Ok(())
     }
 
+    async fn fetch_language_capabilities(
+        &self,
+        language: Language,
+        workspace_root: &Path,
+        file_path: &Path,
+    ) -> Option<LanguageCapabilities> {
+        if let Err(e) = self
+            .server_manager
+            .ensure_workspace_registered(language, workspace_root.to_path_buf())
+            .await
+        {
+            debug!(
+                "Failed to register workspace for {:?} ({}): {}",
+                language,
+                workspace_root.display(),
+                e
+            );
+            return None;
+        }
+
+        match self.server_manager.get_server(language).await {
+            Ok(server_instance) => {
+                let server = server_instance.lock().await;
+                Some(LanguageCapabilities {
+                    references: server.server.supports_references(),
+                    implementations: server.server.supports_implementations(),
+                    call_hierarchy: server.server.supports_call_hierarchy(),
+                })
+            }
+            Err(e) => {
+                debug!(
+                    "Failed to fetch capabilities for {:?} ({}): {}",
+                    language,
+                    file_path.display(),
+                    e
+                );
+                None
+            }
+        }
+    }
+
     /// Stop indexing and shutdown all workers
     pub async fn stop_indexing(&self) -> Result<()> {
         info!("Stopping indexing...");
@@ -830,8 +896,11 @@ impl IndexingManager {
 
         debug!(
             "Workspace completion check for {:?}: complete={}, entries/file={:.1}, hit_rate={:.1}%, total_entries={}",
-            workspace_root, is_complete, estimated_entries_per_file,
-            cache_stats.hit_rate * 100.0, cache_stats.total_entries
+            workspace_root,
+            is_complete,
+            estimated_entries_per_file,
+            cache_stats.hit_rate * 100.0,
+            cache_stats.total_entries
         );
 
         Ok(status)
@@ -957,12 +1026,22 @@ impl IndexingManager {
                     let progress_snapshot = progress.get_snapshot();
                     let queue_snapshot = queue.get_snapshot().await;
 
-                    debug!("Indexing status - Progress: {}/{} files ({:.1}%), Queue: {} items, Workers: {}",
-                        progress_snapshot.processed_files + progress_snapshot.failed_files + progress_snapshot.skipped_files,
+                    debug!(
+                        "Indexing status - Progress: {}/{} files ({:.1}%), Queue: {} items, Workers: {}",
+                        progress_snapshot.processed_files
+                            + progress_snapshot.failed_files
+                            + progress_snapshot.skipped_files,
                         progress_snapshot.total_files,
                         if progress_snapshot.total_files > 0 {
-                            ((progress_snapshot.processed_files + progress_snapshot.failed_files + progress_snapshot.skipped_files) as f64 / progress_snapshot.total_files as f64) * 100.0
-                        } else { 0.0 },
+                            ((progress_snapshot.processed_files
+                                + progress_snapshot.failed_files
+                                + progress_snapshot.skipped_files)
+                                as f64
+                                / progress_snapshot.total_files as f64)
+                                * 100.0
+                        } else {
+                            0.0
+                        },
                         queue_snapshot.total_items,
                         progress_snapshot.active_workers
                     );
@@ -1095,7 +1174,10 @@ impl IndexingManager {
 
                             // Check if the language strategy says this file should be processed
                             if !strategy.should_process_file(&file_path) {
-                                debug!("Skipping specific file based on language strategy: {:?} (language: {:?})", file_path, language);
+                                debug!(
+                                    "Skipping specific file based on language strategy: {:?} (language: {:?})",
+                                    file_path, language
+                                );
                                 continue;
                             }
 
@@ -1106,7 +1188,10 @@ impl IndexingManager {
                             batch.push(queue_item);
                             discovered_count += 1;
 
-                            info!("Added specific file to indexing queue: {:?} (language: {:?}, priority: {:?})", file_path, language, priority);
+                            info!(
+                                "Added specific file to indexing queue: {:?} (language: {:?}, priority: {:?})",
+                                file_path, language, priority
+                            );
 
                             // Batch enqueue for efficiency
                             if batch.len() >= 10 {
@@ -1259,7 +1344,9 @@ impl IndexingManager {
                         if metadata.len() > strategy.file_strategy.max_file_size {
                             debug!(
                                 "Skipping file due to language strategy size limit: {:?} ({} bytes, limit: {} bytes)",
-                                file_path, metadata.len(), strategy.file_strategy.max_file_size
+                                file_path,
+                                metadata.len(),
+                                strategy.file_strategy.max_file_size
                             );
                             continue;
                         }
@@ -1288,8 +1375,12 @@ impl IndexingManager {
                                     debug!(
                                         "File changed, will re-index: {:?} (old: mtime={}, hash={}, size={}) (new: mtime={}, hash={}, size={})",
                                         file_path,
-                                        index_info.modification_time, index_info.content_hash, index_info.file_size,
-                                        current_mtime, current_hash, current_size
+                                        index_info.modification_time,
+                                        index_info.content_hash,
+                                        index_info.file_size,
+                                        current_mtime,
+                                        current_hash,
+                                        current_size
                                     );
                                 }
                             } else {
@@ -1719,12 +1810,18 @@ impl IndexingManager {
                                         Ok(()) => {
                                             info!(
                                                 "Worker {} Phase 1: Successfully persisted {} symbols for {:?}",
-                                                worker_id, pipeline_result.extracted_symbols.len(), file_path
+                                                worker_id,
+                                                pipeline_result.extracted_symbols.len(),
+                                                file_path
                                             );
 
                                             // Signal Phase 2 that new symbols are available
                                             phase2_signal.notify_one();
-                                            debug!("Worker {} signaled Phase 2 after storing {} symbols", worker_id, pipeline_result.extracted_symbols.len());
+                                            debug!(
+                                                "Worker {} signaled Phase 2 after storing {} symbols",
+                                                worker_id,
+                                                pipeline_result.extracted_symbols.len()
+                                            );
                                         }
                                         Err(e) => {
                                             warn!(
@@ -1821,13 +1918,19 @@ impl IndexingManager {
                         Ok(analysis_result) => {
                             debug!(
                                 "Worker {}: Analysis engine completed for {:?}: {} symbols extracted, {} relationships found",
-                                worker_id, file_path, analysis_result.symbols_extracted, analysis_result.relationships_found
+                                worker_id,
+                                file_path,
+                                analysis_result.symbols_extracted,
+                                analysis_result.relationships_found
                             );
 
                             // Signal Phase 2 that new symbols are available from analysis engine
                             if analysis_result.symbols_extracted > 0 {
                                 phase2_signal.notify_one();
-                                debug!("Worker {} signaled Phase 2 after analysis engine stored {} symbols", worker_id, analysis_result.symbols_extracted);
+                                debug!(
+                                    "Worker {} signaled Phase 2 after analysis engine stored {} symbols",
+                                    worker_id, analysis_result.symbols_extracted
+                                );
                             }
                         }
                         Err(e) => {
@@ -1861,7 +1964,12 @@ impl IndexingManager {
 
                         debug!(
                             "Worker {}: Recorded indexing info for {:?} (mtime={}, hash={}, size={}, symbols={})",
-                            worker_id, file_path, current_mtime, current_hash, current_size, symbol_count
+                            worker_id,
+                            file_path,
+                            current_mtime,
+                            current_hash,
+                            current_size,
+                            symbol_count
                         );
                     }
                     Err(e) => {
@@ -2031,7 +2139,13 @@ impl IndexingManager {
         };
 
         // Optionally probe readiness if call hierarchy op is enabled
-        if lsp_caching.should_perform_operation(&crate::cache_types::LspOperation::CallHierarchy) {
+        let server_supports_call_hierarchy = server_guard.server.supports_call_hierarchy();
+        let server_supports_references = server_guard.server.supports_references();
+
+        if server_supports_call_hierarchy
+            && lsp_caching
+                .should_perform_operation(&crate::cache_types::LspOperation::CallHierarchy)
+        {
             debug!(
                 "Worker {}: Waiting for {:?} server to be ready",
                 worker_id, language
@@ -2133,10 +2247,12 @@ impl IndexingManager {
             }
 
             // Determine which operations to perform based on config
-            let do_call_hierarchy = lsp_caching
-                .should_perform_operation(&crate::cache_types::LspOperation::CallHierarchy);
-            let do_references =
-                lsp_caching.should_perform_operation(&crate::cache_types::LspOperation::References);
+            let do_call_hierarchy = server_supports_call_hierarchy
+                && lsp_caching
+                    .should_perform_operation(&crate::cache_types::LspOperation::CallHierarchy);
+            let do_references = server_supports_references
+                && lsp_caching
+                    .should_perform_operation(&crate::cache_types::LspOperation::References);
             if !do_call_hierarchy && !do_references {
                 debug!(
                     "Worker {}: Skipping LSP ops for '{}' due to config",
@@ -2216,16 +2332,18 @@ impl IndexingManager {
                                         call_hierarchy_success += 1;
                                         if retry_count > 0 {
                                             debug!(
-                                            "Worker {}: Got valid call hierarchy for {} after {} retries",
-                                            worker_id, symbol.name, retry_count
-                                        );
+                                                "Worker {}: Got valid call hierarchy for {} after {} retries",
+                                                worker_id, symbol.name, retry_count
+                                            );
                                         }
                                         break;
                                     } else {
                                         debug!(
-                                        "Worker {}: Response has keys but invalid structure for {} (attempt {})",
-                                        worker_id, symbol.name, retry_count + 1
-                                    );
+                                            "Worker {}: Response has keys but invalid structure for {} (attempt {})",
+                                            worker_id,
+                                            symbol.name,
+                                            retry_count + 1
+                                        );
                                     }
                                 }
                                 // SERVER NOT READY: Empty or incomplete response structure
@@ -2233,9 +2351,11 @@ impl IndexingManager {
                                     // Empty object = server not ready
                                     if retry_count % 10 == 0 {
                                         debug!(
-                                        "Worker {}: LSP server returning empty object for {} - not initialized yet (attempt {})",
-                                        worker_id, symbol.name, retry_count + 1
-                                    );
+                                            "Worker {}: LSP server returning empty object for {} - not initialized yet (attempt {})",
+                                            worker_id,
+                                            symbol.name,
+                                            retry_count + 1
+                                        );
                                     }
                                 }
                                 // PARTIAL RESPONSE: Has some fields but not the expected ones
@@ -2246,9 +2366,11 @@ impl IndexingManager {
                                     // Protocol-level response without data = server processing
                                     if retry_count % 10 == 0 {
                                         debug!(
-                                        "Worker {}: LSP server returned protocol message without data for {} - still initializing (attempt {})",
-                                        worker_id, symbol.name, retry_count + 1
-                                    );
+                                            "Worker {}: LSP server returned protocol message without data for {} - still initializing (attempt {})",
+                                            worker_id,
+                                            symbol.name,
+                                            retry_count + 1
+                                        );
                                     }
                                 }
                                 // UNEXPECTED STRUCTURE: Log for debugging
@@ -2257,9 +2379,12 @@ impl IndexingManager {
                                     let keys: Vec<&str> = obj.keys().map(|k| k.as_str()).collect();
                                     if retry_count % 10 == 0 {
                                         debug!(
-                                        "Worker {}: Unexpected response structure for {} with keys {:?} (attempt {})",
-                                        worker_id, symbol.name, keys, retry_count + 1
-                                    );
+                                            "Worker {}: Unexpected response structure for {} with keys {:?} (attempt {})",
+                                            worker_id,
+                                            symbol.name,
+                                            keys,
+                                            retry_count + 1
+                                        );
                                     }
                                 }
                             }
@@ -2269,9 +2394,9 @@ impl IndexingManager {
                                 // After multiple null responses, it's genuinely unsupported
                                 if null_response_count >= max_retries_for_unsupported {
                                     debug!(
-                                    "Worker {}: Symbol {} at {}:{} confirmed unsupported (null {} times)",
-                                    worker_id, symbol.name, line, column, null_response_count
-                                );
+                                        "Worker {}: Symbol {} at {}:{} confirmed unsupported (null {} times)",
+                                        worker_id, symbol.name, line, column, null_response_count
+                                    );
                                     break;
                                 }
                                 debug!(
@@ -2573,16 +2698,33 @@ impl IndexingManager {
                                         )
                                         .await
                                     {
-                                        Ok(ref_edges) => {
-                                            if !ref_edges.is_empty() {
+                                        Ok((ref_symbols, ref_edges)) => {
+                                            if !ref_symbols.is_empty() || !ref_edges.is_empty() {
                                                 let sqlite = match adapter.backend() {
-                                                crate::database_cache_adapter::BackendType::SQLite(db) => db,
-                                            };
-                                                if let Err(e) = sqlite.store_edges(&ref_edges).await
-                                                {
-                                                    warn!("Failed to store reference edges: {}", e);
-                                                } else {
-                                                    references_edges_persisted += ref_edges.len();
+                                                    crate::database_cache_adapter::BackendType::SQLite(db) => db,
+                                                };
+                                                if !ref_symbols.is_empty() {
+                                                    if let Err(e) =
+                                                        sqlite.store_symbols(&ref_symbols).await
+                                                    {
+                                                        warn!(
+                                                            "Failed to store reference symbols: {}",
+                                                            e
+                                                        );
+                                                    }
+                                                }
+                                                if !ref_edges.is_empty() {
+                                                    if let Err(e) =
+                                                        sqlite.store_edges(&ref_edges).await
+                                                    {
+                                                        warn!(
+                                                            "Failed to store reference edges: {}",
+                                                            e
+                                                        );
+                                                    } else {
+                                                        references_edges_persisted +=
+                                                            ref_edges.len();
+                                                    }
                                                 }
                                             }
                                         }
@@ -2715,22 +2857,27 @@ impl IndexingManager {
             return Ok(());
         }
 
-        // Step 1: Find orphan symbols from database
-        let orphan_symbols = self.find_orphan_symbols_for_enrichment().await?;
+        // Step 1: Find symbols that still need LSP enrichment
+        let enrichment_plans = self.find_symbols_for_enrichment().await?;
 
-        if orphan_symbols.is_empty() {
-            info!("Phase 2: No orphan symbols found, skipping LSP enrichment");
+        if enrichment_plans.is_empty() {
+            info!("Phase 2: No symbols require additional LSP enrichment");
             return Ok(());
         }
 
         info!(
-            "Phase 2: Found {} orphan symbols to enrich with LSP data",
-            orphan_symbols.len()
+            "Phase 2: Found {} symbols needing LSP enrichment ({} operations)",
+            enrichment_plans.len(),
+            enrichment_plans
+                .iter()
+                .map(|plan| plan.needs_references as usize
+                    + plan.needs_implementations as usize
+                    + plan.needs_call_hierarchy as usize)
+                .sum::<usize>()
         );
 
         // Step 2: Queue orphan symbols for processing
-        self.queue_orphan_symbols_for_enrichment(orphan_symbols)
-            .await?;
+        self.queue_symbols_for_enrichment(enrichment_plans).await?;
 
         // Step 3: Start worker pool for LSP enrichment
         if let Some(worker_pool) = &self.lsp_enrichment_worker_pool {
@@ -2761,90 +2908,134 @@ impl IndexingManager {
         Ok(())
     }
 
-    /// Find orphan symbols (symbols without edges) that need LSP enrichment
-    async fn find_orphan_symbols_for_enrichment(
-        &self,
-    ) -> Result<Vec<crate::database::SymbolState>> {
-        // Get the batch size from environment variable
+    /// Find symbols that still require LSP enrichment operations
+    async fn find_symbols_for_enrichment(&self) -> Result<Vec<SymbolEnrichmentPlan>> {
         let batch_size = std::env::var("PROBE_LSP_ENRICHMENT_BATCH_SIZE")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(100);
 
-        // Get cache adapter for database access
-        // Route DB access via the actual indexing workspace root
         let workspace_root = {
             let wr = self.workspace_root.read().await;
             wr.clone().unwrap_or(std::env::current_dir()?)
         };
         debug!(
-            "[WORKSPACE_ROUTING] Using workspace root for orphan scan: {}",
+            "[WORKSPACE_ROUTING] Using workspace root for enrichment scan: {}",
             workspace_root.display()
         );
+
         let cache_adapter = self
             .workspace_cache_router
             .cache_for_workspace(workspace_root)
             .await?;
 
-        // Call the database method to find orphan symbols
-        let orphan_symbols = match cache_adapter.backend() {
-            crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
-                sqlite_backend.find_orphan_symbols(batch_size).await?
-            }
+        let sqlite_backend = match cache_adapter.backend() {
+            crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => sqlite_backend,
         };
 
+        let plans = sqlite_backend
+            .find_symbols_pending_enrichment_internal(batch_size)
+            .await?;
+
         debug!(
-            "Found {} orphan symbols for LSP enrichment",
-            orphan_symbols.len()
+            "Found {} symbols pending enrichment (batch size {})",
+            plans.len(),
+            batch_size
         );
 
-        Ok(orphan_symbols)
+        Ok(plans)
     }
 
-    /// Queue orphan symbols for LSP enrichment processing
-    async fn queue_orphan_symbols_for_enrichment(
-        &self,
-        symbols: Vec<crate::database::SymbolState>,
-    ) -> Result<()> {
-        for symbol in symbols {
-            // Convert SymbolState to Language enum
-            let language = match symbol.language.to_lowercase().as_str() {
-                "rust" => Language::Rust,
-                "python" => Language::Python,
-                "typescript" => Language::TypeScript,
-                "javascript" => Language::JavaScript,
-                "go" => Language::Go,
-                "c" => Language::C,
-                "cpp" | "c++" => Language::Cpp,
-                "java" => Language::Java,
+    /// Queue symbols for LSP enrichment processing based on pending operations
+    async fn queue_symbols_for_enrichment(&self, plans: Vec<SymbolEnrichmentPlan>) -> Result<()> {
+        let workspace_root = {
+            let wr = self.workspace_root.read().await;
+            wr.clone().unwrap_or(std::env::current_dir()?)
+        };
+
+        let mut capability_cache: HashMap<Language, Option<LanguageCapabilities>> = HashMap::new();
+
+        let mut queued_symbols = 0usize;
+        let mut queued_reference_ops = 0usize;
+        let mut queued_implementation_ops = 0usize;
+        let mut queued_call_ops = 0usize;
+
+        for plan in plans {
+            let language = match Language::from_str(&plan.symbol.language) {
+                Some(lang) if !matches!(lang, Language::Unknown) => lang,
                 _ => {
                     debug!(
                         "Skipping symbol with unsupported language: {}",
-                        symbol.language
+                        plan.symbol.language
                     );
                     continue;
                 }
             };
 
-            // Create enrichment queue item
-            let queue_item = EnrichmentQueueItem::new(
-                symbol.symbol_uid,
-                PathBuf::from(symbol.file_path),
-                symbol.def_start_line,
-                symbol.def_start_char,
-                symbol.name,
-                language,
-                symbol.kind,
-            );
+            let relative_path = PathBuf::from(&plan.symbol.file_path);
+            let absolute_path = if relative_path.is_absolute() {
+                relative_path.clone()
+            } else {
+                workspace_root.join(&relative_path)
+            };
 
-            // Add to queue
+            let capabilities = match capability_cache.entry(language) {
+                Entry::Occupied(entry) => entry.get().clone(),
+                Entry::Vacant(entry) => {
+                    let caps = self
+                        .fetch_language_capabilities(language, &workspace_root, &absolute_path)
+                        .await;
+                    entry.insert(caps);
+                    caps
+                }
+            };
+
+            let capabilities = match capabilities {
+                Some(caps) => caps,
+                None => continue,
+            };
+
+            let mut operations = Vec::new();
+            if plan.needs_references && capabilities.references {
+                operations.push(EnrichmentOperation::References);
+                queued_reference_ops += 1;
+            }
+            if plan.needs_implementations && capabilities.implementations {
+                operations.push(EnrichmentOperation::Implementations);
+                queued_implementation_ops += 1;
+            }
+            if plan.needs_call_hierarchy && capabilities.call_hierarchy {
+                operations.push(EnrichmentOperation::CallHierarchy);
+                queued_call_ops += 1;
+            }
+
+            if operations.is_empty() {
+                continue;
+            }
+
+            let queue_item = EnrichmentQueueItem::new(
+                plan.symbol.symbol_uid.clone(),
+                relative_path,
+                plan.symbol.def_start_line,
+                plan.symbol.def_start_char,
+                plan.symbol.name.clone(),
+                language,
+                plan.symbol.kind.clone(),
+            )
+            .with_operations(operations);
+
             self.lsp_enrichment_queue.add_symbol(queue_item).await?;
+            queued_symbols += 1;
         }
 
         let queue_stats = self.lsp_enrichment_queue.get_stats().await;
         info!(
-            "Phase 2: Queued {} symbols for LSP enrichment (High: {}, Medium: {}, Low: {})",
-            queue_stats.total_items,
+            "Phase 2: Queued {} symbols for LSP enrichment ({} operations pending; refs:{} impls:{} calls:{}; H/M/L items: {}/{}/{})",
+            queued_symbols,
+            queue_stats.total_operations,
+            queued_reference_ops,
+            queued_implementation_ops,
+            queued_call_ops,
             queue_stats.high_priority_items,
             queue_stats.medium_priority_items,
             queue_stats.low_priority_items
@@ -2889,7 +3080,9 @@ impl IndexingManager {
                 stats.symbols_failed,
                 if stats.symbols_processed > 0 {
                     (stats.symbols_enriched as f64 / stats.symbols_processed as f64) * 100.0
-                } else { 0.0 },
+                } else {
+                    0.0
+                },
                 stats.positions_adjusted,
                 stats.call_hierarchy_success,
                 stats.references_found,
@@ -2930,6 +3123,7 @@ impl IndexingManager {
         let enrichment_worker_handles = self.enrichment_worker_handles.clone();
         let workspace_cache_router = self.workspace_cache_router.clone();
         let workspace_root_holder = self.workspace_root.clone();
+        let server_manager = self.server_manager.clone();
 
         // Spawn the background monitor task
         let monitor_handle = tokio::spawn(async move {
@@ -2979,7 +3173,9 @@ impl IndexingManager {
                                         let mut handles = enrichment_worker_handles.write().await;
                                         handles.extend(worker_handles_vec);
                                         workers_started = true;
-                                        info!("Phase 2 enrichment workers started successfully in parallel monitor");
+                                        info!(
+                                            "Phase 2 enrichment workers started successfully in parallel monitor"
+                                        );
                                     }
                                     Err(e) => {
                                         warn!("Failed to start Phase 2 enrichment workers: {}", e);
@@ -3025,47 +3221,209 @@ impl IndexingManager {
                                     sqlite_backend,
                                 ) = backend;
 
-                                match sqlite_backend.find_orphan_symbols(batch_size).await {
-                                    Ok(orphan_symbols) => {
-                                        if !orphan_symbols.is_empty() {
+                                match sqlite_backend
+                                    .find_symbols_pending_enrichment_internal(batch_size)
+                                    .await
+                                {
+                                    Ok(pending_plans) => {
+                                        if pending_plans.is_empty() {
                                             debug!(
-                                                "Found {} orphan symbols for enrichment",
-                                                orphan_symbols.len()
+                                                "Phase 2 monitor: no symbols pending enrichment"
                                             );
+                                            continue;
+                                        }
 
-                                            // Queue orphan symbols for processing
-                                            for symbol in orphan_symbols {
-                                                // Parse the language from string
-                                                let language = match symbol.language.as_str() {
-                                                    "rust" => Language::Rust,
-                                                    "python" => Language::Python,
-                                                    "typescript" => Language::TypeScript,
-                                                    "javascript" => Language::JavaScript,
-                                                    "go" => Language::Go,
-                                                    "cpp" => Language::Cpp,
-                                                    "c" => Language::C,
-                                                    "java" => Language::Java,
-                                                    _ => Language::Unknown,
+                                        let mut plans_to_queue = Vec::new();
+                                        let mut skipped_count = 0usize;
+
+                                        if let Some(worker_pool) = &lsp_enrichment_worker_pool {
+                                            let enrichment_tracker =
+                                                worker_pool.get_enrichment_tracker();
+                                            let retry_ready = enrichment_tracker
+                                                .get_symbols_ready_for_retry()
+                                                .await;
+                                            for plan in pending_plans {
+                                                let uid = &plan.symbol.symbol_uid;
+                                                let has_failed =
+                                                    enrichment_tracker.has_failed(uid).await;
+                                                let ready_for_retry = retry_ready.contains(uid);
+                                                if has_failed && !ready_for_retry {
+                                                    skipped_count += 1;
+                                                    debug!(
+                                                        "Skipping symbol '{}' due to failure cooldown",
+                                                        plan.symbol.name
+                                                    );
+                                                } else {
+                                                    plans_to_queue.push(plan);
+                                                }
+                                            }
+                                        } else {
+                                            plans_to_queue = pending_plans;
+                                        }
+
+                                        if plans_to_queue.is_empty() {
+                                            if skipped_count > 0 {
+                                                info!(
+                                                    "Phase 2 monitor: skipped {} symbols due to cooldown",
+                                                    skipped_count
+                                                );
+                                            }
+                                            continue;
+                                        }
+
+                                        let mut capability_cache: HashMap<
+                                            Language,
+                                            Option<LanguageCapabilities>,
+                                        > = HashMap::new();
+                                        let mut queued_symbols = 0usize;
+                                        let mut queued_reference_ops = 0usize;
+                                        let mut queued_implementation_ops = 0usize;
+                                        let mut queued_call_ops = 0usize;
+
+                                        for plan in plans_to_queue {
+                                            let language =
+                                                match Language::from_str(&plan.symbol.language) {
+                                                    Some(lang)
+                                                        if !matches!(lang, Language::Unknown) =>
+                                                    {
+                                                        lang
+                                                    }
+                                                    _ => continue,
                                                 };
 
-                                                let queue_item = crate::indexing::lsp_enrichment_queue::QueueItem::new(
-                                                        symbol.symbol_uid,
-                                                        PathBuf::from(symbol.file_path),
-                                                        symbol.def_start_line as u32,
-                                                        symbol.def_start_char as u32,
-                                                        symbol.name,
-                                                        language,
-                                                        symbol.kind.clone(),
-                                                    );
-                                                lsp_enrichment_queue
-                                                    .add_symbol(queue_item)
-                                                    .await
-                                                    .ok();
+                                            let relative_path =
+                                                PathBuf::from(&plan.symbol.file_path);
+                                            let absolute_path = if relative_path.is_absolute() {
+                                                relative_path.clone()
+                                            } else {
+                                                workspace_root.join(&relative_path)
+                                            };
+
+                                            let capabilities = match capability_cache
+                                                .entry(language)
+                                            {
+                                                Entry::Occupied(entry) => entry.get().clone(),
+                                                Entry::Vacant(entry) => {
+                                                    let caps = match server_manager
+                                                        .ensure_workspace_registered(
+                                                            language,
+                                                            workspace_root.clone(),
+                                                        )
+                                                        .await
+                                                    {
+                                                        Ok(_) => match server_manager
+                                                            .get_server(language)
+                                                            .await
+                                                        {
+                                                            Ok(server_instance) => {
+                                                                let server =
+                                                                    server_instance.lock().await;
+                                                                Some(LanguageCapabilities {
+                                                                    references: server
+                                                                        .server
+                                                                        .supports_references(),
+                                                                    implementations: server
+                                                                        .server
+                                                                        .supports_implementations(),
+                                                                    call_hierarchy: server
+                                                                        .server
+                                                                        .supports_call_hierarchy(),
+                                                                })
+                                                            }
+                                                            Err(e) => {
+                                                                debug!(
+                                                                    "Monitor failed to fetch capabilities for {:?} ({}): {}",
+                                                                    language,
+                                                                    absolute_path.display(),
+                                                                    e
+                                                                );
+                                                                None
+                                                            }
+                                                        },
+                                                        Err(e) => {
+                                                            debug!(
+                                                                "Monitor failed to register workspace for {:?}: {}",
+                                                                language, e
+                                                            );
+                                                            None
+                                                        }
+                                                    };
+                                                    entry.insert(caps.clone());
+                                                    caps
+                                                }
+                                            };
+
+                                            let capabilities = match capabilities {
+                                                Some(caps) => caps,
+                                                None => continue,
+                                            };
+
+                                            let mut operations = Vec::new();
+                                            if plan.needs_references && capabilities.references {
+                                                operations.push(EnrichmentOperation::References);
+                                                queued_reference_ops += 1;
                                             }
+                                            if plan.needs_implementations
+                                                && capabilities.implementations
+                                            {
+                                                operations
+                                                    .push(EnrichmentOperation::Implementations);
+                                                queued_implementation_ops += 1;
+                                            }
+                                            if plan.needs_call_hierarchy
+                                                && capabilities.call_hierarchy
+                                            {
+                                                operations.push(EnrichmentOperation::CallHierarchy);
+                                                queued_call_ops += 1;
+                                            }
+
+                                            if operations.is_empty() {
+                                                continue;
+                                            }
+
+                                            let queue_item =
+                                                crate::indexing::lsp_enrichment_queue::QueueItem::new(
+                                                    plan.symbol.symbol_uid.clone(),
+                                                    relative_path,
+                                                    plan.symbol.def_start_line,
+                                                    plan.symbol.def_start_char,
+                                                    plan.symbol.name.clone(),
+                                                    language,
+                                                    plan.symbol.kind.clone(),
+                                                )
+                                                .with_operations(operations);
+
+                                            if let Err(e) =
+                                                lsp_enrichment_queue.add_symbol(queue_item).await
+                                            {
+                                                warn!(
+                                                    "Phase 2 monitor: failed to enqueue symbol {}: {}",
+                                                    plan.symbol.symbol_uid,
+                                                    e
+                                                );
+                                                continue;
+                                            }
+
+                                            queued_symbols += 1;
+                                        }
+
+                                        if queued_symbols > 0 {
+                                            info!(
+                                                "Phase 2 monitor: queued {} symbols (refs:{} impls:{} calls:{})",
+                                                queued_symbols,
+                                                queued_reference_ops,
+                                                queued_implementation_ops,
+                                                queued_call_ops
+                                            );
+                                        } else if skipped_count > 0 {
+                                            info!(
+                                                "Phase 2 monitor: queued none; skipped {} symbols due to cooldown",
+                                                skipped_count
+                                            );
                                         }
                                     }
                                     Err(e) => {
-                                        warn!("Failed to find orphan symbols: {}", e);
+                                        warn!("Failed to find symbols pending enrichment: {}", e);
                                     }
                                 }
                             }
@@ -3183,6 +3541,75 @@ impl IndexingManager {
             .map(|pool| pool.get_stats().snapshot())
     }
 
+    async fn load_pending_enrichment_counts(&self) -> Option<PendingEnrichmentCounts> {
+        let workspace_root = {
+            let wr = self.workspace_root.read().await;
+            wr.clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        };
+
+        match self
+            .workspace_cache_router
+            .cache_for_workspace(workspace_root)
+            .await
+        {
+            Ok(cache_adapter) => match cache_adapter.backend() {
+                crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
+                    match sqlite_backend.get_pending_enrichment_counts().await {
+                        Ok(counts) => Some(counts),
+                        Err(e) => {
+                            debug!(
+                                "Failed to load pending enrichment counts from database: {}",
+                                e
+                            );
+                            None
+                        }
+                    }
+                }
+            },
+            Err(e) => {
+                debug!(
+                    "Workspace cache router could not provide backend for enrichment counts: {}",
+                    e
+                );
+                None
+            }
+        }
+    }
+
+    fn queue_info_from_counts(
+        counts: Option<&PendingEnrichmentCounts>,
+        fallback: &crate::indexing::lsp_enrichment_queue::EnrichmentQueueStats,
+    ) -> crate::protocol::LspEnrichmentQueueInfo {
+        if let Some(counts) = counts {
+            let total_operations = counts.references_pending
+                + counts.implementations_pending
+                + counts.call_hierarchy_pending;
+
+            crate::protocol::LspEnrichmentQueueInfo {
+                total_items: counts.symbols_pending as usize,
+                high_priority_items: counts.high_priority_pending as usize,
+                medium_priority_items: counts.medium_priority_pending as usize,
+                low_priority_items: counts.low_priority_pending as usize,
+                total_operations: total_operations as usize,
+                references_operations: counts.references_pending as usize,
+                implementations_operations: counts.implementations_pending as usize,
+                call_hierarchy_operations: counts.call_hierarchy_pending as usize,
+            }
+        } else {
+            crate::protocol::LspEnrichmentQueueInfo {
+                total_items: fallback.total_items,
+                high_priority_items: fallback.high_priority_items,
+                medium_priority_items: fallback.medium_priority_items,
+                low_priority_items: fallback.low_priority_items,
+                total_operations: fallback.total_operations,
+                references_operations: fallback.references_operations,
+                implementations_operations: fallback.implementations_operations,
+                call_hierarchy_operations: fallback.call_hierarchy_operations,
+            }
+        }
+    }
+
     /// Get LSP enrichment information in protocol format
     pub async fn get_lsp_enrichment_info(&self) -> Option<crate::protocol::LspEnrichmentInfo> {
         let is_enabled = std::env::var("PROBE_LSP_ENRICHMENT_ENABLED")
@@ -3196,27 +3623,30 @@ impl IndexingManager {
         // Get enrichment worker stats
         let worker_stats = self.get_enrichment_stats().await;
 
-        // Get queue stats
-        let queue_stats = self.lsp_enrichment_queue.get_stats().await;
+        // Get queue stats (fallback) and pull SQL-derived counts when available
+        let queue_stats_fallback = self.lsp_enrichment_queue.get_stats().await;
+        let pending_counts = self.load_pending_enrichment_counts().await;
+        let queue_info =
+            Self::queue_info_from_counts(pending_counts.as_ref(), &queue_stats_fallback);
 
         if let Some(stats) = worker_stats {
             Some(crate::protocol::LspEnrichmentInfo {
                 is_enabled: true,
-                active_workers: stats.active_workers,
+                active_workers: if stats.worker_active { 1 } else { 0 },
                 symbols_processed: stats.symbols_processed,
                 symbols_enriched: stats.symbols_enriched,
                 symbols_failed: stats.symbols_failed,
-                queue_stats: crate::protocol::LspEnrichmentQueueInfo {
-                    total_items: queue_stats.total_items,
-                    high_priority_items: queue_stats.high_priority_items,
-                    medium_priority_items: queue_stats.medium_priority_items,
-                    low_priority_items: queue_stats.low_priority_items,
-                },
+                queue_stats: queue_info,
                 edges_created: stats.edges_persisted,
                 reference_edges_created: stats.reference_edges_persisted,
+                implementation_edges_created: stats.implementation_edges_persisted,
                 positions_adjusted: stats.positions_adjusted,
                 call_hierarchy_success: stats.call_hierarchy_success,
                 references_found: stats.references_found,
+                implementations_found: stats.implementations_found,
+                references_attempted: stats.references_attempted,
+                implementations_attempted: stats.implementations_attempted,
+                call_hierarchy_attempted: stats.call_hierarchy_attempted,
                 success_rate: if stats.symbols_processed > 0 {
                     (stats.symbols_enriched as f64 / stats.symbols_processed as f64) * 100.0
                 } else {
@@ -3231,17 +3661,17 @@ impl IndexingManager {
                 symbols_processed: 0,
                 symbols_enriched: 0,
                 symbols_failed: 0,
-                queue_stats: crate::protocol::LspEnrichmentQueueInfo {
-                    total_items: queue_stats.total_items,
-                    high_priority_items: queue_stats.high_priority_items,
-                    medium_priority_items: queue_stats.medium_priority_items,
-                    low_priority_items: queue_stats.low_priority_items,
-                },
+                queue_stats: queue_info,
                 edges_created: 0,
                 reference_edges_created: 0,
+                implementation_edges_created: 0,
                 positions_adjusted: 0,
                 call_hierarchy_success: 0,
                 references_found: 0,
+                implementations_found: 0,
+                references_attempted: 0,
+                implementations_attempted: 0,
+                call_hierarchy_attempted: 0,
                 success_rate: 0.0,
             })
         }
