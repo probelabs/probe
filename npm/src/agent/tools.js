@@ -4,6 +4,7 @@ import {
   queryTool,
   extractTool,
   delegateTool,
+  bashTool,
   DEFAULT_SYSTEM_MESSAGE,
   attemptCompletionSchema,
   attemptCompletionToolDefinition,
@@ -11,10 +12,12 @@ import {
   querySchema,
   extractSchema,
   delegateSchema,
+  bashSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  bashToolDefinition,
   parseXmlToolCall
 } from '../index.js';
 import { randomUUID } from 'crypto';
@@ -22,12 +25,19 @@ import { processXmlWithThinkingAndRecovery } from './xmlParsingUtils.js';
 
 // Create configured tool instances
 export function createTools(configOptions) {
-  return {
+  const tools = {
     searchTool: searchTool(configOptions),
     queryTool: queryTool(configOptions),
     extractTool: extractTool(configOptions),
     delegateTool: delegateTool(configOptions)
   };
+
+  // Add bash tool if enabled
+  if (configOptions.enableBash) {
+    tools.bashTool = bashTool(configOptions);
+  }
+
+  return tools;
 }
 
 // Export tool definitions and schemas
@@ -37,11 +47,13 @@ export {
   querySchema,
   extractSchema,
   delegateSchema,
+  bashSchema,
   attemptCompletionSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  bashToolDefinition,
   attemptCompletionToolDefinition,
   parseXmlToolCall
 };

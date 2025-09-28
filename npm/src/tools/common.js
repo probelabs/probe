@@ -37,6 +37,13 @@ export const delegateSchema = z.object({
 	task: z.string().describe('The task to delegate to a subagent. Be specific about what needs to be accomplished.')
 });
 
+export const bashSchema = z.object({
+	command: z.string().describe('The bash command to execute'),
+	workingDirectory: z.string().optional().describe('Directory to execute the command in (optional)'),
+	timeout: z.number().optional().describe('Command timeout in milliseconds (optional)'),
+	env: z.record(z.string()).optional().describe('Additional environment variables (optional)')
+});
+
 // Schema for the attempt_completion tool - flexible validation for direct XML response
 export const attemptCompletionSchema = {
 	// Custom validation that requires result parameter but allows direct XML response
@@ -277,10 +284,67 @@ I have refactored the search module according to the requirements and verified t
 </attempt_completion>
 `;
 
+export const bashToolDefinition = `
+## bash
+Description: Execute bash commands for system exploration and development tasks. This tool has built-in security with allow/deny lists. By default, only safe read-only commands are allowed for code exploration.
+
+Parameters:
+- command: (required) The bash command to execute
+- workingDirectory: (optional) Directory to execute the command in
+- timeout: (optional) Command timeout in milliseconds
+- env: (optional) Additional environment variables as an object
+
+Security: Commands are filtered through allow/deny lists for safety:
+- Allowed by default: ls, cat, git status, npm list, find, grep, etc.
+- Denied by default: rm -rf, sudo, npm install, dangerous system commands
+
+Usage Examples:
+
+<examples>
+
+User: What files are in the src directory?
+<bash>
+<command>ls -la src/</command>
+</bash>
+
+User: Show me the git status
+<bash>
+<command>git status</command>
+</bash>
+
+User: Find all TypeScript files
+<bash>
+<command>find . -name "*.ts" -type f</command>
+</bash>
+
+User: Check installed npm packages
+<bash>
+<command>npm list --depth=0</command>
+</bash>
+
+User: Search for TODO comments in code
+<bash>
+<command>grep -r "TODO" src/</command>
+</bash>
+
+User: Show recent git commits
+<bash>
+<command>git log --oneline -10</command>
+</bash>
+
+User: Check system info
+<bash>
+<command>uname -a</command>
+</bash>
+
+</examples>
+`;
+
 export const searchDescription = 'Search code in the repository using Elasticsearch-like query syntax. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
+export const bashDescription = 'Execute bash commands for system exploration and development tasks. Secure by default with built-in allow/deny lists.';
 
 // Valid tool names that should be parsed as tool calls
 const DEFAULT_VALID_TOOLS = [

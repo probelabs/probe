@@ -92,6 +92,10 @@ export class ProbeAgent {
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
 
+    // Bash configuration
+    this.enableBash = !!options.enableBash;
+    this.bashConfig = options.bashConfig || {};
+
     // Search configuration - support both path (single) and allowedFolders (array)
     if (options.allowedFolders && Array.isArray(options.allowedFolders)) {
       this.allowedFolders = options.allowedFolders;
@@ -156,7 +160,9 @@ export class ProbeAgent {
       debug: this.debug,
       defaultPath: this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd(),
       allowedFolders: this.allowedFolders,
-      outline: this.outline
+      outline: this.outline,
+      enableBash: this.enableBash,
+      bashConfig: this.bashConfig
     };
 
     // Create base tools
@@ -174,6 +180,11 @@ export class ProbeAgent {
       listFiles: listFilesToolInstance,
       searchFiles: searchFilesToolInstance,
     };
+
+    // Add bash tool if enabled
+    if (this.enableBash && wrappedTools.bashToolInstance) {
+      this.toolImplementations.bash = wrappedTools.bashToolInstance;
+    }
     
     // Store wrapped tools for ACP system
     this.wrappedTools = wrappedTools;
