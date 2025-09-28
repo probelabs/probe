@@ -1184,8 +1184,20 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
         // Enhanced auto-fixing for square bracket nodes [...]
         if (trimmedLine.match(/\[[^\]]*\]/)) {
           modifiedLine = modifiedLine.replace(/\[([^\]]*)\]/g, (match, content) => {
-            // Skip if already properly quoted
+            // Check if already properly quoted with outer quotes
             if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+              // Extract the inner content (between the outer quotes)
+              const innerContent = content.trim().slice(1, -1);
+              // Check if inner content has unescaped quotes that need escaping
+              if (innerContent.includes('"') || innerContent.includes("'")) {
+                wasFixed = true;
+                // Decode any existing HTML entities first, then re-encode ALL quotes
+                const decodedContent = decodeHtmlEntities(innerContent);
+                const safeContent = decodedContent
+                  .replace(/"/g, '&quot;')  // Replace ALL double quotes with HTML entity
+                  .replace(/'/g, '&#39;');  // Replace ALL single quotes with HTML entity
+                return `["${safeContent}"]`;
+              }
               return match;
             }
             
@@ -1211,8 +1223,20 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
         // Enhanced auto-fixing for diamond nodes {...}
         if (trimmedLine.match(/\{[^{}]*\}/)) {
           modifiedLine = modifiedLine.replace(/\{([^{}]*)\}/g, (match, content) => {
-            // Skip if already properly quoted
+            // Check if already properly quoted with outer quotes
             if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+              // Extract the inner content (between the outer quotes)
+              const innerContent = content.trim().slice(1, -1);
+              // Check if inner content has unescaped quotes that need escaping
+              if (innerContent.includes('"') || innerContent.includes("'")) {
+                wasFixed = true;
+                // Decode any existing HTML entities first, then re-encode ALL quotes
+                const decodedContent = decodeHtmlEntities(innerContent);
+                const safeContent = decodedContent
+                  .replace(/"/g, '&quot;')  // Replace ALL double quotes with HTML entity
+                  .replace(/'/g, '&#39;');  // Replace ALL single quotes with HTML entity
+                return `{"${safeContent}"}`;
+              }
               return match;
             }
             
@@ -1453,8 +1477,20 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
           // Look for any node labels that contain special characters and aren't already quoted
           if (trimmedLine.match(/\[[^\]]*\]/)) {
             modifiedLine = modifiedLine.replace(/\[([^\]]*)\]/g, (match, content) => {
-              // Skip if already properly quoted
+              // Check if already properly quoted with outer quotes
               if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+                // Extract the inner content (between the outer quotes)
+                const innerContent = content.trim().slice(1, -1);
+                // Check if inner content has unescaped quotes that need escaping
+                if (innerContent.includes('"') || innerContent.includes("'")) {
+                  wasFixed = true;
+                  // Decode any existing HTML entities first, then re-encode ALL quotes
+                  const decodedContent = decodeHtmlEntities(innerContent);
+                  const safeContent = decodedContent
+                    .replace(/"/g, '&quot;')  // Replace ALL double quotes with HTML entity
+                    .replace(/'/g, '&#39;');  // Replace ALL single quotes with HTML entity
+                  return `["${safeContent}"]`;
+                }
                 return match;
               }
               
@@ -1480,8 +1516,20 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
           // Enhanced auto-fixing for diamond nodes {...}
           if (trimmedLine.match(/\{[^{}]*\}/)) {
             modifiedLine = modifiedLine.replace(/\{([^{}]*)\}/g, (match, content) => {
-              // Skip if already properly quoted
+              // Check if already properly quoted with outer quotes
               if (content.trim().startsWith('"') && content.trim().endsWith('"')) {
+                // Extract the inner content (between the outer quotes)
+                const innerContent = content.trim().slice(1, -1);
+                // Check if inner content has unescaped quotes that need escaping
+                if (innerContent.includes('"') || innerContent.includes("'")) {
+                  wasFixed = true;
+                  // Decode any existing HTML entities first, then re-encode ALL quotes
+                  const decodedContent = decodeHtmlEntities(innerContent);
+                  const safeContent = decodedContent
+                    .replace(/"/g, '&quot;')  // Replace ALL double quotes with HTML entity
+                    .replace(/'/g, '&#39;');  // Replace ALL single quotes with HTML entity
+                  return `{"${safeContent}"}`;
+                }
                 return match;
               }
               
