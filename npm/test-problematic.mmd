@@ -1,5 +1,0 @@
-graph TD
-  subgraph Dependent Check
-    F -- "Accessed via Liquid" --> G[Another Check&apos;s &apos;exec&apos;]
-    G -- "e.g., {{ outputs[&apos;check-name&apos;].key }}" --> H[Processes Data]
-  end
