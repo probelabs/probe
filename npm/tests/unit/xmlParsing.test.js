@@ -380,11 +380,115 @@ describe('XML Tool Call Parsing', () => {
           <description>Add user authentication</description>
         </implement>
       `;
-      
+
       const validToolsWithoutImplement = ['search', 'query', 'extract', 'attempt_completion'];
       const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithoutImplement);
-      
+
       expect(result).toBeNull();
+    });
+  });
+
+  describe('Unclosed attempt_completion tag handling', () => {
+    test('should handle attempt_completion with content but no closing tag', () => {
+      const aiResponse = `<attempt_completion>
+\`\`\`json
+{
+  "issues": [
+    {
+      "file": "test.ts",
+      "line": 442,
+      "message": "Security issue"
+    }
+  ]
+}
+\`\`\``;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'attempt_completion',
+        params: {
+          result: `\`\`\`json
+{
+  "issues": [
+    {
+      "file": "test.ts",
+      "line": 442,
+      "message": "Security issue"
+    }
+  ]
+}
+\`\`\``
+        }
+      });
+    });
+
+    test('should handle attempt_completion with text content and no closing tag', () => {
+      const aiResponse = `Some explanation text before the tag.
+
+<attempt_completion>
+The task has been completed successfully.
+All tests are passing.`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'attempt_completion',
+        params: {
+          result: `The task has been completed successfully.
+All tests are passing.`
+        }
+      });
+    });
+
+    test('should handle attempt_completion with closing tag (normal case)', () => {
+      const aiResponse = `<attempt_completion>
+Task completed with all requirements met.
+</attempt_completion>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'attempt_completion',
+        params: {
+          result: 'Task completed with all requirements met.'
+        }
+      });
+    });
+
+    test('should handle empty attempt_completion tag without closing', () => {
+      const aiResponse = `<attempt_completion>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'attempt_completion',
+        params: {
+          result: '__PREVIOUS_RESPONSE__'
+        }
+      });
+    });
+
+    test('should prioritize attempt_completion over other content', () => {
+      const aiResponse = `Here's some explanation text.
+
+<ins>Important:</ins> The analysis is complete.
+
+<attempt_completion>
+\`\`\`json
+{"status": "complete"}
+\`\`\``;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'attempt_completion',
+        params: {
+          result: `\`\`\`json
+{"status": "complete"}
+\`\`\``
+        }
+      });
     });
   });
 });
