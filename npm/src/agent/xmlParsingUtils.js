@@ -5,11 +5,39 @@
 
 /**
  * Remove thinking tags and their content from XML string
+ * Handles both closed and unclosed thinking tags
  * @param {string} xmlString - The XML string to clean
  * @returns {string} - Cleaned XML string without thinking tags
  */
 export function removeThinkingTags(xmlString) {
-  return xmlString.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+  let result = xmlString;
+
+  // Remove all properly closed thinking tags first
+  result = result.replace(/<thinking>[\s\S]*?<\/thinking>/g, '');
+
+  // Handle unclosed thinking tags
+  // Find any remaining <thinking> tag (which means it's unclosed)
+  const thinkingIndex = result.indexOf('<thinking>');
+  if (thinkingIndex !== -1) {
+    // Check if there's a tool tag after the thinking tag
+    // We want to preserve tool tags even if they're after unclosed thinking
+    const afterThinking = result.substring(thinkingIndex + '<thinking>'.length);
+
+    // Look for any tool tags in the remaining content
+    const toolPattern = /<(search|query|extract|listFiles|searchFiles|implement|attempt_completion|attempt_complete)>/;
+    const toolMatch = afterThinking.match(toolPattern);
+
+    if (toolMatch) {
+      // Found a tool tag - remove thinking tag and its content up to the tool tag
+      const toolStart = thinkingIndex + '<thinking>'.length + toolMatch.index;
+      result = result.substring(0, thinkingIndex) + result.substring(toolStart);
+    } else {
+      // No tool tag found - remove everything from <thinking> onwards
+      result = result.substring(0, thinkingIndex);
+    }
+  }
+
+  return result.trim();
 }
 
 /**
@@ -29,6 +57,30 @@ export function extractThinkingContent(xmlString) {
  * @returns {Object|null} - Standardized attempt_completion result or null
  */
 export function checkAttemptCompleteRecovery(cleanedXmlString, validTools = []) {
+  // Check for <attempt_completion> with content (with or without closing tag)
+  // This handles: "<attempt_completion>content" or "<attempt_completion>content</attempt_completion>"
+  const attemptCompletionMatch = cleanedXmlString.match(/<attempt_completion>([\s\S]*?)(?:<\/attempt_completion>|$)/);
+  if (attemptCompletionMatch) {
+    const content = attemptCompletionMatch[1].trim();
+    const hasClosingTag = cleanedXmlString.includes('</attempt_completion>');
+
+    if (content) {
+      // If there's content after the tag, use it as the result
+      return {
+        toolName: 'attempt_completion',
+        params: { result: content }
+      };
+    }
+
+    // If the tag exists but is empty:
+    // - With closing tag (e.g., "<attempt_completion></attempt_completion>"): use empty string
+    // - Without closing tag (e.g., "<attempt_completion>"): use previous response
+    return {
+      toolName: 'attempt_completion',
+      params: { result: hasClosingTag ? '' : '__PREVIOUS_RESPONSE__' }
+    };
+  }
+
   // Enhanced recovery logic for attempt_complete shorthand
   const attemptCompletePatterns = [
     // Standard shorthand with optional whitespace
@@ -61,7 +113,7 @@ export function checkAttemptCompleteRecovery(cleanedXmlString, validTools = []) 
   if (cleanedXmlString.includes('<attempt_complete') && !hasOtherToolTags(cleanedXmlString, validTools)) {
     // This handles malformed cases where attempt_complete appears but is broken
     return {
-      toolName: 'attempt_completion', 
+      toolName: 'attempt_completion',
       params: { result: '__PREVIOUS_RESPONSE__' }
     };
   }
