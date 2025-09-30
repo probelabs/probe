@@ -364,47 +364,62 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 	for (const toolName of validTools) {
 		const openTag = `<${toolName}>`;
 		const closeTag = `</${toolName}>`;
-		
+
 		const openIndex = xmlString.indexOf(openTag);
 		if (openIndex === -1) {
 			continue; // Tool not found, try next tool
 		}
-		
-		const closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
+
+		let closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
+		let hasClosingTag = closeIndex !== -1;
+
+		// If no closing tag found, use content until end of string
+		// This makes the parser more resilient to AI formatting errors
 		if (closeIndex === -1) {
-			continue; // No closing tag found, try next tool
+			closeIndex = xmlString.length;
 		}
-		
-		// Extract the content between tags
+
+		// Extract the content between tags (or until end if no closing tag)
 		const innerContent = xmlString.substring(
-			openIndex + openTag.length, 
+			openIndex + openTag.length,
 			closeIndex
 		);
-		
+
 		const params = {};
 
 		// Parse parameters using string-based approach for better safety
 		// Common parameter names to look for (can be extended as needed)
 		// Note: includes both camelCase and underscore_case variants to handle inconsistencies
-		const commonParams = ['query', 'file_path', 'line', 'end_line', 'path', 'recursive', 'includeHidden', 
+		const commonParams = ['query', 'file_path', 'line', 'end_line', 'path', 'recursive', 'includeHidden',
 		                      'max_results', 'maxResults', 'result', 'command', 'description', 'task', 'param', 'pattern',
 		                      'allow_tests', 'exact', 'maxTokens', 'language', 'input_content',
 		                      'context_lines', 'format', 'directory', 'autoCommits', 'files', 'targets'];
-		
+
 		for (const paramName of commonParams) {
 			const paramOpenTag = `<${paramName}>`;
 			const paramCloseTag = `</${paramName}>`;
-			
+
 			const paramOpenIndex = innerContent.indexOf(paramOpenTag);
 			if (paramOpenIndex === -1) {
 				continue; // Parameter not found
 			}
-			
-			const paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
+
+			let paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
+
+			// Handle unclosed parameter tags - use content until next tag or end of content
 			if (paramCloseIndex === -1) {
-				continue; // No closing tag found
+				// Find the next opening tag after this parameter
+				let nextTagIndex = innerContent.length;
+				for (const nextParam of commonParams) {
+					const nextOpenTag = `<${nextParam}>`;
+					const nextIndex = innerContent.indexOf(nextOpenTag, paramOpenIndex + paramOpenTag.length);
+					if (nextIndex !== -1 && nextIndex < nextTagIndex) {
+						nextTagIndex = nextIndex;
+					}
+				}
+				paramCloseIndex = nextTagIndex;
 			}
-			
+
 			let paramValue = innerContent.substring(
 				paramOpenIndex + paramOpenTag.length,
 				paramCloseIndex

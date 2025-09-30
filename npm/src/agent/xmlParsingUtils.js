@@ -5,11 +5,39 @@
 
 /**
  * Remove thinking tags and their content from XML string
+ * Handles both closed and unclosed thinking tags
  * @param {string} xmlString - The XML string to clean
  * @returns {string} - Cleaned XML string without thinking tags
  */
 export function removeThinkingTags(xmlString) {
-  return xmlString.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
+  let result = xmlString;
+
+  // Remove all properly closed thinking tags first
+  result = result.replace(/<thinking>[\s\S]*?<\/thinking>/g, '');
+
+  // Handle unclosed thinking tags
+  // Find any remaining <thinking> tag (which means it's unclosed)
+  const thinkingIndex = result.indexOf('<thinking>');
+  if (thinkingIndex !== -1) {
+    // Check if there's a tool tag after the thinking tag
+    // We want to preserve tool tags even if they're after unclosed thinking
+    const afterThinking = result.substring(thinkingIndex + '<thinking>'.length);
+
+    // Look for any tool tags in the remaining content
+    const toolPattern = /<(search|query|extract|listFiles|searchFiles|implement|attempt_completion|attempt_complete)>/;
+    const toolMatch = afterThinking.match(toolPattern);
+
+    if (toolMatch) {
+      // Found a tool tag - remove thinking tag and its content up to the tool tag
+      const toolStart = thinkingIndex + '<thinking>'.length + toolMatch.index;
+      result = result.substring(0, thinkingIndex) + result.substring(toolStart);
+    } else {
+      // No tool tag found - remove everything from <thinking> onwards
+      result = result.substring(0, thinkingIndex);
+    }
+  }
+
+  return result.trim();
 }
 
 /**

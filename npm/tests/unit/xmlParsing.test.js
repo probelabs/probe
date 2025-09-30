@@ -161,12 +161,12 @@ describe('XML Tool Call Parsing', () => {
       test('should handle malformed XML gracefully', () => {
         const xmlString = '<search><query>unclosed tag</search>';
         const result = parseXmlToolCall(xmlString);
-        
-        // The parser will find a valid <search></search> pair but with empty params
-        // since the inner content doesn't have proper parameter structure
+
+        // With improved parser, it now handles unclosed parameter tags
+        // The parser finds <search></search> and extracts the unclosed <query> param
         expect(result).toEqual({
           toolName: 'search',
-          params: {}
+          params: { query: 'unclosed tag' }
         });
       });
 
@@ -180,12 +180,12 @@ describe('XML Tool Call Parsing', () => {
       test('should handle XML with no closing tag', () => {
         const xmlString = '<search><query>test</query>';
         const result = parseXmlToolCall(xmlString);
-        
-        // This finds the complete <query>test</query> tag and parses it
-        // since 'query' is a valid tool name
+
+        // With improved parser, it handles unclosed tool tags
+        // Finds <search> (unclosed) with properly closed <query> parameter
         expect(result).toEqual({
-          toolName: 'query',
-          params: {}
+          toolName: 'search',
+          params: { query: 'test' }
         });
       });
 
@@ -487,6 +487,239 @@ Task completed with all requirements met.
           result: `\`\`\`json
 {"status": "complete"}
 \`\`\``
+        }
+      });
+    });
+  });
+
+  describe('Unclosed thinking tag handling', () => {
+    test('should remove unclosed thinking tag and its content', () => {
+      const aiResponse = `<thinking>
+I need to search for the authentication code.
+This is my reasoning...
+
+<search>
+<query>authentication</query>
+</search>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'search',
+        params: { query: 'authentication' }
+      });
+    });
+
+    test('should handle properly closed thinking tag', () => {
+      const aiResponse = `<thinking>
+Let me analyze this.
+</thinking>
+
+<extract>
+<file_path>src/auth.js</file_path>
+</extract>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'extract',
+        params: { file_path: 'src/auth.js' }
+      });
+    });
+
+    test('should handle multiple thinking tags with one unclosed', () => {
+      const aiResponse = `<thinking>First thought</thinking>
+<thinking>Second thought that never ends...
+
+<query>
+<pattern>test</pattern>
+</query>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'query',
+        params: { pattern: 'test' }
+      });
+    });
+  });
+
+  describe('Unclosed tool tag handling', () => {
+    test('should handle search tool without closing tag', () => {
+      const aiResponse = `<search>
+<query>function definition`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'search',
+        params: { query: 'function definition' }
+      });
+    });
+
+    test('should handle extract tool without closing tag', () => {
+      const aiResponse = `<extract>
+<file_path>src/index.js</file_path>
+<line>42`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'extract',
+        params: {
+          file_path: 'src/index.js',
+          line: 42
+        }
+      });
+    });
+
+    test('should handle query tool without closing tag', () => {
+      const aiResponse = `<query>
+<pattern>class \\w+`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'query',
+        params: { pattern: 'class \\w+' }
+      });
+    });
+
+    test('should handle listFiles tool without closing tag', () => {
+      const aiResponse = `<listFiles>
+<path>src/</path>
+<recursive>true`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'listFiles',
+        params: {
+          path: 'src/',
+          recursive: true
+        }
+      });
+    });
+  });
+
+  describe('Unclosed parameter tag handling', () => {
+    test('should handle parameter without closing tag followed by another param', () => {
+      const aiResponse = `<search>
+<query>authentication
+<max_results>10</max_results>
+</search>`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'search',
+        params: {
+          query: 'authentication',
+          max_results: 10
+        }
+      });
+    });
+
+    test('should handle last parameter without closing tag', () => {
+      const aiResponse = `<extract>
+<file_path>src/test.js</file_path>
+<line>10
+</extract>`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'extract',
+        params: {
+          file_path: 'src/test.js',
+          line: 10
+        }
+      });
+    });
+
+    test('should handle multiple unclosed parameter tags', () => {
+      const aiResponse = `<extract>
+<file_path>src/app.js
+<line>1
+<end_line>100
+</extract>`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'extract',
+        params: {
+          file_path: 'src/app.js',
+          line: 1,
+          end_line: 100
+        }
+      });
+    });
+
+    test('should handle unclosed param with multiline content', () => {
+      const aiResponse = `<search>
+<query>function test() {
+  return true;
+}
+<max_results>5</max_results>
+</search>`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'search',
+        params: {
+          query: `function test() {
+  return true;
+}`,
+          max_results: 5
+        }
+      });
+    });
+  });
+
+  describe('Complex unclosed tag scenarios', () => {
+    test('should handle tool and param both unclosed', () => {
+      const aiResponse = `<search>
+<query>test query`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'search',
+        params: { query: 'test query' }
+      });
+    });
+
+    test('should handle unclosed thinking + unclosed tool', () => {
+      const aiResponse = `<thinking>
+I should search for this...
+
+<search>
+<query>authentication middleware`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'search',
+        params: { query: 'authentication middleware' }
+      });
+    });
+
+    test('should handle mixed properly closed and unclosed tags', () => {
+      const aiResponse = `<extract>
+<file_path>src/auth.js</file_path>
+<line>10
+<end_line>20</end_line>`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'extract',
+        params: {
+          file_path: 'src/auth.js',
+          line: 10,
+          end_line: 20
         }
       });
     });
