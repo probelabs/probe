@@ -162,7 +162,7 @@ describe('GitHub Mermaid Compatibility Validation', () => {
 
     test('should validate Visor sequence diagram as GitHub-compatible', async () => {
       // This diagram works fine on GitHub
-      // Note: maid 0.0.4 requires trailing newline for sequence diagrams
+      // Note: maid 0.0.5 requires trailing newline for sequence diagrams
       const visorSequenceDiagram = `sequenceDiagram
     participant CEE as CheckExecutionEngine
     participant AICP as AICheckProvider
@@ -228,7 +228,7 @@ describe('GitHub Mermaid Compatibility Validation', () => {
 
   describe('Edge cases for GitHub compatibility', () => {
     test('should handle escaped characters properly', async () => {
-      // Maid 0.0.4 requires HTML entities instead of escaped quotes
+      // Maid 0.0.5 requires HTML entities instead of escaped quotes
       const diagramWithEscaping = `graph TD
     A[Start] --> B["Process with &quot;quotes&quot;"]
     B --> C[End]`;
@@ -238,7 +238,7 @@ describe('GitHub Mermaid Compatibility Validation', () => {
     });
 
     test('should allow text in link labels', async () => {
-      // Link labels can contain text (maid 0.0.4 doesn't support parentheses in link labels)
+      // Link labels can contain text (maid 0.0.5 doesn't support parentheses in link labels)
       const diagramWithLinkLabel = `graph TD
     A[Start] --> B[Process]
     B --> C[End]

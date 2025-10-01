@@ -198,7 +198,7 @@ describe('Visor Project Mermaid Examples', () => {
 
       const validation = await validateMermaidDiagram(diagrams[0].content);
       expect(validation.isValid).toBe(true);
-      // Maid 0.0.4 doesn't detect gantt type, returns 'unknown'
+      // Maid 0.0.5 doesn't detect gantt type, returns 'unknown'
       expect(validation.diagramType).toBe('unknown');
     });
   });

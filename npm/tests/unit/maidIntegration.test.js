@@ -13,7 +13,7 @@ describe('Maid Integration Smoke Tests', () => {
 
       const result = await validateMermaidDiagram(diagram);
 
-      // Note: maid 0.0.4 may have validation differences
+      // Note: maid 0.0.5 may have validation differences
       if (!result.isValid) {
         console.log('Validation failed:', result.error, result.errors);
       }
@@ -38,7 +38,7 @@ describe('Maid Integration Smoke Tests', () => {
 
       const result = await validateMermaidDiagram(diagram);
 
-      // Note: maid 0.0.4 may have validation differences
+      // Note: maid 0.0.5 may have validation differences
       if (!result.isValid) {
         console.log('Sequence validation failed:', result.error, result.errors);
       }
@@ -85,7 +85,7 @@ describe('Maid Integration Smoke Tests', () => {
 
       const result = await tryMaidAutoFix(diagram, { debug: false });
 
-      // Maid 0.0.4 may or may not fix this - just check it tries
+      // Maid 0.0.5 may or may not fix this - just check it tries
       expect(result.fixLevel).toBe('all');
       // If it was fixed, verify the fix
       if (result.errors.length === 0) {

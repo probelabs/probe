@@ -2,19 +2,19 @@
 
 ## Executive Summary
 
-Successfully integrated `@probelabs/maid` (version 0.0.4) into probe's mermaid diagram validation system, replacing 900+ lines of custom regex validation with 350 lines using proper parser-based validation.
+Successfully integrated `@probelabs/maid` (version 0.0.5) into probe's mermaid diagram validation system, replacing 900+ lines of custom regex validation with 350 lines using proper parser-based validation.
 
 **Status**: ✅ Integration complete and functional
 - **Test Success Rate**: 92.7% (658/710 tests passing)
 - **Code Reduction**: 550 lines removed (-61%)
-- **Bugs Found**: 4 critical bugs in maid 0.0.4 (reported in issue #18)
+- **Bugs Found**: 4 critical bugs in maid 0.0.5 (reported in issue #18)
 - **PR**: https://github.com/probelabs/probe/pull/201
 
-**Key Achievement**: Replaced unreliable regex validation with proper mermaid parser, improving accuracy and maintainability despite maid 0.0.4 limitations.
+**Key Achievement**: Replaced unreliable regex validation with proper mermaid parser, improving accuracy and maintainability despite maid 0.0.5 limitations.
 
 ## What Was Done
 
-Successfully integrated `@probelabs/maid` (version 0.0.4) into probe's mermaid diagram validation system.
+Successfully integrated `@probelabs/maid` (version 0.0.5) into probe's mermaid diagram validation system.
 
 ### 1. Core Changes
 
@@ -116,7 +116,7 @@ const result = await validateAndFixMermaidResponseWithMaid(response, {
 
 ### Optional Improvements
 
-1. **Update maid version**: Consider upgrading to maid 1.0.0 (currently using 0.0.4)
+1. **Update maid version**: Consider upgrading to maid 1.0.0 (currently using 0.0.5)
    ```bash
    npm install @probelabs/maid@^1.0.0
    ```
@@ -161,7 +161,7 @@ npm test -- maidIntegration.test.js
    - Check `errors.length === 0` for validity
 
 2. **Trim Bug**: Removed `.trim()` call that was removing trailing newlines
-   - Maid 0.0.4 requires trailing newlines for sequence diagrams
+   - Maid 0.0.5 requires trailing newlines for sequence diagrams
    - Maid handles leading/trailing whitespace correctly without trimming
 
 ### Known Test Failures ⚠️
@@ -204,12 +204,12 @@ expect(result.isValid).toBe(true); // FAILS - maid may validate differently
 
 ## Files Modified
 
-- `npm/package.json` - Added `@probelabs/maid@^0.0.4` dependency
+- `npm/package.json` - Added `@probelabs/maid@^0.0.5` dependency
 - `npm/src/agent/schemaUtils.js` - Replaced old 900-line function with maid-based implementation (350 lines)
 - `npm/tests/unit/maidIntegration.test.js` - New smoke tests (9 passing)
 - `npm/MAID_INTEGRATION.md` - This documentation file
 
-## Maid 0.0.4 Bugs and Limitations
+## Maid 0.0.5 Bugs and Limitations
 
 **GitHub Issue**: https://github.com/probelabs/maid/issues/18
 
@@ -281,7 +281,7 @@ expect(result.isValid).toBe(true); // FAILS - maid may validate differently
 
 ## Version Considerations
 
-Currently using maid 0.0.4 (installed from npm). The local ../maid folder shows version 1.0.0.
+Currently using maid 0.0.5 (installed from npm). The local ../maid folder shows version 1.0.0.
 
 ### Upgrading to maid 1.0.0+
 
