@@ -89,12 +89,6 @@ jobs:
             cargo build --release --target ${{ matrix.target }}
           fi
 
-      # Install zip on Windows
-      - name: Install zip on Windows
-        if: runner.os == 'Windows'
-        run: |
-          choco install zip -y
-
       # Package the binary into an archive
       - name: Package Binary
         timeout-minutes: 10
@@ -118,7 +112,8 @@ jobs:
             tar -czf "${ARCHIVE_NAME}.tar.gz" "${ARCHIVE_NAME}"
             echo "ASSET=${ARCHIVE_NAME}.tar.gz" >> "$GITHUB_ENV"
           elif [ "${{ matrix.archive_ext }}" = "zip" ]; then
-            zip -r "${ARCHIVE_NAME}.zip" "${ARCHIVE_NAME}"
+            # Use PowerShell's built-in Compress-Archive (Windows native, no third-party tools needed)
+            powershell -Command "Compress-Archive -Path '${ARCHIVE_NAME}' -DestinationPath '${ARCHIVE_NAME}.zip'"
             echo "ASSET=${ARCHIVE_NAME}.zip" >> "$GITHUB_ENV"
           fi
 
