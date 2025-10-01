@@ -1,5 +1,17 @@
 # Maid Integration Summary
 
+## Executive Summary
+
+Successfully integrated `@probelabs/maid` (version 0.0.4) into probe's mermaid diagram validation system, replacing 900+ lines of custom regex validation with 350 lines using proper parser-based validation.
+
+**Status**: ✅ Integration complete and functional
+- **Test Success Rate**: 92.7% (658/710 tests passing)
+- **Code Reduction**: 550 lines removed (-61%)
+- **Bugs Found**: 4 critical bugs in maid 0.0.4 (reported in issue #18)
+- **PR**: https://github.com/probelabs/probe/pull/201
+
+**Key Achievement**: Replaced unreliable regex validation with proper mermaid parser, improving accuracy and maintainability despite maid 0.0.4 limitations.
+
 ## What Was Done
 
 Successfully integrated `@probelabs/maid` (version 0.0.4) into probe's mermaid diagram validation system.
@@ -198,6 +210,8 @@ expect(result.isValid).toBe(true); // FAILS - maid may validate differently
 - `npm/MAID_INTEGRATION.md` - This documentation file
 
 ## Maid 0.0.4 Bugs and Limitations
+
+**GitHub Issue**: https://github.com/probelabs/maid/issues/18
 
 ### Critical Bugs Identified 🐛
 
