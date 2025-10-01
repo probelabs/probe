@@ -144,7 +144,7 @@ impl RealCodeAnalysisFixture {
                     } else {
                         1
                     },
-                    file_path: format!("version_{}", symbol.file_version_id), // Simplified since we don't have direct file path
+                    file_path: symbol.file_path, // Use actual path from symbol state
                     start_line: symbol.def_start_line,
                     is_definition: symbol.is_definition,
                     signature: symbol.signature,

@@ -3,6 +3,7 @@ use clap::{CommandFactory, Parser as ClapParser};
 use colored::*;
 use std::path::PathBuf;
 use std::time::Instant;
+use tracing_subscriber::EnvFilter;
 
 mod cli;
 
@@ -497,6 +498,29 @@ fn handle_benchmark(params: BenchmarkParams) -> Result<()> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse CLI arguments first so we can decide whether to initialize a global
+    // tracing subscriber here or let the embedded daemon install its own layers.
+    // This avoids clobbering the daemon's in‑memory log layer.
+    let mut args = Args::parse();
+
+    // Decide if this process is going to run the embedded daemon in foreground.
+    // When true, skip installing a global subscriber here so the daemon can
+    // attach its memory/persistent layers and expose logs via `probe lsp logs`.
+    use probe_code::lsp_integration::LspSubcommands;
+    let is_daemon_foreground = matches!(&args.command,
+        Some(Commands::Lsp { subcommand: LspSubcommands::Start { foreground, .. } }) if *foreground
+    );
+
+    if !is_daemon_foreground {
+        // Initialize logging from RUST_LOG (or fallback to info). Use try_init to avoid double init.
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
+            .with_target(true)
+            .with_writer(std::io::stderr)
+            .try_init();
+    }
     // Set CI/Windows safety guards BEFORE any config/filesystem operations
     // This prevents stack overflow from junction point cycles on Windows CI
     #[cfg(target_os = "windows")]
@@ -512,8 +536,7 @@ async fn main() -> Result<()> {
     // Load global configuration
     let config = probe_code::config::get_config();
 
-    // Parse CLI arguments (will override config defaults)
-    let mut args = Args::parse();
+    // Args already parsed above; apply config defaults now (CLI flags win)
 
     // Apply config defaults to CLI args where not specified
     apply_config_defaults(&mut args, config);

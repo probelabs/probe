@@ -1,6 +1,7 @@
 use pathdiff::diff_paths;
 use std::path::{Component, Path, PathBuf};
 
+use super::dependency_path::classify_absolute_path;
 use crate::workspace_utils;
 
 /// Normalize the path component of a version-aware UID.
@@ -49,6 +50,15 @@ pub fn normalize_uid_with_hint(uid: &str, workspace_hint: Option<&Path>) -> Stri
         return uid.to_string();
     }
 
+    // If no explicit workspace hint is provided, prefer classifying well-known
+    // dependency locations upfront so absolute paths from registries/node_modules
+    // are mapped into /dep/... rather than treated as their own workspace roots.
+    if workspace_hint.is_none() {
+        if let Some(dep_path) = classify_absolute_path(&canonical_file) {
+            return format!("{}:{}:{}:{}", dep_path, hash_part, name_part, line_part);
+        }
+    }
+
     let workspace_root = workspace_hint
         .map(Path::to_path_buf)
         .or_else(|| infer_workspace_root(&canonical_file))
@@ -72,6 +82,10 @@ pub fn normalize_uid_with_hint(uid: &str, workspace_hint: Option<&Path>) -> Stri
             .components()
             .any(|component| matches!(component, Component::ParentDir))
         {
+            // Outside workspace root: try to convert to /dep path using language classifiers
+            if let Some(dep_path) = classify_absolute_path(&canonical_file) {
+                return format!("{}:{}:{}:{}", dep_path, hash_part, name_part, line_part);
+            }
             return uid.to_string();
         }
 
@@ -85,6 +99,11 @@ pub fn normalize_uid_with_hint(uid: &str, workspace_hint: Option<&Path>) -> Stri
         }
 
         return format!("{}:{}:{}:{}", normalized, hash_part, name_part, line_part);
+    }
+
+    // Not under workspace: try to convert absolute to /dep path
+    if let Some(dep_path) = classify_absolute_path(&canonical_file) {
+        return format!("{}:{}:{}:{}", dep_path, hash_part, name_part, line_part);
     }
 
     uid.to_string()

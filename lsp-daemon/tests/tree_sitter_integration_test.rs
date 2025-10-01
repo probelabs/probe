@@ -33,7 +33,14 @@ impl TestStruct {
 }
 "#;
 
-    let context = AnalysisContext::new(1, 2, 3, "rs".to_string(), uid_generator);
+    let context = AnalysisContext::new(
+        1,
+        2,
+        "rust".to_string(),
+        PathBuf::from("/tmp/ws"),
+        PathBuf::from("test.rs"),
+        uid_generator,
+    );
     let file_path = PathBuf::from("test.rs");
 
     // Test analysis with file extension "rs" (should convert to "rust")
@@ -99,7 +106,14 @@ export class UserManager {
 }
 "#;
 
-        let ts_context = AnalysisContext::new(4, 5, 6, "ts".to_string(), uid_generator.clone());
+        let ts_context = AnalysisContext::new(
+            4,
+            5,
+            "typescript".to_string(),
+            PathBuf::from("/tmp/ws_ts"),
+            PathBuf::from("test.ts"),
+            uid_generator.clone(),
+        );
         let ts_file_path = PathBuf::from("test.ts");
 
         let ts_result = analyzer
@@ -139,7 +153,14 @@ class Calculator:
         return result
 "#;
 
-        let py_context = AnalysisContext::new(7, 8, 9, "py".to_string(), uid_generator);
+        let py_context = AnalysisContext::new(
+            7,
+            8,
+            "python".to_string(),
+            PathBuf::from("/tmp/ws_py"),
+            PathBuf::from("test.py"),
+            uid_generator,
+        );
         let py_file_path = PathBuf::from("test.py");
 
         let py_result = analyzer

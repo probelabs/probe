@@ -25,10 +25,11 @@ async fn test_phase2_analyzer_enhancements() {
 
     // Create analysis context
     let context = AnalysisContext::new(
-        1, // workspace_id
-        1, // file_version_id
-        1, // analysis_run_id
-        "rust".to_string(),
+        1,                  // workspace_id
+        1,                  // analysis_run_id
+        "rust".to_string(), // language
+        PathBuf::from("/tmp/ws"),
+        test_file_path.clone(),
         uid_generator,
     );
 
@@ -311,7 +312,14 @@ async fn test_relationship_extraction_details() {
     let analyzer = RustAnalyzer::new(uid_generator.clone());
 
     // Create analysis context
-    let context = AnalysisContext::new(1, 1, 1, "rust".to_string(), uid_generator);
+    let context = AnalysisContext::new(
+        1,
+        1,
+        "rust".to_string(),
+        PathBuf::from("/tmp/ws"),
+        test_file_path.clone(),
+        uid_generator,
+    );
 
     // Run analysis
     let result = analyzer
@@ -386,7 +394,14 @@ async fn test_extraction_performance() {
 
     let uid_generator = Arc::new(SymbolUIDGenerator::new());
     let analyzer = RustAnalyzer::new(uid_generator.clone());
-    let context = AnalysisContext::new(1, 1, 1, "rust".to_string(), uid_generator);
+    let context = AnalysisContext::new(
+        1,
+        1,
+        "rust".to_string(),
+        PathBuf::from("/tmp/ws"),
+        test_file_path.clone(),
+        uid_generator,
+    );
 
     // Time the analysis
     let start = std::time::Instant::now();

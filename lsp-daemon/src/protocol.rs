@@ -251,6 +251,28 @@ pub enum DaemonRequest {
         output_path: PathBuf,
         checkpoint: bool,
     },
+    /// Force WAL checkpoint and wait for exclusive access if needed
+    WalSync {
+        request_id: Uuid,
+        /// Maximum seconds to wait (0 = wait indefinitely)
+        timeout_secs: u64,
+        /// Quiesce readers in this process before checkpoint (blocks new reads)
+        #[serde(default)]
+        quiesce: bool,
+        /// Checkpoint mode to use: "auto" (default behavior), or one of
+        /// "passive", "full", "restart", "truncate".
+        #[serde(default)]
+        mode: String,
+        /// Use engine-direct checkpoint API (turso connection.checkpoint) instead of PRAGMA path.
+        /// Defaults to false for backwards compatibility.
+        #[serde(default)]
+        direct: bool,
+    },
+    /// Cancel a long-running request (e.g., WAL sync) by its request ID
+    Cancel {
+        request_id: Uuid,
+        cancel_request_id: Uuid,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -468,6 +490,13 @@ pub enum DaemonResponse {
         workspace_path: PathBuf,
         output_path: PathBuf,
         database_size_bytes: usize,
+    },
+    /// Response for WAL sync request
+    WalSynced {
+        request_id: Uuid,
+        waited_ms: u64,
+        iterations: u32,
+        details: Option<String>,
     },
 
     Error {
@@ -842,6 +871,9 @@ pub struct IndexingStatusInfo {
     pub database: Option<DatabaseInfo>,            // Actual persisted database counts
     #[serde(default)]
     pub lsp_indexing: Option<LspIndexingInfo>, // LSP indexing (prewarm) aggregated stats
+    /// Optional sync status, populated when the workspace backend is available
+    #[serde(default)]
+    pub sync: Option<SyncStatusInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -889,6 +921,53 @@ pub struct LspEnrichmentInfo {
     pub symbols_enriched: u64,
     pub symbols_failed: u64,
     pub queue_stats: LspEnrichmentQueueInfo,
+    /// Current in-memory queue size (items pending in RAM)
+    #[serde(default)]
+    pub in_memory_queue_items: usize,
+    /// Current in-memory total operations (refs+impls+calls) pending in RAM
+    #[serde(default)]
+    pub in_memory_queue_operations: usize,
+    /// In-memory priority breakdown
+    #[serde(default)]
+    pub in_memory_high_priority_items: usize,
+    #[serde(default)]
+    pub in_memory_medium_priority_items: usize,
+    #[serde(default)]
+    pub in_memory_low_priority_items: usize,
+    /// In-memory per-operation breakdown
+    #[serde(default)]
+    pub in_memory_references_operations: usize,
+    #[serde(default)]
+    pub in_memory_implementations_operations: usize,
+    #[serde(default)]
+    pub in_memory_call_hierarchy_operations: usize,
+    // DB writer status (snapshot)
+    #[serde(default)]
+    pub writer_busy: bool,
+    #[serde(default)]
+    pub writer_active_ms: u64,
+    #[serde(default)]
+    pub writer_last_ms: u64,
+    #[serde(default)]
+    pub writer_last_symbols: u64,
+    #[serde(default)]
+    pub writer_last_edges: u64,
+    // New: DB writer gate owner and section details
+    #[serde(default)]
+    pub writer_gate_owner_op: String,
+    #[serde(default)]
+    pub writer_gate_owner_ms: u64,
+    #[serde(default)]
+    pub writer_section_label: String,
+    #[serde(default)]
+    pub writer_section_ms: u64,
+    // DB readers status
+    #[serde(default)]
+    pub reader_active: u64,
+    #[serde(default)]
+    pub reader_last_label: String,
+    #[serde(default)]
+    pub reader_last_ms: u64,
     /// Total call hierarchy edges persisted by workers
     pub edges_created: u64,
     /// Total reference edges persisted by workers
@@ -919,6 +998,15 @@ pub struct LspEnrichmentInfo {
     #[serde(default)]
     pub call_hierarchy_attempted: u64,
     pub success_rate: f64, // Percentage of successfully enriched symbols
+    /// Implementation ops skipped by core-trait/builtin heuristic (total)
+    #[serde(default)]
+    pub impls_skipped_core_total: u64,
+    /// Implementation ops skipped (Rust core traits)
+    #[serde(default)]
+    pub impls_skipped_core_rust: u64,
+    /// Implementation ops skipped (JS/TS builtins)
+    #[serde(default)]
+    pub impls_skipped_core_js_ts: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -954,6 +1042,38 @@ pub struct DatabaseInfo {
     pub total_edges: u64,             // Count from edge table
     pub total_files: u64,             // Count from file table
     pub workspace_id: Option<String>, // Current workspace ID
+    #[serde(default)]
+    pub db_quiesced: bool, // True if counts skipped due to quiesce
+    // Reader/writer gate status: write-held indicates quiesce write lock is currently held
+    #[serde(default)]
+    pub rw_gate_write_held: bool,
+    // Number of active readers
+    #[serde(default)]
+    pub reader_active: u64,
+    // Last reader label and duration
+    #[serde(default)]
+    pub reader_last_label: String,
+    #[serde(default)]
+    pub reader_last_ms: u64,
+}
+
+/// Synchronization status snapshot for the current workspace database.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncStatusInfo {
+    /// A stable client identifier used for sync; source of truth is the backend KV.
+    #[serde(default)]
+    pub client_id: String,
+    /// Unix time of last successful pull (seconds since epoch).
+    #[serde(default)]
+    pub last_pull_unix_time: Option<i64>,
+    /// Unix time of last successful push (seconds since epoch).
+    #[serde(default)]
+    pub last_push_unix_time: Option<i64>,
+    /// Hint fields mirroring Turso engine conventions (if present in KV).
+    #[serde(default)]
+    pub last_pull_generation: Option<i64>,
+    #[serde(default)]
+    pub last_change_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

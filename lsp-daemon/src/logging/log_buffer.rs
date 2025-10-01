@@ -48,48 +48,48 @@ impl LogBuffer {
     }
 
     /// Get the last N log entries, up to the buffer size
+    ///
+    /// Note: We intentionally take a blocking lock here instead of `try_lock`.
+    /// In high-throughput scenarios (e.g., indexing), using `try_lock` often
+    /// resulted in empty responses, which made `probe lsp logs` appear blank.
+    /// We keep the critical section minimal by cloning the needed slice, so
+    /// writers are only paused for a short time.
     pub fn get_last(&self, count: usize) -> Vec<LogEntry> {
-        // Use try_lock to avoid potential deadlock if logging happens during serialization
-        match self.entries.try_lock() {
-            Ok(entries) => {
-                let take_count = count.min(entries.len());
-                entries
-                    .iter()
-                    .rev()
-                    .take(take_count)
-                    .rev()
-                    .cloned()
-                    .collect()
-            }
-            Err(_) => {
-                // If we can't acquire the lock immediately, return empty to avoid deadlock
-                // This can happen if a log event is triggered during response serialization
-                Vec::new()
-            }
-        }
+        let entries = self
+            .entries
+            .lock()
+            .expect("log buffer mutex poisoned while reading");
+        let take_count = count.min(entries.len());
+        entries
+            .iter()
+            .rev()
+            .take(take_count)
+            .rev()
+            .cloned()
+            .collect()
     }
 
     /// Get all log entries currently in the buffer
     pub fn get_all(&self) -> Vec<LogEntry> {
-        // Use try_lock to avoid potential deadlock
-        match self.entries.try_lock() {
-            Ok(entries) => entries.iter().cloned().collect(),
-            Err(_) => Vec::new(),
-        }
+        let entries = self
+            .entries
+            .lock()
+            .expect("log buffer mutex poisoned while reading");
+        entries.iter().cloned().collect()
     }
 
     /// Get log entries since a specific sequence number
     pub fn get_since_sequence(&self, since: u64, limit: usize) -> Vec<LogEntry> {
-        // Use try_lock to avoid potential deadlock
-        match self.entries.try_lock() {
-            Ok(entries) => entries
-                .iter()
-                .filter(|entry| entry.sequence > since)
-                .take(limit)
-                .cloned()
-                .collect(),
-            Err(_) => Vec::new(),
-        }
+        let entries = self
+            .entries
+            .lock()
+            .expect("log buffer mutex poisoned while reading");
+        entries
+            .iter()
+            .filter(|entry| entry.sequence > since)
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
     /// Clear all log entries from the buffer
@@ -171,6 +171,12 @@ impl MemoryLogLayer {
                     if self.message.starts_with('"') && self.message.ends_with('"') {
                         self.message = self.message[1..self.message.len() - 1].to_string();
                     }
+                }
+            }
+
+            fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+                if field.name() == "message" {
+                    self.message = value.to_string();
                 }
             }
         }

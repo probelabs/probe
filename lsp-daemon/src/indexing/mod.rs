@@ -22,6 +22,7 @@ pub mod manager;
 pub mod pipelines;
 pub mod progress;
 pub mod queue;
+pub mod skiplist;
 pub mod symbol_conversion;
 pub mod versioning;
 

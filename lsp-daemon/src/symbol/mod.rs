@@ -55,6 +55,7 @@
 //! - Extensible architecture for adding new languages
 //! - Language-specific normalization and scoping rules
 
+pub mod dependency_path;
 pub mod language_support;
 pub mod normalization;
 pub mod uid_generator;

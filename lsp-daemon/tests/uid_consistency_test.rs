@@ -158,13 +158,11 @@ fn test_uid_external_file() {
     )
     .unwrap();
 
+    // External Rust files are now normalized into the /dep/rust/ namespace
     assert!(
-        uid.starts_with("EXTERNAL:"),
-        "External files should start with EXTERNAL: prefix"
-    );
-    assert!(
-        uid.contains("/tmp/external.rs"),
-        "Should contain the external file path"
+        uid.starts_with("/dep/rust/"),
+        "UID not mapped to /dep/rust: {}",
+        uid
     );
 }
 

@@ -678,8 +678,8 @@ impl SingleServerManager {
         // Normalize workspace path early to ensure consistent registration
         let normalized_workspace = ServerInstance::normalize_workspace_path(&workspace_root);
 
-        // Log the workspace registration attempt
-        info!(
+        // Log at debug to avoid noisy repeats during periodic monitors
+        debug!(
             "Ensuring workspace {:?} (normalized: {:?}) is registered for {:?}",
             workspace_root, normalized_workspace, language
         );
@@ -732,8 +732,8 @@ impl SingleServerManager {
         // Ensure workspace path is normalized for consistent registration
         let normalized_workspace = ServerInstance::normalize_workspace_path(&workspace_root);
 
-        // Log the workspace registration attempt
-        info!(
+        // Internal registration attempt is routine; keep at debug level
+        debug!(
             "Internal workspace registration for {:?} in {:?} (normalized: {:?})",
             language, workspace_root, normalized_workspace
         );
@@ -749,7 +749,7 @@ impl SingleServerManager {
             if let Ok(mut server) = server_instance.try_lock() {
                 // Fast path - got lock immediately, handle quickly
                 if server.is_workspace_registered(&normalized_workspace) {
-                    info!(
+                    debug!(
                         "Workspace {:?} already registered with {:?} server",
                         normalized_workspace, language
                     );
@@ -882,7 +882,7 @@ impl SingleServerManager {
 
             // Double-check if workspace is already registered (in slow path)
             if server.is_workspace_registered(&normalized_workspace) {
-                info!(
+                debug!(
                     "Workspace {:?} already registered with {:?} server (slow path)",
                     normalized_workspace, language
                 );

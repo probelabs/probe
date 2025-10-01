@@ -113,10 +113,11 @@ async fn main() -> Result<()> {
         Level::INFO
     };
 
-    tracing_subscriber::fmt()
+    let _ = tracing_subscriber::fmt()
         .with_max_level(log_level)
         .with_target(false)
-        .init();
+        .with_writer(std::io::stderr)
+        .try_init();
 
     // Initialize analyzer
     let mut analyzer = PositionAnalyzer::new();

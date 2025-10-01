@@ -156,13 +156,19 @@ impl DatabaseCacheAdapter {
 
                     let backend_arc = Arc::new(backend);
 
-                    // Start periodic checkpoint task (every 5 seconds)
-                    let checkpoint_handle = backend_arc.clone().start_periodic_checkpoint(5);
-                    debug!("✅ DATABASE_CACHE_ADAPTER: Started periodic WAL checkpoint task (5s interval) for workspace '{}'", workspace_id);
-
-                    // We don't need to keep the handle unless we want to cancel it later
-                    // The task will run for the lifetime of the daemon
-                    std::mem::forget(checkpoint_handle);
+                    // Periodic checkpoint: enabled by default every 10s, override with PROBE_LSP_AUTO_WAL_INTERVAL
+                    let interval = std::env::var("PROBE_LSP_AUTO_WAL_INTERVAL")
+                        .ok()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(10);
+                    if interval > 0 {
+                        let checkpoint_handle =
+                            backend_arc.clone().start_periodic_checkpoint(interval);
+                        debug!("✅ DATABASE_CACHE_ADAPTER: Started periodic WAL checkpoint task ({}s interval) for workspace '{}'", interval, workspace_id);
+                        std::mem::forget(checkpoint_handle);
+                    } else {
+                        debug!("⏸️ DATABASE_CACHE_ADAPTER: Periodic WAL checkpoint is disabled (workspace '{}')", workspace_id);
+                    }
 
                     backend_arc
                 }
@@ -326,6 +332,13 @@ impl DatabaseCacheAdapter {
     /// Get access to the underlying database backend (for graph export)
     pub fn backend(&self) -> &BackendType {
         &self.database
+    }
+
+    /// Convenience helper: check if the underlying backend's writer is busy
+    pub fn writer_busy(&self) -> bool {
+        match &self.database {
+            BackendType::SQLite(db) => db.is_writer_busy(),
+        }
     }
 
     /// Update hit/miss counts for cache statistics
@@ -932,6 +945,61 @@ impl DatabaseCacheAdapter {
     /// Perform a WAL checkpoint
     pub async fn checkpoint(&self) -> Result<()> {
         self.database.checkpoint().await
+    }
+
+    /// Force a blocking WAL sync with optional timeout.
+    /// mode: None => "auto" behavior. Some("passive"|"full"|"restart"|"truncate") enforces that mode.
+    pub async fn wal_sync_blocking(
+        &self,
+        timeout_secs: u64,
+        quiesce: bool,
+        mode: Option<String>,
+        cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<(u64, u32)> {
+        match &self.database {
+            BackendType::SQLite(db) => {
+                let timeout = if timeout_secs == 0 {
+                    None
+                } else {
+                    Some(std::time::Duration::from_secs(timeout_secs))
+                };
+                let mode_enum = mode
+                    .as_deref()
+                    .map(|m| m.to_ascii_lowercase())
+                    .as_deref()
+                    .and_then(|m| match m {
+                        "auto" => Some(crate::database::sqlite_backend::CheckpointMode::Auto),
+                        "passive" => Some(crate::database::sqlite_backend::CheckpointMode::Passive),
+                        "full" => Some(crate::database::sqlite_backend::CheckpointMode::Full),
+                        "restart" => Some(crate::database::sqlite_backend::CheckpointMode::Restart),
+                        "truncate" => {
+                            Some(crate::database::sqlite_backend::CheckpointMode::Truncate)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or(crate::database::sqlite_backend::CheckpointMode::Auto);
+                db.wal_sync_blocking(timeout, quiesce, mode_enum, cancel)
+                    .await
+                    .map_err(|e| anyhow::anyhow!("Database error: {}", e))
+            }
+        }
+    }
+
+    /// Direct engine-level checkpoint using the backend's native API (when available).
+    pub async fn wal_checkpoint_direct(&self, mode: &str) -> Result<()> {
+        let mode_enum = match mode.to_ascii_lowercase().as_str() {
+            "passive" => crate::database::DbCheckpointMode::Passive,
+            "full" => crate::database::DbCheckpointMode::Full,
+            "restart" => crate::database::DbCheckpointMode::Restart,
+            "truncate" => crate::database::DbCheckpointMode::Truncate,
+            _ => crate::database::DbCheckpointMode::Truncate,
+        };
+        match &self.database {
+            BackendType::SQLite(db) => db
+                .engine_checkpoint(mode_enum)
+                .await
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
+        }
     }
 }
 

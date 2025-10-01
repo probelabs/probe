@@ -406,6 +406,7 @@ impl LanguageServerTestEnvironment {
 
         let symbol_state = SymbolState {
             symbol_uid: symbol_uid.clone(),
+            file_path: file_path.to_string(),
             language: self.language.clone(),
             name: symbol_name.clone(),
             fqn: Some(format!("{}::{}", self.language, symbol_name)),

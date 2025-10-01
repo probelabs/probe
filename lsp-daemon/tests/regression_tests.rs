@@ -66,7 +66,7 @@ async fn test_baseline_performance_regression() -> Result<()> {
     // Phase 2: Store none edges
     let storage_start = Instant::now();
     for symbol_uid in &symbols {
-        let edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+        let edges = create_none_call_hierarchy_edges(symbol_uid);
         database.store_edges(&edges).await?;
     }
     let storage_duration = storage_start.elapsed();
@@ -177,7 +177,7 @@ async fn test_scale_performance_regression() -> Result<()> {
 
     // Store none edges first
     for symbol_uid in &symbols {
-        let edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+        let edges = create_none_call_hierarchy_edges(symbol_uid);
         database.store_edges(&edges).await?;
     }
 

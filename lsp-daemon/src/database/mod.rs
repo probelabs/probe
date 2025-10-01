@@ -49,11 +49,18 @@ use crate::protocol::{CallHierarchyResult, Location};
 
 pub mod converters;
 pub mod enrichment_tracking;
-pub mod migrations;
 pub mod sqlite_backend;
 pub use converters::ProtocolConverter;
 pub use enrichment_tracking::{EnrichmentStatus, EnrichmentTracker, EnrichmentTracking};
 pub use sqlite_backend::SQLiteBackend;
+/// Engine-level checkpoint modes (database-agnostic)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum DbCheckpointMode {
+    Passive,
+    Full,
+    Restart,
+    Truncate,
+}
 // Using Turso (native SQLite implementation) as the primary backend
 
 /// Database error types specific to database operations
@@ -212,9 +219,7 @@ pub enum EdgeRelation {
     Imports,
     Includes,
     DependsOn,
-    // LSP-specific call hierarchy relations
-    IncomingCall,
-    OutgoingCall,
+    // LSP call hierarchy stored uniformly as 'calls'
     // LSP-specific definition relations
     Definition,
     Implementation,
@@ -234,8 +239,6 @@ impl EdgeRelation {
             EdgeRelation::Imports => "imports",
             EdgeRelation::Includes => "includes",
             EdgeRelation::DependsOn => "depends_on",
-            EdgeRelation::IncomingCall => "incoming_call",
-            EdgeRelation::OutgoingCall => "outgoing_call",
             EdgeRelation::Definition => "definition",
             EdgeRelation::Implementation => "implementation",
         }
@@ -254,8 +257,6 @@ impl EdgeRelation {
             "imports" => Ok(EdgeRelation::Imports),
             "includes" => Ok(EdgeRelation::Includes),
             "depends_on" => Ok(EdgeRelation::DependsOn),
-            "incoming_call" => Ok(EdgeRelation::IncomingCall),
-            "outgoing_call" => Ok(EdgeRelation::OutgoingCall),
             "definition" => Ok(EdgeRelation::Definition),
             "implementation" => Ok(EdgeRelation::Implementation),
             _ => Err(DatabaseError::OperationFailed {
@@ -354,10 +355,33 @@ pub fn create_none_edge(source_symbol_uid: &str, relation: EdgeRelation) -> Edge
 /// Create "none" edges for empty call hierarchy results
 /// Used when LSP returns {incoming: [], outgoing: []} (not null!)
 pub fn create_none_call_hierarchy_edges(symbol_uid: &str) -> Vec<Edge> {
-    vec![
-        create_none_edge(symbol_uid, EdgeRelation::IncomingCall),
-        create_none_edge(symbol_uid, EdgeRelation::OutgoingCall),
-    ]
+    // No outgoing: source symbol → none
+    let outgoing = Edge {
+        relation: EdgeRelation::Calls,
+        source_symbol_uid: symbol_uid.to_string(),
+        target_symbol_uid: "none".to_string(),
+        file_path: None,
+        start_line: None,
+        start_char: None,
+        confidence: 1.0,
+        language: "unknown".to_string(),
+        metadata: Some("lsp_call_hierarchy_empty_outgoing".to_string()),
+    };
+
+    // No incoming: none → target symbol
+    let incoming = Edge {
+        relation: EdgeRelation::Calls,
+        source_symbol_uid: "none".to_string(),
+        target_symbol_uid: symbol_uid.to_string(),
+        file_path: None,
+        start_line: None,
+        start_char: None,
+        confidence: 1.0,
+        language: "unknown".to_string(),
+        metadata: Some("lsp_call_hierarchy_empty_incoming".to_string()),
+    };
+
+    vec![incoming, outgoing]
 }
 
 /// Create "none" edges for empty references results  
@@ -477,6 +501,14 @@ pub trait DatabaseBackend: Send + Sync {
 
     /// Check if this database is temporary/in-memory
     fn is_temporary(&self) -> bool;
+
+    /// Perform an engine-direct checkpoint if the backend supports it.
+    /// Default implementation returns OperationFailed.
+    async fn engine_checkpoint(&self, _mode: DbCheckpointMode) -> Result<(), DatabaseError> {
+        Err(DatabaseError::OperationFailed {
+            message: "engine_checkpoint not supported by backend".to_string(),
+        })
+    }
 
     // ===================
     // Workspace Management

@@ -59,11 +59,14 @@ pub enum LspSubcommands {
     /// Gracefully shutdown the LSP daemon
     Shutdown,
 
-    /// Restart the LSP daemon (shutdown + auto-start)
+    /// Restart the LSP daemon (shutdown + start with log level)
     Restart {
         /// Workspace hint for LSP server initialization
         #[clap(long = "workspace-hint")]
         workspace_hint: Option<String>,
+        /// Log level for the restarted daemon (trace/debug/info/warn/error)
+        #[clap(long = "log-level", default_value = "")]
+        log_level: String,
     },
 
     /// Show version information with git hash and build date
@@ -112,6 +115,10 @@ pub enum LspSubcommands {
         /// Run in foreground (don't daemonize)
         #[clap(short, long)]
         foreground: bool,
+
+        /// Auto WAL checkpoint interval in seconds (0 disables; default 0)
+        #[clap(long = "auto-wal-interval", default_value = "0")]
+        auto_wal_interval: u64,
     },
 
     /// Initialize language servers for workspaces
@@ -234,13 +241,32 @@ pub enum LspSubcommands {
         #[clap(short = 'o', long = "output", required = true)]
         output: std::path::PathBuf,
 
-        /// Force WAL checkpoint before export
-        #[clap(long = "checkpoint", default_value = "true")]
+        /// Force WAL checkpoint before export (opt-in)
+        #[clap(long = "checkpoint", action = clap::ArgAction::SetTrue)]
         checkpoint: bool,
 
         /// Use daemon mode (auto-start if not running)
         #[clap(long = "daemon", default_value = "true")]
         daemon: bool,
+    },
+
+    /// Force a WAL checkpoint and wait until it can acquire the lock
+    WalSync {
+        /// Maximum seconds to wait (0 = wait indefinitely)
+        #[clap(long = "timeout", default_value = "0")]
+        timeout_secs: u64,
+        /// Disable quiesce (by default, quiesce is enabled for CLI)
+        #[clap(long = "no-quiesce", action = clap::ArgAction::SetTrue)]
+        no_quiesce: bool,
+
+        /// Checkpoint mode (auto, passive, full, restart, truncate)
+        /// auto = current behavior with pragmatic fallbacks
+        #[clap(long = "mode", value_parser = ["auto", "passive", "full", "restart", "truncate"], default_value = "auto")]
+        mode: String,
+
+        /// Use engine-direct checkpoint API (turso connection.checkpoint) instead of PRAGMA path
+        #[clap(long = "direct", action = clap::ArgAction::SetTrue)]
+        direct: bool,
     },
 }
 

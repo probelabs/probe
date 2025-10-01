@@ -13,8 +13,8 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 mod integration_test_framework;
-mod mock_lsp;
 
+use integration_test_framework::mock_lsp::server::{MockResponsePattern, MockServerConfig};
 use integration_test_framework::{
     test_data::{
         DatabaseTestDataFactory, LspResponseFactory, SourceFileFactory, TestWorkspaceConfig,
@@ -25,7 +25,6 @@ use integration_test_framework::{
     },
     IntegrationTestHarness, TestHarnessConfig,
 };
-use mock_lsp::server::{MockResponsePattern, MockServerConfig};
 
 use lsp_daemon::database::{DatabaseBackend, EdgeRelation};
 use lsp_daemon::protocol::DaemonRequest;
@@ -482,7 +481,7 @@ async fn test_framework_performance() -> Result<()> {
     // Test database operations performance
     let database = harness.database().unwrap();
     let workspace_id = 1;
-    let file_version_id = 1;
+    let _file_version_id = 1; // legacy, no longer used
 
     let op_start = std::time::Instant::now();
 
@@ -490,7 +489,7 @@ async fn test_framework_performance() -> Result<()> {
     let test_symbols = (0..100)
         .map(|i| lsp_daemon::database::SymbolState {
             symbol_uid: format!("test_symbol_{}", i),
-            file_version_id,
+            file_path: "src/test.rs".to_string(),
             language: "rust".to_string(),
             name: format!("symbol_{}", i),
             fqn: None,

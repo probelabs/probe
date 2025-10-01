@@ -46,7 +46,7 @@ async fn test_complete_cache_cycle_with_empty_call_hierarchy() -> Result<()> {
     println!("✅ First query (cache miss): {:?}", first_duration);
 
     // Simulate LSP returning empty call hierarchy and storing "none" edges
-    let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+    let none_edges = create_none_call_hierarchy_edges(symbol_uid);
     database.store_edges(&none_edges).await?;
 
     // Phase 2: Cache hit - should return empty call hierarchy (not None)
@@ -109,7 +109,7 @@ async fn test_cache_miss_vs_cache_hit_performance() -> Result<()> {
         );
 
         // Store "none" edges
-        let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+        let none_edges = create_none_call_hierarchy_edges(symbol_uid);
         database.store_edges(&none_edges).await?;
 
         // Second query - cache hit
@@ -158,7 +158,7 @@ async fn test_references_cache_behavior() -> Result<()> {
     );
 
     // Simulate storing none edges for empty references
-    let none_edges = lsp_daemon::database::create_none_reference_edges(symbol_uid, 1);
+    let none_edges = lsp_daemon::database::create_none_reference_edges(symbol_uid);
     database.store_edges(&none_edges).await?;
 
     // Second query - should still return empty vec but from cache
@@ -200,7 +200,7 @@ async fn test_definitions_cache_behavior() -> Result<()> {
     );
 
     // Simulate storing none edges for empty definitions
-    let none_edges = lsp_daemon::database::create_none_definition_edges(symbol_uid, 1);
+    let none_edges = lsp_daemon::database::create_none_definition_edges(symbol_uid);
     database.store_edges(&none_edges).await?;
 
     // Second query - should return empty vec from cache
@@ -232,7 +232,7 @@ async fn test_implementations_cache_behavior() -> Result<()> {
     );
 
     // Simulate storing none edges for empty implementations
-    let none_edges = lsp_daemon::database::create_none_implementation_edges(symbol_uid, 1);
+    let none_edges = lsp_daemon::database::create_none_implementation_edges(symbol_uid);
     database.store_edges(&none_edges).await?;
 
     // Second query - should return empty vec from cache
@@ -255,7 +255,7 @@ async fn test_concurrent_cache_access() -> Result<()> {
     let symbol_uid = "src/concurrent.rs:ConcurrentSymbol:500";
 
     // Store none edges first
-    let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+    let none_edges = create_none_call_hierarchy_edges(symbol_uid);
     database.store_edges(&none_edges).await?;
 
     // Simulate multiple concurrent requests
@@ -307,7 +307,7 @@ async fn test_cache_invalidation_scenarios() -> Result<()> {
     assert!(initial_result.is_none(), "Should be cache miss initially");
 
     // Store none edges (empty result)
-    let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+    let none_edges = create_none_call_hierarchy_edges(symbol_uid);
     database.store_edges(&none_edges).await?;
 
     // Should now return cached empty result
@@ -324,9 +324,10 @@ async fn test_cache_invalidation_scenarios() -> Result<()> {
     // Simulate code change - new file version with real call relationships
     let new_file_version_id = 2i64;
     let real_edge = lsp_daemon::database::Edge {
-        relation: lsp_daemon::database::EdgeRelation::IncomingCall,
-        source_symbol_uid: symbol_uid.to_string(),
-        target_symbol_uid: "src/caller.rs:new_caller:10".to_string(),
+        relation: lsp_daemon::database::EdgeRelation::Calls,
+        // Incoming: caller -> symbol
+        source_symbol_uid: "src/caller.rs:new_caller:10".to_string(),
+        target_symbol_uid: symbol_uid.to_string(),
         file_path: Some("src/caller.rs".to_string()),
         start_line: Some(10),
         start_char: Some(5),
@@ -351,11 +352,11 @@ async fn test_cache_invalidation_scenarios() -> Result<()> {
     // Find the real edge (not the none edge)
     let real_edges: Vec<_> = updated_edges
         .into_iter()
-        .filter(|e| e.target_symbol_uid != "none")
+        .filter(|e| e.source_symbol_uid != "none")
         .collect();
     assert_eq!(real_edges.len(), 1, "Should have one real edge");
     assert_eq!(
-        real_edges[0].target_symbol_uid,
+        real_edges[0].source_symbol_uid,
         "src/caller.rs:new_caller:10"
     );
 
@@ -386,7 +387,7 @@ async fn test_batch_cache_operations() -> Result<()> {
 
     // Store none edges for all symbols
     for (i, symbol_uid) in symbol_uids.iter().enumerate() {
-        let none_edges = create_none_call_hierarchy_edges(symbol_uid, (i + 1) as i64);
+        let none_edges = create_none_call_hierarchy_edges(symbol_uid);
         database.store_edges(&none_edges).await?;
     }
 

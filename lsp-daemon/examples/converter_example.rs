@@ -18,6 +18,7 @@ fn main() {
     // Example 1: Convert SymbolState to CallHierarchyItem
     let symbol = SymbolState {
         symbol_uid: "rust_function_123".to_string(),
+        file_path: "/src/config/parser.rs".to_string(),
         language: "rust".to_string(),
         name: "parse_config".to_string(),
         fqn: Some("config::parser::parse_config".to_string()),
@@ -53,6 +54,7 @@ fn main() {
         relation: EdgeRelation::Calls,
         source_symbol_uid: "caller_function_456".to_string(),
         target_symbol_uid: "rust_function_123".to_string(),
+        file_path: Some("/src/config/parser.rs".to_string()),
         start_line: Some(15),
         start_char: Some(8),
         confidence: 0.95,
@@ -61,7 +63,7 @@ fn main() {
     };
 
     let edges = vec![edge];
-    let locations = converter.edges_to_locations(edges);
+    let locations = converter.edges_to_locations_direct(edges);
 
     println!("\nLocations:");
     for location in &locations {
@@ -75,6 +77,7 @@ fn main() {
     // Example 3: Convert Edges to CallHierarchyCall
     let caller_symbol = SymbolState {
         symbol_uid: "caller_function_456".to_string(),
+        file_path: "/src/main.rs".to_string(),
         language: "rust".to_string(),
         name: "main".to_string(),
         fqn: Some("main".to_string()),
@@ -94,6 +97,7 @@ fn main() {
         relation: EdgeRelation::Calls,
         source_symbol_uid: "caller_function_456".to_string(),
         target_symbol_uid: "rust_function_123".to_string(),
+        file_path: Some("/src/main.rs".to_string()),
         start_line: Some(15),
         start_char: Some(4),
         confidence: 0.9,

@@ -173,7 +173,7 @@ async fn benchmark_cache_performance() -> Result<()> {
     println!("\n💾 Storing None Edges...");
     let store_start = Instant::now();
     for symbol_uid in &test_symbols {
-        let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+        let none_edges = create_none_call_hierarchy_edges(symbol_uid);
         database.store_edges(&none_edges).await?;
     }
     let store_duration = store_start.elapsed();
@@ -341,10 +341,10 @@ async fn benchmark_different_edge_types() -> Result<()> {
         let store_start = Instant::now();
         for symbol_uid in &symbols {
             let none_edges = match edge_type {
-                "call_hierarchy" => create_none_call_hierarchy_edges(symbol_uid, 1),
-                "references" => create_none_reference_edges(symbol_uid, 1),
-                "definitions" => create_none_definition_edges(symbol_uid, 1),
-                "implementations" => create_none_implementation_edges(symbol_uid, 1),
+                "call_hierarchy" => create_none_call_hierarchy_edges(symbol_uid),
+                "references" => create_none_reference_edges(symbol_uid),
+                "definitions" => create_none_definition_edges(symbol_uid),
+                "implementations" => create_none_implementation_edges(symbol_uid),
                 _ => unreachable!(),
             };
             database.store_edges(&none_edges).await?;
@@ -489,7 +489,7 @@ async fn benchmark_scale_testing() -> Result<()> {
 
         // Store none edges
         for symbol_uid in &symbols {
-            let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+            let none_edges = create_none_call_hierarchy_edges(symbol_uid);
             database.store_edges(&none_edges).await?;
         }
 
@@ -552,7 +552,7 @@ async fn benchmark_concurrent_performance() -> Result<()> {
                 .get_call_hierarchy_for_symbol(workspace_id, &symbol_uid)
                 .await?;
 
-            let none_edges = create_none_call_hierarchy_edges(&symbol_uid, 1);
+            let none_edges = create_none_call_hierarchy_edges(&symbol_uid);
             database.store_edges(&none_edges).await?;
 
             let _result = database
@@ -577,7 +577,7 @@ async fn benchmark_concurrent_performance() -> Result<()> {
                         .await?;
 
                     // Store none edges
-                    let none_edges = create_none_call_hierarchy_edges(&symbol_uid, 1);
+                    let none_edges = create_none_call_hierarchy_edges(&symbol_uid);
                     db.store_edges(&none_edges).await?;
 
                     // Cache hit
@@ -641,7 +641,7 @@ async fn benchmark_memory_usage() -> Result<()> {
 
     // Store none edges for many symbols
     for (i, symbol_uid) in symbols.iter().enumerate() {
-        let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+        let none_edges = create_none_call_hierarchy_edges(symbol_uid);
         database.store_edges(&none_edges).await?;
 
         // Every 100 symbols, check that operations still work
@@ -732,7 +732,7 @@ async fn benchmark_mixed_workload() -> Result<()> {
                     .await?;
                 if result.is_none() {
                     cache_misses += 1;
-                    let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+                    let none_edges = create_none_call_hierarchy_edges(symbol_uid);
                     database.store_edges(&none_edges).await?;
                 } else {
                     cache_hits += 1;
@@ -744,7 +744,7 @@ async fn benchmark_mixed_workload() -> Result<()> {
                     .get_references_for_symbol(workspace_id, symbol_uid, true)
                     .await?;
                 cache_misses += 1; // First time always miss
-                let none_edges = create_none_reference_edges(symbol_uid, 1);
+                let none_edges = create_none_reference_edges(symbol_uid);
                 database.store_edges(&none_edges).await?;
             }
             2 => {
@@ -753,7 +753,7 @@ async fn benchmark_mixed_workload() -> Result<()> {
                     .get_definitions_for_symbol(workspace_id, symbol_uid)
                     .await?;
                 cache_misses += 1;
-                let none_edges = create_none_definition_edges(symbol_uid, 1);
+                let none_edges = create_none_definition_edges(symbol_uid);
                 database.store_edges(&none_edges).await?;
             }
             3 => {
@@ -762,7 +762,7 @@ async fn benchmark_mixed_workload() -> Result<()> {
                     .get_implementations_for_symbol(workspace_id, symbol_uid)
                     .await?;
                 cache_misses += 1;
-                let none_edges = create_none_implementation_edges(symbol_uid, 1);
+                let none_edges = create_none_implementation_edges(symbol_uid);
                 database.store_edges(&none_edges).await?;
             }
             _ => unreachable!(),

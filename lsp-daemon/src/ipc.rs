@@ -78,49 +78,62 @@ mod unix_impl {
         async fn bind_internal(path: &str) -> Result<Self> {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             if let Some(name) = socket_path::unix_abstract_name(path) {
-                let (addr, len) = create_abstract_addr(&name)
-                    .map_err(|e| anyhow!("Failed to construct abstract socket address: {}", e))?;
-                let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
-                    .map_err(|e| anyhow!("Failed to create abstract socket: {}", e))?;
-                socket
-                    .set_cloexec(true)
-                    .map_err(|e| anyhow!("Failed to set CLOEXEC on abstract socket: {}", e))?;
-                let bind_result = unsafe {
-                    libc::bind(
-                        socket.as_raw_fd(),
-                        &addr as *const _ as *const libc::sockaddr,
-                        len,
-                    )
-                };
-                if bind_result != 0 {
-                    return Err(anyhow!(
-                        "Failed to bind abstract socket: {}",
-                        io::Error::last_os_error()
-                    ));
+                // Try abstract bind; on any failure, log and fall back to filesystem socket
+                match (|| {
+                    let (addr, len) = create_abstract_addr(&name).map_err(|e| {
+                        anyhow!("Failed to construct abstract socket address: {}", e)
+                    })?;
+                    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
+                        .map_err(|e| anyhow!("Failed to create abstract socket: {}", e))?;
+                    socket
+                        .set_cloexec(true)
+                        .map_err(|e| anyhow!("Failed to set CLOEXEC on abstract socket: {}", e))?;
+                    let bind_result = unsafe {
+                        libc::bind(
+                            socket.as_raw_fd(),
+                            &addr as *const _ as *const libc::sockaddr,
+                            len,
+                        )
+                    };
+                    if bind_result != 0 {
+                        return Err(anyhow!(
+                            "Failed to bind abstract socket: {}",
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    if unsafe { libc::listen(socket.as_raw_fd(), 256) } != 0 {
+                        return Err(anyhow!(
+                            "Failed to listen on abstract socket: {}",
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    if unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) }
+                        != 0
+                    {
+                        return Err(anyhow!(
+                            "Failed to set nonblocking on abstract socket: {}",
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    let fd = socket.into_raw_fd();
+                    let std_listener = unsafe { StdUnixListener::from_raw_fd(fd) };
+                    let listener = TokioUnixListener::from_std(std_listener).map_err(|e| {
+                        anyhow!("Failed to integrate abstract listener with Tokio: {}", e)
+                    })?;
+                    Ok(Self {
+                        listener,
+                        path: path.to_string(),
+                    })
+                })() {
+                    Ok(l) => return Ok(l),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Abstract socket bind failed ({}); falling back to filesystem socket {}",
+                            e, path
+                        );
+                        // fall through to filesystem bind below
+                    }
                 }
-                if unsafe { libc::listen(socket.as_raw_fd(), 256) } != 0 {
-                    return Err(anyhow!(
-                        "Failed to listen on abstract socket: {}",
-                        io::Error::last_os_error()
-                    ));
-                }
-                if unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } != 0
-                {
-                    return Err(anyhow!(
-                        "Failed to set nonblocking on abstract socket: {}",
-                        io::Error::last_os_error()
-                    ));
-                }
-                let fd = socket.into_raw_fd();
-                let std_listener = unsafe { StdUnixListener::from_raw_fd(fd) };
-                let listener = TokioUnixListener::from_std(std_listener).map_err(|e| {
-                    anyhow!("Failed to integrate abstract listener with Tokio: {}", e)
-                })?;
-
-                return Ok(Self {
-                    listener,
-                    path: path.to_string(),
-                });
             }
 
             // Check if socket file exists and if a daemon is listening
@@ -207,37 +220,50 @@ mod unix_impl {
         pub async fn connect(path: &str) -> Result<Self> {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             if let Some(name) = socket_path::unix_abstract_name(path) {
-                let (addr, len) = create_abstract_addr(&name)
-                    .map_err(|e| anyhow!("Failed to construct abstract socket address: {}", e))?;
-                let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
-                    .map_err(|e| anyhow!("Failed to create abstract stream socket: {}", e))?;
-                socket.set_cloexec(true).map_err(|e| {
-                    anyhow!("Failed to set CLOEXEC on abstract stream socket: {}", e)
-                })?;
-                let connect_result = unsafe {
-                    libc::connect(
-                        socket.as_raw_fd(),
-                        &addr as *const _ as *const libc::sockaddr,
-                        len,
-                    )
-                };
-                if connect_result != 0 {
-                    let err = io::Error::last_os_error();
-                    return Err(anyhow!("Failed to connect to abstract socket: {}", err));
+                // Try abstract connect; on failure, fall back to filesystem connect
+                match (|| {
+                    let (addr, len) = create_abstract_addr(&name).map_err(|e| {
+                        anyhow!("Failed to construct abstract socket address: {}", e)
+                    })?;
+                    let socket = Socket::new(Domain::UNIX, Type::STREAM, None)
+                        .map_err(|e| anyhow!("Failed to create abstract stream socket: {}", e))?;
+                    socket.set_cloexec(true).map_err(|e| {
+                        anyhow!("Failed to set CLOEXEC on abstract stream socket: {}", e)
+                    })?;
+                    let connect_result = unsafe {
+                        libc::connect(
+                            socket.as_raw_fd(),
+                            &addr as *const _ as *const libc::sockaddr,
+                            len,
+                        )
+                    };
+                    if connect_result != 0 {
+                        let err = io::Error::last_os_error();
+                        return Err(anyhow!("Failed to connect to abstract socket: {}", err));
+                    }
+                    if unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) }
+                        != 0
+                    {
+                        return Err(anyhow!(
+                            "Failed to set nonblocking on abstract stream: {}",
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    let fd = socket.into_raw_fd();
+                    let std_stream = unsafe { StdUnixStream::from_raw_fd(fd) };
+                    let stream = TokioUnixStream::from_std(std_stream).map_err(|e| {
+                        anyhow!("Failed to integrate abstract stream with Tokio: {}", e)
+                    })?;
+                    Ok(Self { stream })
+                })() {
+                    Ok(s) => return Ok(s),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Abstract socket connect failed ({}); falling back to filesystem socket {}",
+                            e, path
+                        );
+                    }
                 }
-                if unsafe { libc::fcntl(socket.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) } != 0
-                {
-                    return Err(anyhow!(
-                        "Failed to set nonblocking on abstract stream: {}",
-                        io::Error::last_os_error()
-                    ));
-                }
-                let fd = socket.into_raw_fd();
-                let std_stream = unsafe { StdUnixStream::from_raw_fd(fd) };
-                let stream = TokioUnixStream::from_std(std_stream).map_err(|e| {
-                    anyhow!("Failed to integrate abstract stream with Tokio: {}", e)
-                })?;
-                return Ok(Self { stream });
             }
 
             let stream = TokioUnixStream::connect(path).await?;
