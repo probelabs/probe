@@ -483,8 +483,9 @@ export function extractMermaidFromMarkdown(response) {
 
   while ((match = mermaidBlockRegex.exec(response)) !== null) {
     const attributes = match[1] ? match[1].trim() : '';
-    const fullContent = match[2].trim();
-    
+    // Don't trim the content - maid 0.0.4 requires trailing newlines for sequence diagrams
+    const fullContent = match[2];
+
     // If attributes exist, they were captured separately, so fullContent is just the diagram
     // If no attributes, the first line of fullContent might be diagram type or actual content
     diagrams.push({
