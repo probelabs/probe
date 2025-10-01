@@ -145,10 +145,10 @@ impl ScaleTestHarness {
             let mut batch_edges = Vec::new();
 
             for symbol_uid in batch {
-                batch_edges.extend(create_none_call_hierarchy_edges(symbol_uid, 1));
-                batch_edges.extend(create_none_reference_edges(symbol_uid, 1));
-                batch_edges.extend(create_none_definition_edges(symbol_uid, 1));
-                batch_edges.extend(create_none_implementation_edges(symbol_uid, 1));
+                batch_edges.extend(create_none_call_hierarchy_edges(symbol_uid));
+                batch_edges.extend(create_none_reference_edges(symbol_uid));
+                batch_edges.extend(create_none_definition_edges(symbol_uid));
+                batch_edges.extend(create_none_implementation_edges(symbol_uid));
             }
 
             let store_start = Instant::now();
@@ -283,7 +283,7 @@ impl ScaleTestHarness {
 
             // Store this batch
             for symbol_uid in symbols_to_store {
-                let edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+                let edges = create_none_call_hierarchy_edges(symbol_uid);
                 self.database.store_edges(&edges).await?;
             }
 
@@ -426,7 +426,7 @@ async fn test_nested_workspace_scale() -> Result<()> {
 
         let workspace_start = Instant::now();
         for symbol_uid in &symbols {
-            let edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+            let edges = create_none_call_hierarchy_edges(symbol_uid);
             harness.database.store_edges(&edges).await?;
         }
         let workspace_duration = workspace_start.elapsed();
@@ -478,7 +478,7 @@ async fn test_nested_workspace_scale() -> Result<()> {
     // Test cross-workspace query isolation
     println!("🔒 Testing workspace isolation...");
     let test_symbol = "isolation_test_symbol";
-    let edges = create_none_call_hierarchy_edges(test_symbol, 1);
+    let edges = create_none_call_hierarchy_edges(test_symbol);
     harness.database.store_edges(&edges).await?;
 
     // Symbol should exist in current workspace but not others
@@ -537,7 +537,7 @@ async fn test_long_running_performance() -> Result<()> {
         let store_start = Instant::now();
         for chunk in symbols.chunks(500) {
             for symbol_uid in chunk {
-                let edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+                let edges = create_none_call_hierarchy_edges(symbol_uid);
                 harness.database.store_edges(&edges).await?;
             }
 

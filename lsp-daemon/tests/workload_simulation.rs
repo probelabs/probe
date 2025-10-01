@@ -223,7 +223,7 @@ impl WorkloadSimulator {
 
             if result.is_none() {
                 metrics.record_cache_miss(query_duration);
-                let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+                let none_edges = create_none_call_hierarchy_edges(symbol_uid);
                 self.database.store_edges(&none_edges).await?;
             }
         }

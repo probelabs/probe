@@ -3221,8 +3221,41 @@ impl IndexingManager {
                                     sqlite_backend,
                                 ) = backend;
 
+                                // Low-watermark and writer-busy gating to reduce lock contention
+                                let low_watermark: usize =
+                                    std::env::var("PROBE_LSP_PHASE2_LOW_WATERMARK")
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(500);
+                                let queue_size_now = lsp_enrichment_queue.size().await;
+                                // If the DB writer is currently busy, we still allow a trickle of work
+                                // to bootstrap Phase 2. Only skip entirely when the in-memory queue already
+                                // has adequate headroom (reduces lock contention during heavy Phase 1 writes).
+                                let writer_busy_now = cache_adapter.writer_busy();
+                                if writer_busy_now && queue_size_now >= low_watermark {
+                                    info!("Phase 2 monitor: writer busy and queue_size {} >= low_watermark {}, skipping tick", queue_size_now, low_watermark);
+                                    continue;
+                                }
+                                if queue_size_now >= low_watermark {
+                                    info!("Phase 2 monitor: queue size {} >= low_watermark {}, skipping tick", queue_size_now, low_watermark);
+                                    continue;
+                                }
+                                // Bound how much we fetch per tick based on remaining headroom
+                                let max_per_tick: usize =
+                                    std::env::var("PROBE_LSP_PHASE2_MAX_PER_TICK")
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(batch_size);
+                                let headroom = low_watermark.saturating_sub(queue_size_now).max(1);
+                                // When writer is busy, throttle fetch limit to a very small trickle to avoid contention
+                                let fetch_limit = if writer_busy_now {
+                                    headroom.min(25).min(max_per_tick)
+                                } else {
+                                    headroom.min(max_per_tick)
+                                };
+
                                 match sqlite_backend
-                                    .find_symbols_pending_enrichment_internal(batch_size)
+                                    .find_symbols_pending_enrichment_internal(fetch_limit)
                                     .await
                                 {
                                     Ok(pending_plans) => {
@@ -3276,6 +3309,7 @@ impl IndexingManager {
                                             Option<LanguageCapabilities>,
                                         > = HashMap::new();
                                         let mut queued_symbols = 0usize;
+                                        let mut merged_symbols = 0usize;
                                         let mut queued_reference_ops = 0usize;
                                         let mut queued_implementation_ops = 0usize;
                                         let mut queued_call_ops = 0usize;
@@ -3393,24 +3427,40 @@ impl IndexingManager {
                                                 )
                                                 .with_operations(operations);
 
-                                            if let Err(e) =
-                                                lsp_enrichment_queue.add_symbol(queue_item).await
-                                            {
+                                            match lsp_enrichment_queue.add_symbol_with_outcome(queue_item).await {
+                                                Ok(crate::indexing::lsp_enrichment_queue::EnqueueOutcome::NewItem) => {
+                                                    queued_symbols += 1;
+                                                }
+                                                Ok(crate::indexing::lsp_enrichment_queue::EnqueueOutcome::MergedOps) => {
+                                                    merged_symbols += 1;
+                                                }
+                                                Ok(crate::indexing::lsp_enrichment_queue::EnqueueOutcome::NoChange) => {
+                                                    // nothing to do
+                                                }
+                                                Err(e) => {
                                                 warn!(
                                                     "Phase 2 monitor: failed to enqueue symbol {}: {}",
                                                     plan.symbol.symbol_uid,
                                                     e
                                                 );
                                                 continue;
+                                                }
                                             }
-
-                                            queued_symbols += 1;
                                         }
 
-                                        if queued_symbols > 0 {
+                                        if queued_symbols > 0
+                                            || merged_symbols > 0
+                                            || skipped_count > 0
+                                        {
+                                            let queue_after = lsp_enrichment_queue.size().await;
+                                            let busy = cache_adapter.writer_busy();
                                             info!(
-                                                "Phase 2 monitor: queued {} symbols (refs:{} impls:{} calls:{})",
+                                                "Phase 2 monitor: tick writer_busy={}, queue_size={}, queued_new={}, merged={}, skipped_cooldown={}, ops refs:{} impls:{} calls:{}",
+                                                busy,
+                                                queue_after,
                                                 queued_symbols,
+                                                merged_symbols,
+                                                skipped_count,
                                                 queued_reference_ops,
                                                 queued_implementation_ops,
                                                 queued_call_ops
@@ -3555,13 +3605,24 @@ impl IndexingManager {
         {
             Ok(cache_adapter) => match cache_adapter.backend() {
                 crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
-                    match sqlite_backend.get_pending_enrichment_counts().await {
-                        Ok(counts) => Some(counts),
-                        Err(e) => {
+                    // If writer is busy, skip heavy counts to keep index-status responsive
+                    if sqlite_backend.is_writer_busy() {
+                        debug!("index-status: skipping pending-enrichment DB counts (writer busy)");
+                        return None;
+                    }
+                    // Soft timeout to keep status snappy under load
+                    let fut = sqlite_backend.get_pending_enrichment_counts();
+                    match tokio::time::timeout(std::time::Duration::from_millis(250), fut).await {
+                        Ok(Ok(counts)) => Some(counts),
+                        Ok(Err(e)) => {
                             debug!(
                                 "Failed to load pending enrichment counts from database: {}",
                                 e
                             );
+                            None
+                        }
+                        Err(_) => {
+                            debug!("index-status: pending-enrichment DB counts timed out (250ms)");
                             None
                         }
                     }
@@ -3629,6 +3690,28 @@ impl IndexingManager {
         let queue_info =
             Self::queue_info_from_counts(pending_counts.as_ref(), &queue_stats_fallback);
 
+        // Get writer/reader status snapshot from current workspace backend (best effort)
+        let (writer_snapshot, reader_snapshot) = {
+            let workspace_root = {
+                let wr = self.workspace_root.read().await;
+                wr.clone()
+                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+            };
+            match self
+                .workspace_cache_router
+                .cache_for_workspace(&workspace_root)
+                .await
+            {
+                Ok(cache) => match cache.backend() {
+                    crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => (
+                        Some(sqlite_backend.writer_status_snapshot().await),
+                        Some(sqlite_backend.reader_status_snapshot().await),
+                    ),
+                },
+                Err(_) => (None, None),
+            }
+        };
+
         if let Some(stats) = worker_stats {
             Some(crate::protocol::LspEnrichmentInfo {
                 is_enabled: true,
@@ -3637,6 +3720,15 @@ impl IndexingManager {
                 symbols_enriched: stats.symbols_enriched,
                 symbols_failed: stats.symbols_failed,
                 queue_stats: queue_info,
+                in_memory_queue_items: queue_stats_fallback.total_items,
+                in_memory_queue_operations: queue_stats_fallback.total_operations,
+                in_memory_high_priority_items: queue_stats_fallback.high_priority_items,
+                in_memory_medium_priority_items: queue_stats_fallback.medium_priority_items,
+                in_memory_low_priority_items: queue_stats_fallback.low_priority_items,
+                in_memory_references_operations: queue_stats_fallback.references_operations,
+                in_memory_implementations_operations: queue_stats_fallback
+                    .implementations_operations,
+                in_memory_call_hierarchy_operations: queue_stats_fallback.call_hierarchy_operations,
                 edges_created: stats.edges_persisted,
                 reference_edges_created: stats.reference_edges_persisted,
                 implementation_edges_created: stats.implementation_edges_persisted,
@@ -3652,6 +3744,54 @@ impl IndexingManager {
                 } else {
                     0.0
                 },
+                impls_skipped_core_total: stats.impls_skipped_core_total,
+                impls_skipped_core_rust: stats.impls_skipped_core_rust,
+                impls_skipped_core_js_ts: stats.impls_skipped_core_js_ts,
+                writer_busy: writer_snapshot.as_ref().map(|s| s.busy).unwrap_or(false),
+                writer_active_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.active_ms)
+                    .unwrap_or(0) as u64,
+                writer_last_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.recent.first().map(|r| r.duration_ms as u64))
+                    .unwrap_or(0),
+                writer_last_symbols: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.recent.first().map(|r| r.symbols as u64))
+                    .unwrap_or(0),
+                writer_last_edges: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.recent.first().map(|r| r.edges as u64))
+                    .unwrap_or(0),
+                writer_gate_owner_op: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.gate_owner_op.clone())
+                    .unwrap_or_default(),
+                writer_gate_owner_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.gate_owner_ms)
+                    .unwrap_or(0) as u64,
+                writer_section_label: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.section_label.clone())
+                    .unwrap_or_default(),
+                writer_section_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.section_ms)
+                    .unwrap_or(0) as u64,
+                reader_active: reader_snapshot
+                    .as_ref()
+                    .map(|r| r.active as u64)
+                    .unwrap_or(0),
+                reader_last_label: reader_snapshot
+                    .as_ref()
+                    .and_then(|r| r.last_label.clone())
+                    .unwrap_or_default(),
+                reader_last_ms: reader_snapshot
+                    .as_ref()
+                    .and_then(|r| r.last_ms)
+                    .unwrap_or(0) as u64,
             })
         } else {
             // Return basic info even without worker stats
@@ -3662,6 +3802,15 @@ impl IndexingManager {
                 symbols_enriched: 0,
                 symbols_failed: 0,
                 queue_stats: queue_info,
+                in_memory_queue_items: queue_stats_fallback.total_items,
+                in_memory_queue_operations: queue_stats_fallback.total_operations,
+                in_memory_high_priority_items: queue_stats_fallback.high_priority_items,
+                in_memory_medium_priority_items: queue_stats_fallback.medium_priority_items,
+                in_memory_low_priority_items: queue_stats_fallback.low_priority_items,
+                in_memory_references_operations: queue_stats_fallback.references_operations,
+                in_memory_implementations_operations: queue_stats_fallback
+                    .implementations_operations,
+                in_memory_call_hierarchy_operations: queue_stats_fallback.call_hierarchy_operations,
                 edges_created: 0,
                 reference_edges_created: 0,
                 implementation_edges_created: 0,
@@ -3673,6 +3822,54 @@ impl IndexingManager {
                 implementations_attempted: 0,
                 call_hierarchy_attempted: 0,
                 success_rate: 0.0,
+                impls_skipped_core_total: 0,
+                impls_skipped_core_rust: 0,
+                impls_skipped_core_js_ts: 0,
+                writer_busy: writer_snapshot.as_ref().map(|s| s.busy).unwrap_or(false),
+                writer_active_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.active_ms)
+                    .unwrap_or(0) as u64,
+                writer_last_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.recent.first().map(|r| r.duration_ms as u64))
+                    .unwrap_or(0),
+                writer_last_symbols: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.recent.first().map(|r| r.symbols as u64))
+                    .unwrap_or(0),
+                writer_last_edges: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.recent.first().map(|r| r.edges as u64))
+                    .unwrap_or(0),
+                writer_gate_owner_op: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.gate_owner_op.clone())
+                    .unwrap_or_default(),
+                writer_gate_owner_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.gate_owner_ms)
+                    .unwrap_or(0) as u64,
+                writer_section_label: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.section_label.clone())
+                    .unwrap_or_default(),
+                writer_section_ms: writer_snapshot
+                    .as_ref()
+                    .and_then(|s| s.section_ms)
+                    .unwrap_or(0) as u64,
+                reader_active: reader_snapshot
+                    .as_ref()
+                    .map(|r| r.active as u64)
+                    .unwrap_or(0),
+                reader_last_label: reader_snapshot
+                    .as_ref()
+                    .and_then(|r| r.last_label.clone())
+                    .unwrap_or_default(),
+                reader_last_ms: reader_snapshot
+                    .as_ref()
+                    .and_then(|r| r.last_ms)
+                    .unwrap_or(0) as u64,
             })
         }
     }

@@ -97,10 +97,11 @@ pub const MAX_USERS: usize = 1000;
     // Step 5: Analyze the code
     let uid_generator = Arc::new(SymbolUIDGenerator::new());
     let analysis_context = AnalysisContext::new(
-        1, // workspace_id
-        1, // file_version_id
-        1, // analysis_run_id
-        "rust".to_string(),
+        1,                  // workspace_id
+        1,                  // analysis_run_id
+        "rust".to_string(), // language
+        temp_dir.path().to_path_buf(),
+        test_file.clone(),
         uid_generator.clone(),
     );
 
@@ -150,7 +151,9 @@ pub const MAX_USERS: usize = 1000;
         println!("✅ Step 6: Symbol storage successful");
 
         // Test symbol retrieval
-        let retrieved_symbols = database.get_symbols_by_file(1, "rust").await?;
+        let retrieved_symbols = database
+            .get_symbols_by_file(test_file.to_string_lossy().as_ref(), "rust")
+            .await?;
         println!(
             "  - Retrieved {} symbols from database",
             retrieved_symbols.len()
@@ -166,9 +169,8 @@ pub const MAX_USERS: usize = 1000;
     let start_time = std::time::Instant::now();
 
     // Run analysis multiple times to test performance
-    for i in 0..5 {
-        let mut context = analysis_context.clone();
-        context.file_version_id = i + 2; // Use different version IDs
+    for _i in 0..5 {
+        let context = analysis_context.clone();
         let _result = analyzer_manager
             .analyze_file(test_rust_code, &test_file, "rust", &context)
             .await?;
@@ -273,10 +275,11 @@ export { UserService, userService };
 
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
         let analysis_context = AnalysisContext::new(
-            1, // workspace_id
-            1, // file_version_id
-            1, // analysis_run_id
+            1,
+            1,
             language.to_string(),
+            temp_dir.path().to_path_buf(),
+            test_file.clone(),
             uid_generator.clone(),
         );
 

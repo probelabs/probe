@@ -30,8 +30,7 @@ use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::symbol::{
     SymbolContext, SymbolInfo, SymbolKind, SymbolLocation, SymbolUIDGenerator,
 };
-use lsp_daemon::universal_cache::CacheLayer;
-use lsp_daemon::workspace_cache_router::{WorkspaceCacheRouter, WorkspaceCacheRouterConfig};
+// universal_cache and workspace_cache_router removed
 use lsp_daemon::workspace_resolver::WorkspaceResolver;
 
 /// Symbol resolution test configuration
@@ -285,13 +284,7 @@ impl LspSymbolResolutionTestSuite {
     pub async fn new(config: SymbolResolutionTestConfig) -> Result<Self> {
         let test_base_dir = TempDir::new()?;
 
-        // Create cache infrastructure
-        let workspace_config = WorkspaceCacheRouterConfig {
-            base_cache_dir: test_base_dir.path().join("caches"),
-            max_open_caches: 5,
-            max_parent_lookup_depth: 3,
-            ..Default::default()
-        };
+        // No cache infrastructure
 
         // Create LSP infrastructure
         let registry = Arc::new(LspRegistry::new()?);
@@ -301,15 +294,7 @@ impl LspSymbolResolutionTestSuite {
             child_processes,
         ));
 
-        let workspace_router = Arc::new(WorkspaceCacheRouter::new(
-            workspace_config,
-            server_manager.clone(),
-        ));
-
-        let universal_cache =
-            Arc::new(lsp_daemon::universal_cache::UniversalCache::new(workspace_router).await?);
-
-        let cache_layer = Arc::new(CacheLayer::new(universal_cache, None, None));
+        // Removed cache router/universal cache setup
 
         let language_detector = Arc::new(LanguageDetector::new());
         let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(None)));

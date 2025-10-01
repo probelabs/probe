@@ -25,8 +25,7 @@ use lsp_daemon::relationship::lsp_enhancer::{
 };
 use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::symbol::SymbolUIDGenerator;
-use lsp_daemon::universal_cache::CacheLayer;
-use lsp_daemon::workspace_cache_router::{WorkspaceCacheRouter, WorkspaceCacheRouterConfig};
+// universal_cache/workspace_cache_router deprecated in code; tests use direct LSP paths
 use lsp_daemon::workspace_resolver::WorkspaceResolver;
 
 /// Error test scenario configuration
@@ -105,13 +104,7 @@ impl LspErrorHandlingTestSuite {
     pub async fn new(config: ErrorTestConfig) -> Result<Self> {
         let test_workspace = TempDir::new()?;
 
-        // Create cache infrastructure
-        let workspace_config = WorkspaceCacheRouterConfig {
-            base_cache_dir: test_workspace.path().join("caches"),
-            max_open_caches: 3,
-            max_parent_lookup_depth: 2,
-            ..Default::default()
-        };
+        // No cache infrastructure needed
 
         // Create LSP infrastructure
         let registry = Arc::new(LspRegistry::new()?);
@@ -121,15 +114,7 @@ impl LspErrorHandlingTestSuite {
             child_processes,
         ));
 
-        let workspace_router = Arc::new(WorkspaceCacheRouter::new(
-            workspace_config,
-            server_manager.clone(),
-        ));
-
-        let universal_cache =
-            Arc::new(lsp_daemon::universal_cache::UniversalCache::new(workspace_router).await?);
-
-        let cache_layer = Arc::new(CacheLayer::new(universal_cache, None, None));
+        // Removed cache router/universal cache setup
 
         let language_detector = Arc::new(LanguageDetector::new());
         let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(None)));

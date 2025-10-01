@@ -6,31 +6,197 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
+use dashmap::DashMap;
+use once_cell::sync::Lazy;
+use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
+use tokio::sync::Semaphore; // legacy; kept for compatibility in a few paths
+use tokio::sync::{mpsc, oneshot};
 use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock as AsyncRwLock};
 use tracing::{debug, error, info, warn};
 
 macro_rules! debug_execute {
     ($conn:expr, $sql:expr, $params:expr) => {{
-        debug!("TURSO_SQL_DEBUG: Executing SQL: {}", $sql);
-        $conn.execute($sql, $params).await
+        debug!("🔧 SQL_DEBUG: About to EXECUTE: {}", $sql);
+        let __start = Instant::now();
+        let __res = $conn.execute($sql, $params).await;
+        let __elapsed = __start.elapsed();
+        match &__res {
+            Ok(_) => {
+                if __elapsed.as_millis() < 1000 {
+                    debug!("✅ SQL_DEBUG: Execute OK in {} ms", __elapsed.as_millis());
+                } else {
+                    debug!(
+                        "✅ SQL_DEBUG: Execute OK in {:.3} s",
+                        __elapsed.as_secs_f64()
+                    );
+                }
+            }
+            Err(e) => {
+                if __elapsed.as_millis() < 1000 {
+                    warn!(
+                        "❌ SQL_DEBUG: Execute FAILED in {} ms: {}",
+                        __elapsed.as_millis(),
+                        e
+                    );
+                } else {
+                    warn!(
+                        "❌ SQL_DEBUG: Execute FAILED in {:.3} s: {}",
+                        __elapsed.as_secs_f64(),
+                        e
+                    );
+                }
+            }
+        }
+        __res
     }};
 }
 use turso::{Builder, Connection, Database};
 
 use crate::database::{
-    migrations::{all_migrations, MigrationRunner},
     AnalysisProgress, CallDirection, DatabaseBackend, DatabaseConfig, DatabaseError, DatabaseStats,
-    DatabaseTree, Edge, EdgeInterpretation, EdgeRelation, GraphPath, PendingEnrichmentCounts,
-    SymbolEnrichmentPlan, SymbolState, Workspace,
+    DatabaseTree, DbCheckpointMode, Edge, EdgeInterpretation, EdgeRelation, GraphPath,
+    PendingEnrichmentCounts, SymbolEnrichmentPlan, SymbolState, Workspace,
 };
 use crate::protocol::{CallHierarchyResult, Location};
 use crate::symbol::{is_absolute_like, normalize_uid_with_hint};
 use crate::workspace_utils;
+
+// Global per-database writer gates to serialize writes and DDL across all backend instances
+static WRITER_GATES: Lazy<DashMap<String, Arc<tokio::sync::Mutex<()>>>> = Lazy::new(DashMap::new);
+/// Track which operation currently owns the per-DB writer gate
+static WRITER_GATE_OWNERS: Lazy<DashMap<String, Arc<Mutex<Option<GateOwnerInfo>>>>> =
+    Lazy::new(DashMap::new);
+/// Track finer-grained section inside the owning operation (e.g., store_edges.insert)
+static WRITER_GATE_SECTIONS: Lazy<DashMap<String, Arc<Mutex<Option<SectionInfo>>>>> =
+    Lazy::new(DashMap::new);
+// Per-database reader gates: readers take shared (read) locks; quiesce takes exclusive (write)
+static READER_GATES: Lazy<DashMap<String, Arc<AsyncRwLock<()>>>> = Lazy::new(DashMap::new);
+static READER_SEMAPHORES: Lazy<DashMap<String, Arc<Semaphore>>> = Lazy::new(DashMap::new);
+
+#[derive(Clone, Debug)]
+struct GateOwnerInfo {
+    op: String,
+    since: Instant,
+}
+
+#[derive(Clone, Debug)]
+struct SectionInfo {
+    label: String,
+    since: Instant,
+}
+
+fn get_writer_gate(path: &str) -> Arc<tokio::sync::Mutex<()>> {
+    if let Some(existing) = WRITER_GATES.get(path) {
+        existing.clone()
+    } else {
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        WRITER_GATES.insert(path.to_string(), gate.clone());
+        gate
+    }
+}
+
+fn get_gate_owner_handle(path: &str) -> Arc<Mutex<Option<GateOwnerInfo>>> {
+    if let Some(existing) = WRITER_GATE_OWNERS.get(path) {
+        existing.clone()
+    } else {
+        let slot = Arc::new(Mutex::new(None));
+        WRITER_GATE_OWNERS.insert(path.to_string(), slot.clone());
+        slot
+    }
+}
+
+fn get_section_handle(path: &str) -> Arc<Mutex<Option<SectionInfo>>> {
+    if let Some(existing) = WRITER_GATE_SECTIONS.get(path) {
+        existing.clone()
+    } else {
+        let slot = Arc::new(Mutex::new(None));
+        WRITER_GATE_SECTIONS.insert(path.to_string(), slot.clone());
+        slot
+    }
+}
+
+fn get_reader_semaphore(_path: &str) -> Arc<Semaphore> {
+    // Legacy shim; no longer used for quiesce. Keep for compatibility where referenced.
+    // Return a small-capacity semaphore that's not used for global coordination.
+    Arc::new(Semaphore::new(1024))
+}
+
+fn get_reader_rw_gate(path: &str) -> Arc<AsyncRwLock<()>> {
+    if let Some(existing) = READER_GATES.get(path) {
+        existing.clone()
+    } else {
+        let gate = Arc::new(AsyncRwLock::new(()));
+        READER_GATES.insert(path.to_string(), gate.clone());
+        gate
+    }
+}
 use pathdiff::diff_paths;
+
+/// Guard that ensures quiesce state and debug markers are always cleared
+/// even on early returns (timeout/cancel/errors) during WAL sync.
+struct QuiesceGuard {
+    /// Mutex-protected pool to clear `quiesced` flag
+    pool: Option<Arc<Mutex<ConnectionPool>>>,
+    /// Whether quiesce was enabled
+    quiesced: bool,
+    /// Owned write guard to block readers while quiesced
+    _write_guard: Option<OwnedRwLockWriteGuard<()>>,
+    /// Backend flag to reflect write-held state
+    write_flag: Option<Arc<AtomicBool>>,
+    /// Active section handle to clear on drop
+    section: Option<Arc<Mutex<Option<SectionInfo>>>>,
+    /// Writer-gate owner handle to reset on drop
+    owner: Option<Arc<Mutex<Option<GateOwnerInfo>>>>,
+}
+
+impl Drop for QuiesceGuard {
+    fn drop(&mut self) {
+        // Best-effort: never panic in Drop
+        if self.quiesced {
+            if let Some(pool) = self.pool.take() {
+                // Release quiesce flag
+                if let Ok(p) = pool.try_lock() {
+                    p.quiesced.store(false, Ordering::Relaxed);
+                }
+            }
+        }
+        // Release section marker
+        if let Some(section) = self.section.take() {
+            if let Ok(mut s) = section.try_lock() {
+                *s = None;
+            }
+        }
+        // Lower write-held flag
+        if let Some(flag) = self.write_flag.take() {
+            flag.store(false, Ordering::Relaxed);
+        }
+        // Clear writer-gate owner info for accurate status
+        if let Some(owner) = self.owner.take() {
+            if let Ok(mut o) = owner.try_lock() {
+                *o = None;
+            }
+        }
+        // _write_guard drops here, releasing reader quiesce gate
+    }
+}
+
+/// WAL checkpoint mode for forced syncs
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckpointMode {
+    /// Existing behavior with pragmatic fallbacks
+    Auto,
+    Passive,
+    Full,
+    Restart,
+    Truncate,
+}
 
 /// Execute a turso query and map errors consistently (async, no blocking)
 async fn safe_query<P>(
@@ -42,21 +208,95 @@ async fn safe_query<P>(
 where
     P: turso::params::IntoParams + Send + 'static + std::panic::UnwindSafe,
 {
-    debug!(
-        "🔍 SQL_DEBUG: About to execute QUERY: '{}' (context: {})",
-        sql, context
-    );
-
-    match conn.query(sql, params).await {
-        Ok(rows) => {
-            debug!("✅ SQL_DEBUG: Query completed successfully: '{}'", sql);
-            Ok(rows)
+    {
+        debug!(
+            "🔍 SQL_DEBUG: About to execute QUERY (context={}): {}",
+            context, sql
+        );
+        let start = Instant::now();
+        let res = conn.query(sql, params).await;
+        let elapsed = start.elapsed();
+        match res {
+            Ok(rows) => {
+                if elapsed.as_millis() < 1000 {
+                    debug!(
+                        "✅ SQL_DEBUG: Query OK in {} ms (context={})",
+                        elapsed.as_millis(),
+                        context
+                    );
+                } else {
+                    debug!(
+                        "✅ SQL_DEBUG: Query OK in {:.3} s (context={})",
+                        elapsed.as_secs_f64(),
+                        context
+                    );
+                }
+                Ok(rows)
+            }
+            Err(e) => {
+                if elapsed.as_millis() < 1000 {
+                    warn!(
+                        "❌ SQL_DEBUG: Query FAILED in {} ms (context={}): {}",
+                        elapsed.as_millis(),
+                        context,
+                        e
+                    );
+                } else {
+                    warn!(
+                        "❌ SQL_DEBUG: Query FAILED in {:.3} s (context={}): {}",
+                        elapsed.as_secs_f64(),
+                        context,
+                        e
+                    );
+                }
+                Err(DatabaseError::OperationFailed {
+                    message: format!("{}: {}", context, e),
+                })
+            }
         }
-        Err(e) => {
-            warn!("❌ SQL_DEBUG: Query failed: '{}' - Error: {}", sql, e);
-            Err(DatabaseError::OperationFailed {
-                message: format!("{}: {}", context, e),
-            })
+    }
+}
+
+/// Database lock retry function for SELECTs with exponential backoff
+async fn safe_query_with_retry<P>(
+    conn: &Connection,
+    sql: &str,
+    params: P,
+    context: &str,
+    max_retries: u32,
+) -> Result<turso::Rows, DatabaseError>
+where
+    P: turso::params::IntoParams + Send + 'static + std::panic::UnwindSafe + Clone,
+{
+    let mut attempt = 0;
+    loop {
+        match safe_query(conn, sql, params.clone(), context).await {
+            Ok(rows) => return Ok(rows),
+            Err(DatabaseError::OperationFailed { message })
+                if message.to_ascii_lowercase().contains("database is locked")
+                    || message.to_ascii_lowercase().contains("busy") =>
+            {
+                attempt += 1;
+                if attempt > max_retries {
+                    error!(
+                        "Database lock retry (SELECT) exhausted after {} attempts for: {}",
+                        max_retries, context
+                    );
+                    return Err(DatabaseError::OperationFailed {
+                        message: format!(
+                            "Database locked after {} retry attempts: {}",
+                            max_retries, message
+                        ),
+                    });
+                }
+                let delay_ms = 25 * (1 << (attempt - 1)).min(10);
+                warn!(
+                    "Database locked on SELECT, retrying in {}ms (attempt {}/{}): {}",
+                    delay_ms, attempt, max_retries, context
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms as u64)).await;
+            }
+            Err(e) => return Err(e),
         }
     }
 }
@@ -71,22 +311,51 @@ async fn safe_execute<P>(
 where
     P: turso::params::IntoParams + Send + 'static + std::panic::UnwindSafe,
 {
-    debug!(
-        "🔍 SQL_DEBUG: About to EXECUTE: '{}' (context: {})",
-        sql, context
-    );
-
-    // Execute the async call directly without blocking operations
-    match conn.execute(sql, params).await {
-        Ok(result) => {
-            debug!("✅ SQL_DEBUG: Execute completed successfully: '{}'", sql);
-            Ok(result)
-        }
-        Err(e) => {
-            warn!("❌ SQL_DEBUG: Execute failed: '{}' - Error: {}", sql, e);
-            Err(DatabaseError::OperationFailed {
-                message: format!("{}: {}", context, e),
-            })
+    {
+        debug!(
+            "🔧 SQL_DEBUG: About to EXECUTE (context={}): {}",
+            context, sql
+        );
+        let start = Instant::now();
+        let res = conn.execute(sql, params).await;
+        let elapsed = start.elapsed();
+        match res {
+            Ok(result) => {
+                if elapsed.as_millis() < 1000 {
+                    debug!(
+                        "✅ SQL_DEBUG: Execute OK in {} ms (context={})",
+                        elapsed.as_millis(),
+                        context
+                    );
+                } else {
+                    debug!(
+                        "✅ SQL_DEBUG: Execute OK in {:.3} s (context={})",
+                        elapsed.as_secs_f64(),
+                        context
+                    );
+                }
+                Ok(result)
+            }
+            Err(e) => {
+                if elapsed.as_millis() < 1000 {
+                    warn!(
+                        "❌ SQL_DEBUG: Execute FAILED in {} ms (context={}): {}",
+                        elapsed.as_millis(),
+                        context,
+                        e
+                    );
+                } else {
+                    warn!(
+                        "❌ SQL_DEBUG: Execute FAILED in {:.3} s (context={}): {}",
+                        elapsed.as_secs_f64(),
+                        context,
+                        e
+                    );
+                }
+                Err(DatabaseError::OperationFailed {
+                    message: format!("{}: {}", context, e),
+                })
+            }
         }
     }
 }
@@ -203,6 +472,10 @@ struct ConnectionPool {
     max_size: usize,
     /// Configuration
     config: SQLiteConfig,
+    /// Number of checked-out connections (not in `available`)
+    checked_out: std::sync::atomic::AtomicUsize,
+    /// Quiesce flag: when true, `get_connection` waits until quiesce is lifted
+    quiesced: std::sync::atomic::AtomicBool,
 }
 
 #[allow(dead_code)]
@@ -235,10 +508,11 @@ impl ConnectionPool {
                 ),
             })?;
 
-        Self::run_migrations(&conn, &config).await?;
+        // Migrations removed: ensure minimal schema instead
+        Self::ensure_minimal_schema(&conn, &config).await?;
 
         // Pre-populate with some connections
-        let initial_size = if config.temporary { 1 } else { 2 };
+        let initial_size = 1;
         let mut available = Vec::with_capacity(initial_size);
         for _ in 0..initial_size {
             if let Ok(conn) = database.connect() {
@@ -250,95 +524,37 @@ impl ConnectionPool {
         Ok(Self {
             database,
             available,
-            max_size: 8,
+            // Allow more concurrent readers; writes are serialized by the writer gate
+            max_size: 4,
             config,
+            checked_out: std::sync::atomic::AtomicUsize::new(0),
+            quiesced: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
-    /// Run database migrations to ensure schema is up to date
-    async fn run_migrations(conn: &Connection, config: &SQLiteConfig) -> Result<(), DatabaseError> {
-        // Since we're using the turso library for all SQLite connections,
-        // treat all connections as turso/libSQL compatible to avoid PRAGMA parsing issues
-        let is_turso = true; // Always true when using turso library
-
-        // Skip WAL pragma configuration for all connections when using turso library
-        if false {
-            // Never execute PRAGMA statements when using turso library
-            // Try to enable WAL mode, but don't fail if it's not supported
-            match conn.execute("PRAGMA journal_mode = WAL", ()).await {
-                Ok(_) => {
-                    // Verify WAL mode was actually enabled
-                    match conn.query("PRAGMA journal_mode", ()).await {
-                        Ok(mut rows) => {
-                            if let Ok(Some(row)) = rows.next().await {
-                                if let Ok(turso::Value::Text(mode)) = row.get_value(0) {
-                                    if mode.to_uppercase() == "WAL" {
-                                        info!(
-                                            "Successfully enabled WAL mode for database: {}",
-                                            config.path
-                                        );
-                                    } else {
-                                        warn!("WAL mode requested but database is using: {}", mode);
-                                    }
-                                } else {
-                                    warn!(
-                                        "Could not determine journal mode from database response"
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            warn!("WAL mode enabled but could not verify: {}", e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    warn!("WAL mode not supported or failed to enable, continuing with default journal mode: {}", e);
-                }
-            }
-        } else if is_turso {
-            debug!(
-                "Detected Turso/libSQL database in migrations, skipping WAL pragma configuration"
-            );
+    /// Ensure minimal schema without a migration framework
+    async fn ensure_minimal_schema(
+        conn: &Connection,
+        _config: &SQLiteConfig,
+    ) -> Result<(), DatabaseError> {
+        // Create core project/workspace tables (no-ops where unused)
+        Self::create_core_tables(conn).await?;
+        // Create symbol_state and edge tables used by the indexer
+        Self::create_relationship_tables(conn).await?;
+        // Create a few essential indexes for performance
+        let index_sqls = vec![
+            // symbol lookups by file and language
+            "CREATE INDEX IF NOT EXISTS idx_symbol_state_file_lang ON symbol_state(file_path, language)",
+            // edge lookups for references/impls/calls
+            "CREATE INDEX IF NOT EXISTS idx_edge_source_relation ON edge(source_symbol_uid, relation)",
+            "CREATE INDEX IF NOT EXISTS idx_edge_target_relation ON edge(target_symbol_uid, relation)",
+            "CREATE INDEX IF NOT EXISTS idx_edge_relation ON edge(relation)",
+            // composite index to accelerate dedup lookups
+            "CREATE INDEX IF NOT EXISTS idx_edge_dedup ON edge(relation, source_symbol_uid, target_symbol_uid, language, start_line, start_char)",
+        ];
+        for sql in index_sqls {
+            let _ = conn.execute(sql, ()).await; // best-effort
         }
-
-        // Note: page_size and cache_size pragmas are not supported in Turso
-        // The database handles these settings automatically
-
-        // Create and run migration system
-        let migrations = all_migrations();
-        let runner =
-            MigrationRunner::new(migrations).map_err(|e| DatabaseError::Configuration {
-                message: format!("Failed to create migration runner: {e}"),
-            })?;
-
-        // Check if migrations are needed
-        let needs_migration =
-            runner
-                .needs_migration(conn)
-                .await
-                .map_err(|e| DatabaseError::Configuration {
-                    message: format!("Failed to check if migrations are needed: {e}"),
-                })?;
-
-        if needs_migration {
-            info!("Running database migrations...");
-            let applied_count =
-                runner
-                    .migrate_to(conn, None)
-                    .await
-                    .map_err(|e| DatabaseError::Configuration {
-                        message: format!("Failed to run migrations: {e}"),
-                    })?;
-            info!("Applied {} database migrations successfully", applied_count);
-        } else {
-            info!("Database schema is up to date, no migrations needed");
-        }
-
-        // Performance indexes and views are now included in migrations
-        // Only create the per-instance indexes that need unique suffixes (for tree tables)
-        // These will be created when trees are opened
-
         Ok(())
     }
 
@@ -349,7 +565,7 @@ impl ConnectionPool {
         conn: &Connection,
         config: &SQLiteConfig,
     ) -> Result<(), DatabaseError> {
-        Self::run_migrations(conn, config).await
+        Self::ensure_minimal_schema(conn, config).await
     }
 
     /// Configure a connection with optimal settings
@@ -362,6 +578,11 @@ impl ConnectionPool {
         // Skip PRAGMA busy_timeout and read_uncommitted for Turso compatibility
         // These optimizations are not needed for cloud SQLite implementations
         debug!("Skipping SQLite PRAGMA optimizations for cloud database compatibility");
+
+        // Give read steps a bit more time under transient writer activity
+        if let Err(e) = conn.execute("PRAGMA busy_timeout=500", ()).await {
+            debug!("busy_timeout not applied (may be unsupported): {}", e);
+        }
 
         // Try cache size optimization if supported
         if config.cache_size > 0 {
@@ -889,11 +1110,12 @@ impl ConnectionPool {
     /// Initialize or validate schema version
     async fn initialize_schema_version(conn: &Connection) -> Result<(), DatabaseError> {
         // Check if schema version exists
-        let mut rows = safe_query(
+        let mut rows = safe_query_with_retry(
             conn,
             "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
             (),
             "initialize_schema_version query",
+            5,
         )
         .await?;
 
@@ -929,8 +1151,13 @@ impl ConnectionPool {
 
     /// Get a connection from the pool
     async fn get_connection(&mut self) -> Result<Connection, DatabaseError> {
-        if let Some(conn) = self.available.pop() {
-            Ok(conn)
+        // Respect quiesce: block new checkouts while set
+        while self.quiesced.load(Ordering::Relaxed) {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let conn = if let Some(conn) = self.available.pop() {
+            conn
         } else {
             // Create a new connection if we haven't hit the max
             let conn = self
@@ -940,8 +1167,10 @@ impl ConnectionPool {
                     message: format!("Failed to create new connection: {e}"),
                 })?;
             Self::configure_connection(&conn, &self.config).await?;
-            Ok(conn)
-        }
+            conn
+        };
+        self.checked_out.fetch_add(1, Ordering::Relaxed);
+        Ok(conn)
     }
 
     /// Return a connection to the pool
@@ -949,6 +1178,7 @@ impl ConnectionPool {
         if self.available.len() < self.max_size {
             self.available.push(conn);
         }
+        self.checked_out.fetch_sub(1, Ordering::Relaxed);
         // If pool is full, just drop the connection
     }
 }
@@ -965,8 +1195,10 @@ pub struct SQLiteTree {
 impl DatabaseTree for SQLiteTree {
     async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("SELECT value FROM {table_name} WHERE key = ?");
@@ -993,14 +1225,31 @@ impl DatabaseTree for SQLiteTree {
             None
         };
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(value)
     }
 
     async fn set(&self, key: &[u8], value: &[u8]) -> Result<(), DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        // Obtain DB path for writer gate
+        let db_path = { self.pool.lock().await.config.path.clone() };
+        let gate = get_writer_gate(&db_path);
+        let _guard = gate.lock().await;
+        let owner_handle = get_gate_owner_handle(&db_path);
+        {
+            let mut o = owner_handle.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "tree.set".to_string(),
+                since: Instant::now(),
+            });
+        }
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         // Use UPDATE/INSERT pattern since Turso doesn't support OR REPLACE
@@ -1011,7 +1260,7 @@ impl DatabaseTree for SQLiteTree {
 
         // Try update first
         let timestamp = chrono::Utc::now().timestamp();
-        let rows_updated = safe_execute(
+        let rows_updated = safe_execute_with_retry(
             &conn,
             &update_sql,
             [
@@ -1020,13 +1269,14 @@ impl DatabaseTree for SQLiteTree {
                 turso::Value::Text(key_str.to_string()),
             ],
             &format!("Failed to update key in tree '{}'", self.name),
+            5,
         )
         .await?;
 
         // If no rows were updated, insert new record
         if rows_updated == 0 {
             let timestamp = chrono::Utc::now().timestamp();
-            safe_execute(
+            safe_execute_with_retry(
                 &conn,
                 &insert_sql,
                 [
@@ -1036,37 +1286,80 @@ impl DatabaseTree for SQLiteTree {
                     turso::Value::Integer(timestamp),
                 ],
                 &format!("Failed to insert key in tree '{}'", self.name),
+                5,
             )
             .await?;
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
+        {
+            let mut o = owner_handle.lock().await;
+            *o = None;
+        }
         Ok(())
     }
 
     async fn remove(&self, key: &[u8]) -> Result<bool, DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let db_path = { self.pool.lock().await.config.path.clone() };
+        let gate = get_writer_gate(&db_path);
+        let _guard = gate.lock().await;
+        let owner_handle = get_gate_owner_handle(&db_path);
+        {
+            let mut o = owner_handle.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "tree.remove".to_string(),
+                since: Instant::now(),
+            });
+        }
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("DELETE FROM {table_name} WHERE key = ?");
 
-        let rows_affected = conn
-            .execute(&sql, [turso::Value::Text(key_str.to_string())])
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to remove key from tree '{}': {}", self.name, e),
-            })?;
+        let rows_affected = safe_execute_with_retry(
+            &conn,
+            &sql,
+            [turso::Value::Text(key_str.to_string())],
+            &format!("Failed to remove key from tree '{}'", self.name),
+            5,
+        )
+        .await?;
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
+        {
+            let mut o = owner_handle.lock().await;
+            *o = None;
+        }
         Ok(rows_affected > 0)
     }
 
     async fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DatabaseError> {
         let prefix_str = String::from_utf8_lossy(prefix);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let db_path = { self.pool.lock().await.config.path.clone() };
+        let gate = get_writer_gate(&db_path);
+        let _guard = gate.lock().await;
+        let owner_handle = get_gate_owner_handle(&db_path);
+        {
+            let mut o = owner_handle.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "tree.scan_prefix".to_string(),
+                since: Instant::now(),
+            });
+        }
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = if prefix.is_empty() {
@@ -1081,12 +1374,13 @@ impl DatabaseTree for SQLiteTree {
             vec![turso::Value::Text(prefix_str.to_string())]
         };
 
-        let mut rows =
-            conn.query(&sql, params)
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to scan prefix in tree '{}': {}", self.name, e),
-                })?;
+        let mut rows = safe_query(
+            &conn,
+            &sql,
+            params,
+            &format!("Failed to scan prefix in tree '{}'", self.name),
+        )
+        .await?;
 
         let mut results = Vec::new();
         while let Some(row) = rows
@@ -1104,40 +1398,58 @@ impl DatabaseTree for SQLiteTree {
             // Skip malformed rows
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
+        {
+            let mut o = owner_handle.lock().await;
+            *o = None;
+        }
         Ok(results)
     }
 
     async fn clear(&self) -> Result<(), DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("DELETE FROM {table_name}");
 
-        conn.execute(&sql, ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to clear tree '{}': {}", self.name, e),
-            })?;
+        safe_execute_with_retry(
+            &conn,
+            &sql,
+            (),
+            &format!("Failed to clear tree '{}'", self.name),
+            5,
+        )
+        .await?;
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(())
     }
 
     async fn len(&self) -> Result<u64, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("SELECT COUNT(*) FROM {table_name}");
 
-        let mut rows = conn
-            .query(&sql, ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to get length of tree '{}': {}", self.name, e),
-            })?;
+        let mut rows = safe_query(
+            &conn,
+            &sql,
+            (),
+            &format!("Failed to get length of tree '{}'", self.name),
+        )
+        .await?;
 
         let count = if let Some(row) =
             rows.next()
@@ -1153,7 +1465,10 @@ impl DatabaseTree for SQLiteTree {
             0
         };
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(count)
     }
 }
@@ -1166,9 +1481,132 @@ pub struct SQLiteBackend {
     sqlite_config: SQLiteConfig,
     /// Cache of opened trees
     trees: RwLock<HashMap<String, Arc<SQLiteTree>>>,
+    /// Single-writer channel (serializes all DB write operations)
+    writer_tx: mpsc::Sender<WriteMsg>,
+    /// Indicates writer is performing a batch (monitor can back off)
+    writer_busy: Arc<AtomicBool>,
+    /// Writer span sequence id
+    writer_span_seq: Arc<std::sync::atomic::AtomicU64>,
+    /// Active writer span (if any)
+    writer_span_active: Arc<Mutex<Option<WriterSpanInternal>>>,
+    /// Recent completed writer spans (bounded)
+    writer_span_history: Arc<Mutex<std::collections::VecDeque<WriterSpanCompleted>>>,
+    /// Reader tracking: active count and last label
+    reader_active: Arc<std::sync::atomic::AtomicUsize>,
+    reader_last: Arc<Mutex<Option<SectionInfo>>>,
+    /// True when the per-DB read-write gate is held for writing (quiesced)
+    reader_write_held: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Debug)]
+struct WriterSpanInternal {
+    id: u64,
+    symbols: usize,
+    edges: usize,
+    started_at: std::time::Instant,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WriterSpanCompleted {
+    pub id: u64,
+    pub symbols: usize,
+    pub edges: usize,
+    pub duration_ms: u128,
+    pub ok: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct WriterStatusSnapshot {
+    pub busy: bool,
+    pub active_ms: Option<u128>,
+    pub active_symbols: Option<usize>,
+    pub active_edges: Option<usize>,
+    pub recent: Vec<WriterSpanCompleted>,
+    // New: gate owner and section details
+    pub gate_owner_op: Option<String>,
+    pub gate_owner_ms: Option<u128>,
+    pub section_label: Option<String>,
+    pub section_ms: Option<u128>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ReaderStatusSnapshot {
+    pub active: usize,
+    pub last_label: Option<String>,
+    pub last_ms: Option<u128>,
+}
+
+#[derive(Clone)]
+struct ReaderBackendHandles {
+    active: Arc<std::sync::atomic::AtomicUsize>,
+    last: Arc<Mutex<Option<SectionInfo>>>,
+}
+
+pub struct ReaderGuard {
+    backend: ReaderBackendHandles,
+    // Hold a read lock on the per-DB gate; dropped on guard drop
+    _guard: Option<OwnedRwLockReadGuard<()>>,
+}
+
+impl Drop for ReaderGuard {
+    fn drop(&mut self) {
+        self.backend.active.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Messages for the single-writer task
+enum WriteMsg {
+    StoreSymbols(Vec<SymbolState>, oneshot::Sender<Result<(), DatabaseError>>),
+    StoreEdges(Vec<Edge>, oneshot::Sender<Result<(), DatabaseError>>),
+    Flush(oneshot::Sender<Result<(), DatabaseError>>),
 }
 
 impl SQLiteBackend {
+    /// Engine-direct checkpoint via Turso connection API (if available). Falls back to PRAGMA.
+    pub async fn engine_checkpoint_internal(
+        &self,
+        mode: DbCheckpointMode,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.get_direct_connection().await?;
+        // Try direct API first (if feature enabled and available)
+        #[allow(unused_mut)]
+        let mut used_direct = false;
+        #[cfg(feature = "turso-direct-checkpoint")]
+        {
+            // Current turso::Connection in this dependency set does not expose
+            // a checkpoint API; keeping the feature stub for future versions.
+            warn!("turso-direct-checkpoint feature enabled, but no direct API available in this build; using PRAGMA fallback");
+        }
+        if !used_direct {
+            let sql = match mode {
+                DbCheckpointMode::Passive => "PRAGMA wal_checkpoint(PASSIVE)",
+                DbCheckpointMode::Full => "PRAGMA wal_checkpoint(FULL)",
+                DbCheckpointMode::Restart => "PRAGMA wal_checkpoint(RESTART)",
+                DbCheckpointMode::Truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
+            };
+            // PRAGMA wal_checkpoint returns a single row (busy, checkpointed, total). Use query.
+            let mut rows = safe_query(&conn, sql, (), "engine_checkpoint.fallback.query").await?;
+            // Drain one row if present; ignore values.
+            let _ = rows.next().await;
+        }
+        Ok(())
+    }
+    #[inline]
+    fn is_none_uid(uid: &str) -> bool {
+        uid == "none" || uid.starts_with("none::")
+    }
+    fn writer_gate_for_path(&self) -> Arc<tokio::sync::Mutex<()>> {
+        get_writer_gate(&self.sqlite_config.path)
+    }
+    fn gate_owner_handle(&self) -> Arc<Mutex<Option<GateOwnerInfo>>> {
+        get_gate_owner_handle(&self.sqlite_config.path)
+    }
+    fn section_handle(&self) -> Arc<Mutex<Option<SectionInfo>>> {
+        get_section_handle(&self.sqlite_config.path)
+    }
+    fn reader_rw_gate_for_path(&self) -> Arc<AsyncRwLock<()>> {
+        get_reader_rw_gate(&self.sqlite_config.path)
+    }
     /// Create a new SQLiteBackend with custom SQLite configuration
     pub async fn with_sqlite_config(
         _config: DatabaseConfig,
@@ -1176,10 +1614,23 @@ impl SQLiteBackend {
     ) -> Result<Self, DatabaseError> {
         let pool = ConnectionPool::new(sqlite_config.clone()).await?;
 
+        let (tx, mut rx) = mpsc::channel::<WriteMsg>(1024);
+        let busy_flag = Arc::new(AtomicBool::new(false));
+
         let backend = Self {
             pool: Arc::new(Mutex::new(pool)),
             sqlite_config: sqlite_config.clone(),
             trees: RwLock::new(HashMap::new()),
+            writer_tx: tx.clone(),
+            writer_busy: busy_flag.clone(),
+            writer_span_seq: Arc::new(std::sync::atomic::AtomicU64::new(1)),
+            writer_span_active: Arc::new(Mutex::new(None)),
+            writer_span_history: Arc::new(Mutex::new(std::collections::VecDeque::with_capacity(
+                64,
+            ))),
+            reader_active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            reader_last: Arc::new(Mutex::new(None)),
+            reader_write_held: Arc::new(AtomicBool::new(false)),
         };
 
         if sqlite_config.temporary {
@@ -1194,22 +1645,507 @@ impl SQLiteBackend {
         // Initialize the default workspace record for this database
         backend.ensure_default_workspace().await?;
 
+        // Spawn single-writer task
+        let writer_backend = backend.clone_for_writer();
+        let busy_for_task = busy_flag.clone();
+        tokio::spawn(async move {
+            let mut pending_symbols: Vec<SymbolState> = Vec::new();
+            let mut pending_edges: Vec<Edge> = Vec::new();
+            let mut last_flush = std::time::Instant::now();
+            let max_symbols = 500usize;
+            let max_edges = 3000usize;
+            let flush_after = std::time::Duration::from_millis(75);
+
+            // RAII guard to ensure busy flag always clears even on panic/early-return
+            struct BusyGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+            impl BusyGuard {
+                fn new(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+                    flag.store(true, std::sync::atomic::Ordering::Relaxed);
+                    Self(flag)
+                }
+            }
+            impl Drop for BusyGuard {
+                fn drop(&mut self) {
+                    self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+
+            loop {
+                tokio::select! {
+                    msg = rx.recv() => {
+                        match msg {
+                            Some(WriteMsg::StoreSymbols(mut symbols, ack)) => {
+                                pending_symbols.append(&mut symbols);
+                                let need_flush = pending_symbols.len() >= max_symbols || last_flush.elapsed() >= flush_after;
+                                if need_flush {
+                                    let _busy = BusyGuard::new(busy_for_task.clone());
+                                    writer_backend.begin_writer_span(pending_symbols.len(), pending_edges.len()).await;
+                                    let res = writer_backend.flush_writes(&pending_symbols, &pending_edges).await;
+                                    if res.is_ok() { pending_symbols.clear(); pending_edges.clear(); last_flush = std::time::Instant::now(); }
+                                    writer_backend.end_writer_span(res.is_ok()).await;
+                                    let _ = ack.send(res);
+                                } else {
+                                    let _ = ack.send(Ok(()));
+                                }
+                            }
+                            Some(WriteMsg::StoreEdges(mut edges, ack)) => {
+                                pending_edges.append(&mut edges);
+                                let need_flush = pending_edges.len() >= max_edges || last_flush.elapsed() >= flush_after;
+                                if need_flush {
+                                    let _busy = BusyGuard::new(busy_for_task.clone());
+                                    writer_backend.begin_writer_span(pending_symbols.len(), pending_edges.len()).await;
+                                    let res = writer_backend.flush_writes(&pending_symbols, &pending_edges).await;
+                                    if res.is_ok() { pending_symbols.clear(); pending_edges.clear(); last_flush = std::time::Instant::now(); }
+                                    writer_backend.end_writer_span(res.is_ok()).await;
+                                    let _ = ack.send(res);
+                                } else {
+                                    let _ = ack.send(Ok(()));
+                                }
+                            }
+                            Some(WriteMsg::Flush(ack)) => {
+                                let _busy = BusyGuard::new(busy_for_task.clone());
+                                writer_backend.begin_writer_span(pending_symbols.len(), pending_edges.len()).await;
+                                let res = writer_backend.flush_writes(&pending_symbols, &pending_edges).await;
+                                if res.is_ok() { pending_symbols.clear(); pending_edges.clear(); last_flush = std::time::Instant::now(); }
+                                writer_backend.end_writer_span(res.is_ok()).await;
+                                let _ = ack.send(res);
+                            }
+                            None => {
+                                // channel closed; try final flush and exit
+                                let _busy = BusyGuard::new(busy_for_task.clone());
+                                writer_backend.begin_writer_span(pending_symbols.len(), pending_edges.len()).await;
+                                let _ = writer_backend.flush_writes(&pending_symbols, &pending_edges).await;
+                                writer_backend.end_writer_span(true).await;
+                                break;
+                            }
+                        }
+                    }
+                    _ = tokio::time::sleep(flush_after), if !pending_symbols.is_empty() || !pending_edges.is_empty() => {
+                        let _busy = BusyGuard::new(busy_for_task.clone());
+                        writer_backend.begin_writer_span(pending_symbols.len(), pending_edges.len()).await;
+                        let _ = writer_backend.flush_writes(&pending_symbols, &pending_edges).await;
+                        pending_symbols.clear();
+                        pending_edges.clear();
+                        last_flush = std::time::Instant::now();
+                        writer_backend.end_writer_span(true).await;
+                    }
+                }
+            }
+        });
+
         Ok(backend)
+    }
+
+    /// Clone minimal handles for writer task
+    fn clone_for_writer(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            sqlite_config: self.sqlite_config.clone(),
+            trees: RwLock::new(HashMap::new()), // not used by writer
+            writer_tx: self.writer_tx.clone(),
+            writer_busy: self.writer_busy.clone(),
+            writer_span_seq: self.writer_span_seq.clone(),
+            writer_span_active: self.writer_span_active.clone(),
+            writer_span_history: self.writer_span_history.clone(),
+            reader_active: self.reader_active.clone(),
+            reader_last: self.reader_last.clone(),
+            reader_write_held: self.reader_write_held.clone(),
+        }
+    }
+
+    /// Flush pending writes in a single pass
+    async fn flush_writes(
+        &self,
+        symbols: &[SymbolState],
+        edges: &[Edge],
+    ) -> Result<(), DatabaseError> {
+        if symbols.is_empty() && edges.is_empty() {
+            return Ok(());
+        }
+
+        // Use one direct connection to reduce overhead; separate transactions for symbols/edges
+        let conn = self.get_direct_connection().await?;
+
+        // Global writer gate serialization by database path
+        let gate = self.writer_gate_for_path();
+        // Expose waiting/holding the writer gate for debugging
+        self.set_active_section("writer.wait_for_gate").await;
+        let _guard = gate.lock().await;
+        self.set_active_section("writer.gate_locked").await;
+        {
+            let owner = self.gate_owner_handle();
+            let mut o = owner.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "flush_writes".to_string(),
+                since: Instant::now(),
+            });
+        }
+
+        if !symbols.is_empty() {
+            self.set_active_section("store_symbols_with_conn").await;
+            let res = self.store_symbols_with_conn(&conn, symbols).await;
+            self.clear_active_section().await;
+            res?;
+        }
+        if !edges.is_empty() {
+            self.set_active_section("store_edges_with_conn").await;
+            let res = self.store_edges_with_conn(&conn, edges).await;
+            self.clear_active_section().await;
+            res?;
+        }
+        // Clear owner and section before releasing the gate lock
+        {
+            let owner = self.gate_owner_handle();
+            let mut o = owner.lock().await;
+            *o = None;
+        }
+        self.clear_active_section().await;
+        Ok(())
+    }
+
+    /// Expose whether the writer is currently active (batching/committing).
+    pub fn is_writer_busy(&self) -> bool {
+        self.writer_busy.load(Ordering::Relaxed)
+    }
+
+    /// Whether the pool is currently quiesced (WAL sync or similar)
+    pub async fn is_quiesced(&self) -> bool {
+        let pool = self.pool.lock().await;
+        pool.quiesced.load(Ordering::Relaxed)
+    }
+
+    async fn begin_writer_span(&self, symbols: usize, edges: usize) {
+        let id = self.writer_span_seq.fetch_add(1, Ordering::Relaxed);
+        let mut guard = self.writer_span_active.lock().await;
+        *guard = Some(WriterSpanInternal {
+            id,
+            symbols,
+            edges,
+            started_at: std::time::Instant::now(),
+        });
+        drop(guard);
+        debug!(
+            "[WRITER] span {} started (symbols={}, edges={})",
+            id, symbols, edges
+        );
+    }
+
+    async fn end_writer_span(&self, ok: bool) {
+        let mut active = self.writer_span_active.lock().await;
+        if let Some(span) = active.take() {
+            let dur = span.started_at.elapsed().as_millis();
+            let completed = WriterSpanCompleted {
+                id: span.id,
+                symbols: span.symbols,
+                edges: span.edges,
+                duration_ms: dur,
+                ok,
+            };
+            let mut hist = self.writer_span_history.lock().await;
+            if hist.len() >= 64 {
+                hist.pop_front();
+            }
+            hist.push_back(completed.clone());
+            drop(hist);
+            debug!("[WRITER] span {} ended ok={} ({} ms)", span.id, ok, dur);
+        }
+    }
+
+    pub async fn writer_status_snapshot(&self) -> WriterStatusSnapshot {
+        let busy = self.is_writer_busy();
+        let (active_ms, active_symbols, active_edges) = {
+            let guard = self.writer_span_active.lock().await;
+            if let Some(span) = &*guard {
+                (
+                    Some(span.started_at.elapsed().as_millis()),
+                    Some(span.symbols),
+                    Some(span.edges),
+                )
+            } else {
+                (None, None, None)
+            }
+        };
+        let recent = {
+            let hist = self.writer_span_history.lock().await;
+            hist.iter().cloned().rev().take(5).collect::<Vec<_>>()
+        };
+        let (gate_owner_op, gate_owner_ms) = {
+            let owner = self.gate_owner_handle();
+            let o = owner.lock().await;
+            if let Some(info) = &*o {
+                (
+                    Some(info.op.clone()),
+                    Some(info.since.elapsed().as_millis()),
+                )
+            } else {
+                (None, None)
+            }
+        };
+        let (section_label, section_ms) = {
+            let sec = self.section_handle();
+            let s = sec.lock().await;
+            if let Some(info) = &*s {
+                (
+                    Some(info.label.clone()),
+                    Some(info.since.elapsed().as_millis()),
+                )
+            } else {
+                (None, None)
+            }
+        };
+        WriterStatusSnapshot {
+            busy,
+            active_ms,
+            active_symbols,
+            active_edges,
+            recent,
+            gate_owner_op,
+            gate_owner_ms,
+            section_label,
+            section_ms,
+        }
+    }
+
+    async fn set_active_section(&self, label: &str) {
+        let sec = self.section_handle();
+        let mut s = sec.lock().await;
+        *s = Some(SectionInfo {
+            label: label.to_string(),
+            since: Instant::now(),
+        });
+    }
+
+    async fn clear_active_section(&self) {
+        let sec = self.section_handle();
+        let mut s = sec.lock().await;
+        *s = None;
+    }
+
+    /// Non-channel variant of edge storage used by the writer task
+    async fn store_edges_with_conn(
+        &self,
+        conn: &Connection,
+        edges_in: &[Edge],
+    ) -> Result<(), DatabaseError> {
+        let normalized_edges: Vec<Edge> = edges_in
+            .iter()
+            .map(Self::normalize_edge_for_storage)
+            .collect();
+
+        let mut seen_signatures: HashSet<EdgeDedupKey> = HashSet::new();
+        let mut unique_edges: Vec<Edge> = Vec::with_capacity(normalized_edges.len());
+        for edge in normalized_edges {
+            let signature = EdgeDedupKey::from_edge(&edge);
+            if seen_signatures.insert(signature) {
+                unique_edges.push(edge);
+            }
+        }
+
+        let edges = unique_edges;
+        let edges_len = edges.len();
+
+        // Use deferred BEGIN to reduce lock contention with readers and background tasks
+        let begin_ctx = format!("store_edges_with_conn begin (edges_total={})", edges_len);
+        safe_execute_with_retry(conn, "BEGIN TRANSACTION", (), &begin_ctx, 10).await?;
+
+        if edges_len > 0 {
+            // Allow tuning batch size via env to mitigate lock pressure under load
+            let batch_size = std::env::var("PROBE_LSP_EDGE_BATCH_SIZE")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(100);
+            let mut offset = 0usize;
+            while offset < edges_len {
+                let end = usize::min(offset + batch_size, edges_len);
+                let chunk_edges = &edges[offset..end];
+                let chunk_keys: Vec<EdgeDedupKey> =
+                    chunk_edges.iter().map(EdgeDedupKey::from_edge).collect();
+
+                let mut existing_keys: HashSet<EdgeDedupKey> = HashSet::new();
+                if !chunk_keys.is_empty() {
+                    let mut query = String::from(
+                        "SELECT relation, source_symbol_uid, target_symbol_uid, start_line, start_char, language FROM edge WHERE ",
+                    );
+                    let mut params: Vec<turso::Value> = Vec::new();
+                    for (idx, key) in chunk_keys.iter().enumerate() {
+                        if idx > 0 {
+                            query.push_str(" OR ");
+                        }
+                        query.push_str("(relation = ? AND source_symbol_uid = ? AND target_symbol_uid = ? AND ");
+                        params.push(turso::Value::Text(key.relation.clone()));
+                        params.push(turso::Value::Text(key.source.clone()));
+                        params.push(turso::Value::Text(key.target.clone()));
+                        if key.start_line < 0 {
+                            query.push_str("start_line IS NULL AND ");
+                        } else {
+                            query.push_str("start_line = ? AND ");
+                            params.push(turso::Value::Integer(key.start_line));
+                        }
+                        if key.start_char < 0 {
+                            query.push_str("start_char IS NULL AND ");
+                        } else {
+                            query.push_str("start_char = ? AND ");
+                            params.push(turso::Value::Integer(key.start_char));
+                        }
+                        query.push_str("language = ?)");
+                        params.push(turso::Value::Text(key.language.clone()));
+                    }
+                    let label = format!(
+                        "edges.dedup_select {}/{}",
+                        (offset / batch_size) + 1,
+                        (edges_len + batch_size - 1) / batch_size
+                    );
+                    self.set_active_section(&label).await;
+                    let mut rows = safe_query_with_retry(
+                        conn,
+                        &query,
+                        params,
+                        "store_edges_with_conn dedup",
+                        5,
+                    )
+                    .await?;
+                    while let Some(row) =
+                        rows.next()
+                            .await
+                            .map_err(|e| DatabaseError::OperationFailed {
+                                message: format!("Failed to iterate dedup rows: {e}"),
+                            })?
+                    {
+                        let relation = match row.get_value(0) {
+                            Ok(turso::Value::Text(v)) => v,
+                            _ => continue,
+                        };
+                        let source = match row.get_value(1) {
+                            Ok(turso::Value::Text(v)) => v,
+                            _ => continue,
+                        };
+                        let target = match row.get_value(2) {
+                            Ok(turso::Value::Text(v)) => v,
+                            _ => continue,
+                        };
+                        let start_line = match row.get_value(3) {
+                            Ok(turso::Value::Integer(v)) => v,
+                            Ok(turso::Value::Null) => -1,
+                            _ => -1,
+                        };
+                        let start_char = match row.get_value(4) {
+                            Ok(turso::Value::Integer(v)) => v,
+                            Ok(turso::Value::Null) => -1,
+                            _ => -1,
+                        };
+                        let language = match row.get_value(5) {
+                            Ok(turso::Value::Text(v)) => v,
+                            _ => continue,
+                        };
+                        existing_keys.insert(EdgeDedupKey {
+                            relation,
+                            source,
+                            target,
+                            language,
+                            start_line,
+                            start_char,
+                        });
+                    }
+                    self.clear_active_section().await;
+                }
+
+                let mut edges_to_insert: Vec<&Edge> = Vec::new();
+                for (edge, key) in chunk_edges.iter().zip(chunk_keys.iter()) {
+                    if !existing_keys.contains(key) {
+                        edges_to_insert.push(edge);
+                    }
+                }
+
+                if edges_to_insert.is_empty() {
+                    offset = end;
+                    continue;
+                }
+
+                let placeholders = edges_to_insert
+                    .iter()
+                    .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?)")
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut params = Vec::with_capacity(edges_to_insert.len() * 8);
+                for edge in edges_to_insert.iter() {
+                    params.extend(vec![
+                        turso::Value::Text(edge.relation.to_string().to_string()),
+                        turso::Value::Text(edge.source_symbol_uid.clone()),
+                        turso::Value::Text(edge.target_symbol_uid.clone()),
+                        edge.start_line
+                            .map(|l| turso::Value::Integer((if l >= 1 { l } else { 1 }) as i64))
+                            .unwrap_or(turso::Value::Null),
+                        edge.start_char
+                            .map(|c| turso::Value::Integer(c as i64))
+                            .unwrap_or(turso::Value::Null),
+                        turso::Value::Real(edge.confidence as f64),
+                        turso::Value::Text(edge.language.clone()),
+                        edge.metadata
+                            .clone()
+                            .map(turso::Value::Text)
+                            .unwrap_or(turso::Value::Null),
+                    ]);
+                }
+                let batch_sql = format!("INSERT INTO edge (relation, source_symbol_uid, target_symbol_uid, start_line, start_char, confidence, language, metadata) VALUES {}", placeholders);
+                let label = format!(
+                    "edges.insert_batch {}/{} (+{})",
+                    (offset / batch_size) + 1,
+                    (edges_len + batch_size - 1) / batch_size,
+                    edges_to_insert.len()
+                );
+                self.set_active_section(&label).await;
+                // Enrich context with precise counts to make lock errors actionable
+                let insert_ctx = format!(
+                    "store_edges_with_conn insert (chunk={}/{}, batch_size={}, edges_total={})",
+                    (offset / batch_size) + 1,
+                    (edges_len + batch_size - 1) / batch_size,
+                    edges_to_insert.len(),
+                    edges_len
+                );
+                safe_execute_with_retry(conn, &batch_sql, params, &insert_ctx, 10).await?;
+                self.clear_active_section().await;
+                offset = end;
+            }
+        }
+
+        self.set_active_section("edges.commit").await;
+        let commit_ctx = format!("store_edges_with_conn commit (edges_total={})", edges_len);
+        if let Err(e) = safe_execute_with_retry(conn, "COMMIT", (), &commit_ctx, 10).await {
+            rollback_transaction(conn, "store_edges_with_conn commit failure").await;
+            self.clear_active_section().await;
+            return Err(e);
+        }
+        self.clear_active_section().await;
+        Ok(())
     }
 
     /// Ensures that a default workspace record exists in the database
     /// Each database should have exactly one workspace record representing the current workspace
     async fn ensure_default_workspace(&self) -> Result<(), DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let gate = self.writer_gate_for_path();
+        let _guard = gate.lock().await;
+        {
+            let owner = self.gate_owner_handle();
+            let mut o = owner.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "ensure_default_workspace".to_string(),
+                since: Instant::now(),
+            });
+        }
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         // Check if any workspace records exist
-        let mut rows = conn
-            .query("SELECT COUNT(*) FROM workspace", ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to count workspace records: {}", e),
-            })?;
+        let mut rows = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM workspace",
+            (),
+            "ensure_default_workspace.count",
+        )
+        .await?;
 
         let count = if let Some(row) =
             rows.next()
@@ -1243,10 +2179,11 @@ impl SQLiteBackend {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| ".".to_string());
 
-            conn.execute(
+            safe_execute(
+                &conn,
                 r#"
                 INSERT INTO workspace (workspace_id, project_id, name, path, current_branch, created_at, updated_at, metadata)
-                VALUES (?, ?, ?, ?, ?, ?, ?, '{}')
+                VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'), '{}')
                 "#,
                 [
                     turso::Value::Text(workspace_id.to_string()),
@@ -1254,12 +2191,11 @@ impl SQLiteBackend {
                     turso::Value::Text(workspace_name.clone()),
                     turso::Value::Text(current_dir.clone()),
                     turso::Value::Text(current_branch.clone()),
-                ]
+                ],
+                "ensure_default_workspace.insert_workspace",
             )
             .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to create default workspace: {}", e),
-            })?;
+            .map_err(|e| DatabaseError::OperationFailed { message: format!("Failed to create default workspace: {}", e) })?;
 
             // Also create a default project record if needed
             // First check if project exists (turso doesn't support INSERT OR IGNORE)
@@ -1308,7 +2244,15 @@ impl SQLiteBackend {
             );
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
+        {
+            let owner = self.gate_owner_handle();
+            let mut o = owner.lock().await;
+            *o = None;
+        }
         Ok(())
     }
 
@@ -1375,8 +2319,13 @@ impl SQLiteBackend {
         };
         normalized.source_symbol_uid =
             Self::rebuild_uid_with_path(&normalized_source, &sanitized_source_path);
+        // Always keep sentinel strictly as "none"
         normalized.target_symbol_uid =
-            Self::rebuild_uid_with_path(&normalized_target, &sanitized_target_path);
+            if Self::is_none_uid(&normalized_target) || sanitized_target_path == "none" {
+                "none".to_string()
+            } else {
+                Self::rebuild_uid_with_path(&normalized_target, &sanitized_target_path)
+            };
         if let Some(path) = normalized.file_path.as_ref() {
             normalized.file_path = Some(Self::sanitize_path_string(path));
         }
@@ -1400,6 +2349,11 @@ impl SQLiteBackend {
 
         while normalized.contains("//") {
             normalized = normalized.replace("//", "/");
+        }
+
+        // Preserve canonical dependency prefix
+        if normalized.starts_with("/dep/") {
+            return normalized;
         }
 
         if is_absolute_like(&normalized) {
@@ -1442,6 +2396,10 @@ impl SQLiteBackend {
         {
             return uid.to_string();
         }
+        // Preserve sentinel exactly
+        if Self::is_none_uid(uid) || new_path == "none" {
+            return "none".to_string();
+        }
 
         let mut parts = uid.splitn(4, ':');
         let _ = parts.next();
@@ -1465,7 +2423,10 @@ impl SQLiteBackend {
         // SQLite checkpoint requires no other connections to be active
         pool.available.clear();
 
+        // Checkout a connection, then immediately drop the pool lock to avoid
+        // holding the mutex across async DB calls (prevents global stalls).
         let conn = pool.get_connection().await?;
+        drop(pool);
 
         // Try to execute PRAGMA wal_checkpoint(TRUNCATE) to force checkpoint and truncate WAL
         // Note: turso may be managing WAL internally, so we'll try but not fail if it doesn't work
@@ -1543,6 +2504,8 @@ impl SQLiteBackend {
                         warn!("📋 CHECKPOINT: Failed to execute checkpoint query: {}", e);
                     }
                 }
+                // Return connection to pool
+                let mut pool = pool_arc.lock().await;
                 pool.return_connection(conn);
                 Ok(())
             }
@@ -1551,6 +2514,8 @@ impl SQLiteBackend {
                     "📋 CHECKPOINT: Failed to prepare checkpoint statement: {}",
                     e
                 );
+                // Return connection to pool
+                let mut pool = pool_arc.lock().await;
                 pool.return_connection(conn);
                 Ok(())
             }
@@ -1581,7 +2546,16 @@ impl SQLiteBackend {
                     checkpoint_count
                 );
 
-                if let Err(e) = self.perform_checkpoint().await {
+                // Avoid checkpointing while writer task is busy
+                if self.is_writer_busy() {
+                    debug!("📋 CHECKPOINT: Skipping checkpoint (writer busy)");
+                    continue;
+                }
+                // Run a single passive checkpoint (no quiesce, no retries)
+                if let Err(e) = self
+                    .perform_checkpoint_once_with_mode(CheckpointMode::Passive)
+                    .await
+                {
                     warn!(
                         "📋 CHECKPOINT: Periodic checkpoint #{} failed: {}",
                         checkpoint_count, e
@@ -1597,6 +2571,448 @@ impl SQLiteBackend {
         })
     }
 
+    /// Run a single WAL checkpoint with the provided mode, once, without retries.
+    async fn perform_checkpoint_once_with_mode(
+        &self,
+        mode: CheckpointMode,
+    ) -> Result<(), DatabaseError> {
+        let conn = self.get_direct_connection().await?;
+        let sql = match mode {
+            CheckpointMode::Passive => "PRAGMA wal_checkpoint(PASSIVE)",
+            CheckpointMode::Full => "PRAGMA wal_checkpoint(FULL)",
+            CheckpointMode::Restart => "PRAGMA wal_checkpoint(RESTART)",
+            CheckpointMode::Truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
+            CheckpointMode::Auto => "PRAGMA wal_checkpoint(PASSIVE)",
+        };
+        let mut rows = safe_query(&conn, sql, (), "periodic.checkpoint.once").await?;
+        // Drain a single row if present; ignore counters
+        let _ = rows.next().await;
+        Ok(())
+    }
+
+    /// Force a WAL checkpoint in a blocking loop until it succeeds or timeout.
+    ///
+    /// Implementation notes:
+    /// - Reuses a single direct connection for the entire operation to avoid
+    ///   per-iteration connection churn and noisy configuration logs.
+    /// - Clears idle pooled connections once up-front, then leaves the pool
+    ///   untouched during retries.
+    pub async fn wal_sync_blocking(
+        &self,
+        timeout: Option<std::time::Duration>,
+        quiesce: bool,
+        mode: CheckpointMode,
+        cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<(u64, u32), DatabaseError> {
+        use tokio::time::sleep;
+        let start = Instant::now();
+        let mut iterations: u32 = 0;
+
+        // Take writer gate to prevent our own writer task from interfering
+        let gate = self.writer_gate_for_path();
+        let _guard = gate.lock().await;
+        let owner_handle = self.gate_owner_handle();
+        {
+            let mut o = owner_handle.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "force_wal_sync".to_string(),
+                since: Instant::now(),
+            });
+        }
+
+        info!(
+            "📋 WAL_SYNC: starting forced WAL checkpoint (timeout={:?}, quiesce={}, mode={:?})",
+            timeout, quiesce, mode
+        );
+        self.set_active_section("wal.sync.begin").await;
+
+        // Optionally quiesce readers via per-DB write lock (simpler and more reliable than permit floods)
+        let mut _quiesce_write_guard: Option<OwnedRwLockWriteGuard<()>> = None;
+        // RAII cleanup to ensure we always lift quiesce and clear debug markers
+        let mut _cleanup = QuiesceGuard {
+            pool: Some(self.pool.clone()),
+            quiesced: false,
+            _write_guard: None,
+            write_flag: Some(self.reader_write_held.clone()),
+            section: Some(self.section_handle()),
+            owner: Some(owner_handle.clone()),
+        };
+        if quiesce {
+            let gate = self.reader_rw_gate_for_path();
+            info!("📋 WAL_SYNC: quiescing readers via write lock");
+            let w = gate.clone().write_owned().await;
+            _quiesce_write_guard = Some(w);
+            // Mark write-held true while the write guard is owned
+            self.reader_write_held.store(true, Ordering::Relaxed);
+            info!("📋 WAL_SYNC: readers quiesced");
+
+            // Pool-level quiesce: block new connection checkouts and wait for in-flight to return
+            {
+                let pool = self.pool.lock().await;
+                pool.quiesced.store(true, Ordering::Relaxed);
+            }
+            _cleanup.quiesced = true;
+            _cleanup._write_guard = _quiesce_write_guard.take();
+            // Wait for in-flight connections to drop to zero
+            let mut waited = 0u64;
+            loop {
+                let inflight = { self.pool.lock().await.checked_out.load(Ordering::Relaxed) };
+                if inflight == 0 {
+                    break;
+                }
+                if waited % 1000 == 0 {
+                    info!(
+                        "📋 WAL_SYNC: waiting for {} in-flight connections to return",
+                        inflight
+                    );
+                }
+                if let Some(max) = timeout {
+                    if start.elapsed() >= max {
+                        warn!("📋 WAL_SYNC: timeout waiting for in-flight connections ({} still active)", inflight);
+                        // Early return; QuiesceGuard will release quiesce and clear markers
+                        return Err(DatabaseError::OperationFailed {
+                            message: format!(
+                                "Timeout waiting for in-flight connections: {}",
+                                inflight
+                            ),
+                        });
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                waited += 50;
+            }
+        }
+
+        // Clear idle connections once to maximize checkpoint success chance
+        {
+            let mut pool = self.pool.lock().await;
+            pool.available.clear();
+        }
+
+        // Use a single direct connection for the whole WAL sync to avoid
+        // repeatedly creating and configuring connections on each retry.
+        let conn = self.get_direct_connection().await?;
+        // Helper to map mode→SQL
+        fn checkpoint_sql(m: CheckpointMode) -> &'static str {
+            match m {
+                CheckpointMode::Truncate => "PRAGMA wal_checkpoint(TRUNCATE)",
+                CheckpointMode::Passive => "PRAGMA wal_checkpoint(PASSIVE)",
+                CheckpointMode::Full => "PRAGMA wal_checkpoint(FULL)",
+                CheckpointMode::Restart => "PRAGMA wal_checkpoint(RESTART)",
+                CheckpointMode::Auto => unreachable!(),
+            }
+        }
+
+        // Parse auto order from env, default: truncate,full,restart
+        let auto_modes: Option<Vec<CheckpointMode>> = if matches!(mode, CheckpointMode::Auto) {
+            let env = std::env::var("PROBE_LSP_WAL_AUTO_ORDER")
+                .unwrap_or_else(|_| "truncate,full,restart".to_string());
+            let mut v = Vec::new();
+            for part in env.split(',') {
+                match part.trim().to_ascii_lowercase().as_str() {
+                    "truncate" => v.push(CheckpointMode::Truncate),
+                    "full" => v.push(CheckpointMode::Full),
+                    "restart" => v.push(CheckpointMode::Restart),
+                    "passive" => v.push(CheckpointMode::Passive),
+                    _ => {}
+                }
+            }
+            if v.is_empty() {
+                Some(vec![
+                    CheckpointMode::Truncate,
+                    CheckpointMode::Full,
+                    CheckpointMode::Restart,
+                ])
+            } else {
+                Some(v)
+            }
+        } else {
+            None
+        };
+
+        // For fixed modes, prepare once. For auto, we'll execute each configured mode per-iteration.
+        let mut prepared_stmt = if !matches!(mode, CheckpointMode::Auto) {
+            let pragma = checkpoint_sql(mode);
+            match conn.prepare(pragma).await {
+                Ok(stmt) => Some(stmt),
+                Err(e) => {
+                    warn!("📋 WAL_SYNC: prepare failed for {:?} ({}), falling back to execute each retry", mode, e);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // Determine WAL file path (best-effort) for optional logging only.
+        // turso does not use a separate -shm file; read locks are in-process.
+        let wal_path = if !self.sqlite_config.temporary {
+            let db_path = std::path::Path::new(&self.sqlite_config.path);
+            db_path.to_str().map(|p| format!("{}-wal", p))
+        } else {
+            None
+        };
+
+        let mut last_wal_size: Option<u64> = None;
+        let mut tried_restart_on_truncate = false;
+        loop {
+            iterations += 1;
+            // Run checkpoint and read busy/frames if available
+            let mut busy = -1i64;
+            let mut total = -1i64;
+            let mut checkpointed = -1i64;
+            let mut executed_ok = false;
+            if let Some(modes) = &auto_modes {
+                // Auto: iterate configured modes each loop until one succeeds
+                for m in modes {
+                    let sql = checkpoint_sql(*m);
+                    if let Ok(mut rows) = conn.query(sql, ()).await {
+                        executed_ok = true;
+                        if let Ok(Some(row)) = rows.next().await {
+                            if let (Ok(b), Ok(cp), Ok(t)) =
+                                (row.get_value(0), row.get_value(1), row.get_value(2))
+                            {
+                                if let (
+                                    turso::Value::Integer(bi),
+                                    turso::Value::Integer(cpi),
+                                    turso::Value::Integer(ti),
+                                ) = (b, cp, t)
+                                {
+                                    busy = bi;
+                                    checkpointed = cpi;
+                                    total = ti;
+                                }
+                            }
+                        }
+                        if busy == 0 {
+                            info!("📋 WAL_SYNC: {:?} succeeded during auto-mode", m);
+                            break;
+                        }
+                    }
+                }
+            } else {
+                // Fixed mode
+                if let Some(stmt) = prepared_stmt.as_mut() {
+                    if let Ok(mut rows) = stmt.query(()).await {
+                        executed_ok = true;
+                        if let Ok(Some(row)) = rows.next().await {
+                            if let (Ok(b), Ok(cp), Ok(t)) =
+                                (row.get_value(0), row.get_value(1), row.get_value(2))
+                            {
+                                if let (
+                                    turso::Value::Integer(bi),
+                                    turso::Value::Integer(cpi),
+                                    turso::Value::Integer(ti),
+                                ) = (b, cp, t)
+                                {
+                                    busy = bi;
+                                    checkpointed = cpi;
+                                    total = ti;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let sql = checkpoint_sql(mode);
+                    if conn.execute(sql, ()).await.is_ok() {
+                        executed_ok = true;
+                    }
+                }
+            }
+
+            // Success detection for turso: busy==0 means checkpoint succeeded for the selected mode.
+            // Additionally, for TRUNCATE we also accept "WAL file is gone or size==0" as success,
+            // because some engines don't return counters reliably.
+            let mut wal_zero = false;
+            if matches!(mode, CheckpointMode::Truncate) {
+                if let Some(ref walp) = wal_path {
+                    if let Ok(meta) = tokio::fs::metadata(walp).await {
+                        wal_zero = meta.len() == 0;
+                        last_wal_size = Some(meta.len());
+                    } else {
+                        // If wal doesn't exist, treat as zero-sized
+                        wal_zero = true;
+                        last_wal_size = Some(0);
+                    }
+                } else {
+                    // In-memory DB or no path — treat as success once PRAGMA executes
+                    wal_zero = executed_ok;
+                }
+            }
+
+            if executed_ok && (busy == 0 || wal_zero) {
+                match mode {
+                    CheckpointMode::Truncate | CheckpointMode::Auto => {
+                        if let Some(ref walp) = wal_path {
+                            match tokio::fs::metadata(walp).await {
+                                Ok(meta) => info!(
+                                    "📋 WAL_SYNC: checkpoint ok (mode={:?}); wal_size={} bytes",
+                                    mode,
+                                    meta.len()
+                                ),
+                                Err(_) => info!(
+                                    "📋 WAL_SYNC: checkpoint ok (mode={:?}); wal size unknown",
+                                    mode
+                                ),
+                            }
+                        } else {
+                            info!("📋 WAL_SYNC: checkpoint ok (mode={:?})", mode);
+                        }
+                    }
+                    m => info!(
+                        "📋 WAL_SYNC: checkpoint ok (mode={:?}, checkpointed={}, total={})",
+                        m, checkpointed, total
+                    ),
+                }
+                break;
+            }
+
+            // No separate fallback block: auto-mode loop above already tried configured modes
+
+            // Success conditions: busy==0, or no frames to checkpoint
+            if busy == 0 || total == 0 {
+                info!(
+                    "📋 WAL_SYNC: checkpoint completed (busy={}, checkpointed={}, total={}, iter={})",
+                    busy, checkpointed, total, iterations
+                );
+                break;
+            }
+
+            // TRUNCATE fallback: when counters are unavailable (busy/total remain -1) and WAL size
+            // is non-zero for a while, attempt a single RESTART as a pragmatic fallback.
+            if matches!(mode, CheckpointMode::Truncate)
+                && executed_ok
+                && busy == -1
+                && total == -1
+                && !tried_restart_on_truncate
+            {
+                if let Some(sz) = last_wal_size {
+                    if sz > 0 && iterations % 10 == 0 {
+                        info!("📋 WAL_SYNC: TRUNCATE counters unavailable and wal_size={} > 0; trying RESTART fallback once", sz);
+                        let _ = conn.execute("PRAGMA wal_checkpoint(RESTART)", ()).await;
+                        tried_restart_on_truncate = true;
+                    }
+                }
+            }
+
+            // Timeout check
+            if let Some(max) = timeout {
+                let waited_ms = start.elapsed().as_millis() as u64;
+                if start.elapsed() >= max {
+                    warn!(
+                        "📋 WAL_SYNC: timeout after {} ms (iter={}, busy={}, checkpointed={}, total={})",
+                        waited_ms, iterations, busy, checkpointed, total
+                    );
+                    // Early return; QuiesceGuard will release quiesce and clear markers
+                    return Err(DatabaseError::OperationFailed { message: format!(
+                        "WAL sync timed out after {} ms (iterations={}, busy={}, checkpointed={}, total={})",
+                        waited_ms, iterations, busy, checkpointed, total
+                    )});
+                }
+            }
+
+            // Cancellation check
+            if let Some(flag) = &cancel {
+                if flag.load(Ordering::Relaxed) {
+                    warn!("📋 WAL_SYNC: canceled by client");
+                    // Early return; QuiesceGuard will release quiesce and clear markers
+                    return Err(DatabaseError::OperationFailed {
+                        message: "Canceled by client".into(),
+                    });
+                }
+            }
+
+            // Backoff and retry
+            if iterations == 1 || iterations % 10 == 0 {
+                info!(
+                    "📋 WAL_SYNC: retrying (iter={}, busy={}, checkpointed={}, total={})",
+                    iterations, busy, checkpointed, total
+                );
+            }
+            self.set_active_section("wal.sync.retry").await;
+            sleep(std::time::Duration::from_millis(200)).await;
+        }
+
+        let waited_ms = start.elapsed().as_millis() as u64;
+        // QuiesceGuard (RAII) clears section, owner, and quiesced flag on drop
+        info!(
+            "📋 WAL_SYNC: done in {} ms (iterations={})",
+            waited_ms, iterations
+        );
+        Ok((waited_ms, iterations))
+    }
+
+    /// Begin a tracked reader section. Returns a guard that holds the reader gate (shared)
+    /// and decrements the active counter on drop.
+    pub async fn begin_reader(&self, label: &str) -> ReaderGuard {
+        let gate = self.reader_rw_gate_for_path();
+        let guard = gate.clone().read_owned().await;
+        self.reader_active.fetch_add(1, Ordering::Relaxed);
+        {
+            let mut last = self.reader_last.lock().await;
+            *last = Some(SectionInfo {
+                label: label.to_string(),
+                since: Instant::now(),
+            });
+        }
+        ReaderGuard {
+            backend: self.clone_for_reader(),
+            _guard: Some(guard),
+        }
+    }
+
+    /// Try to begin a reader section without blocking. Returns None if quiesced.
+    pub async fn try_begin_reader(&self, label: &str) -> Option<ReaderGuard> {
+        let gate = self.reader_rw_gate_for_path();
+        // Try to obtain read lock quickly; if a write lock is held (quiesce), bail out.
+        let try_ms: u64 = std::env::var("PROBE_LSP_TRY_READER_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(try_ms),
+            gate.clone().read_owned(),
+        )
+        .await
+        {
+            Ok(guard) => {
+                let guard = guard;
+                self.reader_active.fetch_add(1, Ordering::Relaxed);
+                {
+                    let mut last = self.reader_last.lock().await;
+                    *last = Some(SectionInfo {
+                        label: label.to_string(),
+                        since: Instant::now(),
+                    });
+                }
+                Some(ReaderGuard {
+                    backend: self.clone_for_reader(),
+                    _guard: Some(guard),
+                })
+            }
+            Err(_) => None,
+        }
+    }
+
+    fn clone_for_reader(&self) -> ReaderBackendHandles {
+        ReaderBackendHandles {
+            active: self.reader_active.clone(),
+            last: self.reader_last.clone(),
+        }
+    }
+
+    pub async fn reader_status_snapshot(&self) -> ReaderStatusSnapshot {
+        let active = self.reader_active.load(Ordering::Relaxed);
+        let last = self.reader_last.lock().await.clone();
+        ReaderStatusSnapshot {
+            active,
+            last_label: last.as_ref().map(|s| s.label.clone()),
+            last_ms: last.as_ref().map(|s| s.since.elapsed().as_millis()),
+        }
+    }
+    pub fn is_reader_write_held(&self) -> bool {
+        self.reader_write_held.load(Ordering::Relaxed)
+    }
     /// Helper to get current git branch, if available
     fn get_current_git_branch() -> Option<String> {
         use std::process::Command;
@@ -1620,8 +3036,13 @@ impl SQLiteBackend {
     /// Create a new tree table if it doesn't exist
     async fn ensure_tree_table(&self, tree_name: &str) -> Result<(), DatabaseError> {
         let sanitized_name = sanitize_table_name(tree_name);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        // Serialize DDL with global writer gate to avoid contention with data writes
+        let gate = self.writer_gate_for_path();
+        let _guard = gate.lock().await;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let table_name = format!("tree_{sanitized_name}");
         let sql = format!(
@@ -1635,11 +3056,16 @@ impl SQLiteBackend {
             "#
         );
 
-        conn.execute(&sql, ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to create tree table '{tree_name}': {e}"),
-            })?;
+        safe_execute(
+            &conn,
+            &sql,
+            (),
+            &format!("Failed to create tree table '{tree_name}'"),
+        )
+        .await
+        .map_err(|e| DatabaseError::OperationFailed {
+            message: e.to_string(),
+        })?;
 
         // Create index for the tree with unique suffix to avoid conflicts
         // Use a hash of the tree name and a random component to ensure uniqueness
@@ -1656,22 +3082,25 @@ impl SQLiteBackend {
         let index_name = format!("idx_{sanitized_name}_{unique_suffix:x}_key");
         let index_sql = format!("CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}(key)");
 
-        conn.execute(&index_sql, ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to create index for tree '{tree_name}': {e}"),
-            })?;
+        safe_execute(
+            &conn,
+            &index_sql,
+            (),
+            &format!("Failed to create index for tree '{tree_name}'"),
+        )
+        .await
+        .map_err(|e| DatabaseError::OperationFailed {
+            message: e.to_string(),
+        })?;
 
         // Update metadata - check if exists first, then insert if needed
-        let mut rows = conn
-            .query(
-                "SELECT tree_name FROM tree_metadata WHERE tree_name = ?",
-                [turso::Value::Text(tree_name.to_string())],
-            )
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to check tree metadata for '{tree_name}': {e}"),
-            })?;
+        let mut rows = safe_query(
+            &conn,
+            "SELECT tree_name FROM tree_metadata WHERE tree_name = ?",
+            [turso::Value::Text(tree_name.to_string())],
+            &format!("check tree metadata for '{tree_name}'"),
+        )
+        .await?;
 
         if rows
             .next()
@@ -1682,99 +3111,43 @@ impl SQLiteBackend {
             .is_none()
         {
             // Tree doesn't exist in metadata, insert it
-            conn.execute(
+            safe_execute(
+                &conn,
                 "INSERT INTO tree_metadata (tree_name) VALUES (?)",
                 [turso::Value::Text(tree_name.to_string())],
+                &format!("insert tree metadata for '{tree_name}'"),
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to insert tree metadata for '{tree_name}': {e}"),
+                message: e.to_string(),
             })?;
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(())
     }
 
-    /// Get current database schema version
+    /// Get current database schema version (migrations removed)
     pub async fn get_schema_version(&self) -> Result<u32, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        let result = crate::database::migrations::get_current_version(&conn)
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to get schema version: {e}"),
-            });
-
-        pool.return_connection(conn);
-        result
+        Ok(1)
     }
 
     /// Run migrations manually up to target version
-    pub async fn migrate_to(&self, target_version: Option<u32>) -> Result<u32, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        let migrations = all_migrations();
-        let runner =
-            MigrationRunner::new(migrations).map_err(|e| DatabaseError::Configuration {
-                message: format!("Failed to create migration runner: {e}"),
-            })?;
-
-        let result = runner.migrate_to(&conn, target_version).await.map_err(|e| {
-            DatabaseError::OperationFailed {
-                message: format!("Failed to run migrations: {e}"),
-            }
-        });
-
-        pool.return_connection(conn);
-        result
+    pub async fn migrate_to(&self, _target_version: Option<u32>) -> Result<u32, DatabaseError> {
+        Ok(1)
     }
 
     /// Rollback migrations to target version
-    pub async fn rollback_to(&self, target_version: u32) -> Result<u32, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        let migrations = all_migrations();
-        let runner =
-            MigrationRunner::new(migrations).map_err(|e| DatabaseError::Configuration {
-                message: format!("Failed to create migration runner: {e}"),
-            })?;
-
-        let result = runner
-            .rollback_to(&conn, target_version)
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to rollback migrations: {e}"),
-            });
-
-        pool.return_connection(conn);
-        result
+    pub async fn rollback_to(&self, _target_version: u32) -> Result<u32, DatabaseError> {
+        Ok(1)
     }
 
     /// Check if migrations are needed
     pub async fn needs_migration(&self) -> Result<bool, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        let migrations = all_migrations();
-        let runner =
-            MigrationRunner::new(migrations).map_err(|e| DatabaseError::Configuration {
-                message: format!("Failed to create migration runner: {e}"),
-            })?;
-
-        let result =
-            runner
-                .needs_migration(&conn)
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to check migration status: {e}"),
-                });
-
-        pool.return_connection(conn);
-        result
+        Ok(false)
     }
 
     /// Get the database file path
@@ -1784,19 +3157,57 @@ impl SQLiteBackend {
 
     /// Perform a checkpoint to ensure WAL is flushed to the main database file
     pub async fn checkpoint(&self) -> Result<(), DatabaseError> {
-        let pool_arc = self.pool.clone();
-        let mut pool = pool_arc.lock().await;
-        let conn = pool.get_connection().await?;
+        // Serialize explicit checkpoint with writer gate to avoid racing commits
+        let gate = self.writer_gate_for_path();
+        let _guard = gate.lock().await;
+        // Use the same logic as perform_checkpoint but synchronous and tolerant
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
-        // Execute PRAGMA wal_checkpoint(FULL) to flush WAL to main database
-        conn.execute("PRAGMA wal_checkpoint(FULL)", ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("WAL checkpoint failed: {}", e),
-            })?;
-
-        pool.return_connection(conn);
-        Ok(())
+        // libSQL/Turso returns a row for wal_checkpoint, so use query and ignore fields
+        match safe_query(&conn, "PRAGMA wal_checkpoint(FULL)", (), "checkpoint(FULL)").await {
+            Ok(mut rows) => {
+                // Consume one row if present to avoid "unexpected row" errors
+                let _ = rows.next().await;
+                {
+                    let mut pool = self.pool.lock().await;
+                    pool.return_connection(conn);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                // Fallback to TRUNCATE form, also via query, still tolerant
+                warn!("WAL checkpoint FULL failed ({}), retrying with TRUNCATE", e);
+                match safe_query(
+                    &conn,
+                    "PRAGMA wal_checkpoint(TRUNCATE)",
+                    (),
+                    "checkpoint(TRUNCATE)",
+                )
+                .await
+                {
+                    Ok(mut rows) => {
+                        let _ = rows.next().await;
+                        {
+                            let mut pool = self.pool.lock().await;
+                            pool.return_connection(conn);
+                        }
+                        Ok(())
+                    }
+                    Err(e2) => {
+                        {
+                            let mut pool = self.pool.lock().await;
+                            pool.return_connection(conn);
+                        }
+                        Err(DatabaseError::OperationFailed {
+                            message: format!("WAL checkpoint failed: {}", e2),
+                        })
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1853,18 +3264,17 @@ impl DatabaseBackend for SQLiteBackend {
 
     async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        let mut rows = conn
-            .query(
-                "SELECT value FROM kv_store WHERE key = ?",
-                [turso::Value::Text(key_str.to_string())],
-            )
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to get key from default store: {e}"),
-            })?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
+        let mut rows = safe_query(
+            &conn,
+            "SELECT value FROM kv_store WHERE key = ?",
+            [turso::Value::Text(key_str.to_string())],
+            "kv.get",
+        )
+        .await?;
 
         let value = if let Some(row) =
             rows.next()
@@ -1880,14 +3290,19 @@ impl DatabaseBackend for SQLiteBackend {
             None
         };
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(value)
     }
 
     async fn set(&self, key: &[u8], value: &[u8]) -> Result<(), DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         // Try update first
         let timestamp = chrono::Utc::now().timestamp();
@@ -1923,14 +3338,19 @@ impl DatabaseBackend for SQLiteBackend {
             })?;
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(())
     }
 
     async fn remove(&self, key: &[u8]) -> Result<bool, DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let rows_affected = conn
             .execute(
@@ -1942,7 +3362,10 @@ impl DatabaseBackend for SQLiteBackend {
                 message: format!("Failed to remove key from default store: {e}"),
             })?;
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(rows_affected > 0)
     }
 
@@ -1963,12 +3386,7 @@ impl DatabaseBackend for SQLiteBackend {
             )
         };
 
-        let mut rows =
-            conn.query(&sql, params)
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to scan prefix in default store: {e}"),
-                })?;
+        let mut rows = safe_query(&conn, &sql, params, "kv.scan_prefix").await?;
 
         let mut results = Vec::new();
         while let Some(row) = rows
@@ -1986,7 +3404,10 @@ impl DatabaseBackend for SQLiteBackend {
             // Skip malformed rows
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(results)
     }
 
@@ -2018,15 +3439,18 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     async fn tree_names(&self) -> Result<Vec<String>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
-        let mut rows = conn
-            .query("SELECT tree_name FROM tree_metadata ORDER BY tree_name", ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to get tree names: {e}"),
-            })?;
+        let mut rows = safe_query(
+            &conn,
+            "SELECT tree_name FROM tree_metadata ORDER BY tree_name",
+            (),
+            "tree.names",
+        )
+        .await?;
 
         let mut names = Vec::new();
         while let Some(row) = rows
@@ -2042,39 +3466,28 @@ impl DatabaseBackend for SQLiteBackend {
             // Skip malformed rows
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(names)
     }
 
     async fn clear(&self) -> Result<(), DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        // Clear default key-value store
-        conn.execute("DELETE FROM kv_store", ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to clear default store: {e}"),
-            })?;
-
-        // Clear all tree tables
-        let tree_names = {
-            let trees = self.trees.read().await;
-            trees.keys().cloned().collect::<Vec<_>>()
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
         };
 
-        for tree_name in &tree_names {
-            let sanitized_name = sanitize_table_name(tree_name);
-            let table_name = format!("tree_{sanitized_name}");
-            let sql = format!("DELETE FROM {table_name}");
-            conn.execute(&sql, ())
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to clear tree '{tree_name}': {e}"),
-                })?;
-        }
+        // kv_store and tree_* tables were removed from the schema. Keep clear() tolerant.
+        // Best-effort: clear core tables used by the current backend.
+        let _ = safe_execute(&conn, "DELETE FROM symbol_state", (), "clear.symbol_state").await;
+        let _ = safe_execute(&conn, "DELETE FROM edge", (), "clear.edge").await;
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(())
     }
 
@@ -2088,55 +3501,45 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     async fn stats(&self) -> Result<DatabaseStats, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        // Count entries in default store
-        let mut rows = conn
-            .query("SELECT COUNT(*) FROM kv_store", ())
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to count default store entries: {e}"),
-            })?;
-
-        let default_count = if let Some(row) =
-            rows.next()
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to iterate count result: {e}"),
-                })? {
-            match row.get_value(0) {
-                Ok(turso::Value::Integer(n)) => n as u64,
-                _ => 0,
-            }
-        } else {
-            0
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
         };
 
-        // Count entries in all trees
-        let tree_names = {
-            let trees = self.trees.read().await;
-            trees.keys().cloned().collect::<Vec<_>>()
-        };
+        // Count entries from core tables only (kv_store removed)
+        let mut total_entries: u64 = 0;
 
-        let mut total_entries = default_count;
-        for tree_name in &tree_names {
-            let sanitized_name = sanitize_table_name(tree_name);
-            let table_name = format!("tree_{sanitized_name}");
-            let sql = format!("SELECT COUNT(*) FROM {table_name}");
-
-            let mut rows =
-                conn.query(&sql, ())
-                    .await
-                    .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to count entries in tree '{tree_name}': {e}"),
-                    })?;
-
+        // symbol_state count
+        if let Ok(mut rows) = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM symbol_state",
+            (),
+            "stats.count-symbol",
+        )
+        .await
+        {
             if let Some(row) = rows
                 .next()
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to iterate count result for tree '{tree_name}': {e}"),
+                    message: format!("Failed to read symbol_state count: {e}"),
+                })?
+            {
+                if let Ok(turso::Value::Integer(n)) = row.get_value(0) {
+                    total_entries += n as u64;
+                }
+            }
+        }
+
+        // edge count
+        if let Ok(mut rows) =
+            safe_query(&conn, "SELECT COUNT(*) FROM edge", (), "stats.count-edge").await
+        {
+            if let Some(row) = rows
+                .next()
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to read edge count: {e}"),
                 })?
             {
                 if let Ok(turso::Value::Integer(n)) = row.get_value(0) {
@@ -2155,13 +3558,16 @@ impl DatabaseBackend for SQLiteBackend {
             self.size_on_disk().await?
         };
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
 
         Ok(DatabaseStats {
             total_entries,
             total_size_bytes,
             disk_size_bytes,
-            tree_count: tree_names.len(),
+            tree_count: 0,
             is_temporary: self.sqlite_config.temporary,
         })
     }
@@ -2185,6 +3591,10 @@ impl DatabaseBackend for SQLiteBackend {
 
     fn is_temporary(&self) -> bool {
         self.sqlite_config.temporary
+    }
+
+    async fn engine_checkpoint(&self, mode: DbCheckpointMode) -> Result<(), DatabaseError> {
+        self.engine_checkpoint_internal(mode).await
     }
 
     // ===================
@@ -2268,7 +3678,10 @@ impl DatabaseBackend for SQLiteBackend {
             None
         };
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(result)
     }
 
@@ -2302,12 +3715,7 @@ impl DatabaseBackend for SQLiteBackend {
             )
         };
 
-        let mut rows =
-            conn.query(sql, params)
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to list workspaces: {}", e),
-                })?;
+        let mut rows = safe_query(&conn, sql, params, "list_workspaces").await?;
 
         let mut workspaces = Vec::new();
         while let Some(row) = rows
@@ -2403,178 +3811,24 @@ impl DatabaseBackend for SQLiteBackend {
     // ===================
 
     async fn store_symbols(&self, symbols: &[SymbolState]) -> Result<(), DatabaseError> {
-        if symbols.is_empty() {
-            return Ok(());
-        }
-
-        let normalized_symbols: Vec<SymbolState> = symbols
+        // Route through single-writer task to serialize writes and reduce locks
+        let (tx, rx) = oneshot::channel();
+        let vec: Vec<SymbolState> = symbols
             .iter()
-            .map(Self::normalize_symbol_for_storage)
+            .cloned()
+            .map(|s| Self::normalize_symbol_for_storage(&s))
             .collect();
-
-        let mut seen_symbols: HashSet<String> = HashSet::new();
-        let mut unique_symbols: Vec<SymbolState> = Vec::with_capacity(normalized_symbols.len());
-        for symbol in normalized_symbols {
-            if seen_symbols.insert(symbol.symbol_uid.clone()) {
-                unique_symbols.push(symbol);
-            } else {
-                debug!(
-                    "[DEBUG] store_symbols: Skipping duplicate symbol {}",
-                    symbol.symbol_uid
-                );
-            }
-        }
-
-        if unique_symbols.is_empty() {
-            return Ok(());
-        }
-
-        debug!(
-            "[DEBUG] store_symbols: Attempting to store {} symbols",
-            unique_symbols.len()
-        );
-
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        // Use transaction for batch operations with rollback on error
-        safe_execute_with_retry(
-            &conn,
-            "BEGIN TRANSACTION",
-            (),
-            "begin symbol transaction",
-            5,
-        )
-        .await
-        .map_err(|e| DatabaseError::OperationFailed {
-            message: format!("Failed to begin transaction for symbols: {}", e),
-        })?;
-
-        let transaction_result: Result<(), DatabaseError> = async {
-            // Insert directly into symbol_state table with the correct schema
-            for symbol in &unique_symbols {
-                // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
-                let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
-                let mut check_rows = safe_query(
-                    &conn,
-                    check_query,
-                    [turso::Value::Text(symbol.symbol_uid.clone())],
-                    "check symbol existence",
-                )
-                .await?;
-
-                let symbol_exists = check_rows
-                    .next()
-                    .await
-                    .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to check symbol existence: {}", e),
-                    })?
-                    .is_some();
-
-                let params = vec![
-                    turso::Value::Text(symbol.file_path.clone()),
-                    turso::Value::Text(symbol.language.clone()),
-                    turso::Value::Text(symbol.name.clone()),
-                    symbol
-                        .fqn
-                        .as_ref()
-                        .map(|s| turso::Value::Text(s.clone()))
-                        .unwrap_or(turso::Value::Null),
-                    turso::Value::Text(symbol.kind.clone()),
-                    symbol
-                        .signature
-                        .as_ref()
-                        .map(|s| turso::Value::Text(s.clone()))
-                        .unwrap_or(turso::Value::Null),
-                    symbol
-                        .visibility
-                        .as_ref()
-                        .map(|s| turso::Value::Text(s.clone()))
-                        .unwrap_or(turso::Value::Null),
-                    turso::Value::Integer(symbol.def_start_line as i64),
-                    turso::Value::Integer(symbol.def_start_char as i64),
-                    turso::Value::Integer(symbol.def_end_line as i64),
-                    turso::Value::Integer(symbol.def_end_char as i64),
-                    turso::Value::Integer(if symbol.is_definition { 1 } else { 0 }),
-                    symbol
-                        .documentation
-                        .as_ref()
-                        .map(|s| turso::Value::Text(s.clone()))
-                        .unwrap_or(turso::Value::Null),
-                    symbol
-                        .metadata
-                        .as_ref()
-                        .map(|s| turso::Value::Text(s.clone()))
-                        .unwrap_or(turso::Value::Null),
-                ];
-
-                if symbol_exists {
-                    // Update existing symbol
-                    let update_query = "UPDATE symbol_state SET 
-                        file_path = ?, language = ?, name = ?, fqn = ?, kind = ?,
-                        signature = ?, visibility = ?, def_start_line = ?, def_start_char = ?,
-                        def_end_line = ?, def_end_char = ?, is_definition = ?,
-                        documentation = ?, metadata = ?
-                        WHERE symbol_uid = ?";
-
-                    let mut update_params = params.clone();
-                    update_params.push(turso::Value::Text(symbol.symbol_uid.clone()));
-
-                    safe_execute_with_retry(&conn, update_query, update_params, "update symbol", 5)
-                        .await
-                        .map_err(|e| DatabaseError::OperationFailed {
-                            message: format!(
-                                "Failed to update symbol {}: {}",
-                                symbol.symbol_uid, e
-                            ),
-                        })?;
-                } else {
-                    // Insert new symbol
-                    let insert_query = "INSERT INTO symbol_state 
-                        (symbol_uid, file_path, language, name, fqn, kind, signature, visibility, 
-                         def_start_line, def_start_char, def_end_line, def_end_char, is_definition, documentation, metadata) 
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-
-                    let mut insert_params = vec![turso::Value::Text(symbol.symbol_uid.clone())];
-                    insert_params.extend(params);
-
-                    safe_execute_with_retry(&conn, insert_query, insert_params, "insert symbol", 5)
-                        .await
-                        .map_err(|e| DatabaseError::OperationFailed {
-                            message: format!(
-                                "Failed to insert symbol {}: {}",
-                                symbol.symbol_uid, e
-                            ),
-                        })?;
-                }
-            }
-
-            Ok(())
-        }
-        .await;
-
-        if let Err(err) = transaction_result {
-            rollback_transaction(&conn, "store_symbols").await;
-            pool.return_connection(conn);
-            return Err(err);
-        }
-
-        if let Err(e) =
-            safe_execute_with_retry(&conn, "COMMIT", (), "commit symbol transaction", 5).await
-        {
-            rollback_transaction(&conn, "store_symbols commit failure").await;
-            pool.return_connection(conn);
-            return Err(DatabaseError::OperationFailed {
-                message: format!("Failed to commit symbol transaction: {}", e),
-            });
-        }
-
-        pool.return_connection(conn);
-        debug!(
-            "[DEBUG] store_symbols: Successfully stored {} symbols",
-            unique_symbols.len()
-        );
-        Ok(())
+        self.writer_tx
+            .send(WriteMsg::StoreSymbols(vec, tx))
+            .await
+            .map_err(|_| DatabaseError::OperationFailed {
+                message: "Writer task not available (StoreSymbols)".into(),
+            })?;
+        rx.await.unwrap_or_else(|_| {
+            Err(DatabaseError::OperationFailed {
+                message: "Writer ack dropped (StoreSymbols)".into(),
+            })
+        })
     }
 
     async fn get_symbols_by_file(
@@ -2892,241 +4146,20 @@ impl DatabaseBackend for SQLiteBackend {
     // ===================
 
     async fn store_edges(&self, edges: &[Edge]) -> Result<(), DatabaseError> {
-        let normalized_edges: Vec<Edge> =
-            edges.iter().map(Self::normalize_edge_for_storage).collect();
-
-        let mut seen_signatures: HashSet<EdgeDedupKey> = HashSet::new();
-        let mut unique_edges: Vec<Edge> = Vec::with_capacity(normalized_edges.len());
-        let mut duplicates_pruned = 0usize;
-
-        for edge in normalized_edges {
-            let signature = EdgeDedupKey::from_edge(&edge);
-            if seen_signatures.insert(signature) {
-                unique_edges.push(edge);
-            } else {
-                duplicates_pruned += 1;
-            }
-        }
-
-        if duplicates_pruned > 0 {
-            info!(
-                "[DEBUG] store_edges: Pruned {} duplicate edge candidates before storage",
-                duplicates_pruned
-            );
-        }
-
-        let edges = unique_edges;
-        let edges_len = edges.len();
-
-        // Don't exit early for empty arrays - we need to process transactions consistently
-        // Empty arrays are valid and might be used to store "none" edges
-
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
-
-        // Use transaction for batch operations with rollback on error
-        safe_execute_with_retry(
-            &conn,
-            "BEGIN TRANSACTION",
-            (),
-            "store_edges begin transaction",
-            3,
-        )
-        .await?;
-
-        // Check if we have any edges to store
-        if edges_len == 0 {
-            info!("[DEBUG] store_edges: No edges to store (empty array after normalization) - this is valid for marking analyzed-but-empty state");
-        } else {
-            info!("[DEBUG] store_edges: Storing {} edges", edges_len);
-            for (i, edge) in edges.iter().take(3).enumerate() {
-                info!("[DEBUG] store_edges: Edge[{}]: source='{}', target='{}', relation='{}', metadata={:?}",
-                      i,
-                      edge.source_symbol_uid,
-                      edge.target_symbol_uid,
-                      edge.relation.to_string(),
-                      edge.metadata);
-            }
-
-            // Batch size for optimal performance - edges are smaller so we can handle more
-            const BATCH_SIZE: usize = 200;
-
-            let mut offset = 0usize;
-            while offset < edges_len {
-                let end = usize::min(offset + BATCH_SIZE, edges_len);
-                let chunk_edges = &edges[offset..end];
-                let chunk_keys: Vec<EdgeDedupKey> =
-                    chunk_edges.iter().map(EdgeDedupKey::from_edge).collect();
-
-                let mut existing_keys: HashSet<EdgeDedupKey> = HashSet::new();
-                if !chunk_keys.is_empty() {
-                    let mut query = String::from(
-                        "SELECT relation, source_symbol_uid, target_symbol_uid, IFNULL(start_line, -1) AS start_line_key, IFNULL(start_char, -1) AS start_char_key, language FROM edge WHERE ",
-                    );
-                    let mut params: Vec<turso::Value> = Vec::with_capacity(chunk_keys.len() * 6);
-
-                    for (idx, key) in chunk_keys.iter().enumerate() {
-                        if idx > 0 {
-                            query.push_str(" OR ");
-                        }
-                        query.push_str(
-                            "(relation = ? AND source_symbol_uid = ? AND target_symbol_uid = ? AND IFNULL(start_line, -1) = ? AND IFNULL(start_char, -1) = ? AND language = ?)",
-                        );
-                        params.push(turso::Value::Text(key.relation.clone()));
-                        params.push(turso::Value::Text(key.source.clone()));
-                        params.push(turso::Value::Text(key.target.clone()));
-                        params.push(turso::Value::Integer(key.start_line));
-                        params.push(turso::Value::Integer(key.start_char));
-                        params.push(turso::Value::Text(key.language.clone()));
-                    }
-
-                    let mut rows =
-                        safe_query(&conn, &query, params, "store_edges dedup lookup").await?;
-                    while let Some(row) =
-                        rows.next()
-                            .await
-                            .map_err(|e| DatabaseError::OperationFailed {
-                                message: format!("Failed to iterate dedup lookup rows: {e}"),
-                            })?
-                    {
-                        let relation = match row.get_value(0) {
-                            Ok(turso::Value::Text(val)) => val,
-                            _ => continue,
-                        };
-                        let source = match row.get_value(1) {
-                            Ok(turso::Value::Text(val)) => val,
-                            _ => continue,
-                        };
-                        let target = match row.get_value(2) {
-                            Ok(turso::Value::Text(val)) => val,
-                            _ => continue,
-                        };
-                        let start_line = match row.get_value(3) {
-                            Ok(turso::Value::Integer(val)) => val,
-                            _ => -1,
-                        };
-                        let start_char = match row.get_value(4) {
-                            Ok(turso::Value::Integer(val)) => val,
-                            _ => -1,
-                        };
-                        let language = match row.get_value(5) {
-                            Ok(turso::Value::Text(val)) => val,
-                            _ => continue,
-                        };
-
-                        existing_keys.insert(EdgeDedupKey {
-                            relation,
-                            source,
-                            target,
-                            language,
-                            start_line,
-                            start_char,
-                        });
-                    }
-                }
-
-                let mut edges_to_insert: Vec<&Edge> = Vec::new();
-                for (edge, key) in chunk_edges.iter().zip(chunk_keys.iter()) {
-                    if existing_keys.contains(key) {
-                        info!(
-                            "[DEBUG] store_edges: Skipping duplicate edge (db exists): {} -> {} ({})",
-                            edge.source_symbol_uid,
-                            edge.target_symbol_uid,
-                            edge.relation.to_string()
-                        );
-                    } else {
-                        edges_to_insert.push(edge);
-                    }
-                }
-
-                if edges_to_insert.is_empty() {
-                    info!(
-                        "[DEBUG] store_edges: All {} edges in batch already exist or were duplicates, skipping",
-                        chunk_edges.len()
-                    );
-                    offset = end;
-                    continue;
-                }
-
-                let placeholders = edges_to_insert
-                    .iter()
-                    .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?)")
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let mut params = Vec::with_capacity(edges_to_insert.len() * 8);
-
-                for edge in edges_to_insert.iter() {
-                    params.extend(vec![
-                        turso::Value::Text(edge.relation.to_string().to_string()),
-                        turso::Value::Text(edge.source_symbol_uid.clone()),
-                        turso::Value::Text(edge.target_symbol_uid.clone()),
-                        edge.start_line
-                            .map(|l| turso::Value::Integer((if l >= 1 { l } else { 1 }) as i64))
-                            .unwrap_or(turso::Value::Null),
-                        edge.start_char
-                            .map(|c| turso::Value::Integer(c as i64))
-                            .unwrap_or(turso::Value::Null),
-                        turso::Value::Real(edge.confidence as f64),
-                        turso::Value::Text(edge.language.clone()),
-                        edge.metadata
-                            .clone()
-                            .map(turso::Value::Text)
-                            .unwrap_or(turso::Value::Null),
-                    ]);
-                }
-
-                let batch_sql = format!(
-                    "INSERT INTO edge (relation, source_symbol_uid, target_symbol_uid, start_line, start_char, confidence, language, metadata) VALUES {}",
-                    placeholders
-                );
-
-                info!(
-                    "[DEBUG] store_edges: Executing batch insert with {} values (filtered from {})",
-                    edges_to_insert.len(),
-                    chunk_edges.len()
-                );
-
-                match safe_execute_with_retry(
-                    &conn,
-                    &batch_sql,
-                    params,
-                    "store_edges batch insert",
-                    3,
-                )
-                .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("[DEBUG] store_edges: Failed to insert edges: {}", e);
-                        error!("[DEBUG] store_edges: Failed SQL: {}", batch_sql);
-                        error!(
-                            "[DEBUG] store_edges: Number of edges in batch: {}",
-                            chunk_edges.len()
-                        );
-                        rollback_transaction(&conn, "store_edges batch failure").await;
-                        return Err(e);
-                    }
-                }
-
-                info!(
-                    "[DEBUG] store_edges: Successfully inserted {} edges",
-                    edges_to_insert.len()
-                );
-
-                offset = end;
-            }
-        }
-
-        if let Err(e) = safe_execute_with_retry(&conn, "COMMIT", (), "store_edges commit", 3).await
-        {
-            rollback_transaction(&conn, "store_edges commit failure").await;
-            pool.return_connection(conn);
-            return Err(e);
-        }
-
-        pool.return_connection(conn);
-        Ok(())
+        // Send to single-writer task
+        let (tx, rx) = oneshot::channel();
+        let edges_vec = edges.to_vec();
+        self.writer_tx
+            .send(WriteMsg::StoreEdges(edges_vec, tx))
+            .await
+            .map_err(|_| DatabaseError::OperationFailed {
+                message: "Writer task not available (StoreEdges)".into(),
+            })?;
+        rx.await.unwrap_or_else(|_| {
+            Err(DatabaseError::OperationFailed {
+                message: "Writer ack dropped (StoreEdges)".into(),
+            })
+        })
     }
 
     async fn get_symbol_references(
@@ -3134,8 +4167,11 @@ impl DatabaseBackend for SQLiteBackend {
         _workspace_id: i64,
         symbol_uid: &str,
     ) -> Result<Vec<Edge>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        // Checkout connection, then drop pool lock before running query/iterating rows
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let mut rows = conn
             .query(
@@ -3177,7 +4213,14 @@ impl DatabaseBackend for SQLiteBackend {
                     _ => continue,
                 },
                 target_symbol_uid: match row.get_value(1) {
-                    Ok(turso::Value::Text(uid)) => uid,
+                    Ok(turso::Value::Text(uid)) => {
+                        if Self::is_none_uid(&uid) {
+                            "none".to_string()
+                        } else {
+                            uid
+                        }
+                    }
+                    Ok(turso::Value::Null) => "none".to_string(),
                     _ => continue,
                 },
                 file_path: None, // This method doesn't join with symbol_state for file_path
@@ -3208,7 +4251,10 @@ impl DatabaseBackend for SQLiteBackend {
             });
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(edges)
     }
 
@@ -3221,13 +4267,15 @@ impl DatabaseBackend for SQLiteBackend {
         let mut pool = self.pool.lock().await;
         let conn = pool.get_connection().await?;
 
+        // Calls are stored uniformly with relation = 'calls'.
+        // Direction is expressed by which side matches the symbol.
         let (sql, params) = match direction {
             CallDirection::Incoming => (
                 r#"
                 SELECT source_symbol_uid, target_symbol_uid, relation,
                        start_line, start_char, confidence, language, metadata
                 FROM edge
-                WHERE source_symbol_uid = ? AND relation = 'incoming_call'
+                WHERE relation = 'calls' AND target_symbol_uid = ?
                 "#,
                 vec![turso::Value::Text(symbol_uid.to_string())],
             ),
@@ -3236,7 +4284,7 @@ impl DatabaseBackend for SQLiteBackend {
                 SELECT source_symbol_uid, target_symbol_uid, relation,
                        start_line, start_char, confidence, language, metadata
                 FROM edge
-                WHERE source_symbol_uid = ? AND relation = 'outgoing_call'
+                WHERE relation = 'calls' AND source_symbol_uid = ?
                 "#,
                 vec![turso::Value::Text(symbol_uid.to_string())],
             ),
@@ -3245,9 +4293,12 @@ impl DatabaseBackend for SQLiteBackend {
                 SELECT source_symbol_uid, target_symbol_uid, relation,
                        start_line, start_char, confidence, language, metadata
                 FROM edge
-                WHERE source_symbol_uid = ? AND (relation = 'incoming_call' OR relation = 'outgoing_call')
+                WHERE relation = 'calls' AND (source_symbol_uid = ? OR target_symbol_uid = ?)
                 "#,
-                vec![turso::Value::Text(symbol_uid.to_string())],
+                vec![
+                    turso::Value::Text(symbol_uid.to_string()),
+                    turso::Value::Text(symbol_uid.to_string()),
+                ],
             ),
         };
 
@@ -3258,14 +4309,14 @@ impl DatabaseBackend for SQLiteBackend {
         );
         info!("[DEBUG] Query parameter: symbol_uid = '{}'", symbol_uid);
 
-        let mut rows = conn.query(sql, params).await.map_err(|e| {
-            error!("[DEBUG] get_symbol_calls query failed: {}", e);
-            error!("[DEBUG] Failed SQL: {}", sql.trim());
-            error!("[DEBUG] Failed with symbol_uid: '{}'", symbol_uid);
-            DatabaseError::OperationFailed {
-                message: format!("Failed to get symbol calls: {}", e),
-            }
-        })?;
+        let mut rows = safe_query(&conn, sql, params, "get_symbol_calls")
+            .await
+            .map_err(|e| {
+                error!("[DEBUG] get_symbol_calls query failed: {}", e);
+                error!("[DEBUG] Failed SQL: {}", sql.trim());
+                error!("[DEBUG] Failed with symbol_uid: '{}'", symbol_uid);
+                e
+            })?;
 
         let mut edges = Vec::new();
         while let Some(row) = rows
@@ -3288,7 +4339,14 @@ impl DatabaseBackend for SQLiteBackend {
                     _ => continue,
                 },
                 target_symbol_uid: match row.get_value(1) {
-                    Ok(turso::Value::Text(uid)) => uid,
+                    Ok(turso::Value::Text(uid)) => {
+                        if Self::is_none_uid(&uid) {
+                            "none".to_string()
+                        } else {
+                            uid
+                        }
+                    }
+                    Ok(turso::Value::Null) => "none".to_string(),
                     _ => continue,
                 },
                 file_path: None, // This method doesn't join with symbol_state for file_path
@@ -3321,7 +4379,10 @@ impl DatabaseBackend for SQLiteBackend {
             symbol_uid
         );
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(edges)
     }
 
@@ -3377,12 +4438,7 @@ impl DatabaseBackend for SQLiteBackend {
                     params.push(turso::Value::Text(rel_str.clone()));
                 }
 
-                let mut rows =
-                    conn.query(&sql, params)
-                        .await
-                        .map_err(|e| DatabaseError::OperationFailed {
-                            message: format!("Failed to traverse graph: {}", e),
-                        })?;
+                let mut rows = safe_query(&conn, &sql, params, "traverse_graph layer").await?;
 
                 while let Some(row) =
                     rows.next()
@@ -3419,7 +4475,10 @@ impl DatabaseBackend for SQLiteBackend {
             current_depth += 1;
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(paths)
     }
 
@@ -3434,13 +4493,16 @@ impl DatabaseBackend for SQLiteBackend {
         _language: &str,
         config: &str,
     ) -> Result<i64, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         let run_id = uuid::Uuid::new_v4().to_string();
         let run_id_int = self.generate_unique_id().await?;
 
-        conn.execute(
+        safe_execute(
+            &conn,
             r#"
             INSERT INTO analysis_run (
                 run_id, workspace_id, analyzer_type, analyzer_version,
@@ -3454,13 +4516,17 @@ impl DatabaseBackend for SQLiteBackend {
                 turso::Value::Text(analyzer_version.to_string()),
                 turso::Value::Text(config.to_string()),
             ],
+            "create_analysis_run insert",
         )
         .await
         .map_err(|e| DatabaseError::OperationFailed {
             message: format!("Failed to create analysis run: {}", e),
         })?;
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok(run_id_int)
     }
 
@@ -3593,7 +4659,10 @@ impl DatabaseBackend for SQLiteBackend {
             0.0
         };
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
 
         Ok(AnalysisProgress {
             workspace_id,
@@ -4083,15 +5152,13 @@ impl DatabaseBackend for SQLiteBackend {
         })?;
 
         // Step 25.5: Check if edge table exists and has data
-        let mut table_check = conn
-            .query("SELECT COUNT(*) FROM edge LIMIT 1", [] as [turso::Value; 0])
-            .await
-            .map_err(|e| {
-                error!("[DEBUG] Failed to check edge table existence: {}", e);
-                DatabaseError::OperationFailed {
-                    message: format!("Failed to check edge table: {}", e),
-                }
-            })?;
+        let mut table_check = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM edge LIMIT 1",
+            (),
+            "refs.table_check",
+        )
+        .await?;
 
         if let Some(row) = table_check.next().await.map_err(|e| {
             error!("[DEBUG] Failed to read edge table check result: {}", e);
@@ -4147,24 +5214,25 @@ impl DatabaseBackend for SQLiteBackend {
             workspace_id, symbol_uid
         );
 
-        // Step 25.3: Verify database connection
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await.map_err(|e| {
+        // Step 25.3: Verify database connection (checkout without holding pool lock during I/O)
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await
+        }
+        .map_err(|e| {
             error!("[DEBUG] Database connection failed: {}", e);
             e
         })?;
         debug!("[DEBUG] Database connection acquired successfully");
 
         // Step 25.5: Check if edge table exists and has data
-        let mut table_check = conn
-            .query("SELECT COUNT(*) FROM edge LIMIT 1", [] as [turso::Value; 0])
-            .await
-            .map_err(|e| {
-                error!("[DEBUG] Failed to check edge table existence: {}", e);
-                DatabaseError::OperationFailed {
-                    message: format!("Failed to check edge table: {}", e),
-                }
-            })?;
+        let mut table_check = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM edge LIMIT 1",
+            (),
+            "defs.table_check",
+        )
+        .await?;
 
         if let Some(row) = table_check.next().await.map_err(|e| {
             error!("[DEBUG] Failed to read edge table check result: {}", e);
@@ -4198,15 +5266,13 @@ impl DatabaseBackend for SQLiteBackend {
 
         // 1. Query edges where edge_type = 'defines' or similar
 
-        let mut rows = conn
-            .query(query, [turso::Value::Text(symbol_uid.to_string())])
-            .await
-            .map_err(|e| {
-                error!("[DEBUG] SQL query execution failed: {}", e);
-                DatabaseError::OperationFailed {
-                    message: format!("Failed to get symbol definitions: {}", e),
-                }
-            })?;
+        let mut rows = safe_query(
+            &conn,
+            query,
+            [turso::Value::Text(symbol_uid.to_string())],
+            "get_definitions_for_symbol",
+        )
+        .await?;
 
         debug!("[DEBUG] SQL query executed successfully");
 
@@ -4264,7 +5330,10 @@ impl DatabaseBackend for SQLiteBackend {
             });
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
 
         info!(
             "[DEBUG] Processed {} rows from database, created {} edges",
@@ -4296,24 +5365,25 @@ impl DatabaseBackend for SQLiteBackend {
             workspace_id, symbol_uid
         );
 
-        // Step 25.3: Verify database connection
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await.map_err(|e| {
+        // Step 25.3: Verify database connection (without holding pool lock while iterating)
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await
+        }
+        .map_err(|e| {
             error!("[DEBUG] Database connection failed: {}", e);
             e
         })?;
         debug!("[DEBUG] Database connection acquired successfully");
 
         // Step 25.5: Check if edge table exists and has data
-        let mut table_check = conn
-            .query("SELECT COUNT(*) FROM edge LIMIT 1", [] as [turso::Value; 0])
-            .await
-            .map_err(|e| {
-                error!("[DEBUG] Failed to check edge table existence: {}", e);
-                DatabaseError::OperationFailed {
-                    message: format!("Failed to check edge table: {}", e),
-                }
-            })?;
+        let mut table_check = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM edge LIMIT 1",
+            (),
+            "impls.table_check",
+        )
+        .await?;
 
         if let Some(row) = table_check.next().await.map_err(|e| {
             error!("[DEBUG] Failed to read edge table check result: {}", e);
@@ -4347,15 +5417,13 @@ impl DatabaseBackend for SQLiteBackend {
 
         // 1. Query edges where relation = 'Implements' or similar
 
-        let mut rows = conn
-            .query(query, [turso::Value::Text(symbol_uid.to_string())])
-            .await
-            .map_err(|e| {
-                error!("[DEBUG] SQL query execution failed: {}", e);
-                DatabaseError::OperationFailed {
-                    message: format!("Failed to get symbol implementations: {}", e),
-                }
-            })?;
+        let mut rows = safe_query(
+            &conn,
+            query,
+            [turso::Value::Text(symbol_uid.to_string())],
+            "get_implementations_for_symbol",
+        )
+        .await?;
 
         debug!("[DEBUG] SQL query executed successfully");
 
@@ -4413,7 +5481,10 @@ impl DatabaseBackend for SQLiteBackend {
             });
         }
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
 
         info!(
             "[DEBUG] Processed {} rows from database, created {} edges",
@@ -4582,21 +5653,18 @@ impl SQLiteBackend {
             LIMIT ?
         "#;
 
-        let mut rows = safe_query(
+        let mut rows = safe_query_with_retry(
             conn,
             query,
             [turso::Value::Integer(limit as i64)],
             "find symbols missing references",
+            5,
         )
         .await?;
 
         let mut symbols = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to read references-missing row: {e}"),
-            })?
+        while let Some(row) =
+            Self::next_row_with_retry(&mut rows, "find symbols missing references", 5).await?
         {
             if let Some(symbol) = Self::symbol_state_from_row(&row) {
                 symbols.push(symbol);
@@ -4604,6 +5672,39 @@ impl SQLiteBackend {
         }
 
         Ok(symbols)
+    }
+
+    /// Step a row cursor with limited retries on transient lock errors (associated with backend)
+    async fn next_row_with_retry(
+        rows: &mut turso::Rows,
+        context: &str,
+        max_retries: u32,
+    ) -> Result<Option<turso::Row>, DatabaseError> {
+        let mut attempt = 0;
+        loop {
+            match rows.next().await {
+                Ok(opt) => return Ok(opt),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if msg.contains("database is locked") && attempt < max_retries {
+                        let backoff = 25u64 * (1 << attempt);
+                        warn!(
+                            "{}: step() locked, retrying in {}ms (attempt {}/{})",
+                            context,
+                            backoff,
+                            attempt + 1,
+                            max_retries
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    return Err(DatabaseError::OperationFailed {
+                        message: format!("{}: failed to read row: {}", context, e),
+                    });
+                }
+            }
+        }
     }
 
     async fn query_symbols_missing_implementations(
@@ -4631,21 +5732,18 @@ impl SQLiteBackend {
             LIMIT ?
         "#;
 
-        let mut rows = safe_query(
+        let mut rows = safe_query_with_retry(
             conn,
             query,
             [turso::Value::Integer(limit as i64)],
             "find symbols missing implementations",
+            5,
         )
         .await?;
 
         let mut symbols = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to read implementations-missing row: {e}"),
-            })?
+        while let Some(row) =
+            Self::next_row_with_retry(&mut rows, "find symbols missing implementations", 5).await?
         {
             if let Some(symbol) = Self::symbol_state_from_row(&row) {
                 symbols.push(symbol);
@@ -4671,7 +5769,7 @@ impl SQLiteBackend {
                    s.metadata
             FROM symbol_state s
             LEFT JOIN edge e
-              ON e.relation IN ('calls', 'incoming_call', 'outgoing_call')
+              ON e.relation = 'calls'
              AND (e.source_symbol_uid = s.symbol_uid OR e.target_symbol_uid = s.symbol_uid)
             WHERE s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
               AND s.file_path IS NOT NULL
@@ -4680,21 +5778,18 @@ impl SQLiteBackend {
             LIMIT ?
         "#;
 
-        let mut rows = safe_query(
+        let mut rows = safe_query_with_retry(
             conn,
             query,
             [turso::Value::Integer(limit as i64)],
             "find symbols missing call hierarchy",
+            5,
         )
         .await?;
 
         let mut symbols = Vec::new();
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to read call-hierarchy-missing row: {e}"),
-            })?
+        while let Some(row) =
+            Self::next_row_with_retry(&mut rows, "find symbols missing call hierarchy", 5).await?
         {
             if let Some(symbol) = Self::symbol_state_from_row(&row) {
                 symbols.push(symbol);
@@ -4727,7 +5822,10 @@ impl SQLiteBackend {
             .query_symbols_missing_call_hierarchy(&conn, fetch_limit)
             .await?;
 
-        pool.return_connection(conn);
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
 
         let mut plans: Vec<SymbolEnrichmentPlan> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
@@ -4822,7 +5920,28 @@ impl SQLiteBackend {
         sql: &str,
         context: &str,
     ) -> Result<Vec<(String, String)>, DatabaseError> {
-        let mut rows = safe_query(conn, sql, (), context).await?;
+        // Retry SELECTs when the database is temporarily locked
+        let mut attempt: u32 = 0;
+        let mut rows = loop {
+            match safe_query(conn, sql, (), context).await {
+                Ok(rows) => break rows,
+                Err(DatabaseError::OperationFailed { message })
+                    if message.contains("database is locked") && attempt < 5 =>
+                {
+                    let backoff = 25u64 * (1 << attempt);
+                    warn!(
+                        "{}: database locked, retrying SELECT in {}ms (attempt {}/5)",
+                        context,
+                        backoff,
+                        attempt + 1
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        };
         let mut results = Vec::new();
 
         while let Some(row) = rows
@@ -4880,85 +5999,153 @@ impl SQLiteBackend {
     ) -> Result<PendingEnrichmentCounts, DatabaseError> {
         let conn = self.get_direct_connection().await?;
 
-        let references_sql = r#"
+        // Note: Old COUNT(*) SQL kept in repo history; current approach derives counts
+        // from materialized sets below to avoid dialect limitations.
+
+        // NOTE: Turso SQL dialect does not support compound SELECTs inside FROM or CTEs.
+        // Instead of UNION-ing three sub-queries in SQL, fetch the three pending sets and
+        // deduplicate in Rust.
+        // We avoid dialect limitations (CTE/EXISTS/complex FROM) by fetching candidate symbols
+        // and distinct edge sources/targets separately, then aggregating in Rust.
+        let candidate_symbols_sql = r#"
             SELECT s.symbol_uid, s.kind
             FROM symbol_state s
-            LEFT JOIN edge e
-              ON e.source_symbol_uid = s.symbol_uid
-             AND e.relation = 'references'
             WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
               AND s.file_path IS NOT NULL
               AND trim(s.file_path) != ''
-              AND e.source_symbol_uid IS NULL
         "#;
 
-        let implementations_sql = r#"
-            SELECT s.symbol_uid, s.kind
-            FROM symbol_state s
-            LEFT JOIN edge e
-              ON e.source_symbol_uid = s.symbol_uid
-             AND e.relation IN ('implementation','implements')
-            WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
-              AND s.file_path IS NOT NULL
-              AND trim(s.file_path) != ''
-              AND e.source_symbol_uid IS NULL
+        let refs_sources_sql = r#"
+            SELECT DISTINCT source_symbol_uid
+            FROM edge
+            WHERE relation = 'references'
         "#;
 
-        let call_hierarchy_sql = r#"
-            SELECT s.symbol_uid, s.kind
-            FROM symbol_state s
-            LEFT JOIN edge e
-              ON e.relation IN ('calls','incoming_call','outgoing_call')
-             AND (e.source_symbol_uid = s.symbol_uid OR e.target_symbol_uid = s.symbol_uid)
-            WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
-              AND s.file_path IS NOT NULL
-              AND trim(s.file_path) != ''
-              AND e.relation IS NULL
+        let impl_sources_sql = r#"
+            SELECT DISTINCT source_symbol_uid
+            FROM edge
+            WHERE relation IN ('implementation','implements')
         "#;
 
-        let references = Self::fetch_pending_symbols_with_kind(
+        let calls_sources_sql = r#"
+            SELECT DISTINCT source_symbol_uid
+            FROM edge
+            WHERE relation = 'calls'
+        "#;
+
+        let calls_targets_sql = r#"
+            SELECT DISTINCT target_symbol_uid
+            FROM edge
+            WHERE relation = 'calls'
+        "#;
+
+        // Fetch the three pending sets and deduplicate in Rust
+        use std::collections::HashMap;
+        let mut pending: HashMap<String, String> = HashMap::new();
+
+        // Load candidate symbols
+        let candidates = Self::fetch_pending_symbols_with_kind(
             &conn,
-            references_sql,
-            "fetch pending references",
-        )
-        .await?;
-        let implementations = Self::fetch_pending_symbols_with_kind(
-            &conn,
-            implementations_sql,
-            "fetch pending implementations",
-        )
-        .await?;
-        let call_hierarchy = Self::fetch_pending_symbols_with_kind(
-            &conn,
-            call_hierarchy_sql,
-            "fetch pending call hierarchy",
+            candidate_symbols_sql,
+            "candidate_symbols",
         )
         .await?;
 
-        let references_pending = references.len() as u64;
-        let implementations_pending = implementations.len() as u64;
-        let call_hierarchy_pending = call_hierarchy.len() as u64;
+        // Load distinct edge endpoints
+        let mut refs_sources = HashSet::new();
+        let mut impl_sources = HashSet::new();
+        let mut calls_sources = HashSet::new();
+        let mut calls_targets = HashSet::new();
 
-        let mut combined: std::collections::HashMap<String, String> = HashMap::new();
-        for (uid, kind) in references
-            .iter()
-            .chain(implementations.iter())
-            .chain(call_hierarchy.iter())
+        let mut rows = safe_query(&conn, refs_sources_sql, (), "refs_sources_sql").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("refs_sources_sql read: {}", e),
+            })?
         {
-            combined.entry(uid.clone()).or_insert_with(|| kind.clone());
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                refs_sources.insert(uid);
+            }
+        }
+        let mut rows = safe_query(&conn, impl_sources_sql, (), "impl_sources_sql").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("impl_sources_sql read: {}", e),
+            })?
+        {
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                impl_sources.insert(uid);
+            }
+        }
+        let mut rows = safe_query(&conn, calls_sources_sql, (), "calls_sources_sql").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("calls_sources_sql read: {}", e),
+            })?
+        {
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                calls_sources.insert(uid);
+            }
+        }
+        let mut rows = safe_query(&conn, calls_targets_sql, (), "calls_targets_sql").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("calls_targets_sql read: {}", e),
+            })?
+        {
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                calls_targets.insert(uid);
+            }
         }
 
-        let symbols_pending = combined.len() as u64;
+        // Tally per-op and overall counts
+        let mut references_pending: u64 = 0;
+        let mut implementations_pending: u64 = 0;
+        let mut call_hierarchy_pending: u64 = 0;
 
-        let mut high_priority_pending = 0u64;
-        let mut medium_priority_pending = 0u64;
-        let mut low_priority_pending = 0u64;
+        for (uid, kind) in &candidates {
+            let has_refs = refs_sources.contains(uid);
+            let has_impls = impl_sources.contains(uid);
+            let has_calls = calls_sources.contains(uid) || calls_targets.contains(uid);
 
-        for kind in combined.values() {
-            match Self::enrichment_priority(kind) {
-                0 => high_priority_pending += 1,
-                1 => medium_priority_pending += 1,
-                _ => low_priority_pending += 1,
+            if !has_refs {
+                references_pending += 1;
+            }
+            if !has_impls {
+                implementations_pending += 1;
+            }
+            if !has_calls {
+                call_hierarchy_pending += 1;
+            }
+
+            if !has_refs || !has_impls || !has_calls {
+                pending.entry(uid.clone()).or_insert(kind.clone());
+            }
+        }
+
+        let symbols_pending = pending.len() as u64;
+        let mut high_priority_pending: u64 = 0;
+        let mut medium_priority_pending: u64 = 0;
+        let mut low_priority_pending: u64 = 0;
+
+        for kind in pending.values() {
+            if matches!(kind.as_str(), "function" | "method") {
+                high_priority_pending += 1;
+            } else if matches!(
+                kind.as_str(),
+                "class" | "struct" | "enum" | "interface" | "trait"
+            ) {
+                medium_priority_pending += 1;
+            } else {
+                low_priority_pending += 1;
             }
         }
 
@@ -5034,33 +6221,42 @@ impl SQLiteBackend {
 
         debug!("[DIRECT_CONNECTION] store_symbols_with_conn: Storing {} symbols with direct connection", symbols.len());
 
-        // Use transaction for batch operations with rollback on error
-        conn.execute("BEGIN TRANSACTION", ()).await.map_err(|e| {
-            DatabaseError::OperationFailed {
-                message: format!("Failed to begin transaction for symbols: {}", e),
-            }
-        })?;
+        // Chunked transactions: commit every CHUNK symbols to limit lock hold time
+        // Smaller chunks reduce writer lock hold time and contention with readers
+        const CHUNK: usize = 100;
+        let mut idx = 0usize;
+        while idx < symbols.len() {
+            let end = usize::min(idx + CHUNK, symbols.len());
 
-        let transaction_result: Result<(), DatabaseError> = async {
-            // Insert directly into symbol_state table with the correct schema
-            for symbol in symbols {
-                // CRITICAL: Reject symbols with empty/null file paths to prevent workspace resolution issues
-                if symbol.file_path.trim().is_empty() {
-                    warn!(
-                        "[VALIDATION] Rejecting symbol '{}' ({}) with empty file path - this would cause empty workspace registration!",
-                        symbol.name, symbol.kind
-                    );
-                    continue;
-                }
-                // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
-                let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
-                let mut check_rows = safe_query(
-                    &conn,
-                    check_query,
-                    [turso::Value::Text(symbol.symbol_uid.clone())],
-                    "check symbol existence",
-                )
-                .await?;
+            // Use transaction for this chunk
+            let begin_ctx = format!(
+                "store_symbols_with_conn begin (chunk_size={}, range={}..{}, total={})",
+                end - idx,
+                idx,
+                end,
+                symbols.len()
+            );
+            safe_execute_with_retry(conn, "BEGIN TRANSACTION", (), &begin_ctx, 10).await?;
+
+            let transaction_result: Result<(), DatabaseError> = async {
+                for symbol in &symbols[idx..end] {
+                    // CRITICAL: Reject symbols with empty/null file paths to prevent workspace resolution issues
+                    if symbol.file_path.trim().is_empty() {
+                        warn!(
+                            "[VALIDATION] Rejecting symbol '{}' ({}) with empty file path - this would cause empty workspace registration!",
+                            symbol.name, symbol.kind
+                        );
+                        continue;
+                    }
+                    // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
+                    let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
+                    let mut check_rows = safe_query(
+                        &conn,
+                        check_query,
+                        [turso::Value::Text(symbol.symbol_uid.clone())],
+                        "check symbol existence",
+                    )
+                    .await?;
 
                 let symbol_exists = check_rows
                     .next()
@@ -5119,7 +6315,14 @@ impl SQLiteBackend {
                     let mut update_params = params.clone();
                     update_params.push(turso::Value::Text(symbol.symbol_uid.clone()));
 
-                    safe_execute(&conn, update_query, update_params, "update symbol")
+                    let update_ctx = format!(
+                        "update symbol (uid={}, chunk_range={}..{}, total={})",
+                        symbol.symbol_uid,
+                        idx,
+                        end,
+                        symbols.len()
+                    );
+                    safe_execute_with_retry(&conn, update_query, update_params, &update_ctx, 10)
                         .await
                         .map_err(|e| DatabaseError::OperationFailed {
                             message: format!(
@@ -5137,7 +6340,14 @@ impl SQLiteBackend {
                     let mut insert_params = vec![turso::Value::Text(symbol.symbol_uid.clone())];
                     insert_params.extend(params);
 
-                    safe_execute(&conn, insert_query, insert_params, "insert symbol")
+                    let insert_ctx = format!(
+                        "insert symbol (uid={}, chunk_range={}..{}, total={})",
+                        symbol.symbol_uid,
+                        idx,
+                        end,
+                        symbols.len()
+                    );
+                    safe_execute_with_retry(&conn, insert_query, insert_params, &insert_ctx, 10)
                         .await
                         .map_err(|e| DatabaseError::OperationFailed {
                             message: format!(
@@ -5146,22 +6356,29 @@ impl SQLiteBackend {
                             ),
                         })?;
                 }
+                }
+                Ok(())
+            }
+            .await;
+
+            if let Err(err) = transaction_result {
+                rollback_transaction(&conn, "store_symbols_with_conn").await;
+                return Err(err);
             }
 
-            Ok(())
-        }
-        .await;
+            let commit_ctx = format!(
+                "store_symbols_with_conn commit (chunk_size={}, range={}..{}, total={})",
+                end - idx,
+                idx,
+                end,
+                symbols.len()
+            );
+            if let Err(e) = safe_execute_with_retry(conn, "COMMIT", (), &commit_ctx, 10).await {
+                rollback_transaction(conn, "store_symbols_with_conn commit failure").await;
+                return Err(e);
+            }
 
-        if let Err(err) = transaction_result {
-            rollback_transaction(&conn, "store_symbols_with_conn").await;
-            return Err(err);
-        }
-
-        if let Err(e) = conn.execute("COMMIT", ()).await {
-            rollback_transaction(&conn, "store_symbols_with_conn commit failure").await;
-            return Err(DatabaseError::OperationFailed {
-                message: format!("Failed to commit symbol transaction: {}", e),
-            });
+            idx = end;
         }
 
         debug!(
@@ -5169,6 +6386,23 @@ impl SQLiteBackend {
             symbols.len()
         );
         Ok(())
+    }
+
+    // Public trait method now routes through the single-writer
+    async fn store_symbols(&self, symbols: &[SymbolState]) -> Result<(), DatabaseError> {
+        let (tx, rx) = oneshot::channel();
+        let vec = symbols.to_vec();
+        self.writer_tx
+            .send(WriteMsg::StoreSymbols(vec, tx))
+            .await
+            .map_err(|_| DatabaseError::OperationFailed {
+                message: "Writer task not available (StoreSymbols)".into(),
+            })?;
+        rx.await.unwrap_or_else(|_| {
+            Err(DatabaseError::OperationFailed {
+                message: "Writer ack dropped (StoreSymbols)".into(),
+            })
+        })
     }
 
     /// Get symbol references using a provided connection (lock-free variant)
@@ -5232,7 +6466,14 @@ impl SQLiteBackend {
                 _ => continue,
             };
             let target_uid = match row.get_value(1) {
-                Ok(turso::Value::Text(uid)) => uid,
+                Ok(turso::Value::Text(uid)) => {
+                    if Self::is_none_uid(&uid) {
+                        "none".to_string()
+                    } else {
+                        uid
+                    }
+                }
+                Ok(turso::Value::Null) => "none".to_string(),
                 _ => continue,
             };
 
@@ -5302,36 +6543,28 @@ impl SQLiteBackend {
 
     /// Interpret edges to determine if we should return data, empty result, or trigger fresh LSP call
     fn interpret_edges_for_relation(&self, edges: Vec<Edge>) -> EdgeInterpretation<Edge> {
-        match edges.len() {
-            0 => {
-                // No edges at all - need fresh LSP call
-                EdgeInterpretation::Unknown
-            }
-            1 if edges[0].target_symbol_uid == "none" => {
-                // Single none edge - LSP analyzed but found nothing (return [])
-                debug!("Found single none edge - returning empty result");
-                EdgeInterpretation::AnalyzedEmpty
-            }
-            _ => {
-                // Multiple edges or non-none edges
-                let real_edges: Vec<Edge> = edges
-                    .into_iter()
-                    .filter(|e| e.target_symbol_uid != "none") // Ignore any none edges
-                    .collect();
+        if edges.is_empty() {
+            return EdgeInterpretation::Unknown;
+        }
 
-                if real_edges.is_empty() {
-                    // All edges were none (shouldn't happen but handle gracefully)
-                    warn!("Found multiple none edges - treating as analyzed empty");
-                    EdgeInterpretation::AnalyzedEmpty
-                } else {
-                    // Has real edges - ignore any stale none edges
-                    debug!(
-                        "Found {} real edges (ignoring any none edges)",
-                        real_edges.len()
-                    );
-                    EdgeInterpretation::HasData(real_edges)
-                }
+        // Real edges are those where neither endpoint is a sentinel 'none'
+        let mut real_edges: Vec<Edge> = Vec::with_capacity(edges.len());
+        for e in edges.into_iter() {
+            if Self::is_none_uid(&e.source_symbol_uid) || Self::is_none_uid(&e.target_symbol_uid) {
+                continue;
             }
+            real_edges.push(e);
+        }
+
+        if real_edges.is_empty() {
+            debug!("Only sentinel 'none' edges present - treating as analyzed empty");
+            EdgeInterpretation::AnalyzedEmpty
+        } else {
+            debug!(
+                "Found {} real edges (ignoring any sentinel edges)",
+                real_edges.len()
+            );
+            EdgeInterpretation::HasData(real_edges)
         }
     }
 
@@ -5379,7 +6612,8 @@ impl SQLiteBackend {
             params.push(turso::Value::Text(rel.to_string()));
         }
 
-        let mut rows = safe_query(conn, &sql, params, "fetch edges for relation").await?;
+        let mut rows =
+            safe_query_with_retry(conn, &sql, params, "fetch edges for relation", 5).await?;
         let mut edges = Vec::new();
 
         while let Some(row) = rows
@@ -5468,8 +6702,7 @@ impl SQLiteBackend {
         &self,
         symbol_uid: &str,
     ) -> Result<EdgeInterpretation<Edge>, DatabaseError> {
-        self.interpret_relation_status(symbol_uid, &["calls", "incoming_call", "outgoing_call"])
-            .await
+        self.interpret_relation_status(symbol_uid, &["calls"]).await
     }
 
     /// Validate database integrity with comprehensive checks
@@ -5872,17 +7105,23 @@ fn sanitize_table_name(name: &str) -> String {
 impl SQLiteBackend {
     /// Get specific table counts for index status reporting
     pub async fn get_table_counts(&self) -> Result<(u64, u64, u64), DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        // Track as a reader so quiesce mode can block this safely
+        let _reader_guard = self.begin_reader("index-status.table-counts").await;
+        // Checkout connection, then release pool lock during queries
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
 
         // Count symbols from symbol_state table
         let symbol_count = {
-            let mut rows = conn
-                .query("SELECT COUNT(*) FROM symbol_state", ())
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to count symbols: {}", e),
-                })?;
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(*) FROM symbol_state",
+                (),
+                "index-status.count-symbols",
+            )
+            .await?;
 
             match rows.next().await {
                 Ok(Some(row)) => match row.get_value(0) {
@@ -5895,12 +7134,13 @@ impl SQLiteBackend {
 
         // Count edges from edge table
         let edge_count = {
-            let mut rows = conn
-                .query("SELECT COUNT(*) FROM edge", ())
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to count edges: {}", e),
-                })?;
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(*) FROM edge",
+                (),
+                "index-status.count-edges",
+            )
+            .await?;
 
             match rows.next().await {
                 Ok(Some(row)) => match row.get_value(0) {
@@ -5913,12 +7153,13 @@ impl SQLiteBackend {
 
         // Count distinct files from symbol_state table
         let file_count = {
-            let mut rows = conn
-                .query("SELECT COUNT(DISTINCT file_path) FROM symbol_state", ())
-                .await
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to count files: {}", e),
-                })?;
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
+                (),
+                "index-status.count-files",
+            )
+            .await?;
 
             match rows.next().await {
                 Ok(Some(row)) => match row.get_value(0) {
@@ -5929,8 +7170,222 @@ impl SQLiteBackend {
             }
         };
 
-        pool.return_connection(conn);
+        // Return connection to the pool
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
         Ok((symbol_count, edge_count, file_count))
+    }
+
+    /// Try-get variant that never blocks during quiesce. Returns Ok(None) if quiesced
+    /// or if a bounded attempt to acquire a read snapshot fails while writer is active.
+    pub async fn get_table_counts_try(&self) -> Result<Option<(u64, u64, u64)>, DatabaseError> {
+        // Exit early if quiesced
+        if self.is_quiesced().await {
+            return Ok(None);
+        }
+
+        // Hold a reader guard across the queries so we don't race a write-quiesce in between
+        let mut have_guard = false;
+        let _reader_guard = if let Some(g) =
+            self.try_begin_reader("index-status.table-counts.try").await
+        {
+            have_guard = true;
+            Some(g)
+        } else {
+            // Small, bounded fallback to avoid flakiness right after quiesce lift
+            let block_ms: u64 = std::env::var("PROBE_LSP_STATUS_DB_TRY_BLOCK_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(50);
+            if block_ms > 0 {
+                let fut = self.begin_reader("index-status.table-counts.try.block");
+                match tokio::time::timeout(std::time::Duration::from_millis(block_ms), fut).await {
+                    Ok(guard) => {
+                        have_guard = true;
+                        Some(guard)
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        };
+
+        // If we failed to get the read lock but neither quiesced nor writer busy, try a soft snapshot without the gate
+        if !have_guard {
+            let write_held = self.is_reader_write_held();
+            // Even if writer is busy, libSQL/Turso supports concurrent readers via MVCC.
+            // As long as we are not explicitly quiesced (write-held), take a soft snapshot.
+            if !write_held {
+                let conn = {
+                    let mut pool = self.pool.lock().await;
+                    pool.get_connection().await?
+                };
+                let symbols = {
+                    let mut rows = safe_query(
+                        &conn,
+                        "SELECT COUNT(*) FROM symbol_state",
+                        (),
+                        "index-status.try-soft.count-symbols",
+                    )
+                    .await?;
+                    match rows.next().await {
+                        Ok(Some(row)) => match row.get_value(0) {
+                            Ok(turso::Value::Integer(c)) => c as u64,
+                            _ => 0,
+                        },
+                        _ => 0,
+                    }
+                };
+                let edges = {
+                    let mut rows = safe_query(
+                        &conn,
+                        "SELECT COUNT(*) FROM edge",
+                        (),
+                        "index-status.try-soft.count-edges",
+                    )
+                    .await?;
+                    match rows.next().await {
+                        Ok(Some(row)) => match row.get_value(0) {
+                            Ok(turso::Value::Integer(c)) => c as u64,
+                            _ => 0,
+                        },
+                        _ => 0,
+                    }
+                };
+                let files = {
+                    let mut rows = safe_query(
+                        &conn,
+                        "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
+                        (),
+                        "index-status.try-soft.count-files",
+                    )
+                    .await?;
+                    match rows.next().await {
+                        Ok(Some(row)) => match row.get_value(0) {
+                            Ok(turso::Value::Integer(c)) => c as u64,
+                            _ => 0,
+                        },
+                        _ => 0,
+                    }
+                };
+                {
+                    let mut pool = self.pool.lock().await;
+                    pool.return_connection(conn);
+                }
+                return Ok(Some((symbols, edges, files)));
+            } else {
+                return Ok(None);
+            }
+        }
+        // Checkout connection without holding the pool lock during queries
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
+        // Symbols
+        let symbol_count = {
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(*) FROM symbol_state",
+                (),
+                "index-status.try.count-symbols",
+            )
+            .await?;
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(c)) => c as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        };
+        // Edges
+        let edge_count = {
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(*) FROM edge",
+                (),
+                "index-status.try.count-edges",
+            )
+            .await?;
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(c)) => c as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        };
+        // Files
+        let file_count = {
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
+                (),
+                "index-status.try.count-files",
+            )
+            .await?;
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(c)) => c as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        };
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
+        Ok(Some((symbol_count, edge_count, file_count)))
+    }
+
+    /// Try-get from kv_store that never blocks when the pool is quiesced.
+    /// Returns Ok(None) if quiesced or key not present.
+    pub async fn kv_get_try(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DatabaseError> {
+        // Check quiesce flag without waiting
+        {
+            let pool = self.pool.lock().await;
+            if pool.quiesced.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+        }
+        // Proceed like normal get, but avoid holding the pool lock while querying
+        let key_str = String::from_utf8_lossy(key);
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await?
+        };
+        let mut rows = conn
+            .query(
+                "SELECT value FROM kv_store WHERE key = ?",
+                [turso::Value::Text(key_str.to_string())],
+            )
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to get key from default store: {e}"),
+            })?;
+        let value = if let Some(row) =
+            rows.next()
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to iterate rows in default store: {e}"),
+                })? {
+            match row.get_value(0) {
+                Ok(turso::Value::Blob(blob)) => Some(blob),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
+        Ok(value)
     }
 }
 
@@ -7136,4 +8591,39 @@ mod tests {
         let paths = backend.traverse_graph("any_symbol", 2, &[]).await.unwrap();
         assert!(paths.is_empty());
     }
+}
+#[tokio::test]
+async fn wal_sync_timeout_does_not_leave_quiesced() {
+    // Create a tiny temporary DB
+    let dir = tempfile::tempdir().expect("tmpdir");
+    let db_path = dir.path().join("cache.db");
+    let cfg = DatabaseConfig::default();
+    let sqlite_cfg = SQLiteConfig {
+        path: db_path.to_string_lossy().to_string(),
+        temporary: false,
+        cache_size: 0,
+    };
+    let backend = SQLiteBackend::with_sqlite_config(cfg, sqlite_cfg)
+        .await
+        .expect("backend");
+
+    // Run a wal-sync with a very short timeout; regardless of success, quiesce must be lifted.
+    let _ = backend
+        .wal_sync_blocking(
+            Some(std::time::Duration::from_millis(1)),
+            true,
+            CheckpointMode::Auto,
+            None,
+        )
+        .await;
+
+    // Verify pool is not quiesced
+    let quiesced_now = {
+        let pool = backend.pool.lock().await;
+        pool.quiesced.load(Ordering::Relaxed)
+    };
+    assert!(
+        !quiesced_now,
+        "pool.quiesced should be false after wal-sync exits"
+    );
 }

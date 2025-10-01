@@ -160,7 +160,7 @@ impl PerformanceTestHarness {
         let start = Instant::now();
 
         for symbol_uid in symbols {
-            let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+            let none_edges = create_none_call_hierarchy_edges(symbol_uid);
             self.database.store_edges(&none_edges).await?;
         }
 
@@ -353,7 +353,7 @@ async fn test_concurrent_none_edge_access() -> Result<()> {
 
                 // Store none edges
                 for symbol_uid in &symbols {
-                    let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+                    let none_edges = create_none_call_hierarchy_edges(symbol_uid);
                     match harness_clone.database.store_edges(&none_edges).await {
                         Ok(_) => task_operations += 1,
                         Err(_) => task_errors += 1,
@@ -485,7 +485,7 @@ async fn test_mixed_workload_performance() -> Result<()> {
                     .await?;
                 if result.is_none() {
                     cache_misses += 1;
-                    let none_edges = create_none_call_hierarchy_edges(symbol_uid, 1);
+                    let none_edges = create_none_call_hierarchy_edges(symbol_uid);
                     harness.database.store_edges(&none_edges).await?;
                 } else {
                     cache_hits += 1;
@@ -498,7 +498,7 @@ async fn test_mixed_workload_performance() -> Result<()> {
                     .get_references_for_symbol(harness.workspace_id, symbol_uid, true)
                     .await?;
                 // Always miss first time for references - no need to track
-                let none_edges = create_none_reference_edges(symbol_uid, 1);
+                let none_edges = create_none_reference_edges(symbol_uid);
                 harness.database.store_edges(&none_edges).await?;
             }
             2 => {
@@ -508,7 +508,7 @@ async fn test_mixed_workload_performance() -> Result<()> {
                     .get_definitions_for_symbol(harness.workspace_id, symbol_uid)
                     .await?;
                 cache_misses += 1;
-                let none_edges = create_none_definition_edges(symbol_uid, 1);
+                let none_edges = create_none_definition_edges(symbol_uid);
                 harness.database.store_edges(&none_edges).await?;
             }
             3 => {
@@ -518,7 +518,7 @@ async fn test_mixed_workload_performance() -> Result<()> {
                     .get_implementations_for_symbol(harness.workspace_id, symbol_uid)
                     .await?;
                 cache_misses += 1;
-                let none_edges = create_none_implementation_edges(symbol_uid, 1);
+                let none_edges = create_none_implementation_edges(symbol_uid);
                 harness.database.store_edges(&none_edges).await?;
             }
             _ => unreachable!(),
@@ -698,7 +698,7 @@ async fn test_performance_regression_prevention() -> Result<()> {
                     errors += 1;
                 }
 
-                let none_edges = create_none_call_hierarchy_edges(&symbol_uid, 1);
+                let none_edges = create_none_call_hierarchy_edges(&symbol_uid);
                 operations += 1;
                 if let Err(_) = harness_clone.database.store_edges(&none_edges).await {
                     errors += 1;
@@ -756,10 +756,10 @@ async fn test_database_performance_under_scale() -> Result<()> {
 
         for symbol_uid in &symbols {
             // Add different types of none edges
-            all_edges.extend(create_none_call_hierarchy_edges(symbol_uid, 1));
-            all_edges.extend(create_none_reference_edges(symbol_uid, 1));
-            all_edges.extend(create_none_definition_edges(symbol_uid, 1));
-            all_edges.extend(create_none_implementation_edges(symbol_uid, 1));
+            all_edges.extend(create_none_call_hierarchy_edges(symbol_uid));
+            all_edges.extend(create_none_reference_edges(symbol_uid));
+            all_edges.extend(create_none_definition_edges(symbol_uid));
+            all_edges.extend(create_none_implementation_edges(symbol_uid));
         }
 
         println!("   Generated {} edges for storage", all_edges.len());

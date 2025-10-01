@@ -37,6 +37,8 @@ pub struct LspServer {
     supports_implementations: AtomicBool,
     // Keep the raw advertised capabilities for debugging / future checks
     advertised_capabilities: Arc<Mutex<Option<Value>>>,
+    // Pending responses map so concurrent waits don’t drop each other's replies
+    pending_responses: Arc<Mutex<std::collections::HashMap<i64, Value>>>,
 }
 
 impl std::fmt::Debug for LspServer {
@@ -286,6 +288,7 @@ impl LspServer {
             supports_references: AtomicBool::new(config.capabilities.references),
             supports_implementations: AtomicBool::new(config.capabilities.implementations),
             advertised_capabilities: Arc::new(Mutex::new(None)),
+            pending_responses: Arc::new(Mutex::new(std::collections::HashMap::new())),
         })
     }
 
@@ -1094,6 +1097,13 @@ impl LspServer {
         let mut last_progress_log = Instant::now();
 
         while start.elapsed() < timeout_duration {
+            // First, see if a concurrent waiter already stored our response
+            {
+                let mut map = self.pending_responses.lock().await;
+                if let Some(v) = map.remove(&id) {
+                    return Ok(v);
+                }
+            }
             // Log progress every 10 seconds during long waits
             if last_progress_log.elapsed() > Duration::from_secs(10) {
                 debug!(
@@ -1246,6 +1256,11 @@ impl LspServer {
                             message_count
                         );
                         return Ok(msg);
+                    } else if let Some(other_id) = msg_id {
+                        // Not our response: preserve it so the rightful waiter can retrieve it
+                        let mut map = self.pending_responses.lock().await;
+                        map.insert(other_id, msg);
+                        continue;
                     }
                 }
                 Ok(None) => {

@@ -27,8 +27,7 @@ use lsp_daemon::relationship::lsp_enhancer::{
 };
 use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::symbol::SymbolUIDGenerator;
-use lsp_daemon::universal_cache::CacheLayer;
-use lsp_daemon::workspace_cache_router::{WorkspaceCacheRouter, WorkspaceCacheRouterConfig};
+// universal_cache and workspace_cache_router removed from codebase; tests no longer depend on them
 use lsp_daemon::workspace_resolver::WorkspaceResolver;
 
 #[allow(unused_imports)] // Some imports used conditionally in tests
@@ -930,7 +929,6 @@ struct LspTestContext {
     server_manager: Arc<SingleServerManager>,
     lsp_client_wrapper: Arc<LspClientWrapper>,
     lsp_enhancer: Arc<LspRelationshipEnhancer>,
-    cache_layer: Arc<CacheLayer>,
     uid_generator: Arc<SymbolUIDGenerator>,
     config: LspTestConfig,
     fixtures: LspTestFixture,
@@ -942,12 +940,6 @@ impl LspTestContext {
 
         // Create temporary directory for cache
         let temp_cache_dir = TempDir::new()?;
-        let workspace_config = WorkspaceCacheRouterConfig {
-            base_cache_dir: temp_cache_dir.path().join("caches"),
-            max_open_caches: 5,
-            max_parent_lookup_depth: 3,
-            ..Default::default()
-        };
 
         // Create LSP registry and server manager
         let registry = Arc::new(LspRegistry::new()?);
@@ -957,18 +949,7 @@ impl LspTestContext {
             child_processes,
         ));
 
-        // Create workspace cache router
-        let workspace_router = Arc::new(WorkspaceCacheRouter::new(
-            workspace_config,
-            server_manager.clone(),
-        ));
-
-        // Create universal cache
-        let universal_cache =
-            Arc::new(lsp_daemon::universal_cache::UniversalCache::new(workspace_router).await?);
-
-        // Create cache layer
-        let cache_layer = Arc::new(CacheLayer::new(universal_cache, None, None));
+        // Cache layer no longer used; DB-backed paths are used directly.
 
         // Create language detector and workspace resolver
         let language_detector = Arc::new(LanguageDetector::new());
@@ -1003,7 +984,6 @@ impl LspTestContext {
             Some(server_manager.clone()),
             language_detector.clone(),
             workspace_resolver,
-            cache_layer.clone(),
             uid_generator.clone(),
             lsp_config,
         ));
@@ -1015,7 +995,6 @@ impl LspTestContext {
             server_manager,
             lsp_client_wrapper,
             lsp_enhancer,
-            cache_layer,
             uid_generator,
             config,
             fixtures,
@@ -1379,8 +1358,15 @@ async fn test_lsp_relationship_enhancement(
         let mock_symbols = create_mock_symbols_for_language(language, test_file);
         let tree_sitter_relationships = Vec::new(); // Empty for now
 
-        let analysis_context =
-            AnalysisContext::new(1, 1, 1, "rust".to_string(), context.uid_generator.clone());
+        // Provide minimal paths for AnalysisContext::new
+        let analysis_context = AnalysisContext::new(
+            1,                             // workspace_id
+            1,                             // analysis_run_id
+            "rust".to_string(),            // language
+            PathBuf::from("/tmp/ws"),      // workspace_path (dummy)
+            test_file.clone(),             // file_path
+            context.uid_generator.clone(), // uid generator
+        );
 
         let start_time = Instant::now();
         let enhancement_result = context

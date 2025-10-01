@@ -10,8 +10,8 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
 use crate::database::{
-    create_none_edge, create_none_implementation_edges, create_none_reference_edges,
-    DatabaseBackend, Edge, EdgeRelation, SymbolState,
+    create_none_implementation_edges, create_none_reference_edges, DatabaseBackend, Edge,
+    EdgeRelation, SymbolState,
 };
 use crate::path_resolver::PathResolver;
 use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
@@ -149,8 +149,17 @@ impl LspDatabaseAdapter {
         // Process incoming calls (symbols that call the main symbol)
         if result.incoming.is_empty() {
             if let Some(main_symbol_uid) = &main_symbol_uid {
-                let mut sentinel = create_none_edge(main_symbol_uid, EdgeRelation::IncomingCall);
-                sentinel.metadata = Some("lsp_call_hierarchy_empty_incoming".to_string());
+                let sentinel = Edge {
+                    relation: EdgeRelation::Calls,
+                    source_symbol_uid: "none".to_string(),
+                    target_symbol_uid: main_symbol_uid.clone(),
+                    file_path: None,
+                    start_line: None,
+                    start_char: None,
+                    confidence: 1.0,
+                    language: language.to_string(),
+                    metadata: Some("lsp_call_hierarchy_empty_incoming".to_string()),
+                };
                 debug!(
                     "Storing sentinel edge for empty incoming calls: {}",
                     main_symbol_uid
@@ -197,8 +206,17 @@ impl LspDatabaseAdapter {
         // Process outgoing calls (symbols that the main symbol calls)
         if result.outgoing.is_empty() {
             if let Some(main_symbol_uid) = &main_symbol_uid {
-                let mut sentinel = create_none_edge(main_symbol_uid, EdgeRelation::OutgoingCall);
-                sentinel.metadata = Some("lsp_call_hierarchy_empty_outgoing".to_string());
+                let sentinel = Edge {
+                    relation: EdgeRelation::Calls,
+                    source_symbol_uid: main_symbol_uid.clone(),
+                    target_symbol_uid: "none".to_string(),
+                    file_path: None,
+                    start_line: None,
+                    start_char: None,
+                    confidence: 1.0,
+                    language: language.to_string(),
+                    metadata: Some("lsp_call_hierarchy_empty_outgoing".to_string()),
+                };
                 debug!(
                     "Storing sentinel edge for empty outgoing calls: {}",
                     main_symbol_uid
@@ -406,6 +424,7 @@ impl LspDatabaseAdapter {
         line: u32,
         column: u32,
         language: &str,
+        workspace_root_hint: Option<&Path>,
     ) -> Result<ResolvedSymbol> {
         debug!(
             "[SYMBOL_RESOLVE] Starting resolution at {}:{}:{} in language {}",
@@ -439,8 +458,12 @@ impl LspDatabaseAdapter {
         let canonical_file = file_path
             .canonicalize()
             .unwrap_or_else(|_| file_path.to_path_buf());
-        let workspace_root = workspace_utils::find_workspace_root_with_fallback(&canonical_file)
-            .unwrap_or_else(|_| file_path.parent().unwrap_or(file_path).to_path_buf());
+        let workspace_root = if let Some(hint) = workspace_root_hint {
+            hint.to_path_buf()
+        } else {
+            workspace_utils::find_workspace_root_with_fallback(&canonical_file)
+                .unwrap_or_else(|_| file_path.parent().unwrap_or(file_path).to_path_buf())
+        };
 
         let symbol_info =
             match self.find_symbol_at_position(&content, file_path, line, column, language) {
@@ -532,9 +555,16 @@ impl LspDatabaseAdapter {
         line: u32,
         column: u32,
         language: &str,
+        workspace_root_hint: Option<&Path>,
     ) -> Result<String> {
         let resolved = self
-            .resolve_symbol_details_at_location(file_path, line, column, language)
+            .resolve_symbol_details_at_location(
+                file_path,
+                line,
+                column,
+                language,
+                workspace_root_hint,
+            )
             .await?;
         Ok(resolved.uid)
     }
@@ -854,7 +884,7 @@ impl LspDatabaseAdapter {
                 (
                     format!("impl {} for {}", trait_name, type_name),
                     SymbolKind::TraitImpl,
-                    type_identifier,
+                    trait_identifier,
                     Some(trait_name),
                 )
             } else if let Some(trait_name) = inferred_trait_name {
@@ -1212,6 +1242,7 @@ impl LspDatabaseAdapter {
                 target_position.0,
                 target_position.1,
                 language,
+                Some(workspace_root),
             )
             .await
             .with_context(|| {
@@ -1298,6 +1329,7 @@ impl LspDatabaseAdapter {
                     location.range.start.line,
                     location.range.start.character,
                     language,
+                    Some(workspace_root),
                 )
                 .await
             {
@@ -1539,6 +1571,7 @@ impl LspDatabaseAdapter {
             source_position.0,
             source_position.1,
             language,
+            Some(workspace_root),
         ))
         .with_context(|| {
             format!(
@@ -1576,6 +1609,7 @@ impl LspDatabaseAdapter {
                     location.range.start.line,
                     location.range.start.character,
                     language,
+                    Some(workspace_root),
                 )) {
                     Ok(uid) => uid,
                     Err(e) => {
@@ -1663,6 +1697,7 @@ impl LspDatabaseAdapter {
             interface_position.0,
             interface_position.1,
             language,
+            Some(workspace_root),
         ))
         .with_context(|| {
             format!(
@@ -1700,6 +1735,7 @@ impl LspDatabaseAdapter {
                     location.range.start.line,
                     location.range.start.character,
                     language,
+                    Some(workspace_root),
                 )) {
                     Ok(uid) => uid,
                     Err(e) => {
@@ -2559,7 +2595,7 @@ fn main() {
 
         // Test resolving function at different positions
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 11, 15, "rust")
+            .resolve_symbol_at_location(&temp_file, 11, 15, "rust", None)
             .await;
         assert!(result.is_ok(), "Should resolve 'add' function successfully");
 
@@ -2568,7 +2604,7 @@ fn main() {
 
         // Test resolving struct
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 1, 15, "rust")
+            .resolve_symbol_at_location(&temp_file, 1, 15, "rust", None)
             .await;
         assert!(
             result.is_ok(),
@@ -2577,7 +2613,7 @@ fn main() {
 
         // Test resolving at invalid position
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 100, 50, "rust")
+            .resolve_symbol_at_location(&temp_file, 100, 50, "rust", None)
             .await;
         assert!(result.is_err(), "Should fail for invalid position");
 
@@ -2609,7 +2645,7 @@ impl Default for Widget {
             .expect("Default keyword present") as u32;
 
         let resolved = adapter
-            .resolve_symbol_details_at_location(&temp_file, impl_line, impl_char, "rust")
+            .resolve_symbol_details_at_location(&temp_file, impl_line, impl_char, "rust", None)
             .await
             .expect("Should resolve impl symbol");
 
@@ -2644,7 +2680,7 @@ if __name__ == "__main__":
 
         // Test resolving Python class
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 1, 10, "python")
+            .resolve_symbol_at_location(&temp_file, 1, 10, "python", None)
             .await;
         assert!(
             result.is_ok(),
@@ -2653,13 +2689,13 @@ if __name__ == "__main__":
 
         // Test resolving Python method
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 5, 10, "python")
+            .resolve_symbol_at_location(&temp_file, 5, 10, "python", None)
             .await;
         assert!(result.is_ok(), "Should resolve 'add' method successfully");
 
         // Test resolving Python function
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 9, 5, "python")
+            .resolve_symbol_at_location(&temp_file, 9, 5, "python", None)
             .await;
         assert!(
             result.is_ok(),
@@ -2687,7 +2723,7 @@ if __name__ == "__main__":
         assert!(file_path.exists(), "Expected {:?} to exist", file_path);
 
         let uid = adapter
-            .resolve_symbol_at_location(&file_path, 7, 11, "rust")
+            .resolve_symbol_at_location(&file_path, 7, 11, "rust", None)
             .await
             .expect("Failed to resolve symbol at location");
 
@@ -2701,7 +2737,7 @@ if __name__ == "__main__":
         assert!(prompt_path.exists(), "Expected {:?} to exist", prompt_path);
 
         let prompt_uid = adapter
-            .resolve_symbol_at_location(&prompt_path, 129, 5, "rust")
+            .resolve_symbol_at_location(&prompt_path, 129, 5, "rust", None)
             .await
             .expect("Failed to resolve prompt symbol");
         assert!(
@@ -2743,7 +2779,7 @@ function main(): void {
 
         // Test resolving TypeScript interface
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 1, 15, "typescript")
+            .resolve_symbol_at_location(&temp_file, 1, 15, "typescript", None)
             .await;
         assert!(
             result.is_ok(),
@@ -2752,7 +2788,7 @@ function main(): void {
 
         // Test resolving TypeScript class
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 5, 10, "typescript")
+            .resolve_symbol_at_location(&temp_file, 5, 10, "typescript", None)
             .await;
         assert!(
             result.is_ok(),
@@ -2761,7 +2797,7 @@ function main(): void {
 
         // Test resolving TypeScript method
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 12, 15, "typescript")
+            .resolve_symbol_at_location(&temp_file, 12, 15, "typescript", None)
             .await;
         assert!(result.is_ok(), "Should resolve 'add' method successfully");
 
@@ -2776,7 +2812,7 @@ function main(): void {
         // Test with empty file
         let empty_file = create_temp_file_with_content("", "rs");
         let result = adapter
-            .resolve_symbol_at_location(&empty_file, 0, 0, "rust")
+            .resolve_symbol_at_location(&empty_file, 0, 0, "rust", None)
             .await
             .expect("Empty file should use positional fallback UID");
         assert!(
@@ -2788,7 +2824,7 @@ function main(): void {
         // Test with unsupported language
         let test_file = create_temp_file_with_content("func test() {}", "unknown");
         let result = adapter
-            .resolve_symbol_at_location(&test_file, 0, 5, "unknown")
+            .resolve_symbol_at_location(&test_file, 0, 5, "unknown", None)
             .await
             .expect("Unknown language should fall back to a synthesized UID");
         assert!(!result.is_empty(), "Fallback UID should not be empty");
@@ -2797,7 +2833,7 @@ function main(): void {
         // Test with invalid file path
         let invalid_path = PathBuf::from("/nonexistent/file.rs");
         let result = adapter
-            .resolve_symbol_at_location(&invalid_path, 0, 0, "rust")
+            .resolve_symbol_at_location(&invalid_path, 0, 0, "rust", None)
             .await;
         assert!(result.is_err(), "Should fail for nonexistent file");
     }
@@ -2816,15 +2852,15 @@ pub fn test_function() -> i32 {
 
         // Resolve the same symbol multiple times
         let uid1 = adapter
-            .resolve_symbol_at_location(&temp_file, 1, 10, "rust")
+            .resolve_symbol_at_location(&temp_file, 1, 10, "rust", None)
             .await
             .unwrap();
         let uid2 = adapter
-            .resolve_symbol_at_location(&temp_file, 1, 10, "rust")
+            .resolve_symbol_at_location(&temp_file, 1, 10, "rust", None)
             .await
             .unwrap();
         let uid3 = adapter
-            .resolve_symbol_at_location(&temp_file, 1, 15, "rust")
+            .resolve_symbol_at_location(&temp_file, 1, 15, "rust", None)
             .await
             .unwrap(); // Different column, same function
 
@@ -2955,7 +2991,7 @@ pub fn test_function() -> i32 {
         // Measure resolution time
         let start = std::time::Instant::now();
         let result = adapter
-            .resolve_symbol_at_location(&temp_file, 1, 10, "rust")
+            .resolve_symbol_at_location(&temp_file, 1, 10, "rust", None)
             .await;
         let duration = start.elapsed();
 
@@ -4731,11 +4767,11 @@ impl MyTrait for Beta {}
         let beta_impl_line = 6u32; // `impl MyTrait for Beta {}`
 
         let alpha_uid = adapter
-            .resolve_symbol_at_location(&source_file, alpha_impl_line, 10, "rust")
+            .resolve_symbol_at_location(&source_file, alpha_impl_line, 10, "rust", None)
             .await
             .expect("resolve alpha impl");
         let beta_uid = adapter
-            .resolve_symbol_at_location(&source_file, beta_impl_line, 10, "rust")
+            .resolve_symbol_at_location(&source_file, beta_impl_line, 10, "rust", None)
             .await
             .expect("resolve beta impl");
 

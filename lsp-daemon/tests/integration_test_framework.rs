@@ -21,7 +21,9 @@ use tokio::sync::RwLock;
 use tokio::time::{sleep, timeout};
 use uuid::Uuid;
 
-use crate::mock_lsp::server::{MockLspServer, MockResponsePattern, MockServerConfig};
+#[path = "mock_lsp/mod.rs"]
+pub mod mock_lsp;
+use self::mock_lsp::server::{MockLspServer, MockResponsePattern, MockServerConfig};
 use lsp_daemon::database::{DatabaseBackend, DatabaseConfig, Edge, SQLiteBackend, SymbolState};
 use lsp_daemon::database_cache_adapter::{DatabaseCacheAdapter, DatabaseCacheConfig};
 use lsp_daemon::ipc::IpcStream;
@@ -744,7 +746,7 @@ pub mod test_data {
                 .iter()
                 .map(|s| SymbolState {
                     symbol_uid: format!("{}_{}", s.name, workspace_id),
-                    file_version_id,
+                    file_path: "src/test.rs".to_string(),
                     language: language.to_string(),
                     name: s.name.clone(),
                     fqn: s.fully_qualified_name.clone(),

@@ -230,6 +230,8 @@ pub struct LspDaemon {
     database_errors: Arc<AtomicU64>, // Count of database failures
     last_database_error: Arc<Mutex<Option<String>>>, // Last error message
     database_health_status: Arc<Mutex<DatabaseHealth>>, // Overall health
+    // Cancellation flags for long-running operations keyed by request_id
+    cancel_flags: Arc<DashMap<Uuid, Arc<AtomicBool>>>,
 }
 
 impl LspDaemon {
@@ -415,14 +417,50 @@ impl LspDaemon {
         // Set up tracing subscriber with memory layer and optionally stderr
         use tracing_subscriber::EnvFilter;
 
-        // Always use a filter to ensure INFO level is captured for all modules
-        // Set a base level of 'info' for all modules to capture logs from spawned tasks
-        let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            // Use 'info' as the base level for everything to capture all info-level logs
+        // Initialize EnvFilter from either RUST_LOG or PROBE_LOG_LEVEL, with sensible default.
+        // Preference order:
+        // 1) RUST_LOG (allows complex per-target directives)
+        // 2) PROBE_LOG_LEVEL (simple global level: trace|debug|info|warn|error)
+        // 3) "info"
+        let mut filter = if let Ok(rust_log) = std::env::var("RUST_LOG") {
+            EnvFilter::new(rust_log)
+        } else if let Ok(simple_level) = std::env::var("PROBE_LOG_LEVEL") {
+            EnvFilter::new(simple_level)
+        } else {
             EnvFilter::new("info")
-        });
+        };
+        // Reduce extremely verbose libSQL/turso_core debug logs by default,
+        // even when running the daemon at debug level. Users can override by
+        // explicitly appending directives via PROBE_RUST_LOG_APPEND.
+        for directive in [
+            // Global turso_core default
+            "turso_core=info",
+            // Storage layers
+            "turso_core::storage::wal=info",
+            "turso_core::storage::btree=info",
+            // Translate/collate layers
+            "turso_core::translate=info",
+            // Whole crates
+            "libsql=info",
+        ] {
+            if let Ok(d) = directive.parse() {
+                filter = filter.add_directive(d);
+            }
+        }
+
+        // Append user-provided per-target overrides, e.g.:
+        //   PROBE_RUST_LOG_APPEND="turso_core=warn,libsql=warn"
+        if let Ok(extra) = std::env::var("PROBE_RUST_LOG_APPEND") {
+            for part in extra.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                if let Ok(d) = part.parse() {
+                    filter = filter.add_directive(d);
+                }
+            }
+        }
 
         // Build the subscriber with layers based on what's available
+        // Bridge `log` crate records into `tracing` so dependencies using `log::*` are captured.
+        let _ = tracing_log::LogTracer::init();
         let _has_persistent_layer = persistent_logs.is_some();
         let log_level = std::env::var("PROBE_LOG_LEVEL").unwrap_or_default();
         let has_stderr = log_level == "debug" || log_level == "trace";
@@ -435,10 +473,11 @@ impl LspDaemon {
                 use tracing_subscriber::fmt;
                 let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
 
+                // Place the filter first so it gates events before other layers process them.
                 let subscriber = tracing_subscriber::registry()
+                    .with(filter)
                     .with(memory_layer)
                     .with(persistent_layer)
-                    .with(filter)
                     .with(fmt_layer);
 
                 if tracing::subscriber::set_global_default(subscriber).is_ok() {
@@ -448,9 +487,9 @@ impl LspDaemon {
                 }
             } else {
                 let subscriber = tracing_subscriber::registry()
+                    .with(filter)
                     .with(memory_layer)
-                    .with(persistent_layer)
-                    .with(filter);
+                    .with(persistent_layer);
 
                 if tracing::subscriber::set_global_default(subscriber).is_ok() {
                     tracing::info!("Tracing initialized with memory and persistent logging layers");
@@ -463,8 +502,8 @@ impl LspDaemon {
                 let fmt_layer = fmt::layer().with_target(false).with_writer(std::io::stderr);
 
                 let subscriber = tracing_subscriber::registry()
-                    .with(memory_layer)
                     .with(filter)
+                    .with(memory_layer)
                     .with(fmt_layer);
 
                 if tracing::subscriber::set_global_default(subscriber).is_ok() {
@@ -472,8 +511,8 @@ impl LspDaemon {
                 }
             } else {
                 let subscriber = tracing_subscriber::registry()
-                    .with(memory_layer)
-                    .with(filter);
+                    .with(filter)
+                    .with(memory_layer);
 
                 if tracing::subscriber::set_global_default(subscriber).is_ok() {
                     tracing::info!("Tracing initialized with memory logging layer");
@@ -594,6 +633,7 @@ impl LspDaemon {
             database_errors: Arc::new(AtomicU64::new(0)),
             last_database_error: Arc::new(Mutex::new(None)),
             database_health_status: Arc::new(Mutex::new(DatabaseHealth::Healthy)),
+            cancel_flags: Arc::new(DashMap::new()),
         })
     }
 
@@ -913,14 +953,14 @@ impl LspDaemon {
                         continue; // Continue loop on timeout, don't close connection
                     } else if error_msg.contains("early eof") || error_msg.contains("UnexpectedEof")
                     {
-                        // Client disconnected gracefully - this is normal
-                        debug!("[{}] Client disconnected (early eof)", client_id);
+                        // Client disconnected gracefully - log at info for visibility in memory logs
+                        info!("[{}] Client disconnected (early eof)", client_id);
                         break;
                     } else if error_msg.contains("Connection reset")
                         || error_msg.contains("Broken pipe")
                     {
-                        // Client disconnected abruptly - also normal
-                        debug!(
+                        // Client disconnected abruptly - also normal; log at info for visibility
+                        info!(
                             "[{}] Client disconnected abruptly: {}",
                             client_id, error_msg
                         );
@@ -962,25 +1002,39 @@ impl LspDaemon {
             // Increment request count
             *self.request_count.write().await += 1;
 
-            // Handle request with timeout
+            // Handle request with request-specific timeout (or no timeout)
             let request_start = Instant::now();
-            let response_result = timeout(REQ_TIMEOUT, self.handle_request(request)).await;
-            let request_duration = request_start.elapsed();
-
-            let response = match response_result {
-                Ok(resp) => resp,
-                Err(_) => {
-                    warn!(
-                        "[{}] Request processing timed out after {}s",
-                        client_id,
-                        REQ_TIMEOUT.as_secs()
-                    );
-                    DaemonResponse::Error {
-                        request_id: Uuid::new_v4(),
-                        error: format!("Request timed out after {}s", REQ_TIMEOUT.as_secs()),
+            let effective_timeout: Option<Duration> = match &request {
+                DaemonRequest::WalSync { timeout_secs, .. } => {
+                    if *timeout_secs == 0 {
+                        None
+                    } else {
+                        Some(Duration::from_secs(timeout_secs.saturating_add(10)))
                     }
                 }
+                _ => Some(REQ_TIMEOUT),
             };
+
+            let response = if let Some(t) = effective_timeout {
+                match timeout(t, self.handle_request(request)).await {
+                    Ok(resp) => resp,
+                    Err(_) => {
+                        warn!(
+                            "[{}] Request processing timed out after {}s",
+                            client_id,
+                            t.as_secs()
+                        );
+                        DaemonResponse::Error {
+                            request_id: Uuid::new_v4(),
+                            error: format!("Request timed out after {}s", t.as_secs()),
+                        }
+                    }
+                }
+            } else {
+                // No timeout: run to completion
+                self.handle_request(request).await
+            };
+            let request_duration = request_start.elapsed();
 
             // Track request duration (keep only last 100)
             {
@@ -2409,6 +2463,73 @@ impl LspDaemon {
                 self.handle_index_export(request_id, workspace_path, output_path, checkpoint)
                     .await
             }
+            DaemonRequest::WalSync {
+                request_id,
+                timeout_secs,
+                quiesce,
+                mode,
+                direct,
+            } => {
+                info!(
+                    "📋 WAL_SYNC: request received (timeout_secs={}, quiesce={}, mode={})",
+                    timeout_secs, quiesce, mode
+                );
+                // Register cancellation flag for this request
+                let flag = Arc::new(AtomicBool::new(false));
+                self.cancel_flags.insert(request_id, flag.clone());
+                let (waited_ms, iterations, details) = match self
+                    .handle_wal_sync_ext(
+                        timeout_secs.to_owned(),
+                        quiesce,
+                        mode.clone(),
+                        direct,
+                        Some(flag),
+                    )
+                    .await
+                {
+                    Ok((ms, it)) => (ms, it, None),
+                    Err(e) => (0, 0, Some(e.to_string())),
+                };
+                // Cleanup flag
+                self.cancel_flags.remove(&request_id);
+                if let Some(err) = details {
+                    warn!("📋 WAL_SYNC: failed: {}", err);
+                    DaemonResponse::Error {
+                        request_id,
+                        error: err,
+                    }
+                } else {
+                    info!(
+                        "📋 WAL_SYNC: completed (waited_ms={}, iterations={})",
+                        waited_ms, iterations
+                    );
+                    DaemonResponse::WalSynced {
+                        request_id,
+                        waited_ms,
+                        iterations,
+                        details: None,
+                    }
+                }
+            }
+            DaemonRequest::Cancel {
+                request_id,
+                cancel_request_id,
+            } => {
+                if let Some(entry) = self.cancel_flags.get(&cancel_request_id) {
+                    entry.store(true, Ordering::Relaxed);
+                    info!("Cancellation requested for {}", cancel_request_id);
+                    DaemonResponse::Error {
+                        request_id,
+                        error: "cancellation requested".to_string(),
+                    }
+                } else {
+                    warn!("No cancellable op for {}", cancel_request_id);
+                    DaemonResponse::Error {
+                        request_id,
+                        error: format!("No cancellable op for {}", cancel_request_id),
+                    }
+                }
+            }
         }
     }
 
@@ -2457,11 +2578,23 @@ impl LspDaemon {
         // Get the database path from the cache adapter
         let db_path = cache_adapter.database_path();
 
-        // If checkpoint is requested, perform WAL checkpoint
+        // If checkpoint is requested, perform the same logic as wal-sync --mode auto
         if checkpoint {
-            if let Err(e) = cache_adapter.checkpoint().await {
-                error!("Failed to checkpoint database: {}", e);
-                // Continue with export even if checkpoint fails
+            info!("Index export requested with --checkpoint: running wal-sync in auto mode");
+            match cache_adapter
+                .wal_sync_blocking(0, /*quiesce*/ true, Some("auto".to_string()), None)
+                .await
+            {
+                Ok((waited_ms, iterations)) => {
+                    info!(
+                        "Index export checkpoint completed (auto mode): waited_ms={} iterations={}",
+                        waited_ms, iterations
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to checkpoint database before export: {}", e);
+                    // Continue with export even if checkpoint fails
+                }
             }
         }
 
@@ -2486,6 +2619,42 @@ impl LspDaemon {
                 request_id,
                 error: format!("Failed to export database: {}", e),
             },
+        }
+    }
+
+    /// Handle WAL sync (blocking checkpoint)
+    async fn handle_wal_sync_ext(
+        &self,
+        timeout_secs: u64,
+        quiesce: bool,
+        mode: String,
+        direct: bool,
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<(u64, u32)> {
+        // Resolve current workspace
+        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+        let cache_adapter = self
+            .workspace_cache_router
+            .cache_for_workspace(&current_dir)
+            .await
+            .context("Failed to get workspace cache")?;
+        info!(
+            "📋 WAL_SYNC: running on workspace {:?} (timeout_secs={}, quiesce={}, mode={}, direct={})",
+            current_dir, timeout_secs, quiesce, mode, direct
+        );
+        if direct {
+            // Engine-direct checkpoint does not loop; just measure time and return (0 iterations)
+            let start = std::time::Instant::now();
+            cache_adapter
+                .wal_checkpoint_direct(&mode)
+                .await
+                .context("Failed to perform direct engine checkpoint")?;
+            Ok((start.elapsed().as_millis() as u64, 1))
+        } else {
+            cache_adapter
+                .wal_sync_blocking(timeout_secs, quiesce, Some(mode), cancel)
+                .await
+                .context("Failed to perform WAL sync")
         }
     }
 
@@ -4679,6 +4848,7 @@ impl LspDaemon {
             database_errors: self.database_errors.clone(),
             last_database_error: self.last_database_error.clone(),
             database_health_status: self.database_health_status.clone(),
+            cancel_flags: self.cancel_flags.clone(),
         }
     }
 
@@ -4955,6 +5125,21 @@ impl LspDaemon {
                 })
                 .collect();
 
+            // Time-bounded DB/sync sections to avoid status timeouts under heavy load
+            // Allow a bit more time for DB snapshot under load
+            let db_info = tokio::time::timeout(
+                std::time::Duration::from_millis(1000),
+                self.get_database_info(),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok());
+            let sync_info =
+                tokio::time::timeout(std::time::Duration::from_millis(1000), self.get_sync_info())
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok());
+
             let status_info = crate::protocol::IndexingStatusInfo {
                 manager_status: format!("{status:?}"),
                 progress: IndexingProgressInfo {
@@ -4996,12 +5181,26 @@ impl LspDaemon {
                 elapsed_seconds: progress.elapsed_seconds,
                 lsp_enrichment: manager.get_lsp_enrichment_info().await,
                 lsp_indexing: manager.get_lsp_indexing_info().await,
-                database: self.get_database_info().await.ok(),
+                database: db_info,
+                sync: sync_info,
             };
 
             Ok(status_info)
         } else {
             // No indexing manager active
+            let db_info = tokio::time::timeout(
+                std::time::Duration::from_millis(1000),
+                self.get_database_info(),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok());
+            let sync_info =
+                tokio::time::timeout(std::time::Duration::from_millis(1000), self.get_sync_info())
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok());
+
             let status_info = crate::protocol::IndexingStatusInfo {
                 manager_status: "Idle".to_string(),
                 progress: IndexingProgressInfo {
@@ -5031,7 +5230,8 @@ impl LspDaemon {
                 elapsed_seconds: 0,
                 lsp_enrichment: None,
                 lsp_indexing: None,
-                database: self.get_database_info().await.ok(),
+                database: db_info,
+                sync: sync_info,
             };
 
             Ok(status_info)
@@ -5073,22 +5273,55 @@ impl LspDaemon {
         // Get the backend to query the database directly
         let backend = cache.backend();
 
-        // Query symbol and edge counts from the database
-        let (total_symbols, total_edges, total_files, workspace_id) = match backend {
+        // Query symbol and edge counts from the database; avoid blocking during quiesce
+        let (
+            total_symbols,
+            total_edges,
+            total_files,
+            workspace_id,
+            db_quiesced,
+            rw_gate_write_held,
+            reader_active,
+            reader_last_label,
+            reader_last_ms,
+        ) = match backend {
             crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
-                // Use the new public method to get table counts
-                let (symbol_count, edge_count, file_count) = sqlite_backend
-                    .get_table_counts()
+                // Try without blocking first
+                let (symbol_count, edge_count, file_count, mut db_quiesced) = match sqlite_backend
+                    .get_table_counts_try()
                     .await
-                    .context("Failed to get table counts")?;
+                    .context("Failed to get table counts (try)")?
+                {
+                    Some((s, e, f)) => (s, e, f, false),
+                    None => (0, 0, 0, false),
+                };
 
                 // Get workspace ID
                 let workspace_id = self
                     .workspace_cache_router
                     .workspace_id_for(&current_dir)
                     .unwrap_or_else(|_| "unknown".to_string());
+                // Reader/writer gate snapshot
+                let reader_snapshot = sqlite_backend.reader_status_snapshot().await;
+                let write_held = sqlite_backend.is_reader_write_held();
+                if !db_quiesced {
+                    // Consider pool state for quiesced indicator if counts were skipped
+                    db_quiesced = sqlite_backend.is_quiesced().await || write_held;
+                }
+                let reader_last_label = reader_snapshot.last_label.unwrap_or_default();
+                let reader_last_ms = reader_snapshot.last_ms.unwrap_or(0) as u64;
 
-                (symbol_count, edge_count, file_count, workspace_id)
+                (
+                    symbol_count,
+                    edge_count,
+                    file_count,
+                    workspace_id,
+                    db_quiesced,
+                    write_held,
+                    reader_snapshot.active as u64,
+                    reader_last_label,
+                    reader_last_ms,
+                )
             }
         };
 
@@ -5097,7 +5330,74 @@ impl LspDaemon {
             total_edges,
             total_files,
             workspace_id: Some(workspace_id),
+            db_quiesced,
+            rw_gate_write_held,
+            reader_active,
+            reader_last_label,
+            reader_last_ms,
         })
+    }
+
+    /// Get sync information from backend KV for the current workspace (best-effort).
+    async fn get_sync_info(&self) -> Result<crate::protocol::SyncStatusInfo> {
+        use crate::protocol::SyncStatusInfo;
+
+        // Resolve current workspace backend
+        let current_dir = std::env::current_dir().context("Failed to get current directory")?;
+        let cache = self
+            .workspace_cache_router
+            .cache_for_workspace(&current_dir)
+            .await
+            .context("Failed to get workspace cache")?;
+
+        let backend = cache.backend();
+        let mut info = SyncStatusInfo {
+            client_id: std::env::var("PROBE_SYNC_CLIENT_ID").unwrap_or_default(),
+            last_pull_unix_time: None,
+            last_push_unix_time: None,
+            last_pull_generation: None,
+            last_change_id: None,
+        };
+
+        // Helper to parse i64 from UTF-8 blob
+        fn parse_i64_opt(v: Option<Vec<u8>>) -> Option<i64> {
+            let s = v.and_then(|b| String::from_utf8(b).ok())?;
+            s.trim().parse::<i64>().ok()
+        }
+
+        match backend {
+            crate::database_cache_adapter::BackendType::SQLite(sql) => {
+                // Keys we look for in kv_store — use non-blocking try-get to avoid status hangs
+                let client = sql.kv_get_try(b"sync:client_id").await.ok().flatten();
+                if let Some(cid) = client.and_then(|b| String::from_utf8(b).ok()) {
+                    if !cid.trim().is_empty() {
+                        info.client_id = cid;
+                    }
+                }
+                info.last_pull_unix_time = parse_i64_opt(
+                    sql.kv_get_try(b"sync:last_pull_unix_time")
+                        .await
+                        .ok()
+                        .flatten(),
+                );
+                info.last_push_unix_time = parse_i64_opt(
+                    sql.kv_get_try(b"sync:last_push_unix_time")
+                        .await
+                        .ok()
+                        .flatten(),
+                );
+                info.last_pull_generation = parse_i64_opt(
+                    sql.kv_get_try(b"sync:last_pull_generation")
+                        .await
+                        .ok()
+                        .flatten(),
+                );
+                info.last_change_id =
+                    parse_i64_opt(sql.kv_get_try(b"sync:last_change_id").await.ok().flatten());
+            }
+        }
+
+        Ok(info)
     }
 
     async fn handle_set_indexing_config(

@@ -17,6 +17,7 @@
 //! - ✅ Workspace portability (relative paths work across clones)
 //! - ✅ Deterministic generation (both paths create identical UIDs)
 
+use crate::symbol::dependency_path::classify_absolute_path;
 use anyhow::{Context, Result};
 use blake3::Hasher as Blake3Hasher;
 use std::path::Path;
@@ -150,9 +151,19 @@ pub fn get_workspace_relative_path(file_path: &Path, workspace_root: &Path) -> R
             }
         }
 
-        // File is outside workspace - use absolute path with prefix to make it explicit
+        // File is outside workspace — try to convert to canonical /dep/* path first
+        if let Some(dep_path) = classify_absolute_path(&canonical_file) {
+            debug!(
+                "[VERSION_AWARE_UID] External file mapped to dependency path: {} -> {}",
+                canonical_file.display(),
+                dep_path
+            );
+            return Ok(dep_path);
+        }
+
+        // Fall back to explicit EXTERNAL prefix when we can't classify the ecosystem
         debug!(
-            "[VERSION_AWARE_UID] File {} is outside workspace {}, using external path",
+            "[VERSION_AWARE_UID] File {} is outside workspace {}, using EXTERNAL path",
             file_path.display(),
             workspace_root.display()
         );

@@ -26,8 +26,7 @@ use lsp_daemon::relationship::lsp_enhancer::{
 use lsp_daemon::server_manager::SingleServerManager;
 use lsp_daemon::symbol::SymbolUIDGenerator;
 use lsp_daemon::symbol::{SymbolKind, SymbolLocation};
-use lsp_daemon::universal_cache::CacheLayer;
-use lsp_daemon::workspace_cache_router::{WorkspaceCacheRouter, WorkspaceCacheRouterConfig};
+// universal_cache and workspace_cache_router removed; tests use direct LSP paths
 use lsp_daemon::workspace_resolver::WorkspaceResolver;
 
 /// Performance benchmark configuration
@@ -132,7 +131,7 @@ pub struct LspBenchmarkSuite {
     server_manager: Arc<SingleServerManager>,
     lsp_client_wrapper: Arc<LspClientWrapper>,
     lsp_enhancer: Arc<LspRelationshipEnhancer>,
-    cache_layer: Arc<CacheLayer>,
+    // cache layer removed
     uid_generator: Arc<SymbolUIDGenerator>,
     config: BenchmarkConfig,
     _temp_dir: TempDir, // Keep temp directory alive
@@ -140,14 +139,8 @@ pub struct LspBenchmarkSuite {
 
 impl LspBenchmarkSuite {
     pub async fn new(config: BenchmarkConfig) -> Result<Self> {
-        // Create temporary directory for cache
+        // Create temporary directory for any temp files
         let temp_dir = TempDir::new()?;
-        let workspace_config = WorkspaceCacheRouterConfig {
-            base_cache_dir: temp_dir.path().join("caches"),
-            max_open_caches: 8,
-            max_parent_lookup_depth: 3,
-            ..Default::default()
-        };
 
         // Create LSP infrastructure
         let registry = Arc::new(LspRegistry::new()?);
@@ -157,15 +150,7 @@ impl LspBenchmarkSuite {
             child_processes,
         ));
 
-        let workspace_router = Arc::new(WorkspaceCacheRouter::new(
-            workspace_config,
-            server_manager.clone(),
-        ));
-
-        let universal_cache =
-            Arc::new(lsp_daemon::universal_cache::UniversalCache::new(workspace_router).await?);
-
-        let cache_layer = Arc::new(CacheLayer::new(universal_cache, None, None));
+        // Removed cache router/universal cache setup
 
         let language_detector = Arc::new(LanguageDetector::new());
         let workspace_resolver = Arc::new(tokio::sync::Mutex::new(WorkspaceResolver::new(None)));
@@ -195,7 +180,6 @@ impl LspBenchmarkSuite {
             Some(server_manager.clone()),
             language_detector,
             workspace_resolver,
-            cache_layer.clone(),
             uid_generator.clone(),
             lsp_config,
         ));
@@ -204,7 +188,6 @@ impl LspBenchmarkSuite {
             server_manager,
             lsp_client_wrapper,
             lsp_enhancer,
-            cache_layer,
             uid_generator,
             config,
             _temp_dir: temp_dir,
@@ -429,8 +412,9 @@ impl LspBenchmarkSuite {
             let analysis_context = AnalysisContext::new(
                 1,
                 1,
-                1,
                 format!("{:?}", language).to_lowercase(),
+                PathBuf::from("/tmp/ws"),
+                workspace.main_file.clone(),
                 self.uid_generator.clone(),
             );
 

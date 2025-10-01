@@ -13,8 +13,8 @@ use crate::lsp_integration::{CacheSubcommands, IndexConfigSubcommands, LspSubcom
 use lsp_daemon::{DaemonRequest, DaemonResponse, LogEntry, LogLevel, LspDaemon};
 
 // Follow-mode tuning: keep polling light to avoid hammering the daemon and the filesystem.
-const LOG_FOLLOW_POLL_MS: u64 = 500;
-const LOG_FETCH_LIMIT: usize = 200;
+const LOG_FOLLOW_POLL_MS: u64 = 200; // faster refresh for near-real-time viewing
+const LOG_FETCH_LIMIT: usize = 500; // larger batch to avoid missing bursts
 const LOG_RPC_TIMEOUT_MS: u64 = 2000;
 
 pub struct LspManager;
@@ -153,15 +153,27 @@ impl LspManager {
                 workspace_hint,
             } => Self::ping(*daemon, workspace_hint.clone(), format).await,
             LspSubcommands::Shutdown => Self::shutdown_daemon(format).await,
-            LspSubcommands::Restart { workspace_hint } => {
-                Self::restart_daemon(workspace_hint.clone(), format).await
-            }
+            LspSubcommands::Restart {
+                workspace_hint,
+                log_level,
+            } => Self::restart_daemon(workspace_hint.clone(), log_level.clone(), format).await,
             LspSubcommands::Version => Self::show_version(format).await,
             LspSubcommands::Start {
                 socket,
                 log_level,
                 foreground,
-            } => Self::start_embedded_daemon(socket.clone(), log_level.clone(), *foreground).await,
+                auto_wal_interval,
+            } => {
+                Self::start_embedded_daemon(
+                    socket.clone(),
+                    log_level.clone(),
+                    *foreground,
+                    false,
+                    *auto_wal_interval,
+                    true,
+                )
+                .await
+            }
             LspSubcommands::Logs {
                 follow,
                 lines,
@@ -237,6 +249,21 @@ impl LspManager {
             } => {
                 Self::handle_index_export(workspace.clone(), output.clone(), *checkpoint, *daemon)
                     .await
+            }
+            LspSubcommands::WalSync {
+                timeout_secs,
+                no_quiesce,
+                mode,
+                direct,
+            } => {
+                // CLI default: quiesce enabled unless explicitly disabled
+                let quiesce = !*no_quiesce;
+                if *direct {
+                    std::env::set_var("PROBE_LSP_WAL_DIRECT", "1");
+                } else {
+                    std::env::remove_var("PROBE_LSP_WAL_DIRECT");
+                }
+                Self::handle_wal_sync(*timeout_secs, quiesce, mode, format).await
             }
         }
     }
@@ -649,7 +676,11 @@ impl LspManager {
     }
 
     /// Restart daemon
-    async fn restart_daemon(workspace_hint: Option<String>, format: &str) -> Result<()> {
+    async fn restart_daemon(
+        workspace_hint: Option<String>,
+        log_level: String,
+        format: &str,
+    ) -> Result<()> {
         // First shutdown existing daemon
         let config = LspConfig {
             use_daemon: true,
@@ -669,15 +700,17 @@ impl LspManager {
         // Wait a moment for shutdown to complete
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Start new daemon
+        // Start new daemon explicitly so we can respect log-level
+        Self::start_embedded_daemon(None, log_level.clone(), false, true, 0, false).await?;
+
+        // Create client to verify it's working
         let config = LspConfig {
             use_daemon: true,
             workspace_hint,
-            timeout_ms: 240000, // Increased to 4 minutes for full rust-analyzer indexing (90s) + call hierarchy (60s)
+            timeout_ms: 240000,
             include_stdlib: false,
-            auto_start: true,
+            auto_start: false,
         };
-
         let mut client = LspClient::new(config).await?;
 
         // Verify it's working
@@ -913,8 +946,11 @@ impl LspManager {
     /// Start embedded LSP daemon
     async fn start_embedded_daemon(
         socket: Option<String>,
-        _log_level: String,
+        log_level: String,
         foreground: bool,
+        allow_replace: bool,
+        auto_wal_interval: u64,
+        verify_after_start: bool,
     ) -> Result<()> {
         // Check if we're being run via cargo and warn about potential conflicts
         if std::env::current_exe()
@@ -928,8 +964,19 @@ impl LspManager {
             eprintln!("   Then use: ./target/debug/probe lsp start -f");
         }
 
-        // Don't initialize tracing here - let the daemon handle it with memory logging
-        // The daemon will set up both memory logging and stderr logging as needed
+        // Set log level env for the daemon (affects EnvFilter and stderr layer)
+        if !log_level.is_empty() {
+            std::env::set_var("PROBE_LOG_LEVEL", &log_level);
+            // Also set RUST_LOG so the daemon's EnvFilter picks it up
+            // Accept simple levels (trace/debug/info/warn/error)
+            // If user passed something else, fall back to info
+            let rust_log = match log_level.as_str() {
+                "trace" | "debug" | "info" | "warn" | "error" => log_level.clone(),
+                _ => "info".to_string(),
+            };
+            std::env::set_var("RUST_LOG", rust_log);
+        }
+
         let log_level = std::env::var("PROBE_LOG_LEVEL").unwrap_or_default();
         if log_level == "debug" || log_level == "trace" {
             eprintln!("LSP logging enabled - logs stored in-memory (use 'probe lsp logs' to view)");
@@ -940,7 +987,7 @@ impl LspManager {
 
         // Check if daemon is already running by trying to connect
         // Skip this check if we're in foreground mode (likely being spawned by background mode)
-        if !foreground {
+        if !foreground && !allow_replace {
             match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
                 Ok(_stream) => {
                     eprintln!("❌ LSP daemon is already running on socket: {socket_path}");
@@ -971,6 +1018,13 @@ impl LspManager {
             println!("   Mode: Background");
         }
 
+        // Configure auto WAL interval env for this process before constructing the daemon
+        if auto_wal_interval > 0 {
+            std::env::set_var("PROBE_LSP_AUTO_WAL_INTERVAL", auto_wal_interval.to_string());
+        } else {
+            std::env::remove_var("PROBE_LSP_AUTO_WAL_INTERVAL");
+        }
+
         // Create and start daemon using async constructor
         let daemon = LspDaemon::new_async(socket_path.clone()).await?;
 
@@ -985,7 +1039,8 @@ impl LspManager {
             let exe_path = std::env::current_exe()?;
 
             // Fork the daemon as a separate process
-            let child = Command::new(&exe_path)
+            let mut cmd = Command::new(&exe_path);
+            let mut cmd = cmd
                 .args([
                     "lsp",
                     "start",
@@ -995,10 +1050,21 @@ impl LspManager {
                     "--log-level",
                     &log_level,
                 ])
+                .env("PROBE_LOG_LEVEL", &log_level)
+                .env(
+                    "RUST_LOG",
+                    match log_level.as_str() {
+                        "trace" | "debug" | "info" | "warn" | "error" => log_level.clone(),
+                        _ => "info".to_string(),
+                    },
+                )
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()?;
+                .stderr(Stdio::null());
+            if auto_wal_interval > 0 {
+                cmd = cmd.env("PROBE_LSP_AUTO_WAL_INTERVAL", auto_wal_interval.to_string());
+            }
+            let child = cmd.spawn()?;
 
             println!(
                 "✓ LSP daemon started in background mode (PID: {})",
@@ -1007,32 +1073,30 @@ impl LspManager {
             println!("   Use 'probe lsp status' to check daemon status");
             println!("   Use 'probe lsp logs' to view daemon logs");
 
-            // Verify daemon is running with retry logic (up to 10 seconds)
-            let mut connection_verified = false;
-            for attempt in 1..=20 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-                match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
-                    Ok(_) => {
-                        connection_verified = true;
-                        break;
-                    }
-                    Err(_) => {
-                        // Continue retrying
-                        if attempt == 20 {
-                            // Last attempt failed
-                            eprintln!(
-                                "⚠️  Warning: Could not verify daemon started after {} seconds",
-                                attempt as f32 * 0.5
-                            );
-                            eprintln!("   The daemon may still be starting. Use 'probe lsp status' to check.");
+            if verify_after_start {
+                // Verify daemon is running with retry logic (up to 10 seconds)
+                let mut connection_verified = false;
+                for attempt in 1..=20 {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                    match lsp_daemon::ipc::IpcStream::connect(&socket_path).await {
+                        Ok(_) => {
+                            connection_verified = true;
+                            break;
+                        }
+                        Err(_) => {
+                            if attempt == 20 {
+                                eprintln!(
+                                    "⚠️  Warning: Could not verify daemon started after {} seconds",
+                                    attempt as f32 * 0.5
+                                );
+                                eprintln!("   The daemon may still be starting. Use 'probe lsp status' to check.");
+                            }
                         }
                     }
                 }
-            }
-
-            if connection_verified {
-                println!("✓ Daemon connection verified successfully");
+                if connection_verified {
+                    println!("✓ Daemon connection verified successfully");
+                }
             }
         }
 
@@ -2786,6 +2850,62 @@ impl LspManager {
                                 queue.call_hierarchy_operations
                             );
                         }
+
+                        // Skips due to core trait/builtin heuristic
+                        if lsp_enrichment.impls_skipped_core_total > 0 {
+                            println!(
+                                "  {}: {} (Rust:{} JS/TS:{})",
+                                "Impls Skipped (core)".bold(),
+                                lsp_enrichment.impls_skipped_core_total,
+                                lsp_enrichment.impls_skipped_core_rust,
+                                lsp_enrichment.impls_skipped_core_js_ts
+                            );
+                        }
+
+                        // DB writer snapshot
+                        println!(
+                            "  {}: {} (active:{} ms, last:{} ms, last symbols:{} edges:{})\n      op: {} ({} ms)  section: {} ({} ms)",
+                            "DB Writer".bold(),
+                            if lsp_enrichment.writer_busy { "busy" } else { "idle" },
+                            lsp_enrichment.writer_active_ms,
+                            lsp_enrichment.writer_last_ms,
+                            lsp_enrichment.writer_last_symbols,
+                            lsp_enrichment.writer_last_edges,
+                            if lsp_enrichment.writer_gate_owner_op.is_empty() { "-" } else { &lsp_enrichment.writer_gate_owner_op },
+                            lsp_enrichment.writer_gate_owner_ms,
+                            if lsp_enrichment.writer_section_label.is_empty() { "-" } else { &lsp_enrichment.writer_section_label },
+                            lsp_enrichment.writer_section_ms,
+                        );
+                        // DB reader snapshot
+                        println!(
+                            "  {}: {} (last: {} {} ms)",
+                            "DB Readers".bold(),
+                            lsp_enrichment.reader_active,
+                            if lsp_enrichment.reader_last_label.is_empty() {
+                                "-".to_string()
+                            } else {
+                                lsp_enrichment.reader_last_label.clone()
+                            },
+                            lsp_enrichment.reader_last_ms,
+                        );
+
+                        // Always show in-memory queue size and breakdown for clarity
+                        println!(
+                            "  {}: {} (H:{} M:{} L:{})",
+                            "In-Memory Queue".bold(),
+                            lsp_enrichment.in_memory_queue_items,
+                            lsp_enrichment.in_memory_high_priority_items,
+                            lsp_enrichment.in_memory_medium_priority_items,
+                            lsp_enrichment.in_memory_low_priority_items
+                        );
+                        println!(
+                            "    {}: {} (refs:{} impls:{} calls:{})",
+                            "Operations".bold(),
+                            lsp_enrichment.in_memory_queue_operations,
+                            lsp_enrichment.in_memory_references_operations,
+                            lsp_enrichment.in_memory_implementations_operations,
+                            lsp_enrichment.in_memory_call_hierarchy_operations
+                        );
                     }
                 }
 
@@ -2795,9 +2915,67 @@ impl LspManager {
                     println!("  {}: {}", "Symbols".bold(), database.total_symbols);
                     println!("  {}: {}", "Edges".bold(), database.total_edges);
                     println!("  {}: {}", "Files".bold(), database.total_files);
+                    if database.db_quiesced {
+                        println!("  {}: {}", "DB Quiesced".bold(), "true".yellow());
+                    }
+                    // Reader/Writer gate snapshot for clarity (debug-level to avoid polluting stdout)
+                    tracing::debug!(
+                        target: "lsp_integration::index_status",
+                        rw_gate_write_held = database.rw_gate_write_held,
+                        reader_active = database.reader_active,
+                        reader_last_label = %if database.reader_last_label.is_empty() { "-".to_string() } else { database.reader_last_label.clone() },
+                        reader_last_ms = database.reader_last_ms,
+                        "RW Gate status"
+                    );
                     if let Some(ref workspace_id) = database.workspace_id {
                         println!("  {}: {}", "Workspace".bold(), workspace_id);
                     }
+                } else {
+                    // Best-effort visibility when DB snapshot was skipped (e.g., quiesced/busy)
+                    println!("\n{}", "Database".bold().cyan());
+                    println!("  {}", "(snapshot unavailable under current load; will appear once readers are allowed)".dimmed());
+                }
+
+                // Display sync information
+                if let Some(ref sync) = status.sync {
+                    println!("\n{}", "Sync".bold().cyan());
+                    println!(
+                        "  {}: {}",
+                        "Client ID".bold(),
+                        if sync.client_id.is_empty() {
+                            "-"
+                        } else {
+                            &sync.client_id
+                        }
+                    );
+                    println!(
+                        "  {}: {}",
+                        "Last Pull".bold(),
+                        sync.last_pull_unix_time
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    );
+                    println!(
+                        "  {}: {}",
+                        "Last Push".bold(),
+                        sync.last_push_unix_time
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    );
+                    println!(
+                        "  {}: {}",
+                        "Last Pull Gen".bold(),
+                        sync.last_pull_generation
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    );
+                    println!(
+                        "  {}: {}",
+                        "Last Change ID".bold(),
+                        sync.last_change_id
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    );
                 }
 
                 if detailed && !status.workers.is_empty() {
@@ -2820,6 +2998,75 @@ impl LspManager {
             }
         }
         Ok(())
+    }
+
+    async fn handle_wal_sync(
+        timeout_secs: u64,
+        quiesce: bool,
+        mode: &str,
+        format: &str,
+    ) -> Result<()> {
+        use crate::lsp_integration::{types::LspConfig, LspClient};
+        use lsp_daemon::protocol::{DaemonRequest, DaemonResponse};
+        // Expand client timeout to accommodate long WAL syncs
+        let timeout_ms = if timeout_secs == 0 {
+            3_600_000 // 1 hour
+        } else {
+            (timeout_secs.saturating_mul(1000)).saturating_add(10_000) // +10s cushion
+        };
+        let client = LspClient::new(LspConfig {
+            timeout_ms,
+            ..Default::default()
+        })
+        .await?;
+        let wal_req_id = uuid::Uuid::new_v4();
+        // Pick up --direct flag from outer command by inspecting env passthrough (the caller passes via args in mod.rs)
+        // Since this helper signature is kept stable, read an env var the caller sets: PROBE_LSP_WAL_DIRECT=1
+        let direct = std::env::var("PROBE_LSP_WAL_DIRECT")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let wal_req = DaemonRequest::WalSync {
+            request_id: wal_req_id,
+            timeout_secs,
+            quiesce,
+            mode: mode.to_string(),
+            direct,
+        };
+        let fut_wal = {
+            let mut c = client;
+            async move { c.send(wal_req).await }
+        };
+
+        tokio::select! {
+            resp = fut_wal => {
+                match resp? {
+                    DaemonResponse::WalSynced { waited_ms, iterations, .. } => {
+                        match format {
+                            "json" => println!("{}", serde_json::to_string_pretty(&serde_json::json!({"status":"ok","waited_ms": waited_ms, "iterations": iterations}))?),
+                            _ => {
+                                println!("{}", "WAL Sync".bold().green());
+                                println!("  {}: {} ms", "Waited".bold(), waited_ms);
+                                println!("  {}: {}", "Iterations".bold(), iterations);
+                            }
+                        }
+                        Ok(())
+                    }
+                    DaemonResponse::Error { error, .. } => {
+                        match format { "json" => println!("{}", serde_json::to_string_pretty(&serde_json::json!({"status":"error","error": error}))?), _ => eprintln!("{} {}", "WAL sync failed:".red(), error) }
+                        Err(anyhow::anyhow!(error))
+                    }
+                    other => Err(anyhow::anyhow!(format!("Unexpected response: {:?}", other))),
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                println!("{}", "Cancelling WAL sync ...".yellow());
+                let mut cancel_client = LspClient::new(LspConfig { timeout_ms: 10_000, ..Default::default() }).await?;
+                let cancel_req = DaemonRequest::Cancel { request_id: uuid::Uuid::new_v4(), cancel_request_id: wal_req_id };
+                let _ = cancel_client.send(cancel_req).await; // best effort
+                Ok(())
+            }
+        }
     }
 
     /// Display indexing configuration

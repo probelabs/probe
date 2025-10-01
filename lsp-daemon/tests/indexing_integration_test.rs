@@ -117,20 +117,20 @@ mod indexing_integration_tests {
         /// Verify that symbols were stored in the database
         async fn verify_symbols_stored(
             &self,
-            file_version_id: i64,
+            file_path: &str,
             language: &str,
             expected_symbols: &[ExpectedSymbol],
         ) -> Result<()> {
             let stored_symbols = self
                 .database
-                .get_symbols_by_file(file_version_id, language)
+                .get_symbols_by_file(file_path, language)
                 .await?;
 
             println!(
-                "Expected {} symbols, found {} stored symbols for file_version_id={}, language={}",
+                "Expected {} symbols, found {} stored symbols for file_path={}, language={}",
                 expected_symbols.len(),
                 stored_symbols.len(),
-                file_version_id,
+                file_path,
                 language
             );
 

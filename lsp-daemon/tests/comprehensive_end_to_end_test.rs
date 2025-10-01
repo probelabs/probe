@@ -2156,7 +2156,7 @@ async fn test_comprehensive_end_to_end_workflow() -> Result<()> {
     .with_qualified_name("backend_service::user::User".to_string())
     .with_signature("struct User".to_string());
 
-    let rust_context = SymbolContext::new(1, 1, "rust".to_string())
+    let rust_context = SymbolContext::new(1, "rust".to_string())
         .push_scope("backend_service".to_string())
         .push_scope("user".to_string());
 
@@ -2184,7 +2184,7 @@ async fn test_comprehensive_end_to_end_workflow() -> Result<()> {
     .with_qualified_name("frontend_app.controllers.UserController".to_string())
     .with_signature("export class UserController".to_string());
 
-    let ts_context = SymbolContext::new(1, 2, "typescript".to_string())
+    let ts_context = SymbolContext::new(1, "typescript".to_string())
         .push_scope("frontend_app".to_string())
         .push_scope("controllers".to_string());
 
@@ -2211,7 +2211,7 @@ async fn test_comprehensive_end_to_end_workflow() -> Result<()> {
     .with_signature("class DataProcessor:".to_string());
 
     let python_context =
-        SymbolContext::new(1, 3, "python".to_string()).push_scope("data_processor".to_string());
+        SymbolContext::new(1, "python".to_string()).push_scope("data_processor".to_string());
 
     let python_uid = uid_generator
         .generate_uid(&python_class_info, &python_context)

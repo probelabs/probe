@@ -169,8 +169,8 @@ impl LspClient {
     /// Connect to the LSP daemon, auto-starting if necessary
     async fn connect(&mut self) -> Result<()> {
         let socket_path = effective_socket_path();
-        // Use shorter timeout for initial connection attempt
-        let connection_timeout = Duration::from_secs(5);
+        // Use client-configured timeout for connection as well
+        let connection_timeout = Duration::from_millis(self.config.timeout_ms);
 
         debug!("Attempting to connect to LSP daemon at: {}", socket_path);
 
@@ -351,6 +351,11 @@ impl LspClient {
     /// Send a request to the daemon and wait for response (public interface with retry)
     async fn send_request(&mut self, request: DaemonRequest) -> Result<DaemonResponse> {
         self.send_request_with_retry(request).await
+    }
+
+    // Minimal public helper for ad-hoc requests from management layer
+    pub async fn send(&mut self, request: DaemonRequest) -> Result<DaemonResponse> {
+        self.send_request(request).await
     }
 
     /// Send a request to the daemon and wait for response (internal implementation)
