@@ -154,15 +154,23 @@ npm test -- maidIntegration.test.js
 
 ### Known Test Failures ⚠️
 
-**60 tests still failing** from the old test suite (out of 710 total tests). Down from 104 failures after bug fixes and test updates.
+**52 tests still failing** from the old test suite (out of 710 total tests). Down from 104 failures after bug fixes and test updates.
+
+Progress:
+- Initial: 104 failed tests
+- After API fixes: 60 failed tests
+- After extraction fixes: 52 failed tests
+- **Success rate: 92.7% (658/710 passing)**
 
 **Remaining affected test files:**
-- `tests/unit/mermaidValidationVisorExample.test.js` - Real-world Visor project examples (7 failures)
-- `tests/mermaidQuoteEscaping.test.js` - Quote escaping patterns
+- `tests/mermaidQuoteEscaping.test.js` - 13 failures (quote escaping patterns)
 - `tests/unit/enhancedMermaidValidation.test.js` - Enhanced validation features
 - `tests/unit/mermaidValidation.test.js` - Core validation tests
-- `tests/unit/mermaidHtmlEntities.test.js` - HTML entity handling
+- `tests/unit/backtickAutoFix.test.js` - Backtick auto-fix tests
 - `tests/unit/mermaidInfiniteLoopFix.test.js` - Infinite loop prevention
+- `tests/unit/subgraphAutoFix.test.js` - Subgraph auto-fix tests
+- `tests/nestedQuoteFix.test.js` - Nested quote fix tests
+- `tests/integration/examplesChatMcp.test.js` - Integration tests
 
 **Why tests are failing:**
 1. Tests expect specific error messages from old regex validation
@@ -189,14 +197,86 @@ expect(result.isValid).toBe(true); // FAILS - maid may validate differently
 - `npm/tests/unit/maidIntegration.test.js` - New smoke tests (9 passing)
 - `npm/MAID_INTEGRATION.md` - This documentation file
 
+## Maid 0.0.4 Bugs and Limitations
+
+### Critical Bugs Identified 🐛
+
+1. **<br/> tags without quotes fail validation** (HIGH priority)
+   - **Status**: Bug
+   - **Symptom**: `<br/>` in unquoted node labels causes "unexpected character: -><<-" error
+   - **Workaround**: Quote all labels containing `<br/>` tags: `["Label<br/>text"]`
+   - **Example**:
+     ```mermaid
+     # FAILS:
+     flowchart TD
+       A[Load Prompt<br/>from file]
+
+     # WORKS:
+     flowchart TD
+       A["Load Prompt<br/>from file"]
+     ```
+   - **Impact**: Affects many real-world diagrams with multiline labels
+
+2. **Sequence diagrams require trailing newline** (HIGH priority)
+   - **Status**: Bug
+   - **Symptom**: Validation fails with "Expecting at least one iteration...expecting <[Newline]>" without trailing newline
+   - **Workaround**: Ensure sequence diagrams end with `\n`
+   - **Example**:
+     ```javascript
+     validate(`sequenceDiagram\n    A->>B: msg`); // FAILS
+     validate(`sequenceDiagram\n    A->>B: msg\n`); // WORKS
+     ```
+   - **Impact**: Breaks extraction from markdown that trims whitespace
+
+3. **Escaped quotes not supported** (MEDIUM priority)
+   - **Status**: Limitation
+   - **Symptom**: `\"` in labels causes error "Escaped quotes (\") in node labels are not supported"
+   - **Workaround**: Use HTML entities: `&quot;` instead of `\"`
+   - **Example**:
+     ```mermaid
+     # FAILS:
+     graph TD
+       A["Process with \"quotes\""]
+
+     # WORKS:
+     graph TD
+       A["Process with &quot;quotes&quot;"]
+     ```
+
+4. **Parentheses in link labels not supported** (LOW priority)
+   - **Status**: Limitation
+   - **Symptom**: `|label (detail)|` causes "Expecting token of type Pipe but found '('" error
+   - **Workaround**: Remove parentheses from link labels
+   - **Example**:
+     ```mermaid
+     # FAILS:
+     graph TD
+       A -.->|optional (external)| B
+
+     # WORKS:
+     graph TD
+       A -.->|optional external| B
+     ```
+
+### Type Detection Issues
+
+1. **Gantt charts return 'unknown' type**
+   - **Status**: Limitation
+   - **Symptom**: Valid gantt diagrams validate but return `type: 'unknown'` instead of `type: 'gantt'`
+   - **Impact**: Cannot programmatically detect gantt diagrams
+
 ## Version Considerations
 
 Currently using maid 0.0.4 (installed from npm). The local ../maid folder shows version 1.0.0.
 
+### Upgrading to maid 1.0.0+
+
 If you want to use the latest local version:
-1. Publish ../maid to npm as 1.0.0
-2. Update package.json to use `@probelabs/maid@^1.0.0`
-3. Run `npm install`
+1. Verify if the bugs listed above are fixed in 1.0.0+
+2. Publish ../maid to npm as 1.0.0+
+3. Update package.json to use `@probelabs/maid@^1.0.0`
+4. Run `npm install`
+5. Run full test suite to verify compatibility
 
 ## Performance
 
