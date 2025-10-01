@@ -545,10 +545,11 @@ export async function validateMermaidDiagram(diagram) {
   }
 
   try {
-    const trimmedDiagram = diagram.trim();
+    // Don't trim the diagram - maid 0.0.4 requires trailing newlines for sequence diagrams
+    // and handles leading/trailing whitespace correctly
 
     // Check for markdown code block markers
-    if (trimmedDiagram.includes('```')) {
+    if (diagram.includes('```')) {
       return {
         isValid: false,
         error: 'Diagram contains markdown code block markers',
@@ -557,26 +558,28 @@ export async function validateMermaidDiagram(diagram) {
     }
 
     // Use maid to validate the diagram
-    const result = validate(trimmedDiagram);
+    const result = validate(diagram);
 
-    if (result.valid) {
+    // Maid returns { type: string, errors: array }
+    // Valid if errors array is empty
+    if (result.errors && result.errors.length === 0) {
       return {
         isValid: true,
-        diagramType: result.diagramType || 'unknown'
+        diagramType: result.type || 'unknown'
       };
     } else {
       // Format maid errors into a readable error message
-      const errorMessages = result.errors.map(err => {
+      const errorMessages = (result.errors || []).map(err => {
         const location = err.line ? `line ${err.line}${err.column ? `:${err.column}` : ''}` : '';
         return location ? `${location} - ${err.message}` : err.message;
       });
 
       return {
         isValid: false,
-        diagramType: result.diagramType || 'unknown',
+        diagramType: result.type || 'unknown',
         error: errorMessages[0] || 'Validation failed',
         detailedError: errorMessages.join('\n'),
-        errors: result.errors // Include raw maid errors for AI fixing
+        errors: result.errors || [] // Include raw maid errors for AI fixing
       };
     }
 
@@ -685,7 +688,9 @@ export async function tryMaidAutoFix(diagramContent, options = {}) {
     const result = fixText(diagramContent, { level: 'all' });
     const validation = validate(result.fixed);
 
-    if (validation.valid) {
+    // Maid validation returns { type, errors }
+    // Valid if errors array is empty
+    if (validation.errors && validation.errors.length === 0) {
       if (debug) {
         console.log(`[DEBUG] Mermaid maid: 'All' level fixes succeeded`);
       }
@@ -699,12 +704,12 @@ export async function tryMaidAutoFix(diagramContent, options = {}) {
 
     // Maid couldn't fix it completely, return the best attempt with remaining errors
     if (debug) {
-      console.log(`[DEBUG] Mermaid maid: Auto-fixes couldn't resolve all issues, ${validation.errors.length} errors remain`);
+      console.log(`[DEBUG] Mermaid maid: Auto-fixes couldn't resolve all issues, ${validation.errors?.length || 0} errors remain`);
     }
     return {
       fixed: result.fixed,
       wasFixed: result.fixed !== diagramContent,
-      errors: validation.errors, // Pass maid's structured errors for AI fixing
+      errors: validation.errors || [], // Pass maid's structured errors for AI fixing
       fixLevel: 'all'
     };
 

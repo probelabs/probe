@@ -137,14 +137,27 @@ npm test -- maidIntegration.test.js
   - Basic validation working correctly
   - Auto-fix functionality confirmed
   - Structured error format verified
+- **GitHub Compatibility Tests**: 18/18 passing (`tests/unit/githubCompatibilityValidation.test.js`)
+  - Updated to match maid's validation behavior
+  - All GitHub incompatible patterns correctly detected
+  - All GitHub compatible patterns correctly accepted
+
+### Bug Fixes Applied ✅
+
+1. **API Bug**: Fixed `validateMermaidDiagram()` to use `result.type` instead of `result.diagramType`
+   - Maid returns `{ type, errors }` not `{ diagramType, valid }`
+   - Check `errors.length === 0` for validity
+
+2. **Trim Bug**: Removed `.trim()` call that was removing trailing newlines
+   - Maid 0.0.4 requires trailing newlines for sequence diagrams
+   - Maid handles leading/trailing whitespace correctly without trimming
 
 ### Known Test Failures ⚠️
 
-**104 tests failing** from the old test suite (out of 710 total tests). These failures are **expected** because the tests were written specifically for the old regex-based validation logic, and maid uses proper parser-based validation with different rules.
+**60 tests still failing** from the old test suite (out of 710 total tests). Down from 104 failures after bug fixes and test updates.
 
-**Affected test files:**
-- `tests/unit/githubCompatibilityValidation.test.js` - GitHub-specific compatibility checks
-- `tests/unit/mermaidValidationVisorExample.test.js` - Real-world Visor project examples
+**Remaining affected test files:**
+- `tests/unit/mermaidValidationVisorExample.test.js` - Real-world Visor project examples (7 failures)
 - `tests/mermaidQuoteEscaping.test.js` - Quote escaping patterns
 - `tests/unit/enhancedMermaidValidation.test.js` - Enhanced validation features
 - `tests/unit/mermaidValidation.test.js` - Core validation tests
