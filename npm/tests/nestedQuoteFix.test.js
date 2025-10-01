@@ -1,7 +1,7 @@
 /**
  * Nested Quote Fix Tests
  *
- * NOTE: Most tests in this file have been skipped for maid 0.0.5 integration.
+ * NOTE: Most tests in this file have been skipped for maid 0.0.6 integration.
  * These tests check OLD regex-based HTML entity handling and quote fixing behavior:
  * - Converting &apos; to &#39;
  * - Automatic quote wrapping with escaped inner quotes

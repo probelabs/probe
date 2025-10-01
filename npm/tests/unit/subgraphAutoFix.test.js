@@ -1,7 +1,7 @@
 /**
  * Subgraph and Node Label Auto-Fix Tests
  *
- * NOTE: Many tests in this file have been skipped for maid 0.0.5 integration.
+ * NOTE: Many tests in this file have been skipped for maid 0.0.6 integration.
  * These tests check OLD manual regex-based auto-fix behavior for:
  * - Subgraph quote wrapping (parentheses in unquoted subgraph names)
  * - Node label quote wrapping (parentheses in unquoted node labels)

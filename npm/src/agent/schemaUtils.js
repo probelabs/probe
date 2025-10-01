@@ -483,7 +483,7 @@ export function extractMermaidFromMarkdown(response) {
 
   while ((match = mermaidBlockRegex.exec(response)) !== null) {
     const attributes = match[1] ? match[1].trim() : '';
-    // Don't trim the content - maid 0.0.5 requires trailing newlines for sequence diagrams
+    // Don't trim the content - maid 0.0.6 requires trailing newlines for sequence diagrams
     const fullContent = match[2];
 
     // If attributes exist, they were captured separately, so fullContent is just the diagram
@@ -546,7 +546,7 @@ export async function validateMermaidDiagram(diagram) {
   }
 
   try {
-    // Don't trim the diagram - maid 0.0.5 requires trailing newlines for sequence diagrams
+    // Don't trim the diagram - maid 0.0.6 requires trailing newlines for sequence diagrams
     // and handles leading/trailing whitespace correctly
 
     // Check for markdown code block markers

@@ -1,7 +1,7 @@
 /**
  * Mermaid Quote Handling Tests - Updated for maid integration
  *
- * NOTE: This test file has been significantly updated for maid 0.0.5 integration.
+ * NOTE: This test file has been significantly updated for maid 0.0.6 integration.
  * Many tests from the old regex-based validation have been REMOVED because:
  * 1. Maid has different quote handling than the old manual logic
  * 2. Maid doesn't support escaped quotes (\") - requires HTML entities
