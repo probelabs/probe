@@ -4,6 +4,7 @@ import {
   queryTool,
   extractTool,
   delegateTool,
+  bashTool,
   DEFAULT_SYSTEM_MESSAGE,
   attemptCompletionSchema,
   attemptCompletionToolDefinition,
@@ -11,22 +12,32 @@ import {
   querySchema,
   extractSchema,
   delegateSchema,
+  bashSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  bashToolDefinition,
   parseXmlToolCall
 } from '../index.js';
 import { randomUUID } from 'crypto';
+import { processXmlWithThinkingAndRecovery } from './xmlParsingUtils.js';
 
 // Create configured tool instances
 export function createTools(configOptions) {
-  return {
+  const tools = {
     searchTool: searchTool(configOptions),
     queryTool: queryTool(configOptions),
     extractTool: extractTool(configOptions),
     delegateTool: delegateTool(configOptions)
   };
+
+  // Add bash tool if enabled
+  if (configOptions.enableBash) {
+    tools.bashTool = bashTool(configOptions);
+  }
+
+  return tools;
 }
 
 // Export tool definitions and schemas
@@ -36,11 +47,13 @@ export {
   querySchema,
   extractSchema,
   delegateSchema,
+  bashSchema,
   attemptCompletionSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  bashToolDefinition,
   attemptCompletionToolDefinition,
   parseXmlToolCall
 };
@@ -134,30 +147,15 @@ User: Find all markdown files in the docs directory, but only at the top level.
  * @returns {Object|null} - The parsed tool call or null if no valid tool call found
  */
 export function parseXmlToolCallWithThinking(xmlString, validTools) {
-  // Extract thinking content if present (for potential logging or analysis)
-  const thinkingMatch = xmlString.match(/<thinking>([\s\S]*?)<\/thinking>/);
-  const thinkingContent = thinkingMatch ? thinkingMatch[1].trim() : null;
-
-  // Remove thinking tags and their content from the XML string
-  let cleanedXmlString = xmlString.replace(/<thinking>[\s\S]*?<\/thinking>/g, '').trim();
-
-  // Check for attempt_complete shorthand (single tag with no closing tag and no parameters)
-  const attemptCompleteMatch = cleanedXmlString.match(/^<attempt_complete>\s*$/);
-  if (attemptCompleteMatch) {
-    // Convert shorthand to full attempt_completion format with special marker
-    return {
-      toolName: 'attempt_completion',
-      params: { result: '__PREVIOUS_RESPONSE__' }
-    };
+  // Use the shared processing logic
+  const { cleanedXmlString, recoveryResult } = processXmlWithThinkingAndRecovery(xmlString, validTools);
+  
+  // If recovery found an attempt_complete pattern, return it
+  if (recoveryResult) {
+    return recoveryResult;
   }
 
-  // Use the original parseXmlToolCall function to parse the cleaned XML string
-  const parsedTool = parseXmlToolCall(cleanedXmlString, validTools);
-
-  // If debugging is enabled, log the thinking content
-  if (process.env.DEBUG === '1' && thinkingContent) {
-    console.log(`[DEBUG] AI Thinking Process:\n${thinkingContent}`);
-  }
-
-  return parsedTool;
+  // Otherwise, use the original parseXmlToolCall function to parse the cleaned XML string
+  return parseXmlToolCall(cleanedXmlString, validTools);
 }
+

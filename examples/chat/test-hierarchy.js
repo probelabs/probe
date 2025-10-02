@@ -53,8 +53,8 @@ async function testTraceHierarchy() {
     const userProcessingSpan = appTracer.startUserMessageProcessing(sessionId, messageId, message, 1);
     
     // Extract image URLs within user processing context
-    const result = appTracer.withUserProcessingContext(sessionId, () => {
-      return extractImageUrls(message, true);
+    const result = await appTracer.withUserProcessingContext(sessionId, async () => {
+      return await extractImageUrls(message, true);
     });
     
     console.log('✅ extractImageUrls result:', result);

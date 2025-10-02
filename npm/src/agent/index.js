@@ -112,6 +112,7 @@ function parseArgs() {
     acp: false,
     question: null,
     path: null,
+    allowedFolders: null,
     prompt: null,
     systemPrompt: null,
     schema: null,
@@ -127,7 +128,15 @@ function parseArgs() {
     traceConsole: false,
     useStdin: false, // New flag to indicate stdin should be used
     outline: false, // New flag to enable outline format
-    noMermaidValidation: false // New flag to disable mermaid validation
+    noMermaidValidation: false, // New flag to disable mermaid validation
+    // Bash tool configuration
+    enableBash: false,
+    bashAllow: null,
+    bashDeny: null,
+    bashTimeout: null,
+    bashWorkingDir: null,
+    disableDefaultBashAllow: false,
+    disableDefaultBashDeny: false
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -145,6 +154,8 @@ function parseArgs() {
       config.allowEdit = true;
     } else if (arg === '--path' && i + 1 < args.length) {
       config.path = args[++i];
+    } else if (arg === '--allowed-folders' && i + 1 < args.length) {
+      config.allowedFolders = args[++i].split(',').map(dir => dir.trim());
     } else if (arg === '--prompt' && i + 1 < args.length) {
       config.prompt = args[++i];
     } else if (arg === '--system-prompt' && i + 1 < args.length) {
@@ -169,6 +180,20 @@ function parseArgs() {
       config.outline = true;
     } else if (arg === '--no-mermaid-validation') {
       config.noMermaidValidation = true;
+    } else if (arg === '--enable-bash') {
+      config.enableBash = true;
+    } else if (arg === '--bash-allow' && i + 1 < args.length) {
+      config.bashAllow = args[++i];
+    } else if (arg === '--bash-deny' && i + 1 < args.length) {
+      config.bashDeny = args[++i];
+    } else if (arg === '--bash-timeout' && i + 1 < args.length) {
+      config.bashTimeout = args[++i];
+    } else if (arg === '--bash-working-dir' && i + 1 < args.length) {
+      config.bashWorkingDir = args[++i];
+    } else if (arg === '--no-default-bash-allow') {
+      config.disableDefaultBashAllow = true;
+    } else if (arg === '--no-default-bash-deny') {
+      config.disableDefaultBashDeny = true;
     } else if (!arg.startsWith('--') && !config.question) {
       // First non-flag argument is the question
       config.question = arg;
@@ -201,6 +226,7 @@ Usage:
 
 Options:
   --path <dir>                     Search directory (default: current)
+  --allowed-folders <dirs>         Comma-separated list of allowed directories for file operations
   --prompt <type>                  Persona: code-explorer, engineer, code-review, support, architect
   --system-prompt <text|file>      Custom system prompt (text or file path)
   --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
@@ -218,6 +244,15 @@ Options:
   --trace-console                  Enable tracing to console output
   --no-mermaid-validation          Disable automatic mermaid diagram validation and fixing
   --help, -h                      Show this help message
+
+Bash Tool Options:
+  --enable-bash                    Enable bash command execution for system exploration
+  --bash-allow <patterns>          Additional bash command patterns to allow (comma-separated)
+  --bash-deny <patterns>           Additional bash command patterns to deny (comma-separated)
+  --no-default-bash-allow          Disable default bash allow list (use only custom patterns)
+  --no-default-bash-deny           Disable default bash deny list (use only custom patterns)  
+  --bash-timeout <ms>              Bash command timeout in milliseconds (default: 120000)
+  --bash-working-dir <path>        Default working directory for bash commands
 
 Environment Variables:
   ANTHROPIC_API_KEY               Anthropic Claude API key
@@ -266,6 +301,9 @@ class ProbeAgentMcpServer {
       }
     );
 
+    // Don't initialize AI agent on startup - lazy initialize when needed
+    this.agent = null;
+
     this.setupToolHandlers();
     this.server.onerror = (error) => console.error('[MCP Error]', error);
     process.on('SIGINT', async () => {
@@ -293,17 +331,22 @@ class ProbeAgentMcpServer {
       tools: [
         {
           name: 'search_code',
-          description: "Search code and answer questions about the codebase using an AI agent. This tool provides intelligent responses based on code analysis.",
+          description: "AI agent that answers free-form questions about codebases. Ask detailed questions in natural language.",
           inputSchema: {
             type: 'object',
             properties: {
               query: {
                 type: 'string',
-                description: 'The question or request about the codebase.',
+                description: 'A detailed, free-form question about the codebase in natural language. Be specific and descriptive. Example: "How does the authentication system work and where is user session management implemented?"',
               },
               path: {
                 type: 'string',
-                description: 'Optional path to the directory to search in. Defaults to current directory.',
+                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
+              },
+              allowed_folders: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional list of allowed directories for file operations. Defaults to current directory if not specified.',
               },
               prompt: {
                 type: 'string',
@@ -312,34 +355,6 @@ class ProbeAgentMcpServer {
               system_prompt: {
                 type: 'string',
                 description: 'Optional custom system prompt (text or file path).',
-              },
-              provider: {
-                type: 'string',
-                description: 'Optional AI provider to force: anthropic, openai, google.',
-              },
-              model: {
-                type: 'string',
-                description: 'Optional model name override.',
-              },
-              allow_edit: {
-                type: 'boolean',
-                description: 'Enable code modification capabilities.',
-              },
-              max_iterations: {
-                type: 'number',
-                description: 'Maximum number of tool iterations (default: 30).',
-              },
-              max_response_tokens: {
-                type: 'number',
-                description: 'Maximum tokens for AI response (overrides model defaults).',
-              },
-              schema: {
-                type: 'string',
-                description: 'Optional output schema (JSON, XML, or any format - text or file path).',
-              },
-              no_mermaid_validation: {
-                type: 'boolean',
-                description: 'Disable automatic mermaid diagram validation and fixing.',
               }
             },
             required: ['query']
@@ -393,20 +408,29 @@ class ProbeAgentMcpServer {
           }
         }
 
-        // Create agent with configuration
-        const agentConfig = {
-          path: args.path || process.cwd(),
-          promptType: args.prompt || 'code-explorer',
-          customPrompt: systemPrompt,
-          provider: args.provider,
-          model: args.model,
-          allowEdit: !!args.allow_edit,
-          debug: process.env.DEBUG === '1',
-          maxResponseTokens: args.max_response_tokens,
-          disableMermaidValidation: !!args.no_mermaid_validation
-        };
+        // Lazy initialize AI agent only when tool is called
+        if (!this.agent) {
+          if (process.env.DEBUG === '1') {
+            console.error('[DEBUG] Initializing AI agent on first MCP tool call');
+          }
+          
+          // Create agent with configuration
+          const agentConfig = {
+            path: args.path || (args.allowed_folders && args.allowed_folders[0]) || process.cwd(),
+            promptType: args.prompt || 'code-explorer',
+            customPrompt: systemPrompt,
+            provider: args.provider,
+            model: args.model,
+            allowEdit: !!args.allow_edit,
+            debug: process.env.DEBUG === '1',
+            maxResponseTokens: args.max_response_tokens,
+            disableMermaidValidation: !!args.no_mermaid_validation
+          };
 
-        const agent = new ProbeAgent(agentConfig);
+          this.agent = new ProbeAgent(agentConfig);
+        }
+
+        const agent = this.agent;
         let result = await agent.answer(query, [], { schema });
 
         // If schema is provided, make a follow-up request to format the output
@@ -479,7 +503,7 @@ class ProbeAgentMcpServer {
         }
 
         // Get token usage for debugging
-        const tokenUsage = agent.getTokenUsage();
+        const tokenUsage = this.agent.getTokenUsage();
         console.error(`Token usage: ${JSON.stringify(tokenUsage)}`);
 
         return {
@@ -628,9 +652,58 @@ async function main() {
       }
     }
 
+    // Process bash configuration
+    let bashConfig = null;
+    if (config.enableBash) {
+      bashConfig = {};
+      
+      // Parse allow patterns
+      if (config.bashAllow) {
+        bashConfig.allow = config.bashAllow.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      }
+      
+      // Parse deny patterns
+      if (config.bashDeny) {
+        bashConfig.deny = config.bashDeny.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      }
+      
+      // Handle default list flags
+      if (config.disableDefaultBashAllow) {
+        bashConfig.disableDefaultAllow = true;
+      }
+      
+      if (config.disableDefaultBashDeny) {
+        bashConfig.disableDefaultDeny = true;
+      }
+      
+      // Parse timeout
+      if (config.bashTimeout) {
+        const timeout = parseInt(config.bashTimeout, 10);
+        if (isNaN(timeout) || timeout < 1000) {
+          console.error('Error: Bash timeout must be a number >= 1000 milliseconds');
+          process.exit(1);
+        }
+        bashConfig.timeout = timeout;
+      }
+      
+      // Set working directory
+      if (config.bashWorkingDir) {
+        if (!existsSync(config.bashWorkingDir)) {
+          console.error(`Error: Bash working directory does not exist: ${config.bashWorkingDir}`);
+          process.exit(1);
+        }
+        bashConfig.workingDirectory = config.bashWorkingDir;
+      }
+      
+      if (config.verbose) {
+        console.log('Bash command execution enabled');
+      }
+    }
+
     // Create and configure agent
     const agentConfig = {
       path: config.path,
+      allowedFolders: config.allowedFolders,
       promptType: config.prompt,
       customPrompt: systemPrompt,
       allowEdit: config.allowEdit,
@@ -638,7 +711,9 @@ async function main() {
       tracer: appTracer,
       outline: config.outline,
       maxResponseTokens: config.maxResponseTokens,
-      disableMermaidValidation: config.noMermaidValidation
+      disableMermaidValidation: config.noMermaidValidation,
+      enableBash: config.enableBash,
+      bashConfig: bashConfig
     };
 
     const agent = new ProbeAgent(agentConfig);

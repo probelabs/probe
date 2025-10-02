@@ -2,9 +2,13 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
+import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { streamText } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import { existsSync } from 'fs';
+import { readFile, stat } from 'fs/promises';
+import { resolve, isAbsolute } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { 
   createTools,
@@ -36,6 +40,7 @@ import {
   createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse
 } from './schemaUtils.js';
+import { removeThinkingTags } from './xmlParsingUtils.js';
 import {
   MCPXmlBridge,
   parseHybridXmlToolCall,
@@ -45,6 +50,12 @@ import {
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
 const MAX_HISTORY_MESSAGES = 100;
+
+// Supported image file extensions
+const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+
+// Maximum image file size (20MB) to prevent OOM attacks
+const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
 
 /**
  * ProbeAgent class to handle AI interactions with code search capabilities
@@ -63,6 +74,7 @@ export class ProbeAgent {
    * @param {boolean} [options.debug] - Enable debug mode
    * @param {boolean} [options.outline] - Enable outline-xml format for search results
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
+   * @param {number} [options.maxIterations] - Maximum tool iterations (overrides MAX_TOOL_ITERATIONS env var)
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
    * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
    * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
@@ -80,10 +92,21 @@ export class ProbeAgent {
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
+    this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
 
-    // Search configuration
-    this.allowedFolders = options.path ? [options.path] : [process.cwd()];
+    // Bash configuration
+    this.enableBash = !!options.enableBash;
+    this.bashConfig = options.bashConfig || {};
+
+    // Search configuration - support both path (single) and allowedFolders (array)
+    if (options.allowedFolders && Array.isArray(options.allowedFolders)) {
+      this.allowedFolders = options.allowedFolders;
+    } else if (options.path) {
+      this.allowedFolders = [options.path];
+    } else {
+      this.allowedFolders = [process.cwd()];
+    }
 
     // API configuration
     this.clientApiProvider = options.provider || null;
@@ -104,6 +127,10 @@ export class ProbeAgent {
 
     // Initialize chat history
     this.history = [];
+
+    // Initialize image tracking for agentic loop
+    this.pendingImages = new Map(); // Map<imagePath, base64Data> to avoid reloading
+    this.currentImages = []; // Currently active images for AI calls
 
     // Initialize event emitter for tool execution updates
     this.events = new EventEmitter();
@@ -136,7 +163,9 @@ export class ProbeAgent {
       debug: this.debug,
       defaultPath: this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd(),
       allowedFolders: this.allowedFolders,
-      outline: this.outline
+      outline: this.outline,
+      enableBash: this.enableBash,
+      bashConfig: this.bashConfig
     };
 
     // Create base tools
@@ -154,6 +183,11 @@ export class ProbeAgent {
       listFiles: listFilesToolInstance,
       searchFiles: searchFilesToolInstance,
     };
+
+    // Add bash tool if enabled
+    if (this.enableBash && wrappedTools.bashToolInstance) {
+      this.toolImplementations.bash = wrappedTools.bashToolInstance;
+    }
     
     // Store wrapped tools for ACP system
     this.wrappedTools = wrappedTools;
@@ -173,12 +207,18 @@ export class ProbeAgent {
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
     const googleApiKey = process.env.GOOGLE_API_KEY;
+    const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
+    const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
+    const awsRegion = process.env.AWS_REGION;
+    const awsSessionToken = process.env.AWS_SESSION_TOKEN;
+    const awsApiKey = process.env.AWS_BEDROCK_API_KEY;
 
     // Get custom API URLs if provided
     const llmBaseUrl = process.env.LLM_BASE_URL;
     const anthropicApiUrl = process.env.ANTHROPIC_API_URL || llmBaseUrl;
     const openaiApiUrl = process.env.OPENAI_API_URL || llmBaseUrl;
     const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;
+    const awsBedrockBaseUrl = process.env.AWS_BEDROCK_BASE_URL || llmBaseUrl;
 
     // Get model override if provided
     const modelName = process.env.MODEL_NAME;
@@ -187,7 +227,12 @@ export class ProbeAgent {
     const forceProvider = this.clientApiProvider || (process.env.FORCE_PROVIDER ? process.env.FORCE_PROVIDER.toLowerCase() : null);
 
     if (this.debug) {
-      console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}`);
+      const hasAwsCredentials = !!(awsAccessKeyId && awsSecretAccessKey && awsRegion);
+      const hasAwsApiKey = !!awsApiKey;
+      console.log(`[DEBUG] Available API keys: Anthropic=${!!anthropicApiKey}, OpenAI=${!!openaiApiKey}, Google=${!!googleApiKey}, AWS Bedrock=${hasAwsCredentials || hasAwsApiKey}`);
+      if (hasAwsCredentials) console.log(`[DEBUG] AWS credentials: AccessKey=${!!awsAccessKeyId}, SecretKey=${!!awsSecretAccessKey}, Region=${awsRegion}, SessionToken=${!!awsSessionToken}`);
+      if (hasAwsApiKey) console.log(`[DEBUG] AWS API Key provided`);
+      if (awsBedrockBaseUrl) console.log(`[DEBUG] AWS Bedrock base URL: ${awsBedrockBaseUrl}`);
       console.log(`[DEBUG] Force provider: ${forceProvider || '(not set)'}`);
       if (modelName) console.log(`[DEBUG] Model override: ${modelName}`);
     }
@@ -203,6 +248,9 @@ export class ProbeAgent {
       } else if (forceProvider === 'google' && googleApiKey) {
         this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
         return;
+      } else if (forceProvider === 'bedrock' && ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey)) {
+        this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
+        return;
       }
       console.warn(`WARNING: Forced provider "${forceProvider}" selected but required API key is missing or invalid! Falling back to auto-detection.`);
     }
@@ -214,8 +262,10 @@ export class ProbeAgent {
       this.initializeOpenAIModel(openaiApiKey, openaiApiUrl, modelName);
     } else if (googleApiKey) {
       this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
+    } else if ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey) {
+      this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
     } else {
-      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.');
+      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
     }
   }
 
@@ -266,6 +316,266 @@ export class ProbeAgent {
     if (this.debug) {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
     }
+  }
+
+  /**
+   * Initialize AWS Bedrock model
+   */
+  initializeBedrockModel(accessKeyId, secretAccessKey, region, sessionToken, apiKey, baseURL, modelName) {
+    // Build configuration object, only including defined values
+    const config = {};
+    
+    // Authentication - prefer API key if provided, otherwise use AWS credentials
+    if (apiKey) {
+      config.apiKey = apiKey;
+    } else if (accessKeyId && secretAccessKey) {
+      config.accessKeyId = accessKeyId;
+      config.secretAccessKey = secretAccessKey;
+      if (sessionToken) {
+        config.sessionToken = sessionToken;
+      }
+    }
+    
+    // Region is required for AWS credentials but optional for API key
+    if (region) {
+      config.region = region;
+    }
+    
+    // Optional base URL
+    if (baseURL) {
+      config.baseURL = baseURL;
+    }
+    
+    this.provider = createAmazonBedrock(config);
+    this.model = modelName || 'anthropic.claude-sonnet-4-20250514-v1:0';
+    this.apiType = 'bedrock';
+
+    if (this.debug) {
+      const authMethod = apiKey ? 'API Key' : 'AWS Credentials';
+      const regionInfo = region ? ` (Region: ${region})` : '';
+      const baseUrlInfo = baseURL ? ` (Base URL: ${baseURL})` : '';
+      console.log(`Using AWS Bedrock API with model: ${this.model}${regionInfo} [Auth: ${authMethod}]${baseUrlInfo}`);
+    }
+  }
+
+  /**
+   * Process assistant response content and detect/load image references
+   * @param {string} content - The assistant's response content
+   * @returns {Promise<void>}
+   */
+  async processImageReferences(content) {
+    if (!content) return;
+
+    // Enhanced pattern to detect image file mentions in various contexts
+    // Looks for: "image", "file", "screenshot", etc. followed by path-like strings with image extensions
+    const extensionsPattern = `(?:${SUPPORTED_IMAGE_EXTENSIONS.join('|')})`;
+    const imagePatterns = [
+      // Direct file path mentions: "./screenshot.png", "/path/to/image.jpg", etc.
+      new RegExp(`(?:\\.?\\.\\/)?[^\\s"'<>\\[\\]]+\\\.${extensionsPattern}(?!\\w)`, 'gi'),
+      // Contextual mentions: "look at image.png", "the file screenshot.jpg shows"
+      new RegExp(`(?:image|file|screenshot|diagram|photo|picture|graphic)\\s*:?\\s*([^\\s"'<>\\[\\]]+\\.${extensionsPattern})(?!\\w)`, 'gi'),
+      // Tool result mentions: often contain file paths
+      new RegExp(`(?:found|saved|created|generated).*?([^\\s"'<>\\[\\]]+\\.${extensionsPattern})(?!\\w)`, 'gi')
+    ];
+
+    const foundPaths = new Set();
+
+    // Extract potential image paths using all patterns
+    for (const pattern of imagePatterns) {
+      let match;
+      while ((match = pattern.exec(content)) !== null) {
+        // For patterns with capture groups, use the captured path; otherwise use the full match
+        const imagePath = match[1] || match[0];
+        if (imagePath && imagePath.length > 0) {
+          foundPaths.add(imagePath.trim());
+        }
+      }
+    }
+
+    if (foundPaths.size === 0) return;
+
+    if (this.debug) {
+      console.log(`[DEBUG] Found ${foundPaths.size} potential image references:`, Array.from(foundPaths));
+    }
+
+    // Process each found path
+    for (const imagePath of foundPaths) {
+      await this.loadImageIfValid(imagePath);
+    }
+  }
+
+  /**
+   * Load and cache an image if it's valid and accessible
+   * @param {string} imagePath - Path to the image file
+   * @returns {Promise<boolean>} - True if image was loaded successfully
+   */
+  async loadImageIfValid(imagePath) {
+    try {
+      // Skip if already loaded
+      if (this.pendingImages.has(imagePath)) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image already loaded: ${imagePath}`);
+        }
+        return true;
+      }
+
+      // Security validation: check if path is within any allowed directory
+      const allowedDirs = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders : [process.cwd()];
+      
+      let absolutePath;
+      let isPathAllowed = false;
+      
+      // If absolute path, check if it's within any allowed directory
+      if (isAbsolute(imagePath)) {
+        absolutePath = imagePath;
+        isPathAllowed = allowedDirs.some(dir => absolutePath.startsWith(resolve(dir)));
+      } else {
+        // For relative paths, try resolving against each allowed directory
+        for (const dir of allowedDirs) {
+          const resolvedPath = resolve(dir, imagePath);
+          if (resolvedPath.startsWith(resolve(dir))) {
+            absolutePath = resolvedPath;
+            isPathAllowed = true;
+            break;
+          }
+        }
+      }
+      
+      // Security check: ensure path is within at least one allowed directory
+      if (!isPathAllowed) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image path outside allowed directories: ${imagePath}`);
+        }
+        return false;
+      }
+
+      // Check if file exists and get file stats
+      let fileStats;
+      try {
+        fileStats = await stat(absolutePath);
+      } catch (error) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image file not found: ${absolutePath}`);
+        }
+        return false;
+      }
+
+      // Validate file size to prevent OOM attacks
+      if (fileStats.size > MAX_IMAGE_FILE_SIZE) {
+        if (this.debug) {
+          console.log(`[DEBUG] Image file too large: ${absolutePath} (${fileStats.size} bytes, max: ${MAX_IMAGE_FILE_SIZE})`);
+        }
+        return false;
+      }
+
+      // Validate file extension
+      const extension = absolutePath.toLowerCase().split('.').pop();
+      if (!SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
+        if (this.debug) {
+          console.log(`[DEBUG] Unsupported image format: ${extension}`);
+        }
+        return false;
+      }
+
+      // Determine MIME type
+      const mimeTypes = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'webp': 'image/webp',
+        'gif': 'image/gif',
+        'bmp': 'image/bmp',
+        'svg': 'image/svg+xml'
+      };
+      const mimeType = mimeTypes[extension];
+
+      // Read and encode file asynchronously
+      const fileBuffer = await readFile(absolutePath);
+      const base64Data = fileBuffer.toString('base64');
+      const dataUrl = `data:${mimeType};base64,${base64Data}`;
+
+      // Cache the loaded image
+      this.pendingImages.set(imagePath, dataUrl);
+
+      if (this.debug) {
+        console.log(`[DEBUG] Successfully loaded image: ${imagePath} (${fileBuffer.length} bytes)`);
+      }
+
+      return true;
+    } catch (error) {
+      if (this.debug) {
+        console.log(`[DEBUG] Failed to load image ${imagePath}: ${error.message}`);
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Get all currently loaded images as an array for AI model consumption
+   * @returns {Array<string>} - Array of base64 data URLs
+   */
+  getCurrentImages() {
+    return Array.from(this.pendingImages.values());
+  }
+
+  /**
+   * Clear loaded images (useful for new conversations)
+   */
+  clearLoadedImages() {
+    this.pendingImages.clear();
+    this.currentImages = [];
+    if (this.debug) {
+      console.log('[DEBUG] Cleared all loaded images');
+    }
+  }
+
+  /**
+   * Prepare messages for AI consumption, adding images to the latest user message if available
+   * @param {Array} messages - Current conversation messages
+   * @returns {Array} - Messages formatted for AI SDK with potential image content
+   */
+  prepareMessagesWithImages(messages) {
+    const loadedImages = this.getCurrentImages();
+    
+    // If no images loaded, return messages as-is
+    if (loadedImages.length === 0) {
+      return messages;
+    }
+
+    // Clone messages to avoid mutating the original
+    const messagesWithImages = [...messages];
+    
+    // Find the last user message to attach images to
+    const lastUserMessageIndex = messagesWithImages.map(m => m.role).lastIndexOf('user');
+    
+    if (lastUserMessageIndex === -1) {
+      if (this.debug) {
+        console.log('[DEBUG] No user messages found to attach images to');
+      }
+      return messages;
+    }
+
+    const lastUserMessage = messagesWithImages[lastUserMessageIndex];
+    
+    // Convert to multimodal format if we have images
+    if (typeof lastUserMessage.content === 'string') {
+      messagesWithImages[lastUserMessageIndex] = {
+        ...lastUserMessage,
+        content: [
+          { type: 'text', text: lastUserMessage.content },
+          ...loadedImages.map(imageData => ({
+            type: 'image',
+            image: imageData
+          }))
+        ]
+      };
+
+      if (this.debug) {
+        console.log(`[DEBUG] Added ${loadedImages.length} images to the latest user message`);
+      }
+    }
+
+    return messagesWithImages;
   }
 
   /**
@@ -622,12 +932,13 @@ When troubleshooting:
       // +1 for schema formatting
       // +2 for potential Mermaid validation retries (can be multiple diagrams)
       // +1 for potential JSON correction
-      const maxIterations = options.schema ? MAX_TOOL_ITERATIONS + 4 : MAX_TOOL_ITERATIONS;
+      const baseMaxIterations = this.maxIterations || MAX_TOOL_ITERATIONS;
+      const maxIterations = options.schema ? baseMaxIterations + 4 : baseMaxIterations;
 
       if (this.debug) {
         console.log(`[DEBUG] Starting agentic flow for question: ${message.substring(0, 100)}...`);
         if (options.schema) {
-          console.log(`[DEBUG] Schema provided, using extended iteration limit: ${maxIterations} (base: ${MAX_TOOL_ITERATIONS})`);
+          console.log(`[DEBUG] Schema provided, using extended iteration limit: ${maxIterations} (base: ${baseMaxIterations})`);
         }
       }
 
@@ -695,9 +1006,12 @@ When troubleshooting:
         try {
           // Wrap AI request with tracing if available
           const executeAIRequest = async () => {
+            // Prepare messages with potential image content
+            const messagesForAI = this.prepareMessagesWithImages(currentMessages);
+            
             const result = await streamText({
               model: this.provider(this.model),
-              messages: currentMessages,
+              messages: messagesForAI,
               maxTokens: maxResponseTokens,
               temperature: 0.3,
             });
@@ -739,6 +1053,11 @@ When troubleshooting:
         if (this.debug && assistantResponseContent) {
           const assistantPreview = createMessagePreview(assistantResponseContent);
           console.log(`[DEBUG] Assistant response (${assistantResponseContent.length} chars): ${assistantPreview}`);
+        }
+
+        // Process image references in assistant response for next iteration
+        if (assistantResponseContent) {
+          await this.processImageReferences(assistantResponseContent);
         }
 
         // Parse tool call from response with valid tools list
@@ -819,8 +1138,12 @@ When troubleshooting:
             } else if (this.toolImplementations[toolName]) {
               // Execute native tool
               try {
-                // Add sessionId to params for tool execution
-                const toolParams = { ...params, sessionId: this.sessionId };
+                // Add sessionId and workingDirectory to params for tool execution
+                const toolParams = { 
+                  ...params, 
+                  sessionId: this.sessionId,
+                  workingDirectory: (this.allowedFolders && this.allowedFolders[0]) || process.cwd()
+                };
                 
                 // Emit tool start event
                 this.events.emit('toolCall', {
@@ -898,10 +1221,19 @@ When troubleshooting:
                 
                 // Add assistant response and tool result to conversation
                 currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+                
+                const toolResultContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2);
+                const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
+                
                 currentMessages.push({
                   role: 'user',
-                  content: `<tool_result>\n${typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2)}\n</tool_result>`
+                  content: toolResultMessage
                 });
+
+                // Process tool result for image references
+                if (toolResultContent) {
+                  await this.processImageReferences(toolResultContent);
+                }
 
                 if (this.debug) {
                   console.log(`[DEBUG] Tool ${toolName} executed successfully. Result length: ${typeof toolResult === 'string' ? toolResult.length : JSON.stringify(toolResult).length}`);
@@ -964,8 +1296,10 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
-Or for quick completion if your previous response was already correct:
-<attempt_complete>`;
+Or for quick completion if your previous response was already correct and complete:
+<attempt_complete>
+
+IMPORTANT: When using <attempt_complete>, this must be the ONLY content in your response. No additional text, explanations, or other content should be included. This tag signals to reuse your previous response as the final answer.`;
           }
 
           currentMessages.push({
@@ -1419,6 +1753,12 @@ Convert your previous response content into actual JSON data that follows this s
         }
       } else if (this.debug) {
         console.log(`[DEBUG] Mermaid validation: Skipped final validation due to disableMermaidValidation option`);
+      }
+
+      // Remove thinking tags from final result before returning to user
+      finalResult = removeThinkingTags(finalResult);
+      if (this.debug) {
+        console.log(`[DEBUG] Removed thinking tags from final result`);
       }
 
       return finalResult;
