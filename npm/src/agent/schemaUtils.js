@@ -811,7 +811,8 @@ When presented with a broken Mermaid diagram, analyze it thoroughly and provide 
         model: this.options.model,
         debug: this.options.debug,
         tracer: this.options.tracer,
-        allowEdit: this.options.allowEdit
+        allowEdit: this.options.allowEdit,
+        maxIterations: 2  // Limit mermaid fixing to 2 iterations to prevent long loops
       });
     }
 
@@ -884,10 +885,11 @@ ${contentToFix}
 Provide only the corrected Mermaid diagram within a mermaid code block. Do not add any explanations or additional text.`;
 
     try {
-      const result = await this.agent.answer(prompt, [], { 
-        schema: 'Return only valid Mermaid diagram code within ```mermaid code block' 
-      });
-      
+      // Don't pass schema to avoid infinite loop where AI returns raw mermaid code
+      // instead of using attempt_completion tool. The custom prompt already instructs
+      // to return only mermaid code blocks.
+      const result = await this.agent.answer(prompt, []);
+
       // Extract the mermaid code from the response
       const extractedDiagram = this.extractCorrectedDiagram(result);
       return extractedDiagram || result;
