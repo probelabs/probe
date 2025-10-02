@@ -2701,28 +2701,37 @@ impl SQLiteBackend {
                 // Acquire the writer semaphore so checkpoints never contend with writes
                 let sem = get_direct_write_semaphore(&self.sqlite_config.path);
                 let mut waited_ms: u128 = 0;
+                // Bound the wait to avoid long, noisy loops when the writer is busy
+                let max_wait_ms: u128 = std::env::var("PROBE_LSP_CHECKPOINT_WAIT_MS")
+                    .ok()
+                    .and_then(|v| v.parse::<u128>().ok())
+                    .filter(|&n| n >= 250)
+                    .unwrap_or(2_000);
                 let permit = match sem.try_acquire() {
                     Ok(p) => p,
                     Err(_) => loop {
+                        if waited_ms >= max_wait_ms {
+                            debug!(
+                                "📋 CHECKPOINT: Skipping periodic checkpoint (writer busy for {} ms)",
+                                waited_ms
+                            );
+                            // Skip this cycle without blocking further
+                            continue;
+                        }
                         match sem.try_acquire() {
                             Ok(p) => break p,
                             Err(_) => {
                                 waited_ms += 250;
-                                let snap = self.writer_status_snapshot().await;
-                                let holder =
-                                    snap.gate_owner_op.clone().unwrap_or_else(|| "-".into());
-                                let section =
-                                    snap.section_label.clone().unwrap_or_else(|| "-".into());
-                                let held_for = snap.gate_owner_ms.unwrap_or(0);
                                 if waited_ms % 1000 == 0 {
-                                    info!(
-                                            "CHECKPOINT_LOCK: waiting for writer permit; waited={} ms; holder={}; held_for={} ms; section={}",
-                                            waited_ms, holder, held_for, section
-                                        );
-                                } else {
+                                    let snap = self.writer_status_snapshot().await;
+                                    let holder =
+                                        snap.gate_owner_op.clone().unwrap_or_else(|| "-".into());
+                                    let section =
+                                        snap.section_label.clone().unwrap_or_else(|| "-".into());
+                                    let held_for = snap.gate_owner_ms.unwrap_or(0);
                                     debug!(
-                                        "CHECKPOINT_LOCK: waiting ({} ms); holder={}; section={}",
-                                        waited_ms, holder, section
+                                        "CHECKPOINT_LOCK: writer busy; waited={} ms; holder={}; held_for={} ms; section={}",
+                                        waited_ms, holder, held_for, section
                                     );
                                 }
                                 tokio::time::sleep(std::time::Duration::from_millis(250)).await;
