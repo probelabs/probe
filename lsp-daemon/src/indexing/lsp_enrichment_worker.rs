@@ -685,17 +685,21 @@ impl LspEnrichmentWorkerPool {
                     symbols.len(),
                     edges.len()
                 );
+                // Only mark completion when we have a definite LSP result (empty or populated)
+                Self::mark_operation_complete(
+                    sqlite_backend,
+                    &queue_item.symbol_uid,
+                    language_str,
+                    EnrichmentOperation::CallHierarchy,
+                )
+                .await?;
+            } else {
+                // No result (timeout or error). Do not mark complete so DB can retry later.
+                debug!(
+                    "Call hierarchy not marked complete for '{}' due to transient error/timeout",
+                    queue_item.name
+                );
             }
-
-            // Ensure the queued symbol is marked as satisfied even if the
-            // resolved symbol UID differs by normalization (e.g. line offsets).
-            Self::mark_operation_complete(
-                sqlite_backend,
-                &queue_item.symbol_uid,
-                language_str,
-                EnrichmentOperation::CallHierarchy,
-            )
-            .await?;
         }
 
         if need_references {

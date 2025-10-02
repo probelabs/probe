@@ -2984,6 +2984,9 @@ impl IndexingManager {
                 workspace_root.join(&relative_path)
             };
 
+            // Best-effort capability probing: prefer advertised caps, but don't block
+            // queuing if caps are temporarily unavailable. The worker will check support
+            // again and will not mark completion on unsupported ops.
             let capabilities = match capability_cache.entry(language) {
                 Entry::Occupied(entry) => entry.get().clone(),
                 Entry::Vacant(entry) => {
@@ -2995,23 +2998,38 @@ impl IndexingManager {
                 }
             };
 
-            let capabilities = match capabilities {
-                Some(caps) => caps,
-                None => continue,
-            };
-
             let mut operations = Vec::new();
-            if plan.needs_references && capabilities.references {
-                operations.push(EnrichmentOperation::References);
-                queued_reference_ops += 1;
-            }
-            if plan.needs_implementations && capabilities.implementations {
-                operations.push(EnrichmentOperation::Implementations);
-                queued_implementation_ops += 1;
-            }
-            if plan.needs_call_hierarchy && capabilities.call_hierarchy {
-                operations.push(EnrichmentOperation::CallHierarchy);
-                queued_call_ops += 1;
+            match capabilities {
+                Some(caps) => {
+                    if plan.needs_references && caps.references {
+                        operations.push(EnrichmentOperation::References);
+                        queued_reference_ops += 1;
+                    }
+                    if plan.needs_implementations && caps.implementations {
+                        operations.push(EnrichmentOperation::Implementations);
+                        queued_implementation_ops += 1;
+                    }
+                    if plan.needs_call_hierarchy && caps.call_hierarchy {
+                        operations.push(EnrichmentOperation::CallHierarchy);
+                        queued_call_ops += 1;
+                    }
+                }
+                None => {
+                    // Capabilities not yet available (e.g., server booting). Queue all
+                    // requested operations and let the worker decide per-op.
+                    if plan.needs_references {
+                        operations.push(EnrichmentOperation::References);
+                        queued_reference_ops += 1;
+                    }
+                    if plan.needs_implementations {
+                        operations.push(EnrichmentOperation::Implementations);
+                        queued_implementation_ops += 1;
+                    }
+                    if plan.needs_call_hierarchy {
+                        operations.push(EnrichmentOperation::CallHierarchy);
+                        queued_call_ops += 1;
+                    }
+                }
             }
 
             if operations.is_empty() {
@@ -3392,28 +3410,51 @@ impl IndexingManager {
                                                 }
                                             };
 
-                                            let capabilities = match capabilities {
-                                                Some(caps) => caps,
-                                                None => continue,
-                                            };
-
                                             let mut operations = Vec::new();
-                                            if plan.needs_references && capabilities.references {
-                                                operations.push(EnrichmentOperation::References);
-                                                queued_reference_ops += 1;
-                                            }
-                                            if plan.needs_implementations
-                                                && capabilities.implementations
-                                            {
-                                                operations
-                                                    .push(EnrichmentOperation::Implementations);
-                                                queued_implementation_ops += 1;
-                                            }
-                                            if plan.needs_call_hierarchy
-                                                && capabilities.call_hierarchy
-                                            {
-                                                operations.push(EnrichmentOperation::CallHierarchy);
-                                                queued_call_ops += 1;
+                                            match capabilities {
+                                                Some(caps) => {
+                                                    if plan.needs_references && caps.references {
+                                                        operations
+                                                            .push(EnrichmentOperation::References);
+                                                        queued_reference_ops += 1;
+                                                    }
+                                                    if plan.needs_implementations
+                                                        && caps.implementations
+                                                    {
+                                                        operations.push(
+                                                            EnrichmentOperation::Implementations,
+                                                        );
+                                                        queued_implementation_ops += 1;
+                                                    }
+                                                    if plan.needs_call_hierarchy
+                                                        && caps.call_hierarchy
+                                                    {
+                                                        operations.push(
+                                                            EnrichmentOperation::CallHierarchy,
+                                                        );
+                                                        queued_call_ops += 1;
+                                                    }
+                                                }
+                                                None => {
+                                                    // Capabilities unknown — queue all requested ops; worker will re-check
+                                                    if plan.needs_references {
+                                                        operations
+                                                            .push(EnrichmentOperation::References);
+                                                        queued_reference_ops += 1;
+                                                    }
+                                                    if plan.needs_implementations {
+                                                        operations.push(
+                                                            EnrichmentOperation::Implementations,
+                                                        );
+                                                        queued_implementation_ops += 1;
+                                                    }
+                                                    if plan.needs_call_hierarchy {
+                                                        operations.push(
+                                                            EnrichmentOperation::CallHierarchy,
+                                                        );
+                                                        queued_call_ops += 1;
+                                                    }
+                                                }
                                             }
 
                                             if operations.is_empty() {

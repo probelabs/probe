@@ -15,11 +15,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::time::{timeout, Duration};
 use tokio::sync::Semaphore; // legacy; kept for compatibility in a few paths
 use tokio::sync::{mpsc, oneshot};
 use tokio::sync::{Mutex, RwLock};
 use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock as AsyncRwLock};
+use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
 macro_rules! debug_execute {
@@ -232,7 +232,12 @@ where
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000);
-        let res = match timeout(Duration::from_millis(query_timeout_ms), conn.query(sql, params)).await {
+        let res = match timeout(
+            Duration::from_millis(query_timeout_ms),
+            conn.query(sql, params),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(_) => {
                 return Err(DatabaseError::OperationFailed {
@@ -347,11 +352,19 @@ where
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(5000);
-        let res = match timeout(Duration::from_millis(exec_timeout_ms), conn.execute(sql, params)).await {
+        let res = match timeout(
+            Duration::from_millis(exec_timeout_ms),
+            conn.execute(sql, params),
+        )
+        .await
+        {
             Ok(r) => r,
             Err(_) => {
                 return Err(DatabaseError::OperationFailed {
-                    message: format!("{}: execute timed out after {} ms", context, exec_timeout_ms),
+                    message: format!(
+                        "{}: execute timed out after {} ms",
+                        context, exec_timeout_ms
+                    ),
                 });
             }
         };
@@ -617,7 +630,7 @@ impl ConnectionPool {
         debug!("Skipping SQLite PRAGMA optimizations for cloud database compatibility");
 
         // Give read steps a bit more time under transient writer activity
-        if let Err(e) = conn.execute("PRAGMA busy_timeout=500", ()).await {
+        if let Err(e) = conn.execute("PRAGMA busy_timeout=3000", ()).await {
             debug!("busy_timeout not applied (may be unsupported): {}", e);
         }
 
@@ -1223,14 +1236,18 @@ impl ConnectionPool {
     /// - Pops an available connection under the lock when possible.
     /// - Otherwise clones the database handle + config, drops the lock, creates
     ///   and configures a new connection, then increments `checked_out` under the lock.
-    async fn checkout_arc(pool_arc: &Arc<Mutex<ConnectionPool>>) -> Result<Connection, DatabaseError> {
+    async fn checkout_arc(
+        pool_arc: &Arc<Mutex<ConnectionPool>>,
+    ) -> Result<Connection, DatabaseError> {
         // Respect quiesce without holding the lock during sleep
         loop {
             let quiesced = {
                 let pool = pool_arc.lock().await;
                 pool.quiesced.load(Ordering::Relaxed)
             };
-            if !quiesced { break; }
+            if !quiesced {
+                break;
+            }
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
@@ -1250,7 +1267,9 @@ impl ConnectionPool {
         };
         let conn = database
             .connect()
-            .map_err(|e| DatabaseError::OperationFailed { message: format!("Failed to create new connection: {e}") })?;
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to create new connection: {e}"),
+            })?;
         Self::configure_connection(&conn, &config).await?;
         {
             let pool = pool_arc.lock().await;
@@ -1670,7 +1689,14 @@ impl SQLiteBackend {
     ) -> Result<Self, DatabaseError> {
         let pool = ConnectionPool::new(sqlite_config.clone()).await?;
 
-        let (tx, mut rx) = mpsc::channel::<WriteMsg>(1024);
+        // Allow tuning the writer queue size to avoid producer stalls under load.
+        // Default to a larger buffer to smooth spikes.
+        let writer_queue_size: usize = std::env::var("PROBE_LSP_WRITER_QUEUE_SIZE")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(4096);
+        let (tx, mut rx) = mpsc::channel::<WriteMsg>(writer_queue_size);
         let busy_flag = Arc::new(AtomicBool::new(false));
 
         let backend = Self {
@@ -1817,6 +1843,51 @@ impl SQLiteBackend {
             return Ok(());
         }
 
+        // Serialize with the same per-DB semaphore used by direct write paths
+        let sem = get_direct_write_semaphore(&self.sqlite_config.path);
+        // Fast path: try acquire without waiting
+        let mut waited_ms: u128 = 0;
+        let permit = match sem.try_acquire() {
+            Ok(p) => p,
+            Err(_) => {
+                // Log while waiting, with current holder info
+                loop {
+                    match sem.try_acquire() {
+                        Ok(p) => break p,
+                        Err(_) => {
+                            waited_ms += 250;
+                            // Snapshot current writer holder/section
+                            let snap = self.writer_status_snapshot().await;
+                            let holder = snap.gate_owner_op.clone().unwrap_or_else(|| "-".into());
+                            let section = snap.section_label.clone().unwrap_or_else(|| "-".into());
+                            let held_for = snap.gate_owner_ms.unwrap_or(0);
+                            if waited_ms % 1000 == 0 {
+                                info!(
+                                    "WRITE_LOCK: waiting for writer permit; waited={} ms; holder={}; held_for={} ms; section={}",
+                                    waited_ms, holder, held_for, section
+                                );
+                            } else {
+                                debug!(
+                                    "WRITE_LOCK: waiting ({} ms); holder={}; section={}",
+                                    waited_ms, holder, section
+                                );
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        }
+                    }
+                }
+            }
+        };
+        // Mark owner
+        {
+            let owner = self.gate_owner_handle();
+            let mut o = owner.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "writer.flush_writes".to_string(),
+                since: Instant::now(),
+            });
+        }
+
         // Acquire connection — instrument stages to pinpoint stalls
         self.set_active_section("writer.acquire_conn").await;
         // Prefer direct connection to avoid holding the pool mutex across await points
@@ -1839,6 +1910,13 @@ impl SQLiteBackend {
         }
         self.clear_active_section().await;
         // Direct connection is dropped here
+        // Clear owner before releasing the permit
+        {
+            let owner = self.gate_owner_handle();
+            let mut o = owner.lock().await;
+            *o = None;
+        }
+        drop(permit);
         Ok(())
     }
 
@@ -1993,7 +2071,7 @@ impl SQLiteBackend {
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
                 .filter(|&n| n > 0)
-                .unwrap_or(100);
+                .unwrap_or(50);
             let mut offset = 0usize;
             while offset < edges_len {
                 let end = usize::min(offset + batch_size, edges_len);
@@ -2452,6 +2530,40 @@ impl SQLiteBackend {
         // we're now using turso v0.2.0-pre.7 which should support it.
         // Let's try to perform the checkpoint and handle any errors gracefully.
 
+        // Gate with writer semaphore so checkpoint never contends with writes
+        let sem = get_direct_write_semaphore(&self.sqlite_config.path);
+        let mut waited_ms: u128 = 0;
+        let permit = match sem.try_acquire() {
+            Ok(p) => p,
+            Err(_) => loop {
+                match sem.try_acquire() {
+                    Ok(p) => break p,
+                    Err(_) => {
+                        waited_ms += 250;
+                        let snap = self.writer_status_snapshot().await;
+                        let holder = snap.gate_owner_op.clone().unwrap_or_else(|| "-".into());
+                        let section = snap.section_label.clone().unwrap_or_else(|| "-".into());
+                        let held_for = snap.gate_owner_ms.unwrap_or(0);
+                        if waited_ms % 1000 == 0 {
+                            info!(
+                                "CHECKPOINT_LOCK: waiting for writer permit (perform); waited={} ms; holder={}; held_for={} ms; section={}",
+                                waited_ms, holder, held_for, section
+                            );
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    }
+                }
+            },
+        };
+        {
+            let owner = self.gate_owner_handle();
+            let mut o = owner.lock().await;
+            *o = Some(GateOwnerInfo {
+                op: "checkpoint.perform".to_string(),
+                since: Instant::now(),
+            });
+        }
+
         // Clear all idle connections once to encourage a clean checkpoint
         {
             let mut pool = self.pool.lock().await;
@@ -2537,6 +2649,12 @@ impl SQLiteBackend {
                     }
                 }
                 ConnectionPool::return_connection_arc(&self.pool, conn);
+                {
+                    let owner = self.gate_owner_handle();
+                    let mut o = owner.lock().await;
+                    *o = None;
+                }
+                drop(permit);
                 Ok(())
             }
             Err(e) => {
@@ -2545,6 +2663,12 @@ impl SQLiteBackend {
                     e
                 );
                 ConnectionPool::return_connection_arc(&self.pool, conn);
+                {
+                    let owner = self.gate_owner_handle();
+                    let mut o = owner.lock().await;
+                    *o = None;
+                }
+                drop(permit);
                 Ok(())
             }
         }
@@ -2574,11 +2698,38 @@ impl SQLiteBackend {
                     checkpoint_count
                 );
 
-                // Avoid checkpointing while writer task is busy
-                if self.is_writer_busy() {
-                    debug!("📋 CHECKPOINT: Skipping checkpoint (writer busy)");
-                    continue;
-                }
+                // Acquire the writer semaphore so checkpoints never contend with writes
+                let sem = get_direct_write_semaphore(&self.sqlite_config.path);
+                let mut waited_ms: u128 = 0;
+                let permit = match sem.try_acquire() {
+                    Ok(p) => p,
+                    Err(_) => loop {
+                        match sem.try_acquire() {
+                            Ok(p) => break p,
+                            Err(_) => {
+                                waited_ms += 250;
+                                let snap = self.writer_status_snapshot().await;
+                                let holder =
+                                    snap.gate_owner_op.clone().unwrap_or_else(|| "-".into());
+                                let section =
+                                    snap.section_label.clone().unwrap_or_else(|| "-".into());
+                                let held_for = snap.gate_owner_ms.unwrap_or(0);
+                                if waited_ms % 1000 == 0 {
+                                    info!(
+                                            "CHECKPOINT_LOCK: waiting for writer permit; waited={} ms; holder={}; held_for={} ms; section={}",
+                                            waited_ms, holder, held_for, section
+                                        );
+                                } else {
+                                    debug!(
+                                        "CHECKPOINT_LOCK: waiting ({} ms); holder={}; section={}",
+                                        waited_ms, holder, section
+                                    );
+                                }
+                                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                            }
+                        }
+                    },
+                };
                 // Run a single passive checkpoint (no quiesce, no retries)
                 if let Err(e) = self
                     .perform_checkpoint_once_with_mode(CheckpointMode::Passive)
@@ -2595,6 +2746,7 @@ impl SQLiteBackend {
                         checkpoint_count
                     );
                 }
+                drop(permit);
             }
         })
     }
@@ -2636,7 +2788,7 @@ impl SQLiteBackend {
         let start = Instant::now();
         let mut iterations: u32 = 0;
 
-        // Do NOT take the writer gate here. Checkpointing can run alongside writes; 
+        // Do NOT take the writer gate here. Checkpointing can run alongside writes;
         // holding the writer gate blocks the writer task and stalls indexing.
         info!(
             "📋 WAL_SYNC: starting forced WAL checkpoint (timeout={:?}, quiesce={}, mode={:?})",
@@ -3768,14 +3920,37 @@ impl DatabaseBackend for SQLiteBackend {
     // ===================
 
     async fn store_symbols(&self, symbols: &[SymbolState]) -> Result<(), DatabaseError> {
-        // Inline, direct write path to avoid writer stalls during indexing
         if symbols.is_empty() {
             return Ok(());
         }
-        let sem = get_direct_write_semaphore(&self.sqlite_config.path);
-        let _permit = sem.acquire().await.unwrap();
-        let conn = self.get_direct_connection().await?;
-        self.store_symbols_with_conn(&conn, symbols).await
+        let vec: Vec<SymbolState> = symbols
+            .iter()
+            .cloned()
+            .map(|s| Self::normalize_symbol_for_storage(&s))
+            .collect();
+
+        // Try non-blocking send first; if full, offload to background task.
+        let (ack_tx, _ack_rx) = oneshot::channel::<Result<(), DatabaseError>>();
+        match self
+            .writer_tx
+            .try_send(WriteMsg::StoreSymbols(vec.clone(), ack_tx))
+        {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_msg)) => {
+                let sender = self.writer_tx.clone();
+                tokio::spawn(async move {
+                    let (tx, _rx) = oneshot::channel::<Result<(), DatabaseError>>();
+                    if let Err(e) = sender.send(WriteMsg::StoreSymbols(vec, tx)).await {
+                        tracing::warn!("Writer queue send failed (symbols): {}", e);
+                    }
+                });
+                tracing::debug!("Writer queue full; offloaded symbols send to background task");
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_msg)) => Err(DatabaseError::OperationFailed {
+                message: "Writer task not available (StoreSymbols)".into(),
+            }),
+        }
     }
 
     async fn get_symbols_by_file(
@@ -4093,10 +4268,35 @@ impl DatabaseBackend for SQLiteBackend {
         if edges.is_empty() {
             return Ok(());
         }
-        let sem = get_direct_write_semaphore(&self.sqlite_config.path);
-        let _permit = sem.acquire().await.unwrap();
-        let conn = self.get_direct_connection().await?;
-        self.store_edges_with_conn(&conn, edges).await
+        // Route through single-writer task (unified writer path), but avoid
+        // stalling callers when the channel is temporarily full. Try a
+        // non-blocking send first; if the channel is full, offload the send to
+        // a background task and return immediately.
+        let edges_vec = edges.to_vec();
+        let (ack_tx, _ack_rx) = oneshot::channel::<Result<(), DatabaseError>>();
+        match self
+            .writer_tx
+            .try_send(WriteMsg::StoreEdges(edges_vec.clone(), ack_tx))
+        {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Full(_msg)) => {
+                // Channel is full; spawn a detached task to perform the blocking send.
+                // We intentionally ignore the ack to keep the caller non-blocking.
+                let sender = self.writer_tx.clone();
+                tokio::spawn(async move {
+                    let (tx, _rx) = oneshot::channel::<Result<(), DatabaseError>>();
+                    // Best-effort send; log only at debug to avoid noise.
+                    if let Err(e) = sender.send(WriteMsg::StoreEdges(edges_vec, tx)).await {
+                        tracing::warn!("Writer queue send failed (edges): {}", e);
+                    }
+                });
+                tracing::debug!("Writer queue full; offloaded edges send to background task");
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Closed(_msg)) => Err(DatabaseError::OperationFailed {
+                message: "Writer task not available (StoreEdges)".into(),
+            }),
+        }
     }
 
     async fn get_symbol_references(
@@ -6131,7 +6331,7 @@ impl SQLiteBackend {
 
         // Chunked transactions: commit every CHUNK symbols to limit lock hold time
         // Smaller chunks reduce writer lock hold time and contention with readers
-        const CHUNK: usize = 100;
+        const CHUNK: usize = 50;
         let mut idx = 0usize;
         while idx < symbols.len() {
             let end = usize::min(idx + CHUNK, symbols.len());
@@ -6504,7 +6704,7 @@ impl SQLiteBackend {
             .fetch_edges_for_relations(&conn, symbol_uid, relations)
             .await?;
         ConnectionPool::return_connection_arc(&self.pool, conn);
-        
+
         Ok(self.interpret_edges_for_relation(edges))
     }
 

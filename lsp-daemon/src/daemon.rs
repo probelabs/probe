@@ -5284,6 +5284,15 @@ impl LspDaemon {
             reader_active,
             reader_last_label,
             reader_last_ms,
+            writer_busy,
+            writer_active_ms,
+            writer_last_ms,
+            writer_last_symbols,
+            writer_last_edges,
+            writer_gate_owner_op,
+            writer_gate_owner_ms,
+            writer_section_label,
+            writer_section_ms,
         ) = match backend {
             crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
                 // Try without blocking first
@@ -5310,6 +5319,29 @@ impl LspDaemon {
                 }
                 let reader_last_label = reader_snapshot.last_label.unwrap_or_default();
                 let reader_last_ms = reader_snapshot.last_ms.unwrap_or(0) as u64;
+                // Writer snapshot for lock visibility
+                let writer_snapshot = sqlite_backend.writer_status_snapshot().await;
+                let writer_busy = writer_snapshot.busy;
+                let writer_active_ms = writer_snapshot.active_ms.unwrap_or(0) as u64;
+                let writer_last_ms = writer_snapshot
+                    .recent
+                    .first()
+                    .map(|r| r.duration_ms as u64)
+                    .unwrap_or(0);
+                let writer_last_symbols = writer_snapshot
+                    .recent
+                    .first()
+                    .map(|r| r.symbols as u64)
+                    .unwrap_or(0);
+                let writer_last_edges = writer_snapshot
+                    .recent
+                    .first()
+                    .map(|r| r.edges as u64)
+                    .unwrap_or(0);
+                let writer_gate_owner_op = writer_snapshot.gate_owner_op.unwrap_or_default();
+                let writer_gate_owner_ms = writer_snapshot.gate_owner_ms.unwrap_or(0) as u64;
+                let writer_section_label = writer_snapshot.section_label.unwrap_or_default();
+                let writer_section_ms = writer_snapshot.section_ms.unwrap_or(0) as u64;
 
                 (
                     symbol_count,
@@ -5321,6 +5353,15 @@ impl LspDaemon {
                     reader_snapshot.active as u64,
                     reader_last_label,
                     reader_last_ms,
+                    writer_busy,
+                    writer_active_ms,
+                    writer_last_ms,
+                    writer_last_symbols,
+                    writer_last_edges,
+                    writer_gate_owner_op,
+                    writer_gate_owner_ms,
+                    writer_section_label,
+                    writer_section_ms,
                 )
             }
         };
@@ -5335,6 +5376,15 @@ impl LspDaemon {
             reader_active,
             reader_last_label,
             reader_last_ms,
+            writer_busy,
+            writer_active_ms,
+            writer_last_ms,
+            writer_last_symbols,
+            writer_last_edges,
+            writer_gate_owner_op,
+            writer_gate_owner_ms,
+            writer_section_label,
+            writer_section_ms,
         })
     }
 

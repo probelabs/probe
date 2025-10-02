@@ -2876,6 +2876,27 @@ impl LspManager {
                             if lsp_enrichment.writer_section_label.is_empty() { "-" } else { &lsp_enrichment.writer_section_label },
                             lsp_enrichment.writer_section_ms,
                         );
+                        // One-line writer lock summary for quick visibility
+                        if lsp_enrichment.writer_busy {
+                            let holder = if lsp_enrichment.writer_gate_owner_op.is_empty() {
+                                "-"
+                            } else {
+                                &lsp_enrichment.writer_gate_owner_op
+                            };
+                            let section = if lsp_enrichment.writer_section_label.is_empty() {
+                                "-"
+                            } else {
+                                &lsp_enrichment.writer_section_label
+                            };
+                            let held = lsp_enrichment.writer_gate_owner_ms;
+                            println!(
+                                "  {}: holder={} section={} held={} ms",
+                                "Writer Lock".bold(),
+                                holder,
+                                section,
+                                held
+                            );
+                        }
                         // DB reader snapshot
                         println!(
                             "  {}: {} (last: {} {} ms)",
@@ -2917,6 +2938,44 @@ impl LspManager {
                     println!("  {}: {}", "Files".bold(), database.total_files);
                     if database.db_quiesced {
                         println!("  {}: {}", "DB Quiesced".bold(), "true".yellow());
+                    }
+                    // One-line writer lock summary for quick visibility at the Database level
+                    if database.writer_busy {
+                        let holder = if database.writer_gate_owner_op.is_empty() {
+                            "-"
+                        } else {
+                            &database.writer_gate_owner_op
+                        };
+                        let section = if database.writer_section_label.is_empty() {
+                            "-"
+                        } else {
+                            &database.writer_section_label
+                        };
+                        println!(
+                            "  {}: holder={} section={} held={} ms",
+                            "Writer Lock".bold(),
+                            holder,
+                            section,
+                            database.writer_gate_owner_ms
+                        );
+                        // Active in-flight span (if any)
+                        if database.writer_active_ms > 0 {
+                            println!(
+                                "  {}: {} ms",
+                                "Writer Active".bold(),
+                                database.writer_active_ms
+                            );
+                        }
+                        // Last completed span summary (if any)
+                        if database.writer_last_ms > 0 {
+                            println!(
+                                "  {}: {} ms  (symbols:{} edges:{})",
+                                "Writer Last".bold(),
+                                database.writer_last_ms,
+                                database.writer_last_symbols,
+                                database.writer_last_edges
+                            );
+                        }
                     }
                     // Reader/Writer gate snapshot for clarity (debug-level to avoid polluting stdout)
                     tracing::debug!(
