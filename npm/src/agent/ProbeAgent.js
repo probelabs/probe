@@ -40,6 +40,7 @@ import {
   createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse
 } from './schemaUtils.js';
+import { removeThinkingTags } from './xmlParsingUtils.js';
 import {
   MCPXmlBridge,
   parseHybridXmlToolCall,
@@ -1752,6 +1753,12 @@ Convert your previous response content into actual JSON data that follows this s
         }
       } else if (this.debug) {
         console.log(`[DEBUG] Mermaid validation: Skipped final validation due to disableMermaidValidation option`);
+      }
+
+      // Remove thinking tags from final result before returning to user
+      finalResult = removeThinkingTags(finalResult);
+      if (this.debug) {
+        console.log(`[DEBUG] Removed thinking tags from final result`);
       }
 
       return finalResult;
