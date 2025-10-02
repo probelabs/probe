@@ -1055,6 +1055,25 @@ pub struct DatabaseInfo {
     pub reader_last_label: String,
     #[serde(default)]
     pub reader_last_ms: u64,
+    // Writer snapshot (for quick lock visibility in index-status)
+    #[serde(default)]
+    pub writer_busy: bool,
+    #[serde(default)]
+    pub writer_active_ms: u64,
+    #[serde(default)]
+    pub writer_last_ms: u64,
+    #[serde(default)]
+    pub writer_last_symbols: u64,
+    #[serde(default)]
+    pub writer_last_edges: u64,
+    #[serde(default)]
+    pub writer_gate_owner_op: String,
+    #[serde(default)]
+    pub writer_gate_owner_ms: u64,
+    #[serde(default)]
+    pub writer_section_label: String,
+    #[serde(default)]
+    pub writer_section_ms: u64,
 }
 
 /// Synchronization status snapshot for the current workspace database.
