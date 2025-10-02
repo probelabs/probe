@@ -650,6 +650,11 @@ impl IndexingManager {
         }
         drop(current_status);
 
+        // Ensure the Phase 1 queue is not left paused from a previous session
+        if self.queue.is_paused() {
+            self.queue.resume();
+        }
+
         // Always proceed with indexing - no workspace completion check needed
         info!("Starting indexing for workspace: {:?}", root_path);
         {

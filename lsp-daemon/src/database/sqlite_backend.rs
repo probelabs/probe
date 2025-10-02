@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::time::{timeout, Duration};
 use tokio::sync::Semaphore; // legacy; kept for compatibility in a few paths
 use tokio::sync::{mpsc, oneshot};
 use tokio::sync::{Mutex, RwLock};
@@ -79,6 +80,8 @@ static WRITER_GATE_SECTIONS: Lazy<DashMap<String, Arc<Mutex<Option<SectionInfo>>
 // Per-database reader gates: readers take shared (read) locks; quiesce takes exclusive (write)
 static READER_GATES: Lazy<DashMap<String, Arc<AsyncRwLock<()>>>> = Lazy::new(DashMap::new);
 static READER_SEMAPHORES: Lazy<DashMap<String, Arc<Semaphore>>> = Lazy::new(DashMap::new);
+// Serialize ad-hoc direct writes when bypassing the writer task
+static DIRECT_WRITE_SEMAPHORES: Lazy<DashMap<String, Arc<Semaphore>>> = Lazy::new(DashMap::new);
 
 #[derive(Clone, Debug)]
 struct GateOwnerInfo {
@@ -126,6 +129,16 @@ fn get_reader_semaphore(_path: &str) -> Arc<Semaphore> {
     // Legacy shim; no longer used for quiesce. Keep for compatibility where referenced.
     // Return a small-capacity semaphore that's not used for global coordination.
     Arc::new(Semaphore::new(1024))
+}
+
+fn get_direct_write_semaphore(path: &str) -> Arc<Semaphore> {
+    if let Some(existing) = DIRECT_WRITE_SEMAPHORES.get(path) {
+        existing.clone()
+    } else {
+        let sem = Arc::new(Semaphore::new(1));
+        DIRECT_WRITE_SEMAPHORES.insert(path.to_string(), sem.clone());
+        sem
+    }
 }
 
 fn get_reader_rw_gate(path: &str) -> Arc<AsyncRwLock<()>> {
@@ -214,7 +227,19 @@ where
             context, sql
         );
         let start = Instant::now();
-        let res = conn.query(sql, params).await;
+        // Apply a bounded timeout so calls cannot hang indefinitely
+        let query_timeout_ms: u64 = std::env::var("PROBE_LSP_DB_QUERY_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5000);
+        let res = match timeout(Duration::from_millis(query_timeout_ms), conn.query(sql, params)).await {
+            Ok(r) => r,
+            Err(_) => {
+                return Err(DatabaseError::OperationFailed {
+                    message: format!("{}: query timed out after {} ms", context, query_timeout_ms),
+                });
+            }
+        };
         let elapsed = start.elapsed();
         match res {
             Ok(rows) => {
@@ -317,7 +342,19 @@ where
             context, sql
         );
         let start = Instant::now();
-        let res = conn.execute(sql, params).await;
+        // Apply a bounded timeout per execute
+        let exec_timeout_ms: u64 = std::env::var("PROBE_LSP_DB_EXEC_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5000);
+        let res = match timeout(Duration::from_millis(exec_timeout_ms), conn.execute(sql, params)).await {
+            Ok(r) => r,
+            Err(_) => {
+                return Err(DatabaseError::OperationFailed {
+                    message: format!("{}: execute timed out after {} ms", context, exec_timeout_ms),
+                });
+            }
+        };
         let elapsed = start.elapsed();
         match res {
             Ok(result) => {
@@ -1181,6 +1218,58 @@ impl ConnectionPool {
         self.checked_out.fetch_sub(1, Ordering::Relaxed);
         // If pool is full, just drop the connection
     }
+
+    /// Checkout a connection without holding the pool mutex across awaits.
+    /// - Pops an available connection under the lock when possible.
+    /// - Otherwise clones the database handle + config, drops the lock, creates
+    ///   and configures a new connection, then increments `checked_out` under the lock.
+    async fn checkout_arc(pool_arc: &Arc<Mutex<ConnectionPool>>) -> Result<Connection, DatabaseError> {
+        // Respect quiesce without holding the lock during sleep
+        loop {
+            let quiesced = {
+                let pool = pool_arc.lock().await;
+                pool.quiesced.load(Ordering::Relaxed)
+            };
+            if !quiesced { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // Try fast path: pop an available connection
+        {
+            let mut pool = pool_arc.lock().await;
+            if let Some(conn) = pool.available.pop() {
+                pool.checked_out.fetch_add(1, Ordering::Relaxed);
+                return Ok(conn);
+            }
+        }
+
+        // Slow path: create a new connection outside the lock
+        let (database, config) = {
+            let pool = pool_arc.lock().await;
+            (pool.database.clone(), pool.config.clone())
+        };
+        let conn = database
+            .connect()
+            .map_err(|e| DatabaseError::OperationFailed { message: format!("Failed to create new connection: {e}") })?;
+        Self::configure_connection(&conn, &config).await?;
+        {
+            let pool = pool_arc.lock().await;
+            pool.checked_out.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(conn)
+    }
+
+    /// Return a connection to the pool without holding the lock across awaits
+    fn return_connection_arc(pool_arc: &Arc<Mutex<ConnectionPool>>, conn: Connection) {
+        // Best-effort return; if pool is full, just drop the connection
+        futures::executor::block_on(async {
+            let mut pool = pool_arc.lock().await;
+            if pool.available.len() < pool.max_size {
+                pool.available.push(conn);
+            }
+            pool.checked_out.fetch_sub(1, Ordering::Relaxed);
+        });
+    }
 }
 
 /// SQLite-based implementation of DatabaseTree
@@ -1195,10 +1284,7 @@ pub struct SQLiteTree {
 impl DatabaseTree for SQLiteTree {
     async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("SELECT value FROM {table_name} WHERE key = ?");
@@ -1225,10 +1311,7 @@ impl DatabaseTree for SQLiteTree {
             None
         };
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(value)
     }
 
@@ -1246,10 +1329,7 @@ impl DatabaseTree for SQLiteTree {
                 since: Instant::now(),
             });
         }
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         // Use UPDATE/INSERT pattern since Turso doesn't support OR REPLACE
@@ -1291,10 +1371,7 @@ impl DatabaseTree for SQLiteTree {
             .await?;
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         {
             let mut o = owner_handle.lock().await;
             *o = None;
@@ -1315,10 +1392,7 @@ impl DatabaseTree for SQLiteTree {
                 since: Instant::now(),
             });
         }
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("DELETE FROM {table_name} WHERE key = ?");
@@ -1332,10 +1406,7 @@ impl DatabaseTree for SQLiteTree {
         )
         .await?;
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         {
             let mut o = owner_handle.lock().await;
             *o = None;
@@ -1356,10 +1427,7 @@ impl DatabaseTree for SQLiteTree {
                 since: Instant::now(),
             });
         }
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = if prefix.is_empty() {
@@ -1398,10 +1466,7 @@ impl DatabaseTree for SQLiteTree {
             // Skip malformed rows
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         {
             let mut o = owner_handle.lock().await;
             *o = None;
@@ -1410,10 +1475,7 @@ impl DatabaseTree for SQLiteTree {
     }
 
     async fn clear(&self) -> Result<(), DatabaseError> {
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("DELETE FROM {table_name}");
@@ -1427,18 +1489,12 @@ impl DatabaseTree for SQLiteTree {
         )
         .await?;
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(())
     }
 
     async fn len(&self) -> Result<u64, DatabaseError> {
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let table_name = format!("tree_{}", sanitize_table_name(&self.name));
         let sql = format!("SELECT COUNT(*) FROM {table_name}");
@@ -1677,29 +1733,27 @@ impl SQLiteBackend {
                             Some(WriteMsg::StoreSymbols(mut symbols, ack)) => {
                                 pending_symbols.append(&mut symbols);
                                 let need_flush = pending_symbols.len() >= max_symbols || last_flush.elapsed() >= flush_after;
+                                // Ack immediately so callers never block on flush
+                                let _ = ack.send(Ok(()));
                                 if need_flush {
                                     let _busy = BusyGuard::new(busy_for_task.clone());
                                     writer_backend.begin_writer_span(pending_symbols.len(), pending_edges.len()).await;
                                     let res = writer_backend.flush_writes(&pending_symbols, &pending_edges).await;
                                     if res.is_ok() { pending_symbols.clear(); pending_edges.clear(); last_flush = std::time::Instant::now(); }
                                     writer_backend.end_writer_span(res.is_ok()).await;
-                                    let _ = ack.send(res);
-                                } else {
-                                    let _ = ack.send(Ok(()));
                                 }
                             }
                             Some(WriteMsg::StoreEdges(mut edges, ack)) => {
                                 pending_edges.append(&mut edges);
                                 let need_flush = pending_edges.len() >= max_edges || last_flush.elapsed() >= flush_after;
+                                // Ack immediately so callers never block on flush
+                                let _ = ack.send(Ok(()));
                                 if need_flush {
                                     let _busy = BusyGuard::new(busy_for_task.clone());
                                     writer_backend.begin_writer_span(pending_symbols.len(), pending_edges.len()).await;
                                     let res = writer_backend.flush_writes(&pending_symbols, &pending_edges).await;
                                     if res.is_ok() { pending_symbols.clear(); pending_edges.clear(); last_flush = std::time::Instant::now(); }
                                     writer_backend.end_writer_span(res.is_ok()).await;
-                                    let _ = ack.send(res);
-                                } else {
-                                    let _ = ack.send(Ok(()));
                                 }
                             }
                             Some(WriteMsg::Flush(ack)) => {
@@ -1763,23 +1817,13 @@ impl SQLiteBackend {
             return Ok(());
         }
 
-        // Use one direct connection to reduce overhead; separate transactions for symbols/edges
+        // Acquire connection — instrument stages to pinpoint stalls
+        self.set_active_section("writer.acquire_conn").await;
+        // Prefer direct connection to avoid holding the pool mutex across await points
         let conn = self.get_direct_connection().await?;
-
-        // Global writer gate serialization by database path
-        let gate = self.writer_gate_for_path();
-        // Expose waiting/holding the writer gate for debugging
-        self.set_active_section("writer.wait_for_gate").await;
-        let _guard = gate.lock().await;
-        self.set_active_section("writer.gate_locked").await;
-        {
-            let owner = self.gate_owner_handle();
-            let mut o = owner.lock().await;
-            *o = Some(GateOwnerInfo {
-                op: "flush_writes".to_string(),
-                since: Instant::now(),
-            });
-        }
+        self.set_active_section("writer.flush_writes").await;
+        // No writer gate here — writer task is single-threaded; gate caused stalls under load
+        self.set_active_section("writer.flush_writes").await;
 
         if !symbols.is_empty() {
             self.set_active_section("store_symbols_with_conn").await;
@@ -1793,13 +1837,8 @@ impl SQLiteBackend {
             self.clear_active_section().await;
             res?;
         }
-        // Clear owner and section before releasing the gate lock
-        {
-            let owner = self.gate_owner_handle();
-            let mut o = owner.lock().await;
-            *o = None;
-        }
         self.clear_active_section().await;
+        // Direct connection is dropped here
         Ok(())
     }
 
@@ -2133,10 +2172,7 @@ impl SQLiteBackend {
                 since: Instant::now(),
             });
         }
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // Check if any workspace records exist
         let mut rows = safe_query(
@@ -2416,17 +2452,13 @@ impl SQLiteBackend {
         // we're now using turso v0.2.0-pre.7 which should support it.
         // Let's try to perform the checkpoint and handle any errors gracefully.
 
-        let pool_arc = self.pool.clone();
-        let mut pool = pool_arc.lock().await;
-
-        // Clear all idle connections from the pool to ensure checkpoint can proceed
-        // SQLite checkpoint requires no other connections to be active
-        pool.available.clear();
-
-        // Checkout a connection, then immediately drop the pool lock to avoid
-        // holding the mutex across async DB calls (prevents global stalls).
-        let conn = pool.get_connection().await?;
-        drop(pool);
+        // Clear all idle connections once to encourage a clean checkpoint
+        {
+            let mut pool = self.pool.lock().await;
+            pool.available.clear();
+        }
+        // Checkout a connection without holding the pool mutex across awaits
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // Try to execute PRAGMA wal_checkpoint(TRUNCATE) to force checkpoint and truncate WAL
         // Note: turso may be managing WAL internally, so we'll try but not fail if it doesn't work
@@ -2504,9 +2536,7 @@ impl SQLiteBackend {
                         warn!("📋 CHECKPOINT: Failed to execute checkpoint query: {}", e);
                     }
                 }
-                // Return connection to pool
-                let mut pool = pool_arc.lock().await;
-                pool.return_connection(conn);
+                ConnectionPool::return_connection_arc(&self.pool, conn);
                 Ok(())
             }
             Err(e) => {
@@ -2514,9 +2544,7 @@ impl SQLiteBackend {
                     "📋 CHECKPOINT: Failed to prepare checkpoint statement: {}",
                     e
                 );
-                // Return connection to pool
-                let mut pool = pool_arc.lock().await;
-                pool.return_connection(conn);
+                ConnectionPool::return_connection_arc(&self.pool, conn);
                 Ok(())
             }
         }
@@ -2608,18 +2636,8 @@ impl SQLiteBackend {
         let start = Instant::now();
         let mut iterations: u32 = 0;
 
-        // Take writer gate to prevent our own writer task from interfering
-        let gate = self.writer_gate_for_path();
-        let _guard = gate.lock().await;
-        let owner_handle = self.gate_owner_handle();
-        {
-            let mut o = owner_handle.lock().await;
-            *o = Some(GateOwnerInfo {
-                op: "force_wal_sync".to_string(),
-                since: Instant::now(),
-            });
-        }
-
+        // Do NOT take the writer gate here. Checkpointing can run alongside writes; 
+        // holding the writer gate blocks the writer task and stalls indexing.
         info!(
             "📋 WAL_SYNC: starting forced WAL checkpoint (timeout={:?}, quiesce={}, mode={:?})",
             timeout, quiesce, mode
@@ -2635,7 +2653,7 @@ impl SQLiteBackend {
             _write_guard: None,
             write_flag: Some(self.reader_write_held.clone()),
             section: Some(self.section_handle()),
-            owner: Some(owner_handle.clone()),
+            owner: None,
         };
         if quiesce {
             let gate = self.reader_rw_gate_for_path();
@@ -3039,10 +3057,7 @@ impl SQLiteBackend {
         // Serialize DDL with global writer gate to avoid contention with data writes
         let gate = self.writer_gate_for_path();
         let _guard = gate.lock().await;
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let table_name = format!("tree_{sanitized_name}");
         let sql = format!(
@@ -3123,10 +3138,7 @@ impl SQLiteBackend {
             })?;
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(())
     }
 
@@ -3161,20 +3173,14 @@ impl SQLiteBackend {
         let gate = self.writer_gate_for_path();
         let _guard = gate.lock().await;
         // Use the same logic as perform_checkpoint but synchronous and tolerant
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // libSQL/Turso returns a row for wal_checkpoint, so use query and ignore fields
         match safe_query(&conn, "PRAGMA wal_checkpoint(FULL)", (), "checkpoint(FULL)").await {
             Ok(mut rows) => {
                 // Consume one row if present to avoid "unexpected row" errors
                 let _ = rows.next().await;
-                {
-                    let mut pool = self.pool.lock().await;
-                    pool.return_connection(conn);
-                }
+                ConnectionPool::return_connection_arc(&self.pool, conn);
                 Ok(())
             }
             Err(e) => {
@@ -3190,17 +3196,11 @@ impl SQLiteBackend {
                 {
                     Ok(mut rows) => {
                         let _ = rows.next().await;
-                        {
-                            let mut pool = self.pool.lock().await;
-                            pool.return_connection(conn);
-                        }
+                        ConnectionPool::return_connection_arc(&self.pool, conn);
                         Ok(())
                     }
                     Err(e2) => {
-                        {
-                            let mut pool = self.pool.lock().await;
-                            pool.return_connection(conn);
-                        }
+                        ConnectionPool::return_connection_arc(&self.pool, conn);
                         Err(DatabaseError::OperationFailed {
                             message: format!("WAL checkpoint failed: {}", e2),
                         })
@@ -3264,10 +3264,7 @@ impl DatabaseBackend for SQLiteBackend {
 
     async fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
         let mut rows = safe_query(
             &conn,
             "SELECT value FROM kv_store WHERE key = ?",
@@ -3290,19 +3287,13 @@ impl DatabaseBackend for SQLiteBackend {
             None
         };
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(value)
     }
 
     async fn set(&self, key: &[u8], value: &[u8]) -> Result<(), DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // Try update first
         let timestamp = chrono::Utc::now().timestamp();
@@ -3338,19 +3329,13 @@ impl DatabaseBackend for SQLiteBackend {
             })?;
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(())
     }
 
     async fn remove(&self, key: &[u8]) -> Result<bool, DatabaseError> {
         let key_str = String::from_utf8_lossy(key);
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let rows_affected = conn
             .execute(
@@ -3362,17 +3347,13 @@ impl DatabaseBackend for SQLiteBackend {
                 message: format!("Failed to remove key from default store: {e}"),
             })?;
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(rows_affected > 0)
     }
 
     async fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, DatabaseError> {
         let prefix_str = String::from_utf8_lossy(prefix);
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let (sql, params) = if prefix.is_empty() {
             (
@@ -3404,10 +3385,7 @@ impl DatabaseBackend for SQLiteBackend {
             // Skip malformed rows
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(results)
     }
 
@@ -3439,10 +3417,7 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     async fn tree_names(&self) -> Result<Vec<String>, DatabaseError> {
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut rows = safe_query(
             &conn,
@@ -3466,28 +3441,19 @@ impl DatabaseBackend for SQLiteBackend {
             // Skip malformed rows
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(names)
     }
 
     async fn clear(&self) -> Result<(), DatabaseError> {
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // kv_store and tree_* tables were removed from the schema. Keep clear() tolerant.
         // Best-effort: clear core tables used by the current backend.
         let _ = safe_execute(&conn, "DELETE FROM symbol_state", (), "clear.symbol_state").await;
         let _ = safe_execute(&conn, "DELETE FROM edge", (), "clear.edge").await;
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(())
     }
 
@@ -3501,10 +3467,7 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     async fn stats(&self) -> Result<DatabaseStats, DatabaseError> {
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // Count entries from core tables only (kv_store removed)
         let mut total_entries: u64 = 0;
@@ -3558,10 +3521,7 @@ impl DatabaseBackend for SQLiteBackend {
             self.size_on_disk().await?
         };
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
 
         Ok(DatabaseStats {
             total_entries,
@@ -3614,8 +3574,7 @@ impl DatabaseBackend for SQLiteBackend {
     }
 
     async fn get_workspace(&self, workspace_id: i64) -> Result<Option<Workspace>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let workspace_id_str = workspace_id.to_string();
         let mut rows = conn
@@ -3689,8 +3648,7 @@ impl DatabaseBackend for SQLiteBackend {
         &self,
         project_id: Option<i64>,
     ) -> Result<Vec<Workspace>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let (sql, params) = if let Some(proj_id) = project_id {
             (
@@ -3760,7 +3718,7 @@ impl DatabaseBackend for SQLiteBackend {
             });
         }
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(workspaces)
     }
 
@@ -3769,8 +3727,7 @@ impl DatabaseBackend for SQLiteBackend {
         workspace_id: i64,
         branch: &str,
     ) -> Result<(), DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let workspace_id_str = workspace_id.to_string();
         conn.execute(
@@ -3785,7 +3742,7 @@ impl DatabaseBackend for SQLiteBackend {
             message: format!("Failed to update workspace branch: {}", e),
         })?;
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(())
     }
 
@@ -3811,24 +3768,14 @@ impl DatabaseBackend for SQLiteBackend {
     // ===================
 
     async fn store_symbols(&self, symbols: &[SymbolState]) -> Result<(), DatabaseError> {
-        // Route through single-writer task to serialize writes and reduce locks
-        let (tx, rx) = oneshot::channel();
-        let vec: Vec<SymbolState> = symbols
-            .iter()
-            .cloned()
-            .map(|s| Self::normalize_symbol_for_storage(&s))
-            .collect();
-        self.writer_tx
-            .send(WriteMsg::StoreSymbols(vec, tx))
-            .await
-            .map_err(|_| DatabaseError::OperationFailed {
-                message: "Writer task not available (StoreSymbols)".into(),
-            })?;
-        rx.await.unwrap_or_else(|_| {
-            Err(DatabaseError::OperationFailed {
-                message: "Writer ack dropped (StoreSymbols)".into(),
-            })
-        })
+        // Inline, direct write path to avoid writer stalls during indexing
+        if symbols.is_empty() {
+            return Ok(());
+        }
+        let sem = get_direct_write_semaphore(&self.sqlite_config.path);
+        let _permit = sem.acquire().await.unwrap();
+        let conn = self.get_direct_connection().await?;
+        self.store_symbols_with_conn(&conn, symbols).await
     }
 
     async fn get_symbols_by_file(
@@ -3836,8 +3783,7 @@ impl DatabaseBackend for SQLiteBackend {
         file_path: &str,
         language: &str,
     ) -> Result<Vec<SymbolState>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut rows = conn
             .query(
@@ -3930,7 +3876,7 @@ impl DatabaseBackend for SQLiteBackend {
             });
         }
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(symbols)
     }
 
@@ -3939,8 +3885,7 @@ impl DatabaseBackend for SQLiteBackend {
         _workspace_id: i64,
         name: &str,
     ) -> Result<Vec<SymbolState>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut rows = conn
             .query(
@@ -4033,7 +3978,7 @@ impl DatabaseBackend for SQLiteBackend {
             });
         }
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(symbols)
     }
 
@@ -4042,8 +3987,7 @@ impl DatabaseBackend for SQLiteBackend {
         _workspace_id: i64,
         fqn: &str,
     ) -> Result<Option<SymbolState>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut rows = conn
             .query(
@@ -4137,7 +4081,7 @@ impl DatabaseBackend for SQLiteBackend {
             None
         };
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(result)
     }
 
@@ -4146,20 +4090,13 @@ impl DatabaseBackend for SQLiteBackend {
     // ===================
 
     async fn store_edges(&self, edges: &[Edge]) -> Result<(), DatabaseError> {
-        // Send to single-writer task
-        let (tx, rx) = oneshot::channel();
-        let edges_vec = edges.to_vec();
-        self.writer_tx
-            .send(WriteMsg::StoreEdges(edges_vec, tx))
-            .await
-            .map_err(|_| DatabaseError::OperationFailed {
-                message: "Writer task not available (StoreEdges)".into(),
-            })?;
-        rx.await.unwrap_or_else(|_| {
-            Err(DatabaseError::OperationFailed {
-                message: "Writer ack dropped (StoreEdges)".into(),
-            })
-        })
+        if edges.is_empty() {
+            return Ok(());
+        }
+        let sem = get_direct_write_semaphore(&self.sqlite_config.path);
+        let _permit = sem.acquire().await.unwrap();
+        let conn = self.get_direct_connection().await?;
+        self.store_edges_with_conn(&conn, edges).await
     }
 
     async fn get_symbol_references(
@@ -4167,11 +4104,8 @@ impl DatabaseBackend for SQLiteBackend {
         _workspace_id: i64,
         symbol_uid: &str,
     ) -> Result<Vec<Edge>, DatabaseError> {
-        // Checkout connection, then drop pool lock before running query/iterating rows
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        // Checkout connection without holding pool mutex across awaits
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut rows = conn
             .query(
@@ -4251,10 +4185,7 @@ impl DatabaseBackend for SQLiteBackend {
             });
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(edges)
     }
 
@@ -4264,8 +4195,7 @@ impl DatabaseBackend for SQLiteBackend {
         symbol_uid: &str,
         direction: CallDirection,
     ) -> Result<Vec<Edge>, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // Calls are stored uniformly with relation = 'calls'.
         // Direction is expressed by which side matches the symbol.
@@ -4379,10 +4309,7 @@ impl DatabaseBackend for SQLiteBackend {
             symbol_uid
         );
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(edges)
     }
 
@@ -4395,8 +4322,7 @@ impl DatabaseBackend for SQLiteBackend {
         // This is a simplified implementation of graph traversal
         // In a production system, this would use a more sophisticated graph algorithm
 
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // Convert relations to string for SQL query
         let relation_strs: Vec<String> = relations
@@ -4405,7 +4331,7 @@ impl DatabaseBackend for SQLiteBackend {
             .collect();
 
         if relation_strs.is_empty() {
-            pool.return_connection(conn);
+            ConnectionPool::return_connection_arc(&self.pool, conn);
             return Ok(Vec::new());
         }
 
@@ -4475,10 +4401,7 @@ impl DatabaseBackend for SQLiteBackend {
             current_depth += 1;
         }
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(paths)
     }
 
@@ -4493,10 +4416,7 @@ impl DatabaseBackend for SQLiteBackend {
         _language: &str,
         config: &str,
     ) -> Result<i64, DatabaseError> {
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let run_id = uuid::Uuid::new_v4().to_string();
         let run_id_int = self.generate_unique_id().await?;
@@ -4523,10 +4443,7 @@ impl DatabaseBackend for SQLiteBackend {
             message: format!("Failed to create analysis run: {}", e),
         })?;
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(run_id_int)
     }
 
@@ -4534,8 +4451,7 @@ impl DatabaseBackend for SQLiteBackend {
         &self,
         workspace_id: i64,
     ) -> Result<AnalysisProgress, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let workspace_id_str = workspace_id.to_string();
 
@@ -4659,10 +4575,7 @@ impl DatabaseBackend for SQLiteBackend {
             0.0
         };
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
 
         Ok(AnalysisProgress {
             workspace_id,
@@ -4680,8 +4593,7 @@ impl DatabaseBackend for SQLiteBackend {
         _language: &str,
         priority: i32,
     ) -> Result<(), DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let queue_id = uuid::Uuid::new_v4().to_string();
 
@@ -4704,7 +4616,7 @@ impl DatabaseBackend for SQLiteBackend {
             message: format!("Failed to queue file analysis: {}", e),
         })?;
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(())
     }
 
@@ -5809,8 +5721,7 @@ impl SQLiteBackend {
 
         let fetch_limit = usize::max(limit * 3, limit);
 
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let references = self
             .query_symbols_missing_references(&conn, fetch_limit)
@@ -5822,10 +5733,7 @@ impl SQLiteBackend {
             .query_symbols_missing_call_hierarchy(&conn, fetch_limit)
             .await?;
 
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
 
         let mut plans: Vec<SymbolEnrichmentPlan> = Vec::new();
         let mut index: HashMap<String, usize> = HashMap::new();
@@ -6250,21 +6158,35 @@ impl SQLiteBackend {
                     }
                     // Turso doesn't support ON CONFLICT, so we do SELECT + UPDATE/INSERT
                     let check_query = "SELECT 1 FROM symbol_state WHERE symbol_uid = ?";
-                    let mut check_rows = safe_query(
+                let mut check_rows = safe_query(
                         &conn,
                         check_query,
                         [turso::Value::Text(symbol.symbol_uid.clone())],
                         "check symbol existence",
                     )
                     .await?;
-
-                let symbol_exists = check_rows
-                    .next()
-                    .await
-                    .map_err(|e| DatabaseError::OperationFailed {
-                        message: format!("Failed to check symbol existence: {}", e),
-                    })?
-                    .is_some();
+                // Bound row iteration to avoid indefinite stalls
+                let row_timeout_ms: u64 = std::env::var("PROBE_LSP_DB_ROW_TIMEOUT_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(3000);
+                let symbol_exists = match timeout(Duration::from_millis(row_timeout_ms), check_rows.next()).await {
+                    Ok(Ok(Some(_))) => true,
+                    Ok(Ok(None)) => false,
+                    Ok(Err(e)) => {
+                        return Err(DatabaseError::OperationFailed {
+                            message: format!("Failed to check symbol existence: {}", e),
+                        });
+                    }
+                    Err(_) => {
+                        return Err(DatabaseError::OperationFailed {
+                            message: format!(
+                                "Row iteration timed out ({} ms) while checking symbol existence",
+                                row_timeout_ms
+                            ),
+                        });
+                    }
+                };
 
                 let params = vec![
                     turso::Value::Text(symbol.file_path.clone()),
@@ -6577,13 +6499,12 @@ impl SQLiteBackend {
             return Ok(EdgeInterpretation::AnalyzedEmpty);
         }
 
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
         let edges = self
             .fetch_edges_for_relations(&conn, symbol_uid, relations)
             .await?;
-        pool.return_connection(conn);
-
+        ConnectionPool::return_connection_arc(&self.pool, conn);
+        
         Ok(self.interpret_edges_for_relation(edges))
     }
 
@@ -6707,8 +6628,7 @@ impl SQLiteBackend {
 
     /// Validate database integrity with comprehensive checks
     pub async fn validate_integrity(&self) -> Result<DatabaseIntegrityReport, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut report = DatabaseIntegrityReport {
             total_checks: 0,
@@ -6775,7 +6695,7 @@ impl SQLiteBackend {
         // This check is no longer needed as workspace_file table has been removed
         report.passed_checks += 1;
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(report)
     }
 
@@ -6783,8 +6703,7 @@ impl SQLiteBackend {
     pub async fn optimize_performance(
         &self,
     ) -> Result<PerformanceOptimizationReport, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut report = PerformanceOptimizationReport {
             optimizations_applied: Vec::new(),
@@ -6853,14 +6772,13 @@ impl SQLiteBackend {
             }
         }
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(report)
     }
 
     /// Cleanup orphaned data and optimize storage
     pub async fn cleanup_orphaned_data(&self) -> Result<CleanupReport, DatabaseError> {
-        let mut pool = self.pool.lock().await;
-        let conn = pool.get_connection().await?;
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         let mut report = CleanupReport {
             deleted_records: std::collections::HashMap::new(),
@@ -6916,7 +6834,7 @@ impl SQLiteBackend {
             report.reclaimed_space_bytes = total_deleted * 256; // Rough estimate
         }
 
-        pool.return_connection(conn);
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(report)
     }
 
@@ -7108,10 +7026,7 @@ impl SQLiteBackend {
         // Track as a reader so quiesce mode can block this safely
         let _reader_guard = self.begin_reader("index-status.table-counts").await;
         // Checkout connection, then release pool lock during queries
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
         // Count symbols from symbol_state table
         let symbol_count = {
@@ -7171,10 +7086,7 @@ impl SQLiteBackend {
         };
 
         // Return connection to the pool
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok((symbol_count, edge_count, file_count))
     }
 
@@ -7271,20 +7183,14 @@ impl SQLiteBackend {
                         _ => 0,
                     }
                 };
-                {
-                    let mut pool = self.pool.lock().await;
-                    pool.return_connection(conn);
-                }
+                ConnectionPool::return_connection_arc(&self.pool, conn);
                 return Ok(Some((symbols, edges, files)));
             } else {
                 return Ok(None);
             }
         }
         // Checkout connection without holding the pool lock during queries
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
         // Symbols
         let symbol_count = {
             let mut rows = safe_query(
@@ -7336,10 +7242,7 @@ impl SQLiteBackend {
                 _ => 0,
             }
         };
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(Some((symbol_count, edge_count, file_count)))
     }
 
@@ -7355,10 +7258,7 @@ impl SQLiteBackend {
         }
         // Proceed like normal get, but avoid holding the pool lock while querying
         let key_str = String::from_utf8_lossy(key);
-        let conn = {
-            let mut pool = self.pool.lock().await;
-            pool.get_connection().await?
-        };
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
         let mut rows = conn
             .query(
                 "SELECT value FROM kv_store WHERE key = ?",
@@ -7381,10 +7281,7 @@ impl SQLiteBackend {
         } else {
             None
         };
-        {
-            let mut pool = self.pool.lock().await;
-            pool.return_connection(conn);
-        }
+        ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(value)
     }
 }
