@@ -1,4 +1,4 @@
-use crate::cache_types::{CallHierarchyInfo, CallInfo, LspOperation, NodeId, NodeKey};
+use crate::cache_types::{CallHierarchyInfo, CallInfo, LspOperation};
 use crate::database_cache_adapter::BackendType;
 use crate::database_cache_adapter::DatabaseCacheConfig;
 use crate::hash_utils::md5_hex_file;
@@ -56,6 +56,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock, Semaphore};
 use tokio::time::{timeout, Duration};
@@ -233,6 +234,9 @@ pub struct LspDaemon {
     // Cancellation flags for long-running operations keyed by request_id
     cancel_flags: Arc<DashMap<Uuid, Arc<AtomicBool>>>,
 }
+
+// Bounded concurrency for background DB stores
+static ASYNC_STORE_SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 impl LspDaemon {
     pub fn new(socket_path: String) -> Result<Self> {
@@ -1004,6 +1008,7 @@ impl LspDaemon {
 
             // Handle request with request-specific timeout (or no timeout)
             let request_start = Instant::now();
+            #[allow(unused_variables)]
             let effective_timeout: Option<Duration> = match &request {
                 DaemonRequest::WalSync { timeout_secs, .. } => {
                     if *timeout_secs == 0 {
@@ -1015,7 +1020,26 @@ impl LspDaemon {
                 _ => Some(REQ_TIMEOUT),
             };
 
-            let response = if let Some(t) = effective_timeout {
+            // Increase or disable the outer timeout for heavy LSP operations like call hierarchy,
+            // since the inner handler already uses a dedicated (longer) timeout.
+            let response = if let Some(t) = match &request {
+                DaemonRequest::CallHierarchy { .. } => {
+                    // Use a larger cap (or disable via env) for call hierarchy
+                    if std::env::var("PROBE_LSP_NO_OUTER_TIMEOUT")
+                        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                        .unwrap_or(false)
+                    {
+                        None
+                    } else {
+                        let secs = std::env::var("PROBE_LSP_CALL_OUTER_TIMEOUT_SECS")
+                            .ok()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(90);
+                        Some(Duration::from_secs(secs))
+                    }
+                }
+                _ => Some(REQ_TIMEOUT),
+            } {
                 match timeout(t, self.handle_request(request)).await {
                     Ok(resp) => resp,
                     Err(_) => {
@@ -3060,93 +3084,54 @@ impl LspDaemon {
         // Convert the result to our protocol type and update cache edges
         let protocol_result = parse_call_hierarchy_from_lsp(&result)?;
 
-        // Always store in database, even for empty results (to create "none" edges)
-        // The empty check is now handled inside store_call_hierarchy_in_database_enhanced
-        {
-            // For empty results, try to use the symbol we found at the position
-            let symbol_name =
-                if protocol_result.item.name == "unknown" || protocol_result.item.name.is_empty() {
-                    // Try to find the symbol at the position for better naming
-                    self.find_symbol_at_position(&absolute_file_path, &content, line, column)
-                        .unwrap_or_else(|_| "unknown".to_string())
-                } else {
-                    protocol_result.item.name.clone()
-                };
+        // Prepare symbol name (for logs and optional UID computation inside async store)
+        let symbol_name =
+            if protocol_result.item.name == "unknown" || protocol_result.item.name.is_empty() {
+                self.find_symbol_at_position(&absolute_file_path, &content, line, column)
+                    .unwrap_or_else(|_| "unknown".to_string())
+            } else {
+                protocol_result.item.name.clone()
+            };
 
-            let _node_id = NodeId::new(&symbol_name, absolute_file_path.clone());
+        info!(
+            "Processing call hierarchy for {}:{} (md5: {}, item.name: '{}')",
+            absolute_file_path.display(),
+            symbol_name,
+            content_md5,
+            protocol_result.item.name
+        );
 
-            info!(
-                "Processing call hierarchy for {}:{} (md5: {}, item.name: '{}')",
-                absolute_file_path.display(),
-                symbol_name,
-                content_md5,
-                protocol_result.item.name
-            );
-
-            // Extract edges from the result
-            let _incoming_ids: Vec<NodeId> = protocol_result
-                .incoming
-                .iter()
-                .map(|call| {
-                    let file_path = PathBuf::from(&call.from.uri.replace("file://", ""));
-                    NodeId::new(&call.from.name, file_path)
-                })
-                .collect();
-
-            let _outgoing_ids: Vec<NodeId> = protocol_result
-                .outgoing
-                .iter()
-                .map(|call| {
-                    let file_path = PathBuf::from(&call.from.uri.replace("file://", ""));
-                    NodeId::new(&call.from.name, file_path)
-                })
-                .collect();
-
-            // NOTE: Graph-based edge invalidation is handled by universal cache automatically
-
-            // Create cache key and store the result
-            let _cache_key = NodeKey::new(
-                &symbol_name,
-                absolute_file_path.clone(),
-                content_md5.clone(),
-            );
-            let _cache_info = self.convert_to_cache_info(&protocol_result);
-
-            // Capture request position for index
-            let _pos_file_for_index = absolute_file_path.clone();
-            let _pos_md5_for_index = content_md5.clone();
-            let _pos_line_for_index = line;
-            let _pos_col_for_index = column;
-
-            // NOTE: In universal cache system, caching is handled automatically by the cache layer.
-            // The call hierarchy results are cached transparently when the handler method returns.
-            debug!("Call hierarchy result will be cached automatically by universal cache layer");
-
-            // MILESTONE 21: Store call hierarchy data in the database
-            if let Err(e) = self
-                .store_call_hierarchy_in_database_enhanced(
-                    &protocol_result,
-                    &absolute_file_path,
-                    &workspace_root,
-                    language.as_str(),
-                    &symbol_name,
-                    line,
-                    column,
-                )
-                .await
+        // Fire-and-forget: store in DB in the background through the single writer.
+        // This keeps the RPC responsive even if SQLite is momentarily locked.
+        let router = self.workspace_cache_router.clone();
+        let lang_string = language.as_str().to_string();
+        let file_for_store = absolute_file_path.clone();
+        let ws_for_store = workspace_root.clone();
+        let name_for_store = symbol_name.clone();
+        let sem = ASYNC_STORE_SEM
+            .get_or_init(|| Arc::new(Semaphore::new(4)))
+            .clone();
+        let permit_fut = sem.acquire_owned();
+        let protocol_result_clone = protocol_result.clone();
+        tokio::spawn(async move {
+            let _permit = permit_fut.await.ok();
+            if let Err(e) = store_call_hierarchy_async(
+                router,
+                protocol_result_clone,
+                file_for_store,
+                ws_for_store,
+                lang_string,
+                name_for_store,
+                line,
+                column,
+            )
+            .await
             {
-                error!(
-                    "DATABASE_ERROR [call_hierarchy]: Failed to store call hierarchy in database for {} - {} | cause: {:?} | context: language={}, workspace={:?}",
-                    absolute_file_path.display(),
-                    e,
-                    e.chain().collect::<Vec<_>>(),
-                    format!("{:?}", language),
-                    workspace_root
-                );
-                // Track database error metrics (Step 30.3) - TODO: Make async
-                // self.metrics.increment_database_errors("call_hierarchy").await;
+                tracing::warn!("STORE_ASYNC call_hierarchy failed: {}", e);
+            } else {
+                tracing::debug!("STORE_ASYNC call_hierarchy completed");
             }
-        }
+        });
 
         Ok(protocol_result)
     }
@@ -6489,6 +6474,60 @@ impl LspDaemon {
         );
         Ok(uid)
     }
+}
+
+/// Background store helper for call hierarchy results (single-writer safe).
+async fn store_call_hierarchy_async(
+    router: Arc<WorkspaceDatabaseRouter>,
+    result: CallHierarchyResult,
+    request_file_path: PathBuf,
+    workspace_root: PathBuf,
+    language: String,
+    symbol_name: String,
+    line: u32,
+    column: u32,
+) -> Result<()> {
+    use crate::database::create_none_call_hierarchy_edges;
+    let adapter = LspDatabaseAdapter::new();
+    let workspace_cache = router
+        .cache_for_workspace(&workspace_root)
+        .await
+        .with_context(|| format!("Failed to get workspace cache for {:?}", workspace_root))?;
+
+    // Workspace caches are always SQLite-backed in current architecture
+    let BackendType::SQLite(db) = workspace_cache.backend();
+    let (symbols, mut edges) = adapter.convert_call_hierarchy_to_database(
+        &result,
+        &request_file_path,
+        &language,
+        1,
+        &workspace_root,
+    )?;
+
+    // If empty, synthesize "none" edges to cache emptiness
+    if edges.is_empty() && result.incoming.is_empty() && result.outgoing.is_empty() {
+        let content = std::fs::read_to_string(&request_file_path).unwrap_or_default();
+        let uid = generate_version_aware_uid(
+            &workspace_root,
+            &request_file_path,
+            &content,
+            &symbol_name,
+            line,
+        )
+        .unwrap_or_else(|_| {
+            // Fallback UID on failure
+            let rel = get_workspace_relative_path(&request_file_path, &workspace_root)
+                .unwrap_or_else(|_| request_file_path.to_string_lossy().to_string());
+            format!("{}:{}:{}:{}", rel, symbol_name, line, column)
+        });
+        edges = create_none_call_hierarchy_edges(&uid);
+    }
+
+    adapter
+        .store_in_database(&**db, symbols, edges)
+        .await
+        .with_context(|| "Failed to store call hierarchy data in database")?;
+    Ok(())
 }
 
 fn find_daemon_binary() -> Result<PathBuf> {
