@@ -73,6 +73,7 @@ export class ProbeAgent {
    * @param {boolean} [options.debug] - Enable debug mode
    * @param {boolean} [options.outline] - Enable outline-xml format for search results
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
+   * @param {number} [options.maxIterations] - Maximum tool iterations (overrides MAX_TOOL_ITERATIONS env var)
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
    * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
    * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
@@ -90,6 +91,7 @@ export class ProbeAgent {
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
+    this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
 
     // Bash configuration
@@ -929,12 +931,13 @@ When troubleshooting:
       // +1 for schema formatting
       // +2 for potential Mermaid validation retries (can be multiple diagrams)
       // +1 for potential JSON correction
-      const maxIterations = options.schema ? MAX_TOOL_ITERATIONS + 4 : MAX_TOOL_ITERATIONS;
+      const baseMaxIterations = this.maxIterations || MAX_TOOL_ITERATIONS;
+      const maxIterations = options.schema ? baseMaxIterations + 4 : baseMaxIterations;
 
       if (this.debug) {
         console.log(`[DEBUG] Starting agentic flow for question: ${message.substring(0, 100)}...`);
         if (options.schema) {
-          console.log(`[DEBUG] Schema provided, using extended iteration limit: ${maxIterations} (base: ${MAX_TOOL_ITERATIONS})`);
+          console.log(`[DEBUG] Schema provided, using extended iteration limit: ${maxIterations} (base: ${baseMaxIterations})`);
         }
       }
 
