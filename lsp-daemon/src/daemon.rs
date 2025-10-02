@@ -72,6 +72,25 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
 use uuid::Uuid;
 
+// ===== Helper env parsers for knobs with sane defaults =====
+fn env_bool(name: &str, default: bool) -> bool {
+    match std::env::var(name) {
+        Ok(val) => {
+            let v = val.trim().to_ascii_lowercase();
+            matches!(v.as_str(), "1" | "true" | "yes" | "on")
+        }
+        Err(_) => default,
+    }
+}
+
+fn env_usize(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(default)
+}
+
 /// Database and cache metrics for monitoring (Step 30.3-30.4)
 #[derive(Debug)]
 pub struct DatabaseMetrics {
@@ -235,7 +254,7 @@ pub struct LspDaemon {
     cancel_flags: Arc<DashMap<Uuid, Arc<AtomicBool>>>,
 }
 
-// Bounded concurrency for background DB stores
+// Bounded concurrency for background DB stores (default concurrency is 4)
 static ASYNC_STORE_SEM: OnceLock<Arc<Semaphore>> = OnceLock::new();
 
 impl LspDaemon {
@@ -3101,37 +3120,60 @@ impl LspDaemon {
             protocol_result.item.name
         );
 
-        // Fire-and-forget: store in DB in the background through the single writer.
-        // This keeps the RPC responsive even if SQLite is momentarily locked.
-        let router = self.workspace_cache_router.clone();
-        let lang_string = language.as_str().to_string();
-        let file_for_store = absolute_file_path.clone();
-        let ws_for_store = workspace_root.clone();
-        let name_for_store = symbol_name.clone();
-        let sem = ASYNC_STORE_SEM
-            .get_or_init(|| Arc::new(Semaphore::new(4)))
-            .clone();
-        let permit_fut = sem.acquire_owned();
-        let protocol_result_clone = protocol_result.clone();
-        tokio::spawn(async move {
-            let _permit = permit_fut.await.ok();
-            if let Err(e) = store_call_hierarchy_async(
-                router,
-                protocol_result_clone,
-                file_for_store,
-                ws_for_store,
-                lang_string,
-                name_for_store,
-                line,
-                column,
-            )
-            .await
+        // Async store is enabled by default; env can disable or tune concurrency
+        let async_enabled = env_bool("PROBE_LSP_ASYNC_STORE", true);
+        if async_enabled {
+            let router = self.workspace_cache_router.clone();
+            let lang_string = language.as_str().to_string();
+            let file_for_store = absolute_file_path.clone();
+            let ws_for_store = workspace_root.clone();
+            let name_for_store = symbol_name.clone();
+            let max_conc = env_usize("PROBE_LSP_ASYNC_STORE_CONCURRENCY", 4);
+            let sem = ASYNC_STORE_SEM
+                .get_or_init(|| Arc::new(Semaphore::new(max_conc)))
+                .clone();
+            let permit_fut = sem.acquire_owned();
+            let protocol_result_clone = protocol_result.clone();
+            tokio::spawn(async move {
+                let _permit = permit_fut.await.ok();
+                if let Err(e) = store_call_hierarchy_async(
+                    router,
+                    protocol_result_clone,
+                    file_for_store,
+                    ws_for_store,
+                    lang_string,
+                    name_for_store,
+                    line,
+                    column,
+                )
+                .await
+                {
+                    tracing::warn!("STORE_ASYNC call_hierarchy failed: {}", e);
+                } else {
+                    tracing::debug!("STORE_ASYNC call_hierarchy completed");
+                }
+            });
+        } else {
+            // Synchronous fallback: perform the same store inline.
+            if let Err(e) = self
+                .store_call_hierarchy_in_database_enhanced(
+                    &protocol_result,
+                    &absolute_file_path,
+                    &workspace_root,
+                    language.as_str(),
+                    &symbol_name,
+                    line,
+                    column,
+                )
+                .await
             {
-                tracing::warn!("STORE_ASYNC call_hierarchy failed: {}", e);
-            } else {
-                tracing::debug!("STORE_ASYNC call_hierarchy completed");
+                error!(
+                    "DATABASE_ERROR [call_hierarchy-sync]: {} for {}",
+                    e,
+                    absolute_file_path.display()
+                );
             }
-        });
+        }
 
         Ok(protocol_result)
     }
