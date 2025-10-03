@@ -214,7 +214,7 @@ function parseArgs() {
 
 // Show help message
 function showHelp() {
-  console.log(`
+  console.error(`
 probe agent - AI-powered code exploration tool
 
 Usage:
@@ -696,7 +696,7 @@ async function main() {
       }
       
       if (config.verbose) {
-        console.log('Bash command execution enabled');
+        console.error('Bash command execution enabled');
       }
     }
 

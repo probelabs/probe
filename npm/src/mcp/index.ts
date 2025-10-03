@@ -36,7 +36,7 @@ function parseArgs(): { timeout?: number; format?: string } {
       console.error(`Format set to ${config.format}`);
       i++; // Skip the next argument
     } else if (args[i] === '--help' || args[i] === '-h') {
-      console.log(`
+      console.error(`
 Probe MCP Server
 
 Usage:
@@ -72,11 +72,11 @@ const possiblePaths = [
 for (const packageJsonPath of possiblePaths) {
   try {
     if (fs.existsSync(packageJsonPath)) {
-      console.log(`Found package.json at: ${packageJsonPath}`);
+      console.error(`Found package.json at: ${packageJsonPath}`);
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
       if (packageJson.version) {
         packageVersion = packageJson.version;
-        console.log(`Using version from package.json: ${packageVersion}`);
+        console.error(`Using version from package.json: ${packageVersion}`);
         break;
       }
     }
@@ -93,7 +93,7 @@ if (packageVersion === '0.0.0') {
     const npmList = JSON.parse(result.stdout);
     if (npmList.dependencies && npmList.dependencies['@probelabs/probe']) {
       packageVersion = npmList.dependencies['@probelabs/probe'].version;
-      console.log(`Using version from npm list: ${packageVersion}`);
+      console.error(`Using version from npm list: ${packageVersion}`);
     }
   } catch (error) {
     console.error('Error getting version from npm:', error);
@@ -104,7 +104,7 @@ import { existsSync } from 'fs';
 
 // Get the path to the bin directory
 const binDir = path.resolve(__dirname, '..', 'bin');
-console.log(`Bin directory: ${binDir}`);
+console.error(`Bin directory: ${binDir}`);
 
 // The @probelabs/probe package now handles binary path management internally
 // We don't need to manage the binary path in the MCP server anymore
