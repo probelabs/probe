@@ -777,6 +777,7 @@ FIXING METHODOLOGY:
    - Incorrect formatting for diagram-specific elements
    - **Parentheses in node labels or subgraph names**: Wrap text containing parentheses in double quotes to prevent GitHub parsing errors
    - Single quotes in node labels (GitHub's parser expects double quotes)
+   - **Edge/Arrow labels with spaces**: MUST use pipe syntax like "A --|Label Text|--> B" or "A -- |Label Text| --> B". NEVER use double quotes like "A -- \\"Label\\" --> B" which is INVALID
 4. **Preserve semantic meaning** - never change the intended flow or relationships
 5. **Use proper escaping** for special characters and spaces
 6. **Ensure consistency** in naming conventions and formatting
@@ -812,7 +813,8 @@ When presented with a broken Mermaid diagram, analyze it thoroughly and provide 
         debug: this.options.debug,
         tracer: this.options.tracer,
         allowEdit: this.options.allowEdit,
-        maxIterations: 2  // Limit mermaid fixing to 2 iterations to prevent long loops
+        maxIterations: 2,  // Limit mermaid fixing to 2 iterations to prevent long loops
+        disableMermaidValidation: true  // CRITICAL: Disable mermaid validation in nested agent to prevent infinite recursion
       });
     }
 
