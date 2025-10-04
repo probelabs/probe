@@ -188,9 +188,23 @@ export class ProbeAgent {
     if (this.enableBash && wrappedTools.bashToolInstance) {
       this.toolImplementations.bash = wrappedTools.bashToolInstance;
     }
-    
+
     // Store wrapped tools for ACP system
     this.wrappedTools = wrappedTools;
+
+    // Log available tools in debug mode
+    if (this.debug) {
+      console.error('\n[DEBUG] ========================================');
+      console.error('[DEBUG] ProbeAgent Tools Initialized');
+      console.error('[DEBUG] Session ID:', this.sessionId);
+      console.error('[DEBUG] Available tools:');
+      for (const toolName of Object.keys(this.toolImplementations)) {
+        console.error(`[DEBUG]   - ${toolName}`);
+      }
+      console.error('[DEBUG] Allowed folders:', this.allowedFolders);
+      console.error('[DEBUG] Outline mode:', this.outline);
+      console.error('[DEBUG] ========================================\n');
+    }
   }
 
   /**
@@ -1117,34 +1131,74 @@ When troubleshooting:
             if (type === 'mcp' && this.mcpBridge && this.mcpBridge.isMcpTool(toolName)) {
               // Execute MCP tool
               try {
-                if (this.debug) console.log(`[DEBUG] Executing MCP tool '${toolName}' with params:`, params);
+                // Log MCP tool execution in debug mode
+                if (this.debug) {
+                  console.error(`\n[DEBUG] ========================================`);
+                  console.error(`[DEBUG] Executing MCP tool: ${toolName}`);
+                  console.error(`[DEBUG] Arguments:`);
+                  for (const [key, value] of Object.entries(params)) {
+                    const displayValue = typeof value === 'string' && value.length > 100
+                      ? value.substring(0, 100) + '...'
+                      : value;
+                    console.error(`[DEBUG]   ${key}: ${JSON.stringify(displayValue)}`);
+                  }
+                  console.error(`[DEBUG] ========================================\n`);
+                }
 
                 // Execute MCP tool through the bridge
                 const executionResult = await this.mcpBridge.mcpTools[toolName].execute(params);
 
                 const toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
-                const preview = createMessagePreview(toolResultContent);
+
+                // Log MCP tool result in debug mode
                 if (this.debug) {
-                  console.log(`[DEBUG] MCP tool '${toolName}' executed successfully. Result preview: ${preview}`);
+                  const preview = toolResultContent.length > 500 ? toolResultContent.substring(0, 500) + '...' : toolResultContent;
+                  console.error(`[DEBUG] ========================================`);
+                  console.error(`[DEBUG] MCP tool '${toolName}' completed successfully`);
+                  console.error(`[DEBUG] Result preview:`);
+                  console.error(preview);
+                  console.error(`[DEBUG] ========================================\n`);
                 }
 
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
               } catch (error) {
                 console.error(`Error executing MCP tool ${toolName}:`, error);
                 const toolResultContent = `Error executing MCP tool ${toolName}: ${error.message}`;
-                if (this.debug) console.log(`[DEBUG] MCP tool '${toolName}' execution FAILED.`);
+
+                // Log MCP tool error in debug mode
+                if (this.debug) {
+                  console.error(`[DEBUG] ========================================`);
+                  console.error(`[DEBUG] MCP tool '${toolName}' failed with error:`);
+                  console.error(`[DEBUG] ${error.message}`);
+                  console.error(`[DEBUG] ========================================\n`);
+                }
+
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
               }
             } else if (this.toolImplementations[toolName]) {
               // Execute native tool
               try {
                 // Add sessionId and workingDirectory to params for tool execution
-                const toolParams = { 
-                  ...params, 
+                const toolParams = {
+                  ...params,
                   sessionId: this.sessionId,
                   workingDirectory: (this.allowedFolders && this.allowedFolders[0]) || process.cwd()
                 };
-                
+
+                // Log tool execution in debug mode
+                if (this.debug) {
+                  console.error(`\n[DEBUG] ========================================`);
+                  console.error(`[DEBUG] Executing tool: ${toolName}`);
+                  console.error(`[DEBUG] Arguments:`);
+                  for (const [key, value] of Object.entries(params)) {
+                    const displayValue = typeof value === 'string' && value.length > 100
+                      ? value.substring(0, 100) + '...'
+                      : value;
+                    console.error(`[DEBUG]   ${key}: ${JSON.stringify(displayValue)}`);
+                  }
+                  console.error(`[DEBUG] ========================================\n`);
+                }
+
                 // Emit tool start event
                 this.events.emit('toolCall', {
                   timestamp: new Date().toISOString(),
@@ -1196,6 +1250,18 @@ When troubleshooting:
                     toolResult = await executeToolCall();
                   }
                   
+                  // Log tool result in debug mode
+                  if (this.debug) {
+                    const resultPreview = typeof toolResult === 'string'
+                      ? (toolResult.length > 500 ? toolResult.substring(0, 500) + '...' : toolResult)
+                      : (toolResult ? JSON.stringify(toolResult, null, 2).substring(0, 500) + '...' : 'No Result');
+                    console.error(`[DEBUG] ========================================`);
+                    console.error(`[DEBUG] Tool '${toolName}' completed successfully`);
+                    console.error(`[DEBUG] Result preview:`);
+                    console.error(resultPreview);
+                    console.error(`[DEBUG] ========================================\n`);
+                  }
+
                   // Emit tool success event
                   this.events.emit('toolCall', {
                     timestamp: new Date().toISOString(),
@@ -1206,8 +1272,16 @@ When troubleshooting:
                       : (toolResult ? JSON.stringify(toolResult).substring(0, 200) + '...' : 'No Result'),
                     status: 'completed'
                   });
-                  
+
                 } catch (toolError) {
+                  // Log tool error in debug mode
+                  if (this.debug) {
+                    console.error(`[DEBUG] ========================================`);
+                    console.error(`[DEBUG] Tool '${toolName}' failed with error:`);
+                    console.error(`[DEBUG] ${toolError.message}`);
+                    console.error(`[DEBUG] ========================================\n`);
+                  }
+
                   // Emit tool error event
                   this.events.emit('toolCall', {
                     timestamp: new Date().toISOString(),
