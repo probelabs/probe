@@ -81,6 +81,27 @@ const configOptions = {
 	debug: process.env.DEBUG_CHAT === '1'
 };
 
+// Helper function to truncate long argument values for logging
+function truncateArgValue(value, maxLength = 200) {
+	if (typeof value !== 'string') {
+		value = JSON.stringify(value);
+	}
+	if (value.length <= maxLength * 2) {
+		return value;
+	}
+	// Show first 200 and last 200 characters
+	return `${value.substring(0, maxLength)}...${value.substring(value.length - maxLength)}`;
+}
+
+// Helper function to format tool arguments for debug logging
+function formatToolArgs(args) {
+	const formatted = {};
+	for (const [key, value] of Object.entries(args)) {
+		formatted[key] = truncateArgValue(value);
+	}
+	return formatted;
+}
+
 // Create the base tools using the imported generators
 const baseSearchTool = searchTool(configOptions);
 const baseQueryTool = queryTool(configOptions);
@@ -97,8 +118,15 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 			const toolSessionId = params.sessionId || defaultSessionId; // Fallback, but should always have sessionId
 
 			if (debug) {
-				console.log(`[DEBUG] probeTool: Executing ${toolName} for session ${toolSessionId}`);
-				console.log(`[DEBUG] probeTool: Received params:`, params);
+				console.log(`\n[DEBUG] ========================================`);
+				console.log(`[DEBUG] Tool Call: ${toolName}`);
+				console.log(`[DEBUG] Session: ${toolSessionId}`);
+				console.log(`[DEBUG] Arguments:`);
+				const formattedArgs = formatToolArgs(params);
+				for (const [key, value] of Object.entries(formattedArgs)) {
+					console.log(`[DEBUG]   ${key}: ${value}`);
+				}
+				console.log(`[DEBUG] ========================================\n`);
 			}
 
 			// Register this tool execution (and reset cancel flag if needed)
@@ -345,12 +373,7 @@ const baseListFilesTool = {
 				if (debug) {
 					console.log(`[DEBUG] ${error}`);
 				}
-				return {
-					success: false,
-					directory: targetDir,
-					error: error,
-					timestamp: new Date().toISOString()
-				};
+				return `Error: ${error}`;
 			}
 		}
 
@@ -362,34 +385,62 @@ const baseListFilesTool = {
 			// Read the directory contents
 			const files = await fs.promises.readdir(targetDir, { withFileTypes: true });
 
-			// Format the results
-			const result = files.map(file => {
+			// Format size for human readability
+			const formatSize = (size) => {
+				if (size < 1024) return `${size}B`;
+				if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}K`;
+				if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)}M`;
+				return `${(size / (1024 * 1024 * 1024)).toFixed(1)}G`;
+			};
+
+			// Format the results as ls-style output
+			const entries = await Promise.all(files.map(async (file) => {
 				const isDirectory = file.isDirectory();
+				const fullPath = path.join(targetDir, file.name);
+
+				let size = 0;
+				try {
+					const stats = await fs.promises.stat(fullPath);
+					size = stats.size;
+				} catch (statError) {
+					if (debug) {
+						console.log(`[DEBUG] Could not stat file ${file.name}:`, statError.message);
+					}
+				}
+
 				return {
 					name: file.name,
-					type: isDirectory ? 'directory' : 'file',
-					path: path.join(targetDirectory, file.name)
+					isDirectory,
+					size
 				};
+			}));
+
+			// Sort: directories first, then files, both alphabetically
+			entries.sort((a, b) => {
+				if (a.isDirectory && !b.isDirectory) return -1;
+				if (!a.isDirectory && b.isDirectory) return 1;
+				return a.name.localeCompare(b.name);
+			});
+
+			// Format entries
+			const formatted = entries.map(entry => {
+				const type = entry.isDirectory ? 'dir ' : 'file';
+				const sizeStr = formatSize(entry.size).padStart(8);
+				return `${type} ${sizeStr}  ${entry.name}`;
 			});
 
 			if (debug) {
-				console.log(`[DEBUG] Found ${result.length} files/directories in ${targetDir}`);
+				console.log(`[DEBUG] Found ${entries.length} files/directories in ${targetDir}`);
 			}
 
-			return {
-				success: true,
-				directory: targetDir,
-				files: result,
-				timestamp: new Date().toISOString()
-			};
+			// Return as formatted text output
+			const header = `${targetDir}:\n`;
+			const output = header + formatted.join('\n');
+
+			return output;
 		} catch (error) {
 			console.error(`Error listing files in ${targetDir}:`, error);
-			return {
-				success: false,
-				directory: targetDir,
-				error: error.message || 'Unknown error listing files',
-				timestamp: new Date().toISOString()
-			};
+			return `Error: ${error.message || 'Unknown error listing files'}`;
 		}
 	}
 };
@@ -639,6 +690,19 @@ export const extractToolInstance = wrapToolWithEmitter(baseExtractTool, 'extract
 export const implementToolInstance = wrapToolWithEmitter(baseImplementTool, 'implement', baseImplementTool.execute);
 export const listFilesToolInstance = wrapToolWithEmitter(baseListFilesTool, 'listFiles', baseListFilesTool.execute);
 export const searchFilesToolInstance = wrapToolWithEmitter(baseSearchFilesTool, 'searchFiles', baseSearchFilesTool.execute);
+
+// Log available tools at startup in debug mode
+if (process.env.DEBUG_CHAT === '1') {
+	console.log('\n[DEBUG] ========================================');
+	console.log('[DEBUG] Probe Tools Loaded:');
+	console.log('[DEBUG]   - search: Search for code patterns');
+	console.log('[DEBUG]   - query: Semantic code search');
+	console.log('[DEBUG]   - extract: Extract code snippets');
+	console.log('[DEBUG]   - implement: Generate code implementations');
+	console.log('[DEBUG]   - listFiles: List directory contents');
+	console.log('[DEBUG]   - searchFiles: Search files by pattern');
+	console.log('[DEBUG] ========================================\n');
+}
 
 // --- Backward Compatibility Layer (probeTool mapping to searchToolInstance) ---
 // This might be less relevant if the AI is strictly using the new XML format,
