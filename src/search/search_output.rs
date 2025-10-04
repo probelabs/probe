@@ -1192,6 +1192,7 @@ enum OutlineLineType {
 fn collect_outline_lines(
     result: &SearchResult,
     file_path: &str,
+    file_cache: &HashMap<PathBuf, Arc<String>>,
 ) -> (
     Vec<(usize, OutlineLineType)>,
     std::collections::HashMap<usize, crate::models::ParentContext>,
@@ -1199,10 +1200,11 @@ fn collect_outline_lines(
     let mut lines = Vec::new();
     let mut closing_brace_contexts = std::collections::HashMap::new();
 
-    // Read the full source file
-    let full_source = match std::fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(_) => return (lines, closing_brace_contexts),
+    // Get the source file from cache
+    let file_path_buf = PathBuf::from(file_path);
+    let full_source = match file_cache.get(&file_path_buf) {
+        Some(content) => content.as_str(),
+        None => return (lines, closing_brace_contexts),
     };
 
     // Debug: Check if we have matched lines
@@ -2218,7 +2220,7 @@ fn format_and_print_outline_results(
         for result in file_results {
             // Collect lines for this result
             let (lines_to_display, closing_brace_contexts) =
-                collect_outline_lines(result, &result.file);
+                collect_outline_lines(result, &result.file, file_cache);
 
             // Merge into the file-level collections
             for line in lines_to_display {
@@ -2350,7 +2352,7 @@ fn format_and_print_outline_xml_results(
         for result in file_results {
             // Collect lines for this result
             let (lines_to_display, closing_brace_contexts) =
-                collect_outline_lines(result, &result.file);
+                collect_outline_lines(result, &result.file, file_cache);
 
             // Merge into the file-level collections
             for line in lines_to_display {
