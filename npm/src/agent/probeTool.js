@@ -297,15 +297,15 @@ export const listFilesTool = {
   }
 };
 
-// Simple file search tool
+// Simple file search tool with timeout protection
 export const searchFilesTool = {
   execute: async (params) => {
     const { pattern, directory = '.', recursive = true, workingDirectory } = params;
-    
+
     if (!pattern) {
       throw new Error('Pattern is required for file search');
     }
-    
+
     // Security: Validate path to prevent traversal attacks
     const baseCwd = workingDirectory || process.cwd();
     const secureBaseDir = path.resolve(baseCwd);
@@ -313,19 +313,40 @@ export const searchFilesTool = {
     if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
       throw new Error('Path traversal attempt detected. Access denied.');
     }
-    
+
+    // Validate pattern complexity to prevent DoS
+    if (pattern.includes('**/**') || pattern.split('*').length > 10) {
+      throw new Error('Pattern too complex. Please use a simpler glob pattern.');
+    }
+
     try {
       const options = {
         cwd: targetDir,
         ignore: ['node_modules/**', '.git/**'],
         absolute: false
       };
-      
+
       if (!recursive) {
         options.deep = 1;
       }
-      
-      const files = await glob(pattern, options);
+
+      // Create a timeout promise (10 seconds)
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Search operation timed out after 10 seconds')), 10000);
+      });
+
+      // Race glob against timeout
+      const files = await Promise.race([
+        glob(pattern, options),
+        timeoutPromise
+      ]);
+
+      // Limit results to prevent memory issues
+      const maxResults = 1000;
+      if (files.length > maxResults) {
+        return files.slice(0, maxResults);
+      }
+
       return files;
     } catch (error) {
       throw new Error(`Failed to search files: ${error.message}`);
