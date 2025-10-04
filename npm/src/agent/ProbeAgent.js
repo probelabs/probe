@@ -1336,7 +1336,23 @@ When troubleshooting:
             }
           }
         } else {
-          // No tool call found, add assistant response and ask for tool usage
+          // No tool call found
+          // Special case: If response contains a mermaid code block and no schema was provided,
+          // treat it as a valid completion (for mermaid diagram fixing workflow)
+          const hasMermaidCodeBlock = /```mermaid\s*\n[\s\S]*?\n```/.test(assistantResponseContent);
+          const hasNoSchemaOrTools = !options.schema && validTools.length === 0;
+
+          if (hasMermaidCodeBlock && hasNoSchemaOrTools) {
+            // Accept mermaid code block as final answer for diagram fixing
+            finalResult = assistantResponseContent;
+            completionAttempted = true;
+            if (this.debug) {
+              console.error(`[DEBUG] Accepting mermaid code block as valid completion (no schema, no tools)`);
+            }
+            break;
+          }
+
+          // Add assistant response and ask for tool usage
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
 
           // Build appropriate reminder message based on whether schema is provided

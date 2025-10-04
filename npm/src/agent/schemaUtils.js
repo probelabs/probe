@@ -813,7 +813,7 @@ When presented with a broken Mermaid diagram, analyze it thoroughly and provide 
         debug: this.options.debug,
         tracer: this.options.tracer,
         allowEdit: this.options.allowEdit,
-        maxIterations: 2,  // Limit mermaid fixing to 2 iterations to prevent long loops
+        maxIterations: 10,  // Allow more iterations for mermaid fixing to handle complex diagrams
         disableMermaidValidation: true  // CRITICAL: Disable mermaid validation in nested agent to prevent infinite recursion
       });
     }
