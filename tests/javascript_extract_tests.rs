@@ -22,6 +22,7 @@ fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
             0,
             None,
             false,
+            false,
         )
         .unwrap();
 

@@ -1,0 +1,761 @@
+//! LSP Enrichment Queue Module
+//!
+//! This module provides a priority queue system for queuing symbols that need LSP enrichment.
+//! It's part of Phase 2 of the LSP enrichment system that finds orphan symbols (symbols without
+//! edges) and enriches them with LSP data using the existing server manager infrastructure.
+
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::{Mutex, Notify};
+use tracing::debug;
+
+use crate::language_detector::Language;
+
+/// Priority levels for LSP enrichment processing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum EnrichmentPriority {
+    /// Highest priority - functions and methods
+    High = 3,
+    /// Medium priority - classes and structs
+    Medium = 2,
+    /// Low priority - other symbol types
+    Low = 1,
+}
+
+impl EnrichmentPriority {
+    /// Get priority from symbol kind string
+    pub fn from_symbol_kind(kind: &str) -> Self {
+        match kind {
+            "function" | "method" => Self::High,
+            "class" | "struct" | "enum" => Self::Medium,
+            _ => Self::Low,
+        }
+    }
+}
+
+/// Individual LSP enrichment operations that can be executed for a symbol
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum EnrichmentOperation {
+    References,
+    Implementations,
+    CallHierarchy,
+}
+
+/// Item in the LSP enrichment queue
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueItem {
+    /// Unique identifier for this symbol
+    pub symbol_uid: String,
+    /// File path where the symbol is defined
+    pub file_path: PathBuf,
+    /// Line number of symbol definition
+    pub def_start_line: u32,
+    /// Character position of symbol definition
+    pub def_start_char: u32,
+    /// Symbol name
+    pub name: String,
+    /// Programming language
+    pub language: Language,
+    /// Symbol kind (function, class, etc)
+    pub kind: String,
+    /// Processing priority
+    pub priority: EnrichmentPriority,
+    /// Pending enrichment operations for this symbol
+    pub operations: Vec<EnrichmentOperation>,
+}
+
+impl QueueItem {
+    /// Create a new queue item
+    pub fn new(
+        symbol_uid: String,
+        file_path: PathBuf,
+        def_start_line: u32,
+        def_start_char: u32,
+        name: String,
+        language: Language,
+        kind: String,
+    ) -> Self {
+        let priority = EnrichmentPriority::from_symbol_kind(&kind);
+
+        Self {
+            symbol_uid,
+            file_path,
+            def_start_line,
+            def_start_char,
+            name,
+            language,
+            kind,
+            priority,
+            operations: Vec::new(),
+        }
+    }
+
+    /// Attach pending operations to this queue item
+    pub fn with_operations(mut self, operations: Vec<EnrichmentOperation>) -> Self {
+        if operations.is_empty() {
+            self.operations.clear();
+        } else {
+            let unique: HashSet<EnrichmentOperation> = operations.into_iter().collect();
+            self.operations = operations_from_set(&unique);
+        }
+        self
+    }
+}
+
+/// Wrapper for priority queue ordering
+#[derive(Debug, Clone)]
+struct PriorityQueueItem {
+    item: QueueItem,
+    /// Timestamp for FIFO ordering within same priority
+    timestamp: u64,
+    /// Version of the queue entry when this item was enqueued
+    version: u64,
+}
+
+impl PriorityQueueItem {
+    fn new(item: QueueItem, version: u64) -> Self {
+        Self {
+            item,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            version,
+        }
+    }
+}
+
+impl PartialEq for PriorityQueueItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.item.priority == other.item.priority && self.timestamp == other.timestamp
+    }
+}
+
+impl Eq for PriorityQueueItem {}
+
+impl PartialOrd for PriorityQueueItem {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PriorityQueueItem {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Higher priority first, then earlier timestamp (FIFO within same priority)
+        match self.item.priority.cmp(&other.item.priority) {
+            Ordering::Equal => other.timestamp.cmp(&self.timestamp), // Earlier timestamp first
+            other => other,                                          // Higher priority first
+        }
+    }
+}
+
+/// LSP Enrichment Queue
+///
+/// A thread-safe priority queue for managing symbols that need LSP enrichment.
+/// Provides high-priority processing for functions/methods and lower priority
+/// for other symbol types.
+pub struct LspEnrichmentQueue {
+    /// Internal priority queue
+    queue: Arc<Mutex<QueueState>>,
+    /// Notifier to wake workers when items are enqueued/merged
+    notify: Arc<Notify>,
+}
+
+#[derive(Debug, Default)]
+struct QueueState {
+    heap: BinaryHeap<PriorityQueueItem>,
+    entries: HashMap<String, QueueEntryState>,
+}
+
+#[derive(Debug, Clone)]
+struct QueueEntryState {
+    operations: HashSet<EnrichmentOperation>,
+    priority: EnrichmentPriority,
+    version: u64,
+    // Keep the latest full item so we can regenerate heap entries if needed
+    last_item: QueueItem,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnqueueOutcome {
+    NewItem,
+    MergedOps,
+    NoChange,
+}
+
+impl LspEnrichmentQueue {
+    /// Create a new empty enrichment queue
+    pub fn new() -> Self {
+        Self {
+            queue: Arc::new(Mutex::new(QueueState::default())),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Add a symbol to the enrichment queue
+    pub async fn add_symbol(&self, item: QueueItem) -> Result<()> {
+        let _ = self.add_symbol_with_outcome(item.clone()).await?;
+        debug!(
+            "Adding symbol to enrichment queue: {} ({}:{}) - priority: {:?}",
+            item.name,
+            item.file_path.display(),
+            item.def_start_line,
+            item.priority
+        );
+        Ok(())
+    }
+
+    /// Add a symbol to the enrichment queue and report whether it's new, merged, or a no-op
+    pub async fn add_symbol_with_outcome(&self, item: QueueItem) -> Result<EnqueueOutcome> {
+        let mut state = self.queue.lock().await;
+
+        let desired_ops: HashSet<EnrichmentOperation> = item.operations.iter().copied().collect();
+        if desired_ops.is_empty() {
+            return Ok(EnqueueOutcome::NoChange);
+        }
+
+        let entry = state.entries.entry(item.symbol_uid.clone());
+        match entry {
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                let version = 0;
+                let mut item = item;
+                item.operations = operations_from_set(&desired_ops);
+                vacant.insert(QueueEntryState {
+                    operations: desired_ops,
+                    priority: item.priority,
+                    version,
+                    last_item: item.clone(),
+                });
+                state.heap.push(PriorityQueueItem::new(item, version));
+                // Wake one waiter
+                self.notify.notify_one();
+                Ok(EnqueueOutcome::NewItem)
+            }
+            std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                let (ops_vec, version, priority, updated) = {
+                    let state_entry = occupied.get_mut();
+                    let mut updated = false;
+                    for op in item.operations.iter().copied() {
+                        if state_entry.operations.insert(op) {
+                            updated = true;
+                        }
+                    }
+
+                    state_entry.version = state_entry.version.wrapping_add(1);
+                    let ops_vec = operations_from_set(&state_entry.operations);
+                    // Update stored last_item with latest metadata
+                    state_entry.last_item = QueueItem {
+                        priority: state_entry.priority,
+                        operations: ops_vec.clone(),
+                        ..item.clone()
+                    };
+                    (ops_vec, state_entry.version, state_entry.priority, updated)
+                };
+
+                if !updated {
+                    return Ok(EnqueueOutcome::NoChange);
+                }
+
+                let mut new_item = item;
+                new_item.priority = priority; // Preserve original priority
+                new_item.operations = ops_vec;
+
+                state.heap.push(PriorityQueueItem::new(new_item, version));
+                // Wake one waiter
+                self.notify.notify_one();
+                Ok(EnqueueOutcome::MergedOps)
+            }
+        }
+    }
+
+    /// Pop the next highest priority symbol from the queue
+    pub async fn pop_next(&self) -> Option<QueueItem> {
+        let mut state = self.queue.lock().await;
+
+        while let Some(wrapper) = state.heap.pop() {
+            match state.entries.get(&wrapper.item.symbol_uid) {
+                Some(entry) if entry.version == wrapper.version => {
+                    state.entries.remove(&wrapper.item.symbol_uid);
+                    debug!(
+                        "Popped symbol from enrichment queue: {} - priority: {:?}",
+                        wrapper.item.name, wrapper.item.priority
+                    );
+                    return Some(wrapper.item);
+                }
+                Some(_) | None => {
+                    // Stale entry or already removed; skip
+                    continue;
+                }
+            }
+        }
+
+        // Heap exhausted but entries remain — regenerate one fresh wrapper from latest state
+        if let Some(uid) = state.entries.keys().next().cloned() {
+            if let Some(entry) = state.entries.get(&uid) {
+                let item = entry.last_item.clone();
+                let version = entry.version;
+                state.heap.push(PriorityQueueItem::new(item, version));
+                // Try once more
+                if let Some(wrapper) = state.heap.pop() {
+                    state.entries.remove(&uid);
+                    return Some(wrapper.item);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Check if the queue is empty
+    pub async fn is_empty(&self) -> bool {
+        let state = self.queue.lock().await;
+        state.entries.is_empty()
+    }
+
+    /// Wait until the queue becomes non-empty. Uses a notify-first pattern to avoid lost wakeups.
+    pub async fn wait_non_empty(&self) {
+        loop {
+            // Create the notification future first, then check state to avoid missing signals.
+            let notified = self.notify.notified();
+            if !self.is_empty().await {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    /// Get the current size of the queue
+    pub async fn size(&self) -> usize {
+        let state = self.queue.lock().await;
+        state.entries.len()
+    }
+
+    /// Test-only helper: clear the heap but keep entries to simulate stale-heap condition
+    #[cfg(test)]
+    pub(crate) async fn test_clear_heap_only(&self) {
+        let mut state = self.queue.lock().await;
+        state.heap.clear();
+    }
+
+    /// Get queue statistics by priority level
+    pub async fn get_stats(&self) -> EnrichmentQueueStats {
+        let state = self.queue.lock().await;
+        let mut high_count = 0;
+        let mut medium_count = 0;
+        let mut low_count = 0;
+        let mut total_operations = 0;
+        let mut references_operations = 0;
+        let mut implementations_operations = 0;
+        let mut call_hierarchy_operations = 0;
+
+        for entry in state.entries.values() {
+            match entry.priority {
+                EnrichmentPriority::High => high_count += 1,
+                EnrichmentPriority::Medium => medium_count += 1,
+                EnrichmentPriority::Low => low_count += 1,
+            }
+
+            total_operations += entry.operations.len();
+            for op in &entry.operations {
+                match op {
+                    EnrichmentOperation::References => references_operations += 1,
+                    EnrichmentOperation::Implementations => implementations_operations += 1,
+                    EnrichmentOperation::CallHierarchy => call_hierarchy_operations += 1,
+                }
+            }
+        }
+
+        EnrichmentQueueStats {
+            total_items: state.entries.len(),
+            high_priority_items: high_count,
+            medium_priority_items: medium_count,
+            low_priority_items: low_count,
+            total_operations,
+            references_operations,
+            implementations_operations,
+            call_hierarchy_operations,
+        }
+    }
+
+    /// Clear all items from the queue
+    pub async fn clear(&self) -> Result<()> {
+        let mut state = self.queue.lock().await;
+        state.heap.clear();
+        state.entries.clear();
+        debug!("Cleared LSP enrichment queue");
+        Ok(())
+    }
+}
+
+impl Default for LspEnrichmentQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Statistics about the enrichment queue
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichmentQueueStats {
+    /// Total number of items in queue
+    pub total_items: usize,
+    /// Number of high priority items
+    pub high_priority_items: usize,
+    /// Number of medium priority items
+    pub medium_priority_items: usize,
+    /// Number of low priority items
+    pub low_priority_items: usize,
+    /// Total pending operations across all queue items
+    pub total_operations: usize,
+    /// Pending reference operations
+    pub references_operations: usize,
+    /// Pending implementation operations
+    pub implementations_operations: usize,
+    /// Pending call hierarchy operations
+    pub call_hierarchy_operations: usize,
+}
+
+impl EnrichmentQueueStats {
+    /// Check if the queue has any items
+    pub fn has_items(&self) -> bool {
+        self.total_items > 0
+    }
+
+    /// Get percentage of high priority items
+    pub fn high_priority_percentage(&self) -> f64 {
+        if self.total_items == 0 {
+            0.0
+        } else {
+            (self.high_priority_items as f64 / self.total_items as f64) * 100.0
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[tokio::test]
+    async fn test_queue_basic_operations() {
+        let queue = LspEnrichmentQueue::new();
+
+        // Test empty queue
+        assert!(queue.is_empty().await);
+        assert_eq!(queue.size().await, 0);
+        assert!(queue.pop_next().await.is_none());
+
+        // Add an item
+        let item = QueueItem::new(
+            "test_uid".to_string(),
+            PathBuf::from("test.rs"),
+            10,
+            5,
+            "test_function".to_string(),
+            Language::Rust,
+            "function".to_string(),
+        )
+        .with_operations(vec![EnrichmentOperation::References]);
+
+        queue.add_symbol(item.clone()).await.unwrap();
+
+        // Test non-empty queue
+        assert!(!queue.is_empty().await);
+        assert_eq!(queue.size().await, 1);
+
+        // Pop the item
+        let popped = queue.pop_next().await.unwrap();
+        assert_eq!(popped.symbol_uid, item.symbol_uid);
+        assert_eq!(popped.name, item.name);
+        assert_eq!(popped.priority, EnrichmentPriority::High);
+
+        // Test empty again
+        assert!(queue.is_empty().await);
+        assert_eq!(queue.size().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_priority_ordering() {
+        let queue = LspEnrichmentQueue::new();
+
+        // Add items with different priorities
+        let low_item = QueueItem::new(
+            "low_uid".to_string(),
+            PathBuf::from("test.rs"),
+            10,
+            5,
+            "variable".to_string(),
+            Language::Rust,
+            "variable".to_string(),
+        )
+        .with_operations(vec![EnrichmentOperation::References]);
+
+        let high_item = QueueItem::new(
+            "high_uid".to_string(),
+            PathBuf::from("test.rs"),
+            20,
+            10,
+            "function".to_string(),
+            Language::Rust,
+            "function".to_string(),
+        )
+        .with_operations(vec![EnrichmentOperation::References]);
+
+        let medium_item = QueueItem::new(
+            "medium_uid".to_string(),
+            PathBuf::from("test.rs"),
+            30,
+            15,
+            "MyClass".to_string(),
+            Language::Rust,
+            "class".to_string(),
+        )
+        .with_operations(vec![EnrichmentOperation::References]);
+
+        // Add in random order
+        queue.add_symbol(low_item).await.unwrap();
+        queue.add_symbol(high_item).await.unwrap();
+        queue.add_symbol(medium_item).await.unwrap();
+
+        // Should pop in priority order: High, Medium, Low
+        let first = queue.pop_next().await.unwrap();
+        assert_eq!(first.priority, EnrichmentPriority::High);
+        assert_eq!(first.name, "function");
+
+        let second = queue.pop_next().await.unwrap();
+        assert_eq!(second.priority, EnrichmentPriority::Medium);
+        assert_eq!(second.name, "MyClass");
+
+        let third = queue.pop_next().await.unwrap();
+        assert_eq!(third.priority, EnrichmentPriority::Low);
+        assert_eq!(third.name, "variable");
+    }
+
+    #[tokio::test]
+    async fn test_queue_stats() {
+        let queue = LspEnrichmentQueue::new();
+
+        // Add items of different priorities
+        for i in 0..5 {
+            queue
+                .add_symbol(
+                    QueueItem::new(
+                        format!("high_{}", i),
+                        PathBuf::from("test.rs"),
+                        i as u32,
+                        0,
+                        format!("func_{}", i),
+                        Language::Rust,
+                        "function".to_string(),
+                    )
+                    .with_operations(vec![EnrichmentOperation::References]),
+                )
+                .await
+                .unwrap();
+        }
+
+        for i in 0..3 {
+            queue
+                .add_symbol(
+                    QueueItem::new(
+                        format!("medium_{}", i),
+                        PathBuf::from("test.rs"),
+                        i as u32,
+                        0,
+                        format!("class_{}", i),
+                        Language::Rust,
+                        "class".to_string(),
+                    )
+                    .with_operations(vec![EnrichmentOperation::References]),
+                )
+                .await
+                .unwrap();
+        }
+
+        for i in 0..2 {
+            queue
+                .add_symbol(
+                    QueueItem::new(
+                        format!("low_{}", i),
+                        PathBuf::from("test.rs"),
+                        i as u32,
+                        0,
+                        format!("var_{}", i),
+                        Language::Rust,
+                        "variable".to_string(),
+                    )
+                    .with_operations(vec![EnrichmentOperation::References]),
+                )
+                .await
+                .unwrap();
+        }
+
+        let stats = queue.get_stats().await;
+        assert_eq!(stats.total_items, 10);
+        assert_eq!(stats.high_priority_items, 5);
+        assert_eq!(stats.medium_priority_items, 3);
+        assert_eq!(stats.low_priority_items, 2);
+        assert!(stats.has_items());
+        assert_eq!(stats.high_priority_percentage(), 50.0);
+    }
+
+    #[tokio::test]
+    async fn test_priority_from_symbol_kind() {
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("function"),
+            EnrichmentPriority::High
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("method"),
+            EnrichmentPriority::High
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("class"),
+            EnrichmentPriority::Medium
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("struct"),
+            EnrichmentPriority::Medium
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("enum"),
+            EnrichmentPriority::Medium
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("variable"),
+            EnrichmentPriority::Low
+        );
+        assert_eq!(
+            EnrichmentPriority::from_symbol_kind("unknown"),
+            EnrichmentPriority::Low
+        );
+    }
+
+    #[tokio::test]
+    async fn test_clear_queue() {
+        let queue = LspEnrichmentQueue::new();
+
+        // Add some items
+        for i in 0..3 {
+            queue
+                .add_symbol(
+                    QueueItem::new(
+                        format!("test_{}", i),
+                        PathBuf::from("test.rs"),
+                        i as u32,
+                        0,
+                        format!("item_{}", i),
+                        Language::Rust,
+                        "function".to_string(),
+                    )
+                    .with_operations(vec![EnrichmentOperation::References]),
+                )
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(queue.size().await, 3);
+
+        // Clear the queue
+        queue.clear().await.unwrap();
+
+        assert!(queue.is_empty().await);
+        assert_eq!(queue.size().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_symbols_are_not_enqueued_twice() {
+        let queue = LspEnrichmentQueue::new();
+
+        let base_item = QueueItem::new(
+            "dup_symbol".to_string(),
+            PathBuf::from("dup.rs"),
+            42,
+            3,
+            "dup_fn".to_string(),
+            Language::Rust,
+            "function".to_string(),
+        )
+        .with_operations(vec![EnrichmentOperation::References]);
+
+        queue.add_symbol(base_item.clone()).await.unwrap();
+        assert_eq!(queue.size().await, 1);
+
+        // Attempt to enqueue same symbol again with additional operations
+        let extended_item = QueueItem::new(
+            "dup_symbol".to_string(),
+            PathBuf::from("dup.rs"),
+            42,
+            3,
+            "dup_fn".to_string(),
+            Language::Rust,
+            "function".to_string(),
+        )
+        .with_operations(vec![
+            EnrichmentOperation::References,
+            EnrichmentOperation::Implementations,
+        ]);
+
+        queue.add_symbol(extended_item).await.unwrap();
+
+        // Queue should still report a single item, but aggregated operations
+        assert_eq!(queue.size().await, 1);
+        let stats = queue.get_stats().await;
+        assert_eq!(stats.total_items, 1);
+        assert_eq!(stats.total_operations, 2);
+
+        let popped = queue.pop_next().await.unwrap();
+        assert_eq!(popped.symbol_uid, "dup_symbol");
+        assert_eq!(popped.operations.len(), 2);
+        assert!(popped.operations.contains(&EnrichmentOperation::References));
+        assert!(popped
+            .operations
+            .contains(&EnrichmentOperation::Implementations));
+        assert!(queue.is_empty().await);
+    }
+
+    #[tokio::test]
+    async fn test_heap_rebuild_when_heap_empty_but_entries_exist() {
+        let queue = LspEnrichmentQueue::new();
+
+        // Enqueue one symbol
+        let item = QueueItem::new(
+            "rebuild_uid".to_string(),
+            PathBuf::from("src/lib.rs"),
+            10,
+            0,
+            "rebuild_fn".to_string(),
+            Language::Rust,
+            "function".to_string(),
+        )
+        .with_operations(vec![EnrichmentOperation::References]);
+        queue.add_symbol(item.clone()).await.unwrap();
+
+        // Simulate a state where heap is empty but entries still exist
+        queue.test_clear_heap_only().await;
+
+        // pop_next should rebuild a wrapper and return the item
+        let popped = queue.pop_next().await.expect("should rebuild and pop");
+        assert_eq!(popped.symbol_uid, item.symbol_uid);
+        assert_eq!(popped.name, item.name);
+        // After popping, queue should be empty
+        assert!(queue.is_empty().await);
+    }
+}
+
+fn operations_from_set(set: &HashSet<EnrichmentOperation>) -> Vec<EnrichmentOperation> {
+    let mut ops: Vec<EnrichmentOperation> = set.iter().copied().collect();
+    ops.sort_by_key(operation_rank);
+    ops
+}
+
+fn operation_rank(op: &EnrichmentOperation) -> u8 {
+    match op {
+        EnrichmentOperation::References => 0,
+        EnrichmentOperation::Implementations => 1,
+        EnrichmentOperation::CallHierarchy => 2,
+    }
+}

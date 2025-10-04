@@ -1,4 +1,5 @@
 #!/bin/sh
+
 #
 # Pre-commit hook to run tests and code quality checks
 # Installed by 'make install-hooks'
@@ -8,6 +9,9 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 NC='\033[0m' # No Color
+
+# Always cleanup consent file after any commit attempt
+trap 'repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"; cd "$repo_root"; [ -f AGENT_CONSENT.md ] && [ -e .AGENT_CONSENT ] && rm -f .AGENT_CONSENT || true' EXIT
 
 echo "${YELLOW}Running pre-commit checks...${NC}"
 
@@ -27,8 +31,8 @@ rust_files_changed=$(git diff --cached --name-only | grep -E '\.(rs|toml)$|^Carg
 workflow_files_changed=$(git diff --cached --name-only | grep -E '^\.github/workflows/.*\.ya?ml$')
 
 if [ -z "$rust_files_changed" ] && [ -z "$workflow_files_changed" ]; then
-    echo "${YELLOW}No Rust or workflow files changed. Skipping checks.${NC}"
-    exit 0
+    echo "${YELLOW}No Rust or workflow files changed. Skipping Rust/workflow checks.${NC}"
+    # Don't exit here - we still need to run the consent check
 fi
 
 # Run actionlint if workflow files changed
@@ -91,9 +95,8 @@ if [ $status -eq 0 ]; then
 else
     echo "${RED}Pre-commit checks failed. Commit aborted.${NC}"
     echo "${YELLOW}You can bypass this check with 'git commit --no-verify'${NC}"
+    exit $status
 fi
-
-exit $status
 
 # Run Vow accountability check at the end
 "$(git config core.hooksPath)/pre-commit-vow"

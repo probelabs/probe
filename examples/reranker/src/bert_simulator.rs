@@ -17,7 +17,7 @@ impl BertSimulator {
             max_length: 512,
             // Real BERT CPU inference: ~1-2ms per token for small models
             inference_time_per_token: Duration::from_micros(1500), // 1.5ms per token
-            setup_overhead: Duration::from_millis(5), // 5ms overhead per document
+            setup_overhead: Duration::from_millis(5),              // 5ms overhead per document
         }
     }
 
@@ -38,7 +38,8 @@ impl BertSimulator {
     fn score_pair(&self, query: &str, document: &str) -> f32 {
         // Simulate tokenization and processing time
         let token_count = self.estimate_token_count(query, document);
-        let inference_time = self.setup_overhead + (self.inference_time_per_token * token_count as u32);
+        let inference_time =
+            self.setup_overhead + (self.inference_time_per_token * token_count as u32);
 
         // Actually sleep to simulate real inference time
         std::thread::sleep(inference_time);
@@ -115,9 +116,9 @@ impl BertSimulator {
         };
 
         // Combine scores with weights that simulate BERT's behavior
-        let final_score = (exact_match_score * 3.0 +
-                          partial_match_score * 2.0 +
-                          prog_match_score * 1.5) * length_penalty;
+        let final_score =
+            (exact_match_score * 3.0 + partial_match_score * 2.0 + prog_match_score * 1.5)
+                * length_penalty;
 
         // Add some realistic noise and transform to BERT-like logit range
         let noise = (rand::random() - 0.5) * 0.2; // Small random noise
@@ -129,16 +130,93 @@ impl BertSimulator {
     fn get_programming_keywords(&self) -> HashMap<&'static str, Vec<&'static str>> {
         let mut keywords = HashMap::new();
 
-        keywords.insert("rust", vec!["cargo", "rustc", "trait", "impl", "struct", "enum", "match", "ownership", "borrow"]);
-        keywords.insert("async", vec!["await", "future", "tokio", "task", "runtime", "executor"]);
-        keywords.insert("search", vec!["index", "query", "algorithm", "tree", "hash", "lookup", "find"]);
-        keywords.insert("algorithm", vec!["sort", "tree", "graph", "hash", "binary", "linear", "complexity"]);
-        keywords.insert("performance", vec!["optimize", "benchmark", "profile", "speed", "memory", "cache"]);
-        keywords.insert("machine", vec!["learning", "model", "neural", "training", "inference", "ai"]);
-        keywords.insert("vector", vec!["embedding", "similarity", "distance", "cosine", "dot", "product"]);
-        keywords.insert("neural", vec!["network", "transformer", "bert", "attention", "layer", "weight"]);
-        keywords.insert("database", vec!["sql", "index", "table", "query", "schema", "transaction"]);
-        keywords.insert("api", vec!["rest", "http", "endpoint", "request", "response", "server"]);
+        keywords.insert(
+            "rust",
+            vec![
+                "cargo",
+                "rustc",
+                "trait",
+                "impl",
+                "struct",
+                "enum",
+                "match",
+                "ownership",
+                "borrow",
+            ],
+        );
+        keywords.insert(
+            "async",
+            vec!["await", "future", "tokio", "task", "runtime", "executor"],
+        );
+        keywords.insert(
+            "search",
+            vec![
+                "index",
+                "query",
+                "algorithm",
+                "tree",
+                "hash",
+                "lookup",
+                "find",
+            ],
+        );
+        keywords.insert(
+            "algorithm",
+            vec![
+                "sort",
+                "tree",
+                "graph",
+                "hash",
+                "binary",
+                "linear",
+                "complexity",
+            ],
+        );
+        keywords.insert(
+            "performance",
+            vec![
+                "optimize",
+                "benchmark",
+                "profile",
+                "speed",
+                "memory",
+                "cache",
+            ],
+        );
+        keywords.insert(
+            "machine",
+            vec!["learning", "model", "neural", "training", "inference", "ai"],
+        );
+        keywords.insert(
+            "vector",
+            vec![
+                "embedding",
+                "similarity",
+                "distance",
+                "cosine",
+                "dot",
+                "product",
+            ],
+        );
+        keywords.insert(
+            "neural",
+            vec![
+                "network",
+                "transformer",
+                "bert",
+                "attention",
+                "layer",
+                "weight",
+            ],
+        );
+        keywords.insert(
+            "database",
+            vec!["sql", "index", "table", "query", "schema", "transaction"],
+        );
+        keywords.insert(
+            "api",
+            vec!["rest", "http", "endpoint", "request", "response", "server"],
+        );
 
         keywords
     }
@@ -184,9 +262,18 @@ impl BertPerformanceStats {
         println!("\n🤖 BERT MODEL PERFORMANCE CHARACTERISTICS");
         println!("==========================================");
         println!("Model: {}", self.model_name);
-        println!("Average inference time: {:.1}ms per document", self.avg_inference_time_ms);
-        println!("Processing speed: {:.1} tokens/second", self.tokens_per_second);
-        println!("Document throughput: {:.1} docs/second", self.docs_per_second);
+        println!(
+            "Average inference time: {:.1}ms per document",
+            self.avg_inference_time_ms
+        );
+        println!(
+            "Processing speed: {:.1} tokens/second",
+            self.tokens_per_second
+        );
+        println!(
+            "Document throughput: {:.1} docs/second",
+            self.docs_per_second
+        );
         println!("Memory usage: {:.1} MB", self.memory_usage_mb);
         println!("==========================================");
     }
@@ -200,7 +287,10 @@ mod rand {
 
     pub fn random() -> f32 {
         let mut hasher = DefaultHasher::new();
-        let time_nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let time_nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         time_nanos.hash(&mut hasher);
         let hash = hasher.finish();
         (hash as f32) / (u64::MAX as f32)
