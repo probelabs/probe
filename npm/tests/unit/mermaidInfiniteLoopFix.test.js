@@ -50,15 +50,15 @@ describe('Mermaid Infinite Loop Fix', () => {
       }
     });
 
-    it('should initialize ProbeAgent with maxIterations set to 2', async () => {
+    it('should initialize ProbeAgent with maxIterations set to 10', async () => {
       // Create MermaidFixingAgent
       const fixer = new MermaidFixingAgent({ debug: false });
 
       // Initialize the agent
       const agent = await fixer.initializeAgent();
 
-      // Verify maxIterations is set to 2
-      expect(agent.maxIterations).toBe(2);
+      // Verify maxIterations is set to 10 (increased from 2 to handle complex diagrams)
+      expect(agent.maxIterations).toBe(10);
     });
   });
 });
