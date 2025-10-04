@@ -84,7 +84,6 @@
     "probeChat.js",
     "tokenCounter.js",
     "tokenUsageDisplay.js",
-    "tools.js",
     "webServer.js",
     "auth.js",
     "probeTool.js",

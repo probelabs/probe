@@ -34,6 +34,7 @@ import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel
 import { bashTool } from './tools/bash.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
+import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
 
 export {
 	search,
@@ -57,6 +58,9 @@ export {
 	extractTool,
 	delegateTool,
 	bashTool,
+	// Export tool instances
+	listFilesToolInstance,
+	searchFilesToolInstance,
 	// Export schemas
 	searchSchema,
 	querySchema,
