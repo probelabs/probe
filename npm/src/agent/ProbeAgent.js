@@ -380,6 +380,9 @@ export class ProbeAgent {
   async processImageReferences(content) {
     if (!content) return;
 
+    // First, try to parse listFiles output format to extract directory context
+    const listFilesDirectories = this.extractListFilesDirectories(content);
+
     // Enhanced pattern to detect image file mentions in various contexts
     // Looks for: "image", "file", "screenshot", etc. followed by path-like strings with image extensions
     const extensionsPattern = `(?:${SUPPORTED_IMAGE_EXTENSIONS.join('|')})`;
@@ -414,8 +417,53 @@ export class ProbeAgent {
 
     // Process each found path
     for (const imagePath of foundPaths) {
-      await this.loadImageIfValid(imagePath);
+      // Try to resolve the path with directory context from listFiles output
+      let resolvedPath = imagePath;
+
+      // If the path is just a filename (no directory separator), try to find it in listFiles directories
+      if (!imagePath.includes('/') && !imagePath.includes('\\')) {
+        for (const dir of listFilesDirectories) {
+          const potentialPath = resolve(dir, imagePath);
+          // Check if this file exists by attempting to load it
+          const loaded = await this.loadImageIfValid(potentialPath);
+          if (loaded) {
+            // Successfully loaded with this directory context
+            if (this.debug) {
+              console.log(`[DEBUG] Resolved ${imagePath} to ${potentialPath} using listFiles context`);
+            }
+            break; // Found it, no need to try other directories
+          }
+        }
+      } else {
+        // Path already has directory info, load as-is
+        await this.loadImageIfValid(resolvedPath);
+      }
     }
+  }
+
+  /**
+   * Extract directory paths from listFiles tool output
+   * @param {string} content - Tool output content
+   * @returns {string[]} - Array of directory paths
+   */
+  extractListFilesDirectories(content) {
+    const directories = [];
+
+    // Pattern to match listFiles output format: "/path/to/directory:" at the start of a line
+    const dirPattern = /^([^\n:]+):\s*$/gm;
+
+    let match;
+    while ((match = dirPattern.exec(content)) !== null) {
+      const dirPath = match[1].trim();
+      if (dirPath && dirPath.length > 0) {
+        directories.push(dirPath);
+        if (this.debug) {
+          console.log(`[DEBUG] Extracted directory context from listFiles: ${dirPath}`);
+        }
+      }
+    }
+
+    return directories;
   }
 
   /**
