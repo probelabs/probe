@@ -223,9 +223,22 @@ export const listFilesTool = {
 
     // Security: Validate path to prevent traversal attacks
     const secureBaseDir = path.resolve(baseCwd);
-    const targetDir = path.resolve(secureBaseDir, directory);
-    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
-      throw new Error('Path traversal attempt detected. Access denied.');
+
+    // If directory is absolute, check if it's within the secure base directory
+    // If it's relative, resolve it against the secure base directory
+    let targetDir;
+    if (path.isAbsolute(directory)) {
+      targetDir = path.resolve(directory);
+      // Check if the absolute path is within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Cannot access directory outside workspace: ${directory}`);
+      }
+    } else {
+      targetDir = path.resolve(secureBaseDir, directory);
+      // Double-check the resolved path is still within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Access denied: ${directory}`);
+      }
     }
 
     const debug = process.env.DEBUG === '1';
@@ -309,9 +322,22 @@ export const searchFilesTool = {
     // Security: Validate path to prevent traversal attacks
     const baseCwd = workingDirectory || process.cwd();
     const secureBaseDir = path.resolve(baseCwd);
-    const targetDir = path.resolve(secureBaseDir, directory);
-    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
-      throw new Error('Path traversal attempt detected. Access denied.');
+
+    // If directory is absolute, check if it's within the secure base directory
+    // If it's relative, resolve it against the secure base directory
+    let targetDir;
+    if (path.isAbsolute(directory)) {
+      targetDir = path.resolve(directory);
+      // Check if the absolute path is within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Cannot access directory outside workspace: ${directory}`);
+      }
+    } else {
+      targetDir = path.resolve(secureBaseDir, directory);
+      // Double-check the resolved path is still within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Access denied: ${directory}`);
+      }
     }
 
     // Validate pattern complexity to prevent DoS
