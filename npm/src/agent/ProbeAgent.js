@@ -644,16 +644,23 @@ export class ProbeAgent {
       this.mcpBridge = new MCPXmlBridge({ debug: this.debug });
       await this.mcpBridge.initialize(mcpConfig);
 
-      const mcpToolCount = this.mcpBridge.getToolNames().length;
+      const mcpToolNames = this.mcpBridge.getToolNames();
+      const mcpToolCount = mcpToolNames.length;
       if (mcpToolCount > 0) {
         if (this.debug) {
-          console.log(`[DEBUG] Loaded ${mcpToolCount} MCP tools`);
+          console.error('\n[DEBUG] ========================================');
+          console.error(`[DEBUG] MCP Tools Initialized (${mcpToolCount} tools)`);
+          console.error('[DEBUG] Available MCP tools:');
+          for (const toolName of mcpToolNames) {
+            console.error(`[DEBUG]   - ${toolName}`);
+          }
+          console.error('[DEBUG] ========================================\n');
         }
       } else {
         // For backward compatibility: if no tools were loaded, set bridge to null
         // This maintains the behavior expected by existing tests
         if (this.debug) {
-          console.log('[DEBUG] No MCP tools loaded, setting bridge to null');
+          console.error('[DEBUG] No MCP tools loaded, setting bridge to null');
         }
         this.mcpBridge = null;
       }
