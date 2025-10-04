@@ -1,14 +1,14 @@
-import { get_encoding } from 'tiktoken';
+import { encode } from 'gpt-tokenizer';
 
 /**
  * TokenCounter class to track token usage in the agent
  */
 export class TokenCounter {
   constructor() {
-    // Initialize the tokenizer with cl100k_base encoding (works for both Claude and GPT models)
+    // Initialize the tokenizer with gpt-tokenizer (works for both Claude and GPT models)
     try {
-      // Initialize tokenizer
-      this.tokenizer = get_encoding('cl100k_base');
+      // gpt-tokenizer uses encode directly, no need to initialize
+      this.tokenizer = encode;
 
       // Context window tracking
       this.contextSize = 0; // Current size based on history
@@ -30,7 +30,7 @@ export class TokenCounter {
 
     } catch (error) {
       console.error('Error initializing tokenizer:', error);
-      // Fallback to a simple token counting method if tiktoken fails
+      // Fallback to a simple token counting method if gpt-tokenizer fails
       this.tokenizer = null;
       this.contextSize = 0;
       this.requestTokens = 0;
@@ -49,7 +49,7 @@ export class TokenCounter {
   }
 
   /**
-   * Count tokens in a string using tiktoken or fallback method
+   * Count tokens in a string using gpt-tokenizer or fallback method
    * @param {string} text - The text to count tokens for
    * @returns {number} - The number of tokens
    */
@@ -60,7 +60,7 @@ export class TokenCounter {
 
     if (this.tokenizer) {
       try {
-        const tokens = this.tokenizer.encode(text);
+        const tokens = this.tokenizer(text);
         return tokens.length;
       } catch (error) {
         // Fallback to a simple approximation (1 token ≈ 4 characters)
