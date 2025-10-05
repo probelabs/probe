@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use colored::*;
 use dirs;
 use serde_json::json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
@@ -3077,20 +3077,30 @@ impl LspManager {
         use crate::lsp_integration::{types::LspConfig, LspClient};
         use colored::Colorize;
 
-        // Capture current workspace and indexing state
+        // Capture current workspace and indexing state without auto-starting the daemon
         let cwd = std::env::current_dir()?;
-        let mut client = LspClient::new(LspConfig {
-            timeout_ms: 30_000,
+        let quick_cfg = LspConfig {
+            use_daemon: true,
+            auto_start: false,
+            timeout_ms: 1000,
             ..Default::default()
-        })
-        .await?;
-        let db_path = client.get_workspace_db_path(Some(cwd.clone())).await?;
-        let status_before = client.get_indexing_status().await.ok();
-        let was_indexing = status_before
-            .as_ref()
-            .map(|s| s.manager_status == "Indexing")
-            .unwrap_or(false);
-        let cfg_before = client.get_indexing_config().await.ok();
+        };
+        let mut client_opt = LspClient::new_non_blocking(quick_cfg).await;
+        let (db_path, was_indexing, cfg_before) = if let Some(ref mut client) = client_opt {
+            let db = client
+                .get_workspace_db_path(Some(cwd.clone()))
+                .await
+                .unwrap_or_else(|_| Self::compute_workspace_db_path_offline(&cwd));
+            let status_before = client.get_indexing_status().await.ok();
+            let was = status_before
+                .as_ref()
+                .map(|s| s.manager_status == "Indexing")
+                .unwrap_or(false);
+            let cfg = client.get_indexing_config().await.ok();
+            (db, was, cfg)
+        } else {
+            (Self::compute_workspace_db_path_offline(&cwd), false, None)
+        };
 
         // Shutdown daemon to release locks
         let _ = Self::shutdown_daemon("terminal").await;
@@ -3142,6 +3152,85 @@ impl LspManager {
             db_path.display()
         );
         Ok(())
+    }
+
+    /// Compute workspace cache DB path offline without contacting the daemon.
+    fn compute_workspace_db_path_offline(ws_root: &Path) -> PathBuf {
+        let ws_root = ws_root
+            .canonicalize()
+            .unwrap_or_else(|_| ws_root.to_path_buf());
+        let workspace_id = if let Ok(out) = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&ws_root)
+            .arg("config")
+            .arg("--get")
+            .arg("remote.origin.url")
+            .output()
+        {
+            if out.status.success() {
+                let url = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !url.is_empty() {
+                    Self::sanitize_remote_for_id(&url)
+                } else {
+                    Self::hash_path_for_id(&ws_root)
+                }
+            } else {
+                Self::hash_path_for_id(&ws_root)
+            }
+        } else {
+            Self::hash_path_for_id(&ws_root)
+        };
+
+        let base = dirs::cache_dir()
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(|| PathBuf::from(".")))
+            .join("probe")
+            .join("lsp")
+            .join("workspaces");
+        base.join(workspace_id).join("cache.db")
+    }
+
+    fn sanitize_remote_for_id(url: &str) -> String {
+        let mut s = url.to_lowercase();
+        for p in ["https://", "http://", "ssh://", "git@", "git://"] {
+            if let Some(rem) = s.strip_prefix(p) {
+                s = rem.to_string();
+            }
+        }
+        s = s.replace(':', "/");
+        if s.ends_with(".git") {
+            s.truncate(s.len() - 4);
+        }
+        let mut out: String = s
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect();
+        while out.contains("__") {
+            out = out.replace("__", "_");
+        }
+        out.trim_matches('_').to_string()
+    }
+
+    fn hash_path_for_id(path: &Path) -> String {
+        let norm = path.to_string_lossy().to_string();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"workspace_id:");
+        hasher.update(norm.as_bytes());
+        let hash = hasher.finalize();
+        let folder = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let safe: String = folder
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        format!("{}_{}", hash.to_hex()[..8].to_string(), safe)
     }
 
     /// Display indexing configuration
