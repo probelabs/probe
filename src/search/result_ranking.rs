@@ -292,9 +292,9 @@ pub fn rank_search_results(
     let reranker_sort_start = Instant::now();
 
     if debug_mode {
-        println!("DEBUG: Using BM25 ranking (Okapi BM25 algorithm)");
+        eprintln!("DEBUG: Using BM25 ranking (Okapi BM25 algorithm)");
     } else {
-        println!("Using BM25 ranking (Okapi BM25 algorithm)");
+        eprintln!("Using BM25 ranking (Okapi BM25 algorithm)");
     }
 
     // Sort by boosted score in descending order
