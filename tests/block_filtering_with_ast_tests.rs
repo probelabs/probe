@@ -447,6 +447,7 @@ fn test_required_terms_query() {
         required_terms_indices,
         has_only_excluded_terms,
         evaluation_cache,
+        is_universal_query: false,
     };
 
     // Use the term indices directly
