@@ -4409,7 +4409,7 @@ impl LspManager {
     async fn handle_index_export(
         workspace: Option<std::path::PathBuf>,
         output: std::path::PathBuf,
-        checkpoint: bool,
+        _checkpoint: bool,
         daemon: bool,
         yes: bool,
     ) -> Result<()> {
@@ -4437,43 +4437,69 @@ impl LspManager {
             std::fs::remove_file(&output).ok();
         }
 
-        // Create LSP client
-        let config = LspConfig::default();
-        let mut client = LspClient::new(config).await?;
+        // Determine workspace root and capture DB path + indexing state
+        let ws_root = workspace.clone().unwrap_or(std::env::current_dir()?);
+        let mut client = LspClient::new(LspConfig::default()).await?;
+        let db_path = client.get_workspace_db_path(Some(ws_root.clone())).await?;
+        let status_before = client.get_indexing_status().await.ok();
+        let was_indexing = status_before
+            .as_ref()
+            .map(|s| s.manager_status == "Indexing")
+            .unwrap_or(false);
+        let cfg_before = client.get_indexing_config().await.ok();
 
-        // Send index export request
-        let response = client
-            .export_index(workspace, output.clone(), checkpoint)
-            .await?;
+        // Shutdown daemon and wait briefly for locks to clear
+        let _ = Self::shutdown_daemon("terminal").await;
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-        match response {
-            lsp_daemon::DaemonResponse::IndexExported {
-                workspace_path,
-                output_path,
-                database_size_bytes,
-                ..
-            } => {
-                // Print summary
-                println!(
-                    "{}",
-                    format!(
-                        "Successfully exported index database from workspace: {}",
-                        workspace_path.to_string_lossy()
-                    )
-                    .green()
-                    .bold()
-                );
-                println!("Output file: {}", output_path.to_string_lossy());
-                println!("Database size: {}", format_bytes(database_size_bytes));
-                println!();
-
-                Ok(())
+        // Offline checkpoint: FULL + TRUNCATE + DELETE journaling, then copy base file
+        let copied_bytes = {
+            use turso::Builder;
+            let builder = Builder::new_local(&db_path.to_string_lossy());
+            let db = builder.build().await?;
+            let conn = db.connect()?;
+            // Try a few times in case of transient locks
+            let mut attempts = 0;
+            loop {
+                attempts += 1;
+                let full = conn.query("PRAGMA wal_checkpoint(FULL)", ()).await;
+                let trunc = conn.query("PRAGMA wal_checkpoint(TRUNCATE)", ()).await;
+                let jdel = conn.query("PRAGMA journal_mode=DELETE", ()).await;
+                if full.is_ok() && trunc.is_ok() && jdel.is_ok() {
+                    break;
+                }
+                if attempts >= 5 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             }
-            lsp_daemon::DaemonResponse::Error { error, .. } => {
-                Err(anyhow!("Index export failed: {}", error))
+            std::fs::copy(&db_path, &output)? as usize
+        };
+
+        // Restart daemon and resume indexing if necessary
+        Self::start_embedded_daemon(None, String::new(), false, false, 10, true).await?;
+        if was_indexing {
+            if let Some(cfg) = cfg_before {
+                let mut c2 = LspClient::new(LspConfig::default()).await?;
+                let _ = c2.start_indexing(ws_root.clone(), cfg).await?;
+                println!("{}", "Resumed indexing after export".green());
             }
-            _ => Err(anyhow!("Unexpected response type from daemon")),
         }
+
+        // Summary
+        println!(
+            "{}",
+            format!(
+                "Successfully exported index database from workspace: {}",
+                ws_root.to_string_lossy()
+            )
+            .green()
+            .bold()
+        );
+        println!("Output file: {}", output.to_string_lossy());
+        println!("Database size: {}", format_bytes(copied_bytes));
+        println!();
+        Ok(())
     }
 }
 
