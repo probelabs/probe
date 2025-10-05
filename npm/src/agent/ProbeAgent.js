@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, dirname } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { 
   createTools,
@@ -442,26 +442,45 @@ export class ProbeAgent {
   }
 
   /**
-   * Extract directory paths from listFiles tool output
+   * Extract directory paths from tool output (both listFiles and extract tool)
    * @param {string} content - Tool output content
    * @returns {string[]} - Array of directory paths
    */
   extractListFilesDirectories(content) {
     const directories = [];
 
-    // Pattern to match listFiles output format: "/path/to/directory:" at the start of a line
+    // Pattern 1: Extract directory from extract tool "File:" header
+    // Format: "File: /path/to/file.md" or "File: ./relative/path/file.md"
+    const fileHeaderPattern = /^File:\s+(.+)$/gm;
+
+    let match;
+    while ((match = fileHeaderPattern.exec(content)) !== null) {
+      const filePath = match[1].trim();
+      // Get directory from file path
+      const dir = dirname(filePath);
+      if (dir && dir !== '.') {
+        directories.push(dir);
+        if (this.debug) {
+          console.log(`[DEBUG] Extracted directory context from File header: ${dir}`);
+        }
+      }
+    }
+
+    // Pattern 2: Extract directory from listFiles output format: "/path/to/directory:"
     // More specific: must start with / or ./ or ../ or a drive letter (Windows)
     // This prevents matching arbitrary headings like "Token Usage:"
     const dirPattern = /^([\/.](?:[^\n:]*[\/\\])?[^\n:]*?):\s*$/gm;
 
-    let match;
     while ((match = dirPattern.exec(content)) !== null) {
       const dirPath = match[1].trim();
       // Additional validation: path should contain path separator or be a root path
       if (dirPath && dirPath.length > 0 && (dirPath.includes('/') || dirPath.includes('\\') || dirPath === '.' || dirPath === '..')) {
-        directories.push(dirPath);
-        if (this.debug) {
-          console.log(`[DEBUG] Extracted directory context from listFiles: ${dirPath}`);
+        // Avoid duplicates
+        if (!directories.includes(dirPath)) {
+          directories.push(dirPath);
+          if (this.debug) {
+            console.log(`[DEBUG] Extracted directory context from listFiles: ${dirPath}`);
+          }
         }
       }
     }

@@ -70,6 +70,19 @@ describe('Image Path Resolution', () => {
   });
 
   describe('extractListFilesDirectories', () => {
+    test('should extract directory from extract tool File: header', () => {
+      const content = `File: ${testDir}/ticket.md
+Lines: 41-48
+\`\`\`markdown
+  <attachments>
+    <attachment filename="policy-1.png" />
+  </attachments>
+\`\`\``;
+
+      const directories = agent.extractListFilesDirectories(content);
+      expect(directories).toEqual([testDir]);
+    });
+
     test('should extract directory paths from listFiles output', () => {
       const content = `${testDir}:
 file    1.2K  policy-1.png
@@ -123,6 +136,27 @@ file    1.2K  policy-1.png`;
 
       const directories = agent.extractListFilesDirectories(content);
       expect(directories).toEqual([testDir]);
+    });
+
+    test('should extract from both File: header and listFiles output without duplicates', () => {
+      const content = `File: ${testDir}/ticket.md
+Lines: 1-10
+Some content
+
+${testDir}:
+file    1.2K  policy-1.png`;
+
+      const directories = agent.extractListFilesDirectories(content);
+      expect(directories).toEqual([testDir]); // Should only have one entry, no duplicates
+    });
+
+    test('should handle extract tool output with relative paths', () => {
+      const content = `File: ./docs/ticket.md
+Lines: 1-10
+Some content`;
+
+      const directories = agent.extractListFilesDirectories(content);
+      expect(directories).toEqual(['./docs']);
     });
   });
 
@@ -226,6 +260,31 @@ file    1.2K  policy-1.png`;
   });
 
   describe('Real-world XML attachment scenario', () => {
+    test('should load images from extract tool File: header without needing listFiles', async () => {
+      // This is the CORRECT way - extract tool provides the file path directly
+      const extractToolOutput = `File: ${testDir}/ticket.md
+Lines: 41-48
+\`\`\`markdown
+  <attachments>
+    <attachment filename="policy-1.png" size="458477" content_type="image/png" />
+    <attachment filename="policy-2.png" size="436301" content_type="image/png" />
+    <attachment filename="client.png" size="447699" content_type="image/png" />
+  </attachments>
+\`\`\``;
+
+      // Process the extract tool output
+      await agent.processImageReferences(extractToolOutput);
+
+      // Verify images were loaded
+      const loadedImages = agent.getCurrentImages();
+      expect(loadedImages.length).toBeGreaterThan(0);
+
+      // Verify the images are valid base64 data URLs
+      loadedImages.forEach(img => {
+        expect(img).toMatch(/^data:image\/(png|jpeg|jpg);base64,/);
+      });
+    });
+
     test('should handle the Zendesk ticket attachment format', async () => {
       // Simulate the actual scenario from the bug report
       const ticketContent = `<message id="11842728115356" author="User 8718562264860" created="2023-12-20T03:24:29Z" public="true">
