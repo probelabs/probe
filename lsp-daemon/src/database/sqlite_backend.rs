@@ -58,7 +58,8 @@ macro_rules! debug_execute {
         __res
     }};
 }
-use turso::{Builder, Connection, Database};
+use turso::Connection;
+use turso_core as coredb;
 
 use crate::database::{
     AnalysisProgress, CallDirection, DatabaseBackend, DatabaseConfig, DatabaseError, DatabaseStats,
@@ -351,7 +352,7 @@ where
         let exec_timeout_ms: u64 = std::env::var("PROBE_LSP_DB_EXEC_TIMEOUT_MS")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(5000);
+            .unwrap_or(15000);
         let res = match timeout(
             Duration::from_millis(exec_timeout_ms),
             conn.execute(sql, params),
@@ -514,8 +515,12 @@ impl Default for SQLiteConfig {
 
 /// Connection pool for managing SQLite connections
 struct ConnectionPool {
-    /// The libSQL database instance
-    database: Database,
+    /// The libSQL core database instance (MVCC-aware)
+    core_database: std::sync::Arc<coredb::Database>,
+    /// Whether MVCC was enabled at open time
+    mvcc_enabled: bool,
+    /// Whether engine-level indexes support was enabled at open time
+    indexes_enabled: bool,
     /// Available connections
     available: Vec<Connection>,
     /// Maximum pool size
@@ -530,25 +535,204 @@ struct ConnectionPool {
 
 #[allow(dead_code)]
 impl ConnectionPool {
+    /// If the database was created with an older libSQL that used the "-lg" MVCC sidecar,
+    /// try migrating it to the current "-log" filename so the engine can recover the logical log.
+    /// Call before opening the database. Best-effort with clear logging.
+    fn maybe_migrate_legacy_mvcc_log(db_path: &str) {
+        if db_path == ":memory:" {
+            return;
+        }
+        let base = std::path::Path::new(db_path);
+        let Some(fname) = base.file_name().map(|s| s.to_string_lossy().to_string()) else {
+            return;
+        };
+        let legacy = base.with_file_name(format!("{}-lg", fname));
+        let current = base.with_file_name(format!("{}-log", fname));
+        if !legacy.exists() {
+            return;
+        }
+        let current_size = std::fs::metadata(&current).map(|m| m.len()).unwrap_or(0);
+        let legacy_size = std::fs::metadata(&legacy).map(|m| m.len()).unwrap_or(0);
+        if legacy_size > 8 * 1024 && current_size < 8 * 1024 {
+            let backup = current.with_extension("log.bak");
+            if current.exists() {
+                if let Err(e) = std::fs::rename(&current, &backup) {
+                    warn!(
+                        "MVCC migrate: failed to back up existing -log sidecar ({}): {}",
+                        current.display(),
+                        e
+                    );
+                } else {
+                    info!(
+                        "MVCC migrate: backed up existing -log to {}",
+                        backup.display()
+                    );
+                }
+            }
+            match std::fs::rename(&legacy, &current) {
+                Ok(()) => info!(
+                    "MVCC migrate: moved legacy sidecar {} -> {} ({} bytes)",
+                    legacy.display(),
+                    current.display(),
+                    legacy_size
+                ),
+                Err(e) => warn!(
+                    "MVCC migrate: failed to rename legacy sidecar {} -> {}: {}",
+                    legacy.display(),
+                    current.display(),
+                    e
+                ),
+            }
+        }
+    }
+    fn mvcc_sidecar_path(path: &str) -> Option<std::path::PathBuf> {
+        if path == ":memory:" {
+            return None;
+        }
+        Some(std::path::PathBuf::from(format!("{}.mvcc", path)))
+    }
+
+    fn resolve_mvcc_enabled(config: &SQLiteConfig) -> bool {
+        // 0) In-memory/temporary DBs never use MVCC
+        if config.temporary {
+            return false;
+        }
+        // 1) Explicit env toggles (highest priority)
+        if let Ok(v) = std::env::var("PROBE_LSP_DB_DISABLE_MVCC") {
+            if v == "1" || v.eq_ignore_ascii_case("true") {
+                return false;
+            }
+        }
+        if let Ok(v) = std::env::var("PROBE_LSP_DB_ENABLE_MVCC") {
+            if v == "1" || v.eq_ignore_ascii_case("true") {
+                return true;
+            }
+        }
+        // 2) Sidecar file marker (workspace preference persists across restarts)
+        if let Some(p) = Self::mvcc_sidecar_path(&config.path) {
+            if p.exists() {
+                return true;
+            }
+        }
+        // 3) Default ON for persistent databases to minimize `database is locked` stalls
+        true
+    }
     /// Create a new connection pool
     async fn new(config: SQLiteConfig) -> Result<Self, DatabaseError> {
-        let database = if config.path == ":memory:" {
-            Builder::new_local(":memory:")
-        } else {
-            Builder::new_local(&config.path)
+        // Preflight: migrate legacy MVCC sidecar if present ("-lg" -> "-log")
+        if !config.temporary {
+            Self::maybe_migrate_legacy_mvcc_log(&config.path);
         }
-        .build()
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!(
-                "Failed to create Turso/SQLite database at '{}': {}. \
-                 Error details: {:?}. Check database path, permissions, and disk space.",
-                config.path, e, e
-            ),
+        // Resolve MVCC using env overrides or a persistent sidecar marker
+        let mvcc_enabled = Self::resolve_mvcc_enabled(&config);
+
+        let io = coredb::Database::io_for_path(&config.path).map_err(|e| {
+            DatabaseError::Configuration {
+                message: format!("Failed to create IO for '{}': {}", config.path, e),
+            }
         })?;
 
+        // Try to open with requested MVCC. Some libsql builds currently do not support
+        // MVCC together with indexes and return a clear error. Detect and fall back.
+        let mut requested_mvcc = mvcc_enabled;
+        // Determine engine-level index support. When MVCC is enabled, default to disabling
+        // engine indexes unless explicitly allowed via env; after open, prefer the engine's
+        // own indexes_enabled() truth.
+        let env_disable_indexes = std::env::var("PROBE_LSP_DB_DISABLE_INDEXES")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let env_enable_indexes = std::env::var("PROBE_LSP_DB_ENABLE_INDEXES")
+            .ok()
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let mut indexes_enabled = if requested_mvcc {
+            // Default: disable indexes with MVCC unless user forces enable
+            env_enable_indexes == true && env_disable_indexes == false
+        } else {
+            // Without MVCC, enable indexes unless explicitly disabled
+            !env_disable_indexes
+        };
+
+        let mut opts = coredb::DatabaseOpts::new()
+            .with_indexes(indexes_enabled)
+            .with_mvcc(requested_mvcc);
+        let core_database = match coredb::Database::open_file_with_flags(
+            io.clone(),
+            &config.path,
+            coredb::OpenFlags::default(),
+            opts.clone(),
+            None,
+        ) {
+            Ok(db) => db,
+            Err(e) if requested_mvcc => {
+                let msg = e.to_string();
+                // Known limitation in some libsql/turso_core versions
+                let mvcc_index_incompatible = msg
+                    .to_ascii_lowercase()
+                    .contains("indexes not yet supported for mvcc");
+                if mvcc_index_incompatible {
+                    warn!(
+                        "MVCC requested but unsupported with indexes in this engine: {} — falling back to MVCC=off",
+                        msg
+                    );
+                    // Remove any persisted MVCC sidecar to avoid retry loops on next start
+                    if let Some(marker) = Self::mvcc_sidecar_path(&config.path) {
+                        let _ = std::fs::remove_file(marker);
+                    }
+                    requested_mvcc = false;
+                    indexes_enabled = true;
+                    opts = coredb::DatabaseOpts::new()
+                        .with_indexes(indexes_enabled)
+                        .with_mvcc(false);
+                    coredb::Database::open_file_with_flags(
+                        io,
+                        &config.path,
+                        coredb::OpenFlags::default(),
+                        opts,
+                        None,
+                    )
+                    .map_err(|e2| DatabaseError::Configuration {
+                        message: format!(
+                            "Failed to open core database at '{}' after MVCC fallback: {}",
+                            config.path, e2
+                        ),
+                    })?
+                } else {
+                    return Err(DatabaseError::Configuration {
+                        message: format!(
+                            "Failed to open core database at '{}': {}",
+                            config.path, e
+                        ),
+                    });
+                }
+            }
+            Err(e) => {
+                return Err(DatabaseError::Configuration {
+                    message: format!("Failed to open core database at '{}': {}", config.path, e),
+                });
+            }
+        };
+
+        // Ask engine whether indexes are enabled for this database. Prefer this over heuristics.
+        let engine_indexes_enabled = match core_database.indexes_enabled() {
+            true => true,
+            false => false,
+        };
+        indexes_enabled = engine_indexes_enabled;
+
+        // Persist MVCC preference via sidecar if enabled
+        if requested_mvcc {
+            if let Some(marker) = Self::mvcc_sidecar_path(&config.path) {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .open(marker);
+            }
+        }
+
         // Initialize the database with our schema
-        let conn = database
+        let conn = core_database
             .connect()
             .map_err(|e| DatabaseError::Configuration {
                 message: format!(
@@ -557,22 +741,26 @@ impl ConnectionPool {
                     config.path, e, e
                 ),
             })?;
+        let conn = Connection::create(conn);
 
         // Migrations removed: ensure minimal schema instead
-        Self::ensure_minimal_schema(&conn, &config).await?;
+        Self::ensure_minimal_schema(&conn, &config, indexes_enabled).await?;
 
         // Pre-populate with some connections
         let initial_size = 1;
         let mut available = Vec::with_capacity(initial_size);
         for _ in 0..initial_size {
-            if let Ok(conn) = database.connect() {
-                Self::configure_connection(&conn, &config).await?;
+            if let Ok(core_conn) = core_database.connect() {
+                let conn = Connection::create(core_conn);
+                // Defer connection tuning to checkout time to avoid awaits here
                 available.push(conn);
             }
         }
 
         Ok(Self {
-            database,
+            core_database,
+            mvcc_enabled: requested_mvcc,
+            indexes_enabled,
             available,
             // Allow more concurrent readers; writes are serialized by the writer gate
             max_size: 4,
@@ -586,12 +774,13 @@ impl ConnectionPool {
     async fn ensure_minimal_schema(
         conn: &Connection,
         _config: &SQLiteConfig,
+        indexes_enabled: bool,
     ) -> Result<(), DatabaseError> {
         // Create core project/workspace tables (no-ops where unused)
-        Self::create_core_tables(conn).await?;
+        Self::create_core_tables(conn, indexes_enabled).await?;
         // Create symbol_state and edge tables used by the indexer
-        Self::create_relationship_tables(conn).await?;
-        // Create a few essential indexes for performance
+        Self::create_relationship_tables(conn, indexes_enabled).await?;
+        // Create a few essential indexes for performance (optional)
         let index_sqls = vec![
             // symbol lookups by file and language
             "CREATE INDEX IF NOT EXISTS idx_symbol_state_file_lang ON symbol_state(file_path, language)",
@@ -602,8 +791,12 @@ impl ConnectionPool {
             // composite index to accelerate dedup lookups
             "CREATE INDEX IF NOT EXISTS idx_edge_dedup ON edge(relation, source_symbol_uid, target_symbol_uid, language, start_line, start_char)",
         ];
-        for sql in index_sqls {
-            let _ = conn.execute(sql, ()).await; // best-effort
+        if indexes_enabled {
+            for sql in index_sqls {
+                let _ = conn.execute(sql, ()).await; // best-effort
+            }
+        } else {
+            debug!("Indexes disabled by configuration; skipping CREATE INDEX statements");
         }
         Ok(())
     }
@@ -615,7 +808,8 @@ impl ConnectionPool {
         conn: &Connection,
         config: &SQLiteConfig,
     ) -> Result<(), DatabaseError> {
-        Self::ensure_minimal_schema(conn, config).await
+        // Default to enabling indexes when using the legacy initializer
+        Self::ensure_minimal_schema(conn, config, true).await
     }
 
     /// Configure a connection with optimal settings
@@ -625,9 +819,22 @@ impl ConnectionPool {
     ) -> Result<(), DatabaseError> {
         debug!("Configuring database connection for concurrent access");
 
-        // Skip PRAGMA busy_timeout and read_uncommitted for Turso compatibility
-        // These optimizations are not needed for cloud SQLite implementations
-        debug!("Skipping SQLite PRAGMA optimizations for cloud database compatibility");
+        // Set engine-level busy timeout to reduce transient `database is locked` returns.
+        // libSQL/Turso exposes a native busy_timeout; prefer it over PRAGMA.
+        let busy_ms: u64 = std::env::var("PROBE_LSP_DB_BUSY_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|&n| n >= 250)
+            .unwrap_or(5000);
+        if let Err(e) = conn.busy_timeout(std::time::Duration::from_millis(busy_ms)) {
+            debug!(
+                "busy_timeout not applied via API ({}), falling back to PRAGMA",
+                e
+            );
+            let _ = conn
+                .execute(&format!("PRAGMA busy_timeout={}", busy_ms), ())
+                .await;
+        }
 
         // Give read steps a bit more time under transient writer activity
         if let Err(e) = conn.execute("PRAGMA busy_timeout=3000", ()).await {
@@ -686,9 +893,12 @@ impl ConnectionPool {
     }
 
     /// Create core PRD tables (workspaces, files, file_versions)
-    async fn create_core_tables(conn: &Connection) -> Result<(), DatabaseError> {
+    async fn create_core_tables(
+        conn: &Connection,
+        indexes_enabled: bool,
+    ) -> Result<(), DatabaseError> {
         // 1. Projects/Workspaces table
-        conn.execute(
+        let project_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS project (
                 project_id TEXT PRIMARY KEY,
@@ -699,16 +909,28 @@ impl ConnectionPool {
                 updated_at TIMESTAMP NOT NULL,
                 metadata TEXT
             )
-            "#,
-            (),
-        )
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create project table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS project (
+                project_id TEXT,
+                root_path TEXT NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                metadata TEXT
+            )
+            "#
+        };
+        conn.execute(project_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create project table: {e}"),
+            })?;
 
         // 2. Workspaces table (project workspaces with branch support)
-        conn.execute(
+        let workspace_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS workspace (
                 workspace_id TEXT PRIMARY KEY,
@@ -722,16 +944,30 @@ impl ConnectionPool {
                 metadata TEXT,
                 FOREIGN KEY (project_id) REFERENCES project(project_id) ON DELETE CASCADE
             )
-            "#,
-            (),
-        )
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create workspace table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS workspace (
+                workspace_id TEXT,
+                project_id TEXT,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL,
+                current_branch TEXT,
+                head_commit TEXT,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL,
+                metadata TEXT
+            )
+            "#
+        };
+        conn.execute(workspace_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create workspace table: {e}"),
+            })?;
 
         // 3. File registry with project association
-        conn.execute(
+        let file_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS file (
                 file_id TEXT PRIMARY KEY,
@@ -744,18 +980,31 @@ impl ConnectionPool {
                 updated_at TIMESTAMP NOT NULL,
                 FOREIGN KEY (project_id) REFERENCES project(project_id) ON DELETE CASCADE
             )
-            "#,
-            (),
-        )
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create file table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS file (
+                file_id TEXT,
+                project_id TEXT,
+                relative_path TEXT NOT NULL,
+                absolute_path TEXT NOT NULL,
+                language TEXT,
+                size_bytes INTEGER,
+                created_at TIMESTAMP NOT NULL,
+                updated_at TIMESTAMP NOT NULL
+            )
+            "#
+        };
+        conn.execute(file_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create file table: {e}"),
+            })?;
 
         // 7. File versions removed - file versioning complexity eliminated
 
         // 8. Analysis run tracking
-        conn.execute(
+        let analysis_run_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS analysis_run (
                 run_id TEXT PRIMARY KEY,
@@ -771,16 +1020,32 @@ impl ConnectionPool {
                 errors TEXT,
                 FOREIGN KEY (workspace_id) REFERENCES workspace(workspace_id) ON DELETE CASCADE
             )
-            "#,
-            (),
-        )
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create analysis_run table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS analysis_run (
+                run_id TEXT,
+                workspace_id TEXT,
+                analyzer_type TEXT NOT NULL,
+                analyzer_version TEXT,
+                configuration TEXT,
+                started_at TIMESTAMP NOT NULL,
+                completed_at TIMESTAMP,
+                status TEXT DEFAULT 'running',
+                files_processed INTEGER DEFAULT 0,
+                symbols_found INTEGER DEFAULT 0,
+                errors TEXT
+            )
+            "#
+        };
+        conn.execute(analysis_run_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create analysis_run table: {e}"),
+            })?;
 
         // 9. File analysis status and results
-        conn.execute(
+        let file_analysis_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS file_analysis (
                 analysis_id TEXT PRIMARY KEY,
@@ -797,21 +1062,39 @@ impl ConnectionPool {
                 FOREIGN KEY (file_id) REFERENCES file(file_id) ON DELETE CASCADE,
                 FOREIGN KEY (version_id) REFERENCES file_version(version_id) ON DELETE CASCADE
             )
-            "#,
-            (),
-        )
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create file_analysis table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS file_analysis (
+                analysis_id TEXT,
+                run_id TEXT,
+                file_id TEXT,
+                version_id TEXT,
+                status TEXT DEFAULT 'pending',
+                started_at TIMESTAMP,
+                completed_at TIMESTAMP,
+                symbols_found INTEGER DEFAULT 0,
+                references_found INTEGER DEFAULT 0,
+                errors TEXT
+            )
+            "#
+        };
+        conn.execute(file_analysis_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create file_analysis table: {e}"),
+            })?;
 
         Ok(())
     }
 
     /// Create relationship tables (symbols, hierarchy, references, calls)
-    async fn create_relationship_tables(conn: &Connection) -> Result<(), DatabaseError> {
+    async fn create_relationship_tables(
+        conn: &Connection,
+        indexes_enabled: bool,
+    ) -> Result<(), DatabaseError> {
         // 10. Symbol definitions (file versioning removed)
-        conn.execute(
+        let symbol_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS symbol_state (
                 symbol_uid TEXT PRIMARY KEY,
@@ -830,13 +1113,33 @@ impl ConnectionPool {
                 documentation TEXT,
                 metadata TEXT
             )
-            "#,
-            (),
-        )
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create symbol_state table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS symbol_state (
+                symbol_uid TEXT,
+                file_path TEXT NOT NULL,
+                language TEXT NOT NULL,
+                name TEXT NOT NULL,
+                fqn TEXT,
+                kind TEXT NOT NULL,
+                signature TEXT,
+                visibility TEXT,
+                def_start_line INTEGER NOT NULL,
+                def_start_char INTEGER NOT NULL,
+                def_end_line INTEGER NOT NULL,
+                def_end_char INTEGER NOT NULL,
+                is_definition BOOLEAN NOT NULL,
+                documentation TEXT,
+                metadata TEXT
+            )
+            "#
+        };
+        conn.execute(symbol_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create symbol_state table: {e}"),
+            })?;
 
         // 12. Relationships between symbols (file versioning removed)
         conn.execute(
@@ -860,7 +1163,7 @@ impl ConnectionPool {
         })?;
 
         // 13. File dependency relationships (file versioning removed)
-        conn.execute(
+        let dep_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS file_dependency (
                 dependency_id TEXT PRIMARY KEY,
@@ -875,16 +1178,29 @@ impl ConnectionPool {
                 FOREIGN KEY (source_file_id) REFERENCES file(file_id) ON DELETE CASCADE,
                 FOREIGN KEY (target_file_id) REFERENCES file(file_id) ON DELETE CASCADE
             )
-            "#,
-            (),
-        )
-        .await
-        .map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create file_dependency table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS file_dependency (
+                dependency_id TEXT,
+                project_id TEXT,
+                source_file_id TEXT,
+                target_file_id TEXT,
+                dependency_type TEXT NOT NULL,
+                import_statement TEXT,
+                git_commit_hash TEXT,
+                created_at TIMESTAMP NOT NULL
+            )
+            "#
+        };
+        conn.execute(dep_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create file_dependency table: {e}"),
+            })?;
 
         // 14. Symbol change tracking
-        conn.execute(
+        let symchg_sql = if indexes_enabled {
             r#"
             CREATE TABLE IF NOT EXISTS symbol_change (
                 change_id TEXT PRIMARY KEY,
@@ -899,11 +1215,26 @@ impl ConnectionPool {
                 FOREIGN KEY (previous_state_id) REFERENCES symbol_state(state_id) ON DELETE SET NULL,
                 FOREIGN KEY (current_state_id) REFERENCES symbol_state(state_id) ON DELETE CASCADE
             )
-            "#,
-            (),
-        ).await.map_err(|e| DatabaseError::Configuration {
-            message: format!("Failed to create symbol_change table: {e}"),
-        })?;
+            "#
+        } else {
+            r#"
+            CREATE TABLE IF NOT EXISTS symbol_change (
+                change_id TEXT,
+                symbol_id TEXT,
+                previous_state_id TEXT,
+                current_state_id TEXT,
+                change_type TEXT NOT NULL,
+                git_commit_hash TEXT,
+                changed_at TIMESTAMP NOT NULL,
+                change_description TEXT
+            )
+            "#
+        };
+        conn.execute(symchg_sql, ())
+            .await
+            .map_err(|e| DatabaseError::Configuration {
+                message: format!("Failed to create symbol_change table: {e}"),
+            })?;
 
         Ok(())
     }
@@ -1210,12 +1541,13 @@ impl ConnectionPool {
             conn
         } else {
             // Create a new connection if we haven't hit the max
-            let conn = self
-                .database
-                .connect()
-                .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to create new connection: {e}"),
-                })?;
+            let core_conn =
+                self.core_database
+                    .connect()
+                    .map_err(|e| DatabaseError::OperationFailed {
+                        message: format!("Failed to create new connection: {e}"),
+                    })?;
+            let conn = Connection::create(core_conn);
             Self::configure_connection(&conn, &self.config).await?;
             conn
         };
@@ -1261,15 +1593,16 @@ impl ConnectionPool {
         }
 
         // Slow path: create a new connection outside the lock
-        let (database, config) = {
+        let (core_database, config) = {
             let pool = pool_arc.lock().await;
-            (pool.database.clone(), pool.config.clone())
+            (pool.core_database.clone(), pool.config.clone())
         };
-        let conn = database
+        let core_conn = core_database
             .connect()
             .map_err(|e| DatabaseError::OperationFailed {
                 message: format!("Failed to create new connection: {e}"),
             })?;
+        let conn = Connection::create(core_conn);
         Self::configure_connection(&conn, &config).await?;
         {
             let pool = pool_arc.lock().await;
@@ -1571,6 +1904,10 @@ pub struct SQLiteBackend {
     reader_last: Arc<Mutex<Option<SectionInfo>>>,
     /// True when the per-DB read-write gate is held for writing (quiesced)
     reader_write_held: Arc<AtomicBool>,
+    /// Whether MVCC was enabled when opening the database
+    mvcc_enabled: bool,
+    /// Whether engine/index DDL is enabled for this database
+    indexes_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1637,22 +1974,89 @@ enum WriteMsg {
 }
 
 impl SQLiteBackend {
+    async fn count_distinct_files_fallback(
+        &self,
+        conn: &Connection,
+        context: &str,
+    ) -> Result<u64, DatabaseError> {
+        // Manual DISTINCT by scanning file_path and deduplicating in memory.
+        let mut rows = safe_query(conn, "SELECT file_path FROM symbol_state", (), context).await?;
+        let mut set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("{}: {}", context, e),
+            })?
+        {
+            if let Ok(turso::Value::Text(fp)) = row.get_value(0) {
+                if !fp.trim().is_empty() {
+                    set.insert(fp);
+                }
+            }
+        }
+        Ok(set.len() as u64)
+    }
     /// Engine-direct checkpoint via Turso connection API (if available). Falls back to PRAGMA.
     pub async fn engine_checkpoint_internal(
         &self,
         mode: DbCheckpointMode,
     ) -> Result<(), DatabaseError> {
-        let conn = self.get_direct_connection().await?;
-        // Try direct API first (if feature enabled and available)
+        // Try engine-direct checkpoint via turso_core if feature is enabled
         #[allow(unused_mut)]
         let mut used_direct = false;
         #[cfg(feature = "turso-direct-checkpoint")]
         {
-            // Current turso::Connection in this dependency set does not expose
-            // a checkpoint API; keeping the feature stub for future versions.
-            warn!("turso-direct-checkpoint feature enabled, but no direct API available in this build; using PRAGMA fallback");
+            use turso_core::{
+                CheckpointMode as CoreCheckpointMode, Database as CoreDatabase,
+                DatabaseOpts as CoreDatabaseOpts, OpenFlags as CoreOpenFlags,
+            };
+            // Attempt to open the core database for the same path and run a checkpoint
+            match CoreDatabase::io_for_path(&self.sqlite_config.path).and_then(|io| {
+                CoreDatabase::open_file_with_flags(
+                    io,
+                    &self.sqlite_config.path,
+                    CoreOpenFlags::default(),
+                    CoreDatabaseOpts::new().with_indexes(true),
+                    None,
+                )
+            }) {
+                Ok(db) => {
+                    if let Ok(core_conn) = db.connect() {
+                        let mode_core = match mode {
+                            DbCheckpointMode::Passive => CoreCheckpointMode::Passive {
+                                upper_bound_inclusive: None,
+                            },
+                            DbCheckpointMode::Full => CoreCheckpointMode::Full,
+                            DbCheckpointMode::Restart => CoreCheckpointMode::Restart,
+                            DbCheckpointMode::Truncate => CoreCheckpointMode::Truncate {
+                                upper_bound_inclusive: None,
+                            },
+                        };
+                        match core_conn.checkpoint(mode_core) {
+                            Ok(_res) => {
+                                used_direct = true;
+                                debug!("ENGINE_CHECKPOINT: used turso_core direct API");
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "ENGINE_CHECKPOINT: direct API failed ({}); falling back to PRAGMA",
+                                    e
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "ENGINE_CHECKPOINT: failed to open core DB for direct checkpoint ({}); falling back to PRAGMA",
+                        e
+                    );
+                }
+            }
         }
         if !used_direct {
+            let conn = self.get_direct_connection().await?;
             let sql = match mode {
                 DbCheckpointMode::Passive => "PRAGMA wal_checkpoint(PASSIVE)",
                 DbCheckpointMode::Full => "PRAGMA wal_checkpoint(FULL)",
@@ -1688,6 +2092,8 @@ impl SQLiteBackend {
         sqlite_config: SQLiteConfig,
     ) -> Result<Self, DatabaseError> {
         let pool = ConnectionPool::new(sqlite_config.clone()).await?;
+        let mvcc_enabled_flag = pool.mvcc_enabled;
+        let indexes_enabled_flag = pool.indexes_enabled;
 
         // Allow tuning the writer queue size to avoid producer stalls under load.
         // Default to a larger buffer to smooth spikes.
@@ -1713,14 +2119,16 @@ impl SQLiteBackend {
             reader_active: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             reader_last: Arc::new(Mutex::new(None)),
             reader_write_held: Arc::new(AtomicBool::new(false)),
+            mvcc_enabled: mvcc_enabled_flag,
+            indexes_enabled: indexes_enabled_flag,
         };
 
         if sqlite_config.temporary {
             info!("Initialized temporary SQLite database (in-memory)");
         } else {
             info!(
-                "Initialized persistent SQLite database at: {}",
-                sqlite_config.path
+                "Initialized persistent SQLite database at: {} (mvcc={})",
+                sqlite_config.path, backend.mvcc_enabled
             );
         }
 
@@ -1830,6 +2238,8 @@ impl SQLiteBackend {
             reader_active: self.reader_active.clone(),
             reader_last: self.reader_last.clone(),
             reader_write_held: self.reader_write_held.clone(),
+            mvcc_enabled: self.mvcc_enabled,
+            indexes_enabled: self.indexes_enabled,
         }
     }
 
@@ -1900,13 +2310,50 @@ impl SQLiteBackend {
             self.set_active_section("store_symbols_with_conn").await;
             let res = self.store_symbols_with_conn(&conn, symbols).await;
             self.clear_active_section().await;
-            res?;
+            if let Err(e) = res {
+                // If we got a database-locked error from the writer path, don't hold the gate forever.
+                let msg = e.to_string();
+                if msg.contains("database is locked") {
+                    warn!(
+                        "Writer hit 'database is locked' during store_symbols; yielding writer gate for a short backoff"
+                    );
+                    // Clear owner, drop permit and return early; writer loop will retry later and keep draining
+                    {
+                        let owner = self.gate_owner_handle();
+                        let mut o = owner.lock().await;
+                        *o = None;
+                    }
+                    drop(permit);
+                    // Short backoff to avoid immediate collision
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    return Ok(());
+                } else {
+                    return Err(e);
+                }
+            }
         }
         if !edges.is_empty() {
             self.set_active_section("store_edges_with_conn").await;
             let res = self.store_edges_with_conn(&conn, edges).await;
             self.clear_active_section().await;
-            res?;
+            if let Err(e) = res {
+                let msg = e.to_string();
+                if msg.contains("database is locked") {
+                    warn!(
+                        "Writer hit 'database is locked' during store_edges; yielding writer gate for a short backoff"
+                    );
+                    {
+                        let owner = self.gate_owner_handle();
+                        let mut o = owner.lock().await;
+                        *o = None;
+                    }
+                    drop(permit);
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                    return Ok(());
+                } else {
+                    return Err(e);
+                }
+            }
         }
         self.clear_active_section().await;
         // Direct connection is dropped here
@@ -2023,6 +2470,10 @@ impl SQLiteBackend {
         }
     }
 
+    pub fn is_mvcc_enabled(&self) -> bool {
+        self.mvcc_enabled
+    }
+
     async fn set_active_section(&self, label: &str) {
         let sec = self.section_handle();
         let mut s = sec.lock().await;
@@ -2063,7 +2514,7 @@ impl SQLiteBackend {
 
         // Use deferred BEGIN to reduce lock contention with readers and background tasks
         let begin_ctx = format!("store_edges_with_conn begin (edges_total={})", edges_len);
-        safe_execute_with_retry(conn, "BEGIN TRANSACTION", (), &begin_ctx, 10).await?;
+        safe_execute_with_retry(conn, "BEGIN TRANSACTION", (), &begin_ctx, 6).await?;
 
         if edges_len > 0 {
             // Allow tuning batch size via env to mitigate lock pressure under load
@@ -2220,7 +2671,7 @@ impl SQLiteBackend {
                     edges_to_insert.len(),
                     edges_len
                 );
-                safe_execute_with_retry(conn, &batch_sql, params, &insert_ctx, 10).await?;
+                safe_execute_with_retry(conn, &batch_sql, params, &insert_ctx, 6).await?;
                 self.clear_active_section().await;
                 offset = end;
             }
@@ -2228,7 +2679,7 @@ impl SQLiteBackend {
 
         self.set_active_section("edges.commit").await;
         let commit_ctx = format!("store_edges_with_conn commit (edges_total={})", edges_len);
-        if let Err(e) = safe_execute_with_retry(conn, "COMMIT", (), &commit_ctx, 10).await {
+        if let Err(e) = safe_execute_with_retry(conn, "COMMIT", (), &commit_ctx, 6).await {
             rollback_transaction(conn, "store_edges_with_conn commit failure").await;
             self.clear_active_section().await;
             return Err(e);
@@ -2685,77 +3136,80 @@ impl SQLiteBackend {
         );
 
         tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
-            let mut checkpoint_count = 0u64;
+            'tick: loop {
+                let mut interval =
+                    tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+                let mut checkpoint_count = 0u64;
 
-            loop {
-                interval.tick().await;
-                checkpoint_count += 1;
+                loop {
+                    interval.tick().await;
+                    checkpoint_count += 1;
 
-                debug!(
-                    "📋 CHECKPOINT: Running periodic checkpoint #{}",
-                    checkpoint_count
-                );
-
-                // Acquire the writer semaphore so checkpoints never contend with writes
-                let sem = get_direct_write_semaphore(&self.sqlite_config.path);
-                let mut waited_ms: u128 = 0;
-                // Bound the wait to avoid long, noisy loops when the writer is busy
-                let max_wait_ms: u128 = std::env::var("PROBE_LSP_CHECKPOINT_WAIT_MS")
-                    .ok()
-                    .and_then(|v| v.parse::<u128>().ok())
-                    .filter(|&n| n >= 250)
-                    .unwrap_or(2_000);
-                let permit = match sem.try_acquire() {
-                    Ok(p) => p,
-                    Err(_) => loop {
-                        if waited_ms >= max_wait_ms {
-                            debug!(
-                                "📋 CHECKPOINT: Skipping periodic checkpoint (writer busy for {} ms)",
-                                waited_ms
-                            );
-                            // Skip this cycle without blocking further
-                            continue;
-                        }
-                        match sem.try_acquire() {
-                            Ok(p) => break p,
-                            Err(_) => {
-                                waited_ms += 250;
-                                if waited_ms % 1000 == 0 {
-                                    let snap = self.writer_status_snapshot().await;
-                                    let holder =
-                                        snap.gate_owner_op.clone().unwrap_or_else(|| "-".into());
-                                    let section =
-                                        snap.section_label.clone().unwrap_or_else(|| "-".into());
-                                    let held_for = snap.gate_owner_ms.unwrap_or(0);
-                                    debug!(
-                                        "CHECKPOINT_LOCK: writer busy; waited={} ms; holder={}; held_for={} ms; section={}",
-                                        waited_ms, holder, held_for, section
-                                    );
-                                }
-                                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-                            }
-                        }
-                    },
-                };
-                // Run a single passive checkpoint (no quiesce, no retries)
-                if let Err(e) = self
-                    .perform_checkpoint_once_with_mode(CheckpointMode::Passive)
-                    .await
-                {
-                    warn!(
-                        "📋 CHECKPOINT: Periodic checkpoint #{} failed: {}",
-                        checkpoint_count, e
-                    );
-                } else {
-                    // Log at debug level to avoid polluting logs (checkpoints usually fail with turso)
                     debug!(
-                        "📋 CHECKPOINT: Periodic checkpoint #{} completed",
+                        "📋 CHECKPOINT: Running periodic checkpoint #{}",
                         checkpoint_count
                     );
+
+                    // Acquire the writer semaphore so checkpoints never contend with writes
+                    let sem = get_direct_write_semaphore(&self.sqlite_config.path);
+                    let mut waited_ms: u128 = 0;
+                    // Bound the wait to avoid long, noisy loops when the writer is busy
+                    let max_wait_ms: u128 = std::env::var("PROBE_LSP_CHECKPOINT_WAIT_MS")
+                        .ok()
+                        .and_then(|v| v.parse::<u128>().ok())
+                        .filter(|&n| n >= 250)
+                        .unwrap_or(2_000);
+                    let permit = match sem.try_acquire() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            // Bounded wait; if still busy after max_wait, skip this tick entirely
+                            loop {
+                                if waited_ms >= max_wait_ms {
+                                    debug!(
+                                        "📋 CHECKPOINT: Skipping periodic checkpoint (writer busy for {} ms)",
+                                        waited_ms
+                                    );
+                                    continue 'tick;
+                                }
+                                match sem.try_acquire() {
+                                    Ok(p) => break p,
+                                    Err(_) => {
+                                        waited_ms += 250;
+                                        if waited_ms % 1000 == 0 {
+                                            let snap = self.writer_status_snapshot().await;
+                                            debug!(
+                                                "CHECKPOINT_LOCK: writer busy; waited={} ms; holder={}; held_for={} ms; section={}",
+                                                waited_ms,
+                                                snap.gate_owner_op.as_deref().unwrap_or("-"),
+                                                snap.gate_owner_ms.unwrap_or(0),
+                                                snap.section_label.as_deref().unwrap_or("-")
+                                            );
+                                        }
+                                        tokio::time::sleep(std::time::Duration::from_millis(250))
+                                            .await;
+                                    }
+                                }
+                            }
+                        }
+                    };
+                    // Run a single passive checkpoint (no quiesce, no retries)
+                    if let Err(e) = self
+                        .perform_checkpoint_once_with_mode(CheckpointMode::Passive)
+                        .await
+                    {
+                        warn!(
+                            "📋 CHECKPOINT: Periodic checkpoint #{} failed: {}",
+                            checkpoint_count, e
+                        );
+                    } else {
+                        // Log at debug level to avoid polluting logs (checkpoints usually fail with turso)
+                        debug!(
+                            "📋 CHECKPOINT: Periodic checkpoint #{} completed",
+                            checkpoint_count
+                        );
+                    }
+                    drop(permit);
                 }
-                drop(permit);
             }
         })
     }
@@ -3243,7 +3697,7 @@ impl SQLiteBackend {
             message: e.to_string(),
         })?;
 
-        // Create index for the tree with unique suffix to avoid conflicts
+        // Create index for the tree with unique suffix to avoid conflicts (optional)
         // Use a hash of the tree name and a random component to ensure uniqueness
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         tree_name.hash(&mut hasher);
@@ -3255,19 +3709,26 @@ impl SQLiteBackend {
             .hash(&mut hasher);
         let unique_suffix = hasher.finish();
 
-        let index_name = format!("idx_{sanitized_name}_{unique_suffix:x}_key");
-        let index_sql = format!("CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}(key)");
+        if self.indexes_enabled {
+            let index_name = format!("idx_{sanitized_name}_{unique_suffix:x}_key");
+            let index_sql = format!("CREATE INDEX IF NOT EXISTS {index_name} ON {table_name}(key)");
 
-        safe_execute(
-            &conn,
-            &index_sql,
-            (),
-            &format!("Failed to create index for tree '{tree_name}'"),
-        )
-        .await
-        .map_err(|e| DatabaseError::OperationFailed {
-            message: e.to_string(),
-        })?;
+            safe_execute(
+                &conn,
+                &index_sql,
+                (),
+                &format!("Failed to create index for tree '{tree_name}'"),
+            )
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: e.to_string(),
+            })?;
+        } else {
+            debug!(
+                "Indexes disabled; skipping tree index for '{}': {}",
+                tree_name, table_name
+            );
+        }
 
         // Update metadata - check if exists first, then insert if needed
         let mut rows = safe_query(
@@ -3369,6 +3830,376 @@ impl SQLiteBackend {
                 }
             }
         }
+    }
+
+    /// Export the current database into a standalone SQLite file.
+    /// Uses a clone-based path that reads from a snapshot and writes a new file.
+    /// No checkpointing is performed here; compaction (if desired) should be run separately.
+    pub async fn export_to(&self, out_path: &std::path::Path) -> Result<usize, DatabaseError> {
+        use std::fs;
+        if let Some(parent) = out_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        // Preferred path: use a clone flow equivalent to turso CLI `.clone`.
+        self.engine_clone_to_path(out_path).await
+    }
+
+    async fn engine_clone_to_path(
+        &self,
+        dest_path: &std::path::Path,
+    ) -> Result<usize, DatabaseError> {
+        use std::fs;
+        use turso::{Connection, Value};
+        if dest_path.exists() {
+            return Err(DatabaseError::OperationFailed {
+                message: format!(
+                    "Refusing to overwrite existing file: {}",
+                    dest_path.display()
+                ),
+            });
+        }
+        // Open source and destination connections
+        let src: Connection = self.get_direct_connection().await?;
+        // Create destination DB with MVCC disabled and indexes enabled for a plain single-file export
+        let dest_path_str = dest_path.to_string_lossy().to_string();
+        let dest_io = coredb::Database::io_for_path(&dest_path_str).map_err(|e| {
+            DatabaseError::OperationFailed {
+                message: format!("Failed to create IO for dest '{}': {}", dest_path_str, e),
+            }
+        })?;
+        let dest_opts = coredb::DatabaseOpts::new()
+            .with_mvcc(false)
+            .with_indexes(true);
+        let dest_core = coredb::Database::open_file_with_flags(
+            dest_io,
+            &dest_path_str,
+            coredb::OpenFlags::default(),
+            dest_opts,
+            None,
+        )
+        .map_err(|e| DatabaseError::OperationFailed {
+            message: format!("Failed to create destination DB: {}", e),
+        })?;
+        let dest_core_conn = dest_core
+            .connect()
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to open destination connection: {}", e),
+            })?;
+        let dest: Connection = Connection::create(dest_core_conn);
+        // Prefer single-file export: ensure DELETE journaling (no -wal)
+        let _ = dest.execute("PRAGMA journal_mode=DELETE", ()).await;
+
+        // Helper to quote identifiers
+        fn quote_ident(s: &str) -> String {
+            let mut out = String::with_capacity(s.len() + 2);
+            out.push('"');
+            out.push_str(&s.replace('"', "\"\""));
+            out.push('"');
+            out
+        }
+
+        // Begin a single transaction on destination for durability/perf; use autocommit on source
+        dest.execute("BEGIN", ())
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to BEGIN on dest: {}", e),
+            })?;
+
+        // Diagnostics: log source table counts if present
+        if let Ok(mut r) = src.query("SELECT COUNT(*) FROM symbol_state", ()).await {
+            if let Ok(Some(row)) = r.next().await {
+                if let Ok(v) = row.get::<i64>(0) {
+                    info!("clone: source symbol_state rows={}", v);
+                }
+            }
+        }
+        if let Ok(mut r) = src.query("SELECT COUNT(*) FROM edge", ()).await {
+            if let Ok(Some(row)) = r.next().await {
+                if let Ok(v) = row.get::<i64>(0) {
+                    info!("clone: source edge rows={}", v);
+                }
+            }
+        }
+
+        // 1) Create user tables and copy data (skip internal + sqlite_sequence)
+        let mut tables = src.query(
+            "SELECT name, sql FROM sqlite_schema \n             WHERE type='table' AND sql NOT NULL\n               AND name NOT LIKE 'sqlite_%'\n               AND name <> 'sqlite_sequence'\n             ORDER BY rowid",
+            (),
+        ).await.map_err(|e| DatabaseError::OperationFailed { message: format!("Failed to enumerate tables: {}", e) })?;
+
+        while let Some(row) = tables
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to read table row: {}", e),
+            })?
+        {
+            let name: String = row.get(0).map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to get table name: {}", e),
+            })?;
+            let ddl: String = row.get(1).map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to get table DDL: {}", e),
+            })?;
+            dest.execute(&ddl, ())
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to create table {}: {}", name, e),
+                })?;
+
+            // Column list in order
+            let pragma = format!("PRAGMA table_info({})", quote_ident(&name));
+            let mut cols_rs =
+                src.query(&pragma, ())
+                    .await
+                    .map_err(|e| DatabaseError::OperationFailed {
+                        message: format!("Failed to PRAGMA table_info({}): {}", name, e),
+                    })?;
+            let mut cols: Vec<String> = Vec::new();
+            while let Some(crow) =
+                cols_rs
+                    .next()
+                    .await
+                    .map_err(|e| DatabaseError::OperationFailed {
+                        message: format!("Failed to read PRAGMA table_info row: {}", e),
+                    })?
+            {
+                let col_name: String = crow.get(1).map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to get column name: {}", e),
+                })?;
+                cols.push(col_name);
+            }
+            if cols.is_empty() {
+                continue;
+            }
+
+            let select = format!(
+                "SELECT {} FROM {}",
+                cols.iter()
+                    .map(|c| quote_ident(c))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                quote_ident(&name)
+            );
+            let placeholders = (1..=cols.len())
+                .map(|i| format!("?{}", i))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let insert_sql = format!(
+                "INSERT INTO {} VALUES({})",
+                quote_ident(&name),
+                placeholders
+            );
+
+            // Batch insert rows for performance
+            let batch_size: usize = std::env::var("PROBE_LSP_EXPORT_BATCH_SIZE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|&n| n > 0)
+                .unwrap_or(1000);
+            // Disable foreign key checks during bulk load (best effort)
+            let _ = dest.execute("PRAGMA foreign_keys=OFF", ()).await;
+
+            let mut srows =
+                src.query(&select, ())
+                    .await
+                    .map_err(|e| DatabaseError::OperationFailed {
+                        message: format!("Failed to select from {}: {}", name, e),
+                    })?;
+            let mut buf: Vec<Vec<Value>> = Vec::with_capacity(batch_size);
+            let mut total_rows: usize = 0;
+            loop {
+                match srows.next().await {
+                    Ok(Some(srow)) => {
+                        let mut rowvals: Vec<Value> = Vec::with_capacity(cols.len());
+                        for i in 0..cols.len() {
+                            rowvals.push(srow.get_value(i).map_err(|e| {
+                                DatabaseError::OperationFailed {
+                                    message: format!("Failed to get cell value: {}", e),
+                                }
+                            })?);
+                        }
+                        buf.push(rowvals);
+                        if buf.len() >= batch_size {
+                            // Build multi-row INSERT
+                            let row_placeholders = format!(
+                                "({})",
+                                (1..=cols.len())
+                                    .map(|i| format!("?{}", i))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                            let mut sql = String::with_capacity(
+                                insert_sql.len() + buf.len() * row_placeholders.len(),
+                            );
+                            sql.push_str(&format!("INSERT INTO {} VALUES ", quote_ident(&name)));
+                            for i in 0..buf.len() {
+                                if i > 0 {
+                                    sql.push(',');
+                                }
+                                sql.push_str(&row_placeholders);
+                            }
+                            // Flatten params
+                            let mut params: Vec<Value> = Vec::with_capacity(buf.len() * cols.len());
+                            for row in &buf {
+                                params.extend_from_slice(&row[..]);
+                            }
+                            dest.execute(&sql, params).await.map_err(|e| {
+                                DatabaseError::OperationFailed {
+                                    message: format!("Failed to batch insert into {}: {}", name, e),
+                                }
+                            })?;
+                            total_rows += buf.len();
+                            buf.clear();
+                            info!(
+                                "clone: inserted {} rows into {} (total {})",
+                                batch_size, name, total_rows
+                            );
+                        }
+                    }
+                    Ok(None) => {
+                        // flush remainder
+                        if !buf.is_empty() {
+                            let row_placeholders = format!(
+                                "({})",
+                                (1..=cols.len())
+                                    .map(|i| format!("?{}", i))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                            let mut sql = String::with_capacity(
+                                insert_sql.len() + buf.len() * row_placeholders.len(),
+                            );
+                            sql.push_str(&format!("INSERT INTO {} VALUES ", quote_ident(&name)));
+                            for i in 0..buf.len() {
+                                if i > 0 {
+                                    sql.push(',');
+                                }
+                                sql.push_str(&row_placeholders);
+                            }
+                            let mut params: Vec<Value> = Vec::with_capacity(buf.len() * cols.len());
+                            for row in &buf {
+                                params.extend_from_slice(&row[..]);
+                            }
+                            dest.execute(&sql, params).await.map_err(|e| {
+                                DatabaseError::OperationFailed {
+                                    message: format!(
+                                        "Failed to batch insert (final) into {}: {}",
+                                        name, e
+                                    ),
+                                }
+                            })?;
+                            total_rows += buf.len();
+                            buf.clear();
+                        }
+                        info!("clone: finished table {} ({} rows)", name, total_rows);
+                        break;
+                    }
+                    Err(e) => {
+                        return Err(DatabaseError::OperationFailed {
+                            message: format!("Failed to iterate rows from {}: {}", name, e),
+                        });
+                    }
+                }
+            }
+            // Re-enable foreign keys (best effort)
+            let _ = dest.execute("PRAGMA foreign_keys=ON", ()).await;
+        }
+
+        // 2) Rebuild sqlite_sequence if present
+        let mut has_seq = src
+            .query(
+                "SELECT 1 FROM sqlite_schema WHERE name='sqlite_sequence' AND type='table'",
+                (),
+            )
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to check sqlite_sequence: {}", e),
+            })?;
+        if has_seq
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to read sqlite_sequence check: {}", e),
+            })?
+            .is_some()
+        {
+            // Ensure destination has the table (it may be auto-created)
+            let _ = dest.execute("DELETE FROM sqlite_sequence", ()).await;
+            let mut seq_rows = src
+                .query("SELECT name, seq FROM sqlite_sequence", ())
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to read sqlite_sequence rows: {}", e),
+                })?;
+            while let Some(r) =
+                seq_rows
+                    .next()
+                    .await
+                    .map_err(|e| DatabaseError::OperationFailed {
+                        message: format!("Failed to iterate sqlite_sequence: {}", e),
+                    })?
+            {
+                let n: String = r.get(0).map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to get seq name: {}", e),
+                })?;
+                let s: i64 = r.get(1).map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("Failed to get seq value: {}", e),
+                })?;
+                let _ = dest
+                    .execute(
+                        "INSERT INTO sqlite_sequence(name,seq) VALUES(?,?)",
+                        [Value::Text(n), Value::Integer(s)],
+                    )
+                    .await;
+            }
+        }
+
+        // 3) Create indexes, triggers, views
+        let mut objs = src.query(
+            "SELECT name, sql FROM sqlite_schema\n             WHERE sql NOT NULL\n               AND name NOT LIKE 'sqlite_%'\n               AND type IN ('index','trigger','view')\n             ORDER BY CASE type WHEN 'view' THEN 1 WHEN 'index' THEN 2 WHEN 'trigger' THEN 3 END, rowid",
+            (),
+        ).await.map_err(|e| DatabaseError::OperationFailed { message: format!("Failed to enumerate schema objects: {}", e) })?;
+        while let Some(row) = objs
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to read schema object row: {}", e),
+            })?
+        {
+            let ddl: String = row.get(1).map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to get schema object DDL: {}", e),
+            })?;
+            let _ = dest.execute(&ddl, ()).await; // best-effort
+        }
+
+        dest.execute("COMMIT", ())
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to COMMIT destination: {}", e),
+            })?;
+        // Consolidate WAL into the base file for a single-file export (prefer engine-direct checkpoint)
+        if let Ok(core_conn2) = dest_core.connect() {
+            let _ = core_conn2.checkpoint(coredb::CheckpointMode::Full);
+            let _ = core_conn2.checkpoint(coredb::CheckpointMode::Truncate {
+                upper_bound_inclusive: None,
+            });
+        }
+        let _ = dest.execute("PRAGMA journal_mode=DELETE", ()).await;
+        // Give the engine a moment to flush metadata
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Remove empty -wal if present to deliver single-file output
+        let wal_path = std::path::PathBuf::from(format!("{}-wal", dest_path.to_string_lossy()));
+        if let Ok(meta) = fs::metadata(&wal_path) {
+            if meta.len() == 0 {
+                let _ = fs::remove_file(&wal_path);
+            }
+        }
+        let sz = fs::metadata(dest_path)
+            .map(|m| m.len() as usize)
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to stat export file: {}", e),
+            })?;
+        Ok(sz)
     }
 }
 
@@ -4681,7 +5512,7 @@ impl DatabaseBackend for SQLiteBackend {
                 message: format!("Failed to get analysis progress: {}", e),
             })?;
 
-        let (analyzed_files, _total_runs) = if let Some(row) =
+        let (_analyzed_files, _total_runs) = if let Some(row) =
             rows.next()
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
@@ -4701,81 +5532,71 @@ impl DatabaseBackend for SQLiteBackend {
             (0, 0)
         };
 
-        // Get simplified progress - workspace_file tables removed
-        // Return progress based on symbol_state and file tables
-        let mut progress_rows = conn
+        // Compute detailed progress without DISTINCT when indexes are disabled
+        // analysis_info
+        let mut ai_rows = conn
             .query(
                 r#"
-                WITH workspace_info AS (
-                    SELECT 
-                        COUNT(DISTINCT ss.file_path) as total_files,
-                        COUNT(ss.symbol_uid) as total_symbols
-                    FROM symbol_state ss
-                    WHERE 1 = 1  -- All symbols in this database belong to this workspace
-                ),
-                analysis_info AS (
-                    SELECT
-                        COUNT(ar.run_id) as analysis_runs,
-                        COUNT(CASE WHEN ar.status = 'completed' THEN 1 END) as completed_runs,
-                        COUNT(CASE WHEN ar.status = 'failed' THEN 1 END) as failed_runs
-                    FROM analysis_run ar 
-                    WHERE ar.workspace_id = ?
-                )
-                SELECT 
-                    COALESCE(wi.total_files, 0) as total_files,
-                    COALESCE(ai.completed_runs, 0) as successful_files,
-                    COALESCE(ai.failed_runs, 0) as failed_files,
-                    COALESCE(ai.analysis_runs - ai.completed_runs - ai.failed_runs, 0) as pending_files
-                FROM workspace_info wi
-                CROSS JOIN analysis_info ai
+                SELECT
+                    COUNT(ar.run_id) as analysis_runs,
+                    COUNT(CASE WHEN ar.status = 'completed' THEN 1 END) as completed_runs,
+                    COUNT(CASE WHEN ar.status = 'failed' THEN 1 END) as failed_runs
+                FROM analysis_run ar 
+                WHERE ar.workspace_id = ?
                 "#,
-                [
-                    turso::Value::Text(workspace_id_str.clone())
-                ]
+                [turso::Value::Text(workspace_id_str.clone())],
             )
             .await
             .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to get detailed analysis progress: {}", e),
+                message: format!("Failed to get analysis_info: {}", e),
             })?;
-
-        let (total_files, analyzed_files, failed_files, pending_files) = if let Some(row) =
-            progress_rows
+        let (analysis_runs, completed_runs, failed_runs) = if let Some(row) =
+            ai_rows
                 .next()
                 .await
                 .map_err(|e| DatabaseError::OperationFailed {
-                    message: format!("Failed to iterate detailed progress results: {}", e),
+                    message: format!("Failed to iterate analysis_info: {}", e),
                 })? {
             (
                 match row.get_value(0) {
-                    Ok(turso::Value::Integer(count)) => count as u64,
+                    Ok(turso::Value::Integer(c)) => c as u64,
                     _ => 0,
                 },
                 match row.get_value(1) {
-                    Ok(turso::Value::Integer(count)) => count as u64,
+                    Ok(turso::Value::Integer(c)) => c as u64,
                     _ => 0,
                 },
                 match row.get_value(2) {
-                    Ok(turso::Value::Integer(count)) => count as u64,
-                    _ => 0,
-                },
-                match row.get_value(3) {
-                    Ok(turso::Value::Integer(count)) => count as u64,
+                    Ok(turso::Value::Integer(c)) => c as u64,
                     _ => 0,
                 },
             )
         } else {
-            // Fallback: use analyzed_files from the previous query as total if detailed data isn't available
-            let total = analyzed_files.max(1); // Ensure at least 1 to avoid division by zero
-            (
-                total,
-                analyzed_files,
-                0,
-                if total > analyzed_files {
-                    total - analyzed_files
-                } else {
-                    0
-                },
+            (0, 0, 0)
+        };
+        let failed_files = failed_runs;
+        let analyzed_files = completed_runs;
+        let pending_files = analysis_runs.saturating_sub(completed_runs + failed_runs);
+
+        // total_files
+        let total_files = if self.indexes_enabled {
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
+                (),
+                "analysis.total_files",
             )
+            .await?;
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(c)) => c as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        } else {
+            self.count_distinct_files_fallback(&conn, "analysis.total_files.fallback")
+                .await?
         };
 
         let completion_percentage = if total_files > 0 {
@@ -5809,13 +6630,23 @@ impl SQLiteBackend {
                     let msg = e.to_string();
                     if msg.contains("database is locked") && attempt < max_retries {
                         let backoff = 25u64 * (1 << attempt);
-                        warn!(
-                            "{}: step() locked, retrying in {}ms (attempt {}/{})",
-                            context,
-                            backoff,
-                            attempt + 1,
-                            max_retries
-                        );
+                        if attempt + 1 < max_retries {
+                            debug!(
+                                "{}: step() locked, retrying in {}ms (attempt {}/{})",
+                                context,
+                                backoff,
+                                attempt + 1,
+                                max_retries
+                            );
+                        } else {
+                            warn!(
+                                "{}: step() locked, final retry in {}ms (attempt {}/{})",
+                                context,
+                                backoff,
+                                attempt + 1,
+                                max_retries
+                            );
+                        }
                         tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
                         attempt += 1;
                         continue;
@@ -5929,6 +6760,35 @@ impl SQLiteBackend {
         }
 
         let fetch_limit = usize::max(limit * 3, limit);
+        // Take a reader snapshot so we don't race a quiesce/write section
+        // If we cannot get a reader quickly, signal the caller to back off
+        let _reader_guard = match self.try_begin_reader("phase2.find-pending").await {
+            Some(g) => Some(g),
+            None => {
+                // Small bounded wait for a read section to avoid thrashing
+                let block_ms: u64 = std::env::var("PROBE_LSP_PHASE2_READER_BLOCK_MS")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(50);
+                if block_ms > 0 {
+                    let fut = self.begin_reader("phase2.find-pending.block");
+                    match tokio::time::timeout(std::time::Duration::from_millis(block_ms), fut)
+                        .await
+                    {
+                        Ok(g) => Some(g),
+                        Err(_) => {
+                            return Err(DatabaseError::OperationFailed {
+                                message: "find symbols pending enrichment: reader gate busy".into(),
+                            });
+                        }
+                    }
+                } else {
+                    return Err(DatabaseError::OperationFailed {
+                        message: "find symbols pending enrichment: reader gate busy".into(),
+                    });
+                }
+            }
+        };
 
         let conn = ConnectionPool::checkout_arc(&self.pool).await?;
 
@@ -6133,25 +6993,25 @@ impl SQLiteBackend {
         "#;
 
         let refs_sources_sql = r#"
-            SELECT DISTINCT source_symbol_uid
+            SELECT source_symbol_uid
             FROM edge
             WHERE relation = 'references'
         "#;
 
         let impl_sources_sql = r#"
-            SELECT DISTINCT source_symbol_uid
+            SELECT source_symbol_uid
             FROM edge
             WHERE relation IN ('implementation','implements')
         "#;
 
         let calls_sources_sql = r#"
-            SELECT DISTINCT source_symbol_uid
+            SELECT source_symbol_uid
             FROM edge
             WHERE relation = 'calls'
         "#;
 
         let calls_targets_sql = r#"
-            SELECT DISTINCT target_symbol_uid
+            SELECT target_symbol_uid
             FROM edge
             WHERE relation = 'calls'
         "#;
@@ -6301,13 +7161,13 @@ impl SQLiteBackend {
         debug!("[DIRECT_CONNECTION] Creating fresh database connection without pool locks");
 
         // Get the database instance from the pool (read-only access, no lock needed)
-        let database = {
+        let core_database = {
             let pool = self.pool.lock().await;
-            pool.database.clone()
+            pool.core_database.clone()
         };
 
-        // Create a fresh connection directly from database
-        let conn = database
+        // Create a fresh connection directly from core database and wrap
+        let core_conn = core_database
             .connect()
             .map_err(|e| DatabaseError::Configuration {
                 message: format!(
@@ -6315,6 +7175,7 @@ impl SQLiteBackend {
                     e, e
                 ),
             })?;
+        let conn = Connection::create(core_conn);
 
         // Configure the connection with optimal settings
         ConnectionPool::configure_connection(&conn, &self.sqlite_config).await?;
@@ -6353,7 +7214,7 @@ impl SQLiteBackend {
                 end,
                 symbols.len()
             );
-            safe_execute_with_retry(conn, "BEGIN TRANSACTION", (), &begin_ctx, 10).await?;
+            safe_execute_with_retry(conn, "BEGIN TRANSACTION", (), &begin_ctx, 6).await?;
 
             let transaction_result: Result<(), DatabaseError> = async {
                 for symbol in &symbols[idx..end] {
@@ -6453,7 +7314,7 @@ impl SQLiteBackend {
                         end,
                         symbols.len()
                     );
-                    safe_execute_with_retry(&conn, update_query, update_params, &update_ctx, 10)
+                    safe_execute_with_retry(&conn, update_query, update_params, &update_ctx, 6)
                         .await
                         .map_err(|e| DatabaseError::OperationFailed {
                             message: format!(
@@ -6478,7 +7339,7 @@ impl SQLiteBackend {
                         end,
                         symbols.len()
                     );
-                    safe_execute_with_retry(&conn, insert_query, insert_params, &insert_ctx, 10)
+                    safe_execute_with_retry(&conn, insert_query, insert_params, &insert_ctx, 6)
                         .await
                         .map_err(|e| DatabaseError::OperationFailed {
                             message: format!(
@@ -6504,7 +7365,7 @@ impl SQLiteBackend {
                 end,
                 symbols.len()
             );
-            if let Err(e) = safe_execute_with_retry(conn, "COMMIT", (), &commit_ctx, 10).await {
+            if let Err(e) = safe_execute_with_retry(conn, "COMMIT", (), &commit_ctx, 6).await {
                 rollback_transaction(conn, "store_symbols_with_conn commit failure").await;
                 return Err(e);
             }
@@ -7276,7 +8137,7 @@ impl SQLiteBackend {
         };
 
         // Count distinct files from symbol_state table
-        let file_count = {
+        let file_count = if self.indexes_enabled {
             let mut rows = safe_query(
                 &conn,
                 "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
@@ -7284,7 +8145,6 @@ impl SQLiteBackend {
                 "index-status.count-files",
             )
             .await?;
-
             match rows.next().await {
                 Ok(Some(row)) => match row.get_value(0) {
                     Ok(turso::Value::Integer(count)) => count as u64,
@@ -7292,6 +8152,9 @@ impl SQLiteBackend {
                 },
                 _ => 0,
             }
+        } else {
+            self.count_distinct_files_fallback(&conn, "index-status.count-files.fallback")
+                .await?
         };
 
         // Return connection to the pool
@@ -7376,7 +8239,7 @@ impl SQLiteBackend {
                         _ => 0,
                     }
                 };
-                let files = {
+                let files = if self.indexes_enabled {
                     let mut rows = safe_query(
                         &conn,
                         "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
@@ -7391,6 +8254,12 @@ impl SQLiteBackend {
                         },
                         _ => 0,
                     }
+                } else {
+                    self.count_distinct_files_fallback(
+                        &conn,
+                        "index-status.try-soft.count-files.fallback",
+                    )
+                    .await?
                 };
                 ConnectionPool::return_connection_arc(&self.pool, conn);
                 return Ok(Some((symbols, edges, files)));
@@ -7435,7 +8304,7 @@ impl SQLiteBackend {
             }
         };
         // Files
-        let file_count = {
+        let file_count = if self.indexes_enabled {
             let mut rows = safe_query(
                 &conn,
                 "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
@@ -7450,6 +8319,9 @@ impl SQLiteBackend {
                 },
                 _ => 0,
             }
+        } else {
+            self.count_distinct_files_fallback(&conn, "index-status.try.count-files.fallback")
+                .await?
         };
         ConnectionPool::return_connection_arc(&self.pool, conn);
         Ok(Some((symbol_count, edge_count, file_count)))

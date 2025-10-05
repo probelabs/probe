@@ -78,7 +78,9 @@ pub fn generate_version_aware_uid(
         return Err(anyhow::anyhow!("Line number must be greater than 0"));
     }
 
-    // Get workspace-relative path
+    // Get workspace-relative path using the provided anchor workspace root.
+    // If the file is outside this workspace, this helper will classify it under
+    // a stable /dep/... namespace (or EXTERNAL: as a last resort).
     let relative_path =
         get_workspace_relative_path(file_path, workspace_root).with_context(|| {
             format!(

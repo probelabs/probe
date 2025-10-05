@@ -68,9 +68,10 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 const REQ_TIMEOUT: Duration = Duration::from_secs(25);
 const CONNECTION_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+use futures::FutureExt;
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::prelude::*;
-use uuid::Uuid;
+use uuid::Uuid; // for catch_unwind on futures
 
 // ===== Helper env parsers for knobs with sane defaults =====
 fn env_bool(name: &str, default: bool) -> bool {
@@ -381,6 +382,10 @@ impl LspDaemon {
         socket_path: String,
         allowed_roots: Option<Vec<PathBuf>>,
     ) -> Result<Self> {
+        // Install a global panic hook that writes a crash report to a well-known file.
+        // This helps diagnose unexpected exits (e.g., MVCC engine panics) where the
+        // connection simply drops with “connection reset by peer”.
+        Self::install_crash_hook();
         // Log CI environment detection and persistence status
         if std::env::var("PROBE_CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok() {
             info!("CI environment detected - persistence disabled to prevent hanging");
@@ -658,6 +663,101 @@ impl LspDaemon {
             database_health_status: Arc::new(Mutex::new(DatabaseHealth::Healthy)),
             cancel_flags: Arc::new(DashMap::new()),
         })
+    }
+
+    /// Install a global panic hook that appends a crash report (with backtrace) to
+    /// a stable location the CLI knows how to read (probe lsp crash-logs).
+    fn install_crash_hook() {
+        // Compute crash log path similar to the CLI helper
+        fn crash_log_path() -> std::path::PathBuf {
+            let base = dirs::cache_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join("probe");
+            let _ = std::fs::create_dir_all(&base);
+            base.join("lsp-daemon-crashes.log")
+        }
+
+        // Capture build info once
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        let git_hash = option_env!("GIT_HASH").unwrap_or("").to_string();
+        let build_date = option_env!("BUILD_DATE").unwrap_or("").to_string();
+
+        // Install idempotently: replace any existing hook but chain to it
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic_info| {
+            use std::io::Write as _;
+            let path = crash_log_path();
+            let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            let thread = std::thread::current();
+            let thread_name = thread.name().unwrap_or("<unnamed>");
+            let location = panic_info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()))
+                .unwrap_or_else(|| "<unknown>".to_string());
+            let payload = if let Some(s) = panic_info.payload().downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = panic_info.payload().downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "<non-string panic payload>".to_string()
+            };
+            // Force-capture a backtrace even if RUST_BACKTRACE is not set
+            let bt = std::backtrace::Backtrace::force_capture();
+
+            let mut report = String::new();
+            use std::fmt::Write as FmtWrite;
+            let _ = writeln!(report, "==== LSP Daemon Crash ====");
+            let _ = writeln!(report, "timestamp: {}", ts);
+            let _ = writeln!(report, "thread: {}", thread_name);
+            let _ = writeln!(report, "location: {}", location);
+            let _ = writeln!(report, "message: {}", payload);
+            let _ = writeln!(report, "version: {}", version);
+            if !git_hash.is_empty() {
+                let _ = writeln!(report, "git: {}", git_hash);
+            }
+            if !build_date.is_empty() {
+                let _ = writeln!(report, "build: {}", build_date);
+            }
+            // Log key env/tuning flags to correlate with crashes
+            for (k, v) in [
+                (
+                    "PROBE_LSP_DB_ENABLE_MVCC",
+                    std::env::var("PROBE_LSP_DB_ENABLE_MVCC").unwrap_or_default(),
+                ),
+                (
+                    "PROBE_LSP_DB_DISABLE_MVCC",
+                    std::env::var("PROBE_LSP_DB_DISABLE_MVCC").unwrap_or_default(),
+                ),
+                (
+                    "RUST_BACKTRACE",
+                    std::env::var("RUST_BACKTRACE").unwrap_or_default(),
+                ),
+                ("RUST_LOG", std::env::var("RUST_LOG").unwrap_or_default()),
+                (
+                    "PROBE_LOG_LEVEL",
+                    std::env::var("PROBE_LOG_LEVEL").unwrap_or_default(),
+                ),
+            ] {
+                let _ = writeln!(report, "env {}={}", k, v);
+            }
+            let _ = writeln!(report, "backtrace:\n{}", bt);
+            let _ = writeln!(report, "===========================\n");
+
+            // Best‑effort append to the crash log file
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = f.write_all(report.as_bytes());
+            }
+
+            // Also echo to stderr to help when running in foreground
+            eprintln!("{}", report);
+
+            // Chain to previous hook (keeps default printing if desired)
+            prev(panic_info);
+        }));
     }
 
     pub async fn run(mut self) -> Result<()> {
@@ -1036,11 +1136,16 @@ impl LspDaemon {
                         Some(Duration::from_secs(timeout_secs.saturating_add(10)))
                     }
                 }
+                DaemonRequest::IndexExport { .. } => {
+                    // Export can be large; allow extended time
+                    Some(Duration::from_secs(600))
+                }
                 _ => Some(REQ_TIMEOUT),
             };
 
             // Increase or disable the outer timeout for heavy LSP operations like call hierarchy,
             // since the inner handler already uses a dedicated (longer) timeout.
+            // Guard against panics inside request handling to avoid crashing the daemon
             let response = if let Some(t) = match &request {
                 DaemonRequest::CallHierarchy { .. } => {
                     // Use a larger cap (or disable via env) for call hierarchy
@@ -1057,9 +1162,34 @@ impl LspDaemon {
                         Some(Duration::from_secs(secs))
                     }
                 }
+                DaemonRequest::IndexExport { .. } => Some(Duration::from_secs(600)),
                 _ => Some(REQ_TIMEOUT),
             } {
-                match timeout(t, self.handle_request(request)).await {
+                match timeout(t, async {
+                    // catch_unwind to prevent process abort on handler panics
+                    match std::panic::AssertUnwindSafe(self.handle_request(request))
+                        .catch_unwind()
+                        .await
+                    {
+                        Ok(resp) => resp,
+                        Err(panic) => {
+                            let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                                s.to_string()
+                            } else if let Some(s) = panic.downcast_ref::<String>() {
+                                s.clone()
+                            } else {
+                                "unknown panic".to_string()
+                            };
+                            error!("Request handler panicked: {}", msg);
+                            DaemonResponse::Error {
+                                request_id: Uuid::new_v4(),
+                                error: format!("Internal server error: {}", msg),
+                            }
+                        }
+                    }
+                })
+                .await
+                {
                     Ok(resp) => resp,
                     Err(_) => {
                         warn!(
@@ -1075,7 +1205,26 @@ impl LspDaemon {
                 }
             } else {
                 // No timeout: run to completion
-                self.handle_request(request).await
+                match std::panic::AssertUnwindSafe(self.handle_request(request))
+                    .catch_unwind()
+                    .await
+                {
+                    Ok(resp) => resp,
+                    Err(panic) => {
+                        let msg = if let Some(s) = panic.downcast_ref::<&str>() {
+                            s.to_string()
+                        } else if let Some(s) = panic.downcast_ref::<String>() {
+                            s.clone()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        error!("Request handler panicked: {}", msg);
+                        DaemonResponse::Error {
+                            request_id: Uuid::new_v4(),
+                            error: format!("Internal server error: {}", msg),
+                        }
+                    }
+                }
             };
             let request_duration = request_start.elapsed();
 
@@ -1212,6 +1361,36 @@ impl LspDaemon {
         self.cleanup_stale_connections();
 
         match request {
+            DaemonRequest::WorkspaceDbPath {
+                request_id,
+                workspace_path,
+            } => {
+                let workspace = match workspace_path {
+                    Some(p) => p,
+                    None => {
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+                    }
+                };
+                match self
+                    .workspace_cache_router
+                    .cache_for_workspace(&workspace)
+                    .await
+                {
+                    Ok(cache) => {
+                        let db_path = cache.database_path();
+                        DaemonResponse::WorkspaceDbPath {
+                            request_id,
+                            workspace_path: workspace,
+                            db_path,
+                        }
+                    }
+                    Err(e) => DaemonResponse::Error {
+                        request_id,
+                        error: format!("Failed to get workspace DB path: {}", e),
+                    },
+                }
+            }
+
             DaemonRequest::Connect { client_id } => DaemonResponse::Connected {
                 request_id: client_id,
                 daemon_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1477,6 +1656,16 @@ impl LspDaemon {
                 }
             }
 
+            DaemonRequest::Version { request_id } => {
+                // Lightweight: no DB, no server stats — safe during early boot
+                DaemonResponse::VersionInfo {
+                    request_id,
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                    git_hash: env!("GIT_HASH").to_string(),
+                    build_date: env!("BUILD_DATE").to_string(),
+                }
+            }
+
             DaemonRequest::ListLanguages { request_id } => {
                 let languages = self.registry.list_available_servers();
                 let language_info: Vec<LanguageInfo> = languages
@@ -1510,6 +1699,7 @@ impl LspDaemon {
                 request_id,
                 lines,
                 since_sequence,
+                min_level,
             } => {
                 let entries = if let Some(since) = since_sequence {
                     // Get logs since sequence
@@ -1518,10 +1708,82 @@ impl LspDaemon {
                     // Backward compatibility: get last N logs
                     self.log_buffer.get_last(lines)
                 };
-
+                // Optional level filtering (server-side) to reduce payload
+                let entries = if let Some(min) = min_level {
+                    fn rank(level: &crate::protocol::LogLevel) -> u8 {
+                        match level {
+                            crate::protocol::LogLevel::Trace => 0,
+                            crate::protocol::LogLevel::Debug => 1,
+                            crate::protocol::LogLevel::Info => 2,
+                            crate::protocol::LogLevel::Warn => 3,
+                            crate::protocol::LogLevel::Error => 4,
+                        }
+                    }
+                    let min_r = rank(&min);
+                    entries
+                        .into_iter()
+                        .filter(|e| rank(&e.level) >= min_r)
+                        .collect()
+                } else {
+                    entries
+                };
                 DaemonResponse::Logs {
                     request_id,
                     entries,
+                }
+            }
+
+            DaemonRequest::DbLockSnapshot { request_id } => {
+                // Try to get a cache adapter for current working directory
+                let current_dir = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+                let snapshot = if let Ok(cache_adapter) = self
+                    .workspace_cache_router
+                    .cache_for_workspace(&current_dir)
+                    .await
+                {
+                    match &cache_adapter.database {
+                        crate::database_cache_adapter::BackendType::SQLite(db) => {
+                            let snap = db.writer_status_snapshot().await;
+                            Some((
+                                snap.busy,
+                                snap.gate_owner_op,
+                                snap.gate_owner_ms,
+                                snap.section_label,
+                                snap.section_ms,
+                                snap.active_ms,
+                            ))
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                match snapshot {
+                    Some((
+                        busy,
+                        gate_owner_op,
+                        gate_owner_ms,
+                        section_label,
+                        section_ms,
+                        active_ms,
+                    )) => DaemonResponse::DbLockSnapshotResponse {
+                        request_id,
+                        busy,
+                        gate_owner_op,
+                        gate_owner_ms,
+                        section_label,
+                        section_ms,
+                        active_ms,
+                    },
+                    None => DaemonResponse::DbLockSnapshotResponse {
+                        request_id,
+                        busy: false,
+                        gate_owner_op: None,
+                        gate_owner_ms: None,
+                        section_label: None,
+                        section_ms: None,
+                        active_ms: None,
+                    },
                 }
             }
 
@@ -2582,9 +2844,9 @@ impl LspDaemon {
         request_id: Uuid,
         workspace_path: Option<PathBuf>,
         output_path: PathBuf,
-        checkpoint: bool,
+        _checkpoint: bool,
     ) -> DaemonResponse {
-        use std::fs;
+        // filesystem operations use top-level import; no local import needed
 
         // Determine which workspace to export from
         let workspace = match workspace_path {
@@ -2621,47 +2883,32 @@ impl LspDaemon {
         // Get the database path from the cache adapter
         let db_path = cache_adapter.database_path();
 
-        // If checkpoint is requested, perform the same logic as wal-sync --mode auto
-        if checkpoint {
-            info!("Index export requested with --checkpoint: running wal-sync in auto mode");
-            match cache_adapter
-                .wal_sync_blocking(0, /*quiesce*/ true, Some("auto".to_string()), None)
-                .await
-            {
-                Ok((waited_ms, iterations)) => {
-                    info!(
-                        "Index export checkpoint completed (auto mode): waited_ms={} iterations={}",
-                        waited_ms, iterations
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to checkpoint database before export: {}", e);
-                    // Continue with export even if checkpoint fails
-                }
-            }
-        }
+        // Checkpointing is intentionally disabled for export; we do not attempt it.
 
-        // Copy the database file to the output path
-        match fs::copy(&db_path, &output_path) {
-            Ok(bytes_copied) => {
-                info!(
-                    "Exported database from {} to {} ({} bytes)",
-                    db_path.display(),
-                    output_path.display(),
-                    bytes_copied
-                );
-
-                DaemonResponse::IndexExported {
+        // Export via clone-based engine path only; no auto-checkpointing or base file copy.
+        let export_bytes = match cache_adapter.database.export_to(&output_path).await {
+            Ok(sz) => sz,
+            Err(e) => {
+                return DaemonResponse::Error {
                     request_id,
-                    workspace_path: workspace,
-                    output_path,
-                    database_size_bytes: bytes_copied as usize,
+                    error: format!(
+                        "Index export failed: {}. Tip: run 'probe lsp wal-sync --mode auto' separately if you need compaction.",
+                        e
+                    ),
                 }
             }
-            Err(e) => DaemonResponse::Error {
-                request_id,
-                error: format!("Failed to export database: {}", e),
-            },
+        };
+        info!(
+            "Exported database from {} to {} ({} bytes)",
+            db_path.display(),
+            output_path.display(),
+            export_bytes
+        );
+        DaemonResponse::IndexExported {
+            request_id,
+            workspace_path: workspace,
+            output_path,
+            database_size_bytes: export_bytes,
         }
     }
 
@@ -5320,17 +5567,19 @@ impl LspDaemon {
             writer_gate_owner_ms,
             writer_section_label,
             writer_section_ms,
+            counts_locked,
         ) = match backend {
             crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
                 // Try without blocking first
-                let (symbol_count, edge_count, file_count, mut db_quiesced) = match sqlite_backend
-                    .get_table_counts_try()
-                    .await
-                    .context("Failed to get table counts (try)")?
-                {
-                    Some((s, e, f)) => (s, e, f, false),
-                    None => (0, 0, 0, false),
-                };
+                let (symbol_count, edge_count, file_count, mut db_quiesced, counts_locked) =
+                    match sqlite_backend
+                        .get_table_counts_try()
+                        .await
+                        .context("Failed to get table counts (try)")?
+                    {
+                        Some((s, e, f)) => (s, e, f, false, false),
+                        None => (0, 0, 0, false, true),
+                    };
 
                 // Get workspace ID
                 let workspace_id = self
@@ -5389,6 +5638,7 @@ impl LspDaemon {
                     writer_gate_owner_ms,
                     writer_section_label,
                     writer_section_ms,
+                    counts_locked,
                 )
             }
         };
@@ -5398,6 +5648,7 @@ impl LspDaemon {
             total_edges,
             total_files,
             workspace_id: Some(workspace_id),
+            counts_locked,
             db_quiesced,
             rw_gate_write_held,
             reader_active,
@@ -5412,6 +5663,9 @@ impl LspDaemon {
             writer_gate_owner_ms,
             writer_section_label,
             writer_section_ms,
+            mvcc_enabled: match backend {
+                crate::database_cache_adapter::BackendType::SQLite(sql) => sql.is_mvcc_enabled(),
+            },
         })
     }
 

@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock, Semaphore};
 // Provide a grace period where health checks won't restart new, CPU-heavy servers
@@ -313,6 +313,195 @@ impl WorkspaceInitSingleflight {
     }
 }
 
+/// Key for deduplicating in-flight callHierarchy requests
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum OpKind {
+    CallHierarchy,
+    References { include_declaration: bool },
+    Implementations,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CallKey {
+    language: Language,
+    file: PathBuf,
+    line: u32,
+    column: u32,
+    op: OpKind,
+}
+
+impl CallKey {
+    fn new(language: Language, file: &Path, line: u32, column: u32) -> Self {
+        Self::new_with_op(language, file, line, column, OpKind::CallHierarchy)
+    }
+
+    fn new_with_op(language: Language, file: &Path, line: u32, column: u32, op: OpKind) -> Self {
+        // Normalize file path for stable deduplication
+        let abs = if file.is_absolute() {
+            file.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("/"))
+                .join(file)
+        };
+        Self {
+            language,
+            file: abs,
+            line,
+            column,
+            op,
+        }
+    }
+}
+
+/// Result type for callHierarchy singleflight broadcast
+#[derive(Clone)]
+enum CallBroadcastResult {
+    Ok(crate::protocol::CallHierarchyResult),
+    Err(String),
+}
+
+/// Singleflight coordinator for callHierarchy
+#[derive(Debug)]
+struct CallSingleflight {
+    active: DashMap<CallKey, broadcast::Sender<CallBroadcastResult>>,
+}
+
+impl CallSingleflight {
+    fn new() -> Self {
+        Self {
+            active: DashMap::new(),
+        }
+    }
+
+    async fn call<F, Fut>(
+        &self,
+        key: CallKey,
+        op: F,
+    ) -> Result<crate::protocol::CallHierarchyResult>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<crate::protocol::CallHierarchyResult>>,
+    {
+        use dashmap::mapref::entry::Entry;
+
+        // Fast path: if an operation is already in-flight, subscribe to it
+        if let Some(sender) = self.active.get(&key) {
+            let mut rx = sender.subscribe();
+            drop(sender);
+            match rx.recv().await {
+                Ok(CallBroadcastResult::Ok(res)) => return Ok(res),
+                Ok(CallBroadcastResult::Err(err)) => return Err(anyhow!(err)),
+                Err(_) => return Err(anyhow!("callHierarchy singleflight channel closed")),
+            }
+        }
+
+        // Create a channel for this key if absent
+        let sender = match self.active.entry(key.clone()) {
+            Entry::Occupied(occ) => occ.get().clone(),
+            Entry::Vacant(vac) => {
+                let (tx, _rx) = broadcast::channel(8);
+                vac.insert(tx.clone());
+                tx
+            }
+        };
+
+        // If we raced and someone else inserted, subscribe to theirs
+        if !self.active.contains_key(&key) {
+            let mut rx = sender.subscribe();
+            match rx.recv().await {
+                Ok(CallBroadcastResult::Ok(res)) => return Ok(res),
+                Ok(CallBroadcastResult::Err(err)) => return Err(anyhow!(err)),
+                Err(_) => return Err(anyhow!("callHierarchy singleflight channel closed")),
+            }
+        }
+
+        // We are the leader: perform the operation
+        let res = op().await;
+
+        // Broadcast and remove the entry
+        match &res {
+            Ok(ok) => {
+                let _ = sender.send(CallBroadcastResult::Ok(ok.clone()));
+            }
+            Err(e) => {
+                let _ = sender.send(CallBroadcastResult::Err(e.to_string()));
+            }
+        }
+        self.active.remove(&key);
+
+        res
+    }
+}
+
+/// Singleflight for JSON-returning LSP ops (references/implementations)
+#[derive(Clone)]
+enum JsonBroadcastResult {
+    Ok(serde_json::Value),
+    Err(String),
+}
+
+#[derive(Debug)]
+struct JsonSingleflight {
+    active: DashMap<CallKey, broadcast::Sender<JsonBroadcastResult>>,
+}
+
+impl JsonSingleflight {
+    fn new() -> Self {
+        Self {
+            active: DashMap::new(),
+        }
+    }
+
+    async fn call<F, Fut>(&self, key: CallKey, op: F) -> Result<serde_json::Value>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<serde_json::Value>>,
+    {
+        use dashmap::mapref::entry::Entry;
+
+        if let Some(sender) = self.active.get(&key) {
+            let mut rx = sender.subscribe();
+            drop(sender);
+            return match rx.recv().await {
+                Ok(JsonBroadcastResult::Ok(v)) => Ok(v),
+                Ok(JsonBroadcastResult::Err(e)) => Err(anyhow!(e)),
+                Err(_) => Err(anyhow!("json singleflight channel closed")),
+            };
+        }
+
+        let sender = match self.active.entry(key.clone()) {
+            Entry::Occupied(occ) => occ.get().clone(),
+            Entry::Vacant(vac) => {
+                let (tx, _rx) = broadcast::channel(8);
+                vac.insert(tx.clone());
+                tx
+            }
+        };
+
+        if !self.active.contains_key(&key) {
+            let mut rx = sender.subscribe();
+            return match rx.recv().await {
+                Ok(JsonBroadcastResult::Ok(v)) => Ok(v),
+                Ok(JsonBroadcastResult::Err(e)) => Err(anyhow!(e)),
+                Err(_) => Err(anyhow!("json singleflight channel closed")),
+            };
+        }
+
+        let res = op().await;
+        match &res {
+            Ok(v) => {
+                let _ = sender.send(JsonBroadcastResult::Ok(v.clone()));
+            }
+            Err(e) => {
+                let _ = sender.send(JsonBroadcastResult::Err(e.to_string()));
+            }
+        }
+        self.active.remove(&key);
+        res
+    }
+}
+
 /// Manages single server instances per language with multi-workspace support
 #[derive(Debug, Clone)]
 pub struct SingleServerManager {
@@ -328,6 +517,14 @@ pub struct SingleServerManager {
     language_health: Arc<DashMap<Language, Arc<ServerHealth>>>,
     /// Configuration for concurrency control and health tracking
     concurrency_config: ConcurrencyConfig,
+    /// Singleflight for deduplicating identical callHierarchy requests
+    call_singleflight: Arc<CallSingleflight>,
+    /// Singleflight for deduplicating identical references requests
+    refs_singleflight: Arc<JsonSingleflight>,
+    /// Singleflight for deduplicating identical implementations requests
+    impls_singleflight: Arc<JsonSingleflight>,
+    /// Total in-flight LSP requests across all languages (best-effort)
+    total_inflight: Arc<AtomicUsize>,
 }
 
 impl SingleServerManager {
@@ -351,6 +548,10 @@ impl SingleServerManager {
             language_semaphores: Arc::new(DashMap::new()),
             language_health: Arc::new(DashMap::new()),
             concurrency_config,
+            call_singleflight: Arc::new(CallSingleflight::new()),
+            refs_singleflight: Arc::new(JsonSingleflight::new()),
+            impls_singleflight: Arc::new(JsonSingleflight::new()),
+            total_inflight: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -435,8 +636,9 @@ impl SingleServerManager {
             semaphore.available_permits()
         );
 
-        // Execute the operation
-        match operation.await {
+        // Execute the operation (track in-flight counter)
+        self.total_inflight.fetch_add(1, Ordering::Relaxed);
+        let result = match operation.await {
             Ok(result) => {
                 health.record_success();
                 debug!(
@@ -462,8 +664,15 @@ impl SingleServerManager {
 
                 Err(err)
             }
-        }
+        };
+        self.total_inflight.fetch_sub(1, Ordering::Relaxed);
+        result
         // Semaphore permit is automatically released when _permit is dropped
+    }
+
+    /// Return a best-effort count of total in-flight LSP requests.
+    pub fn total_inflight(&self) -> usize {
+        self.total_inflight.load(Ordering::Relaxed)
     }
 
     /// Check and handle unhealthy processes
@@ -1496,25 +1705,32 @@ impl SingleServerManager {
         column: u32,
         include_declaration: bool,
     ) -> Result<serde_json::Value> {
-        // Execute with semaphore control and health tracking
-        self.execute_with_semaphore(language, async {
-            // Get or create server for this language and workspace
-            let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
-
-            let server = server_instance.lock().await;
-
-            if !server.server.supports_references() {
-                return Err(anyhow!(
-                    "References not supported by {:?} language server",
-                    language
-                ));
-            }
-
-            // Delegate to the underlying LspServer
-            server
-                .server
-                .references(file_path, line, column, include_declaration)
-                .await
+        let key = CallKey::new_with_op(
+            language,
+            file_path,
+            line,
+            column,
+            OpKind::References {
+                include_declaration,
+            },
+        );
+        let sf = self.refs_singleflight.clone();
+        sf.call(key, || async move {
+            self.execute_with_semaphore(language, async {
+                let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
+                let server = server_instance.lock().await;
+                if !server.server.supports_references() {
+                    return Err(anyhow!(
+                        "References not supported by {:?} language server",
+                        language
+                    ));
+                }
+                server
+                    .server
+                    .references(file_path, line, column, include_declaration)
+                    .await
+            })
+            .await
         })
         .await
     }
@@ -1549,47 +1765,55 @@ impl SingleServerManager {
         line: u32,
         column: u32,
     ) -> Result<crate::protocol::CallHierarchyResult> {
-        // Execute with semaphore control and health tracking
-        self.execute_with_semaphore(language, async {
-            // Get or create server for this language and workspace
-            let server_instance = self
-                .ensure_workspace_for_file(language, file_path)
-                .await?;
+        // Deduplicate identical in-flight requests for the same (language, file, line, column)
+        let key = CallKey::new(language, file_path, line, column);
+        let sf = self.call_singleflight.clone();
 
-            let server = server_instance.lock().await;
+        sf.call(key, || async move {
+            // Execute with semaphore control and health tracking
+            self.execute_with_semaphore(language, async {
+                // Get or create server for this language and workspace
+                let server_instance = self
+                    .ensure_workspace_for_file(language, file_path)
+                    .await?;
 
-            if !server.server.supports_call_hierarchy() {
-                return Err(anyhow!(
-                    "Call hierarchy not supported by {:?} language server",
-                    language
-                ));
-            }
+                let server = server_instance.lock().await;
 
-            // Delegate to the underlying LspServer's call_hierarchy method
-            let lsp_result = server
-                .server
-                .call_hierarchy(file_path, line, column)
-                .await
-                .with_context(|| format!(
-                    "Call hierarchy request failed for {:?} LSP server at {}:{}:{}. \
-                    Server may not be installed, responding, or the position may not be valid for call hierarchy.",
-                    language,
-                    file_path.display(),
-                    line,
-                    column
-                ))?;
+                if !server.server.supports_call_hierarchy() {
+                    return Err(anyhow!(
+                        "Call hierarchy not supported by {:?} language server",
+                        language
+                    ));
+                }
 
-            // Parse the call hierarchy result using the existing protocol parser
-            crate::protocol::parse_call_hierarchy_from_lsp(&lsp_result).with_context(|| {
-                format!(
-                    "Failed to parse call hierarchy response from {:?} LSP server for {}:{}:{}",
-                    language,
-                    file_path.display(),
-                    line,
-                    column
-                )
+                // Delegate to the underlying LspServer's call_hierarchy method
+                let lsp_result = server
+                    .server
+                    .call_hierarchy(file_path, line, column)
+                    .await
+                    .with_context(|| format!(
+                        "Call hierarchy request failed for {:?} LSP server at {}:{}:{}. \
+                        Server may not be installed, responding, or the position may not be valid for call hierarchy.",
+                        language,
+                        file_path.display(),
+                        line,
+                        column
+                    ))?;
+
+                // Parse the call hierarchy result using the existing protocol parser
+                crate::protocol::parse_call_hierarchy_from_lsp(&lsp_result).with_context(|| {
+                    format!(
+                        "Failed to parse call hierarchy response from {:?} LSP server for {}:{}:{}",
+                        language,
+                        file_path.display(),
+                        line,
+                        column
+                    )
+                })
             })
-        }).await
+            .await
+        })
+        .await
     }
 
     /// Execute textDocument/implementation request for the given file and position
@@ -1600,34 +1824,33 @@ impl SingleServerManager {
         line: u32,
         column: u32,
     ) -> Result<serde_json::Value> {
-        // Execute with semaphore control and health tracking
-        self.execute_with_semaphore(language, async {
-            // Get or create server for this language and workspace
-            let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
-
-            let server = server_instance.lock().await;
-
-            if !server.server.supports_implementations() {
-                return Err(anyhow!(
-                    "Implementations not supported by {:?} language server",
-                    language
-                ));
-            }
-
-            // Delegate to the underlying LspServer's implementation method
-            server
-                .server
-                .implementation(file_path, line, column)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Implementation request failed for {:?} LSP server at {}:{}:{}",
-                        language,
-                        file_path.display(),
-                        line,
-                        column
-                    )
-                })
+        let key = CallKey::new_with_op(language, file_path, line, column, OpKind::Implementations);
+        let sf = self.impls_singleflight.clone();
+        sf.call(key, || async move {
+            self.execute_with_semaphore(language, async {
+                let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
+                let server = server_instance.lock().await;
+                if !server.server.supports_implementations() {
+                    return Err(anyhow!(
+                        "Implementations not supported by {:?} language server",
+                        language
+                    ));
+                }
+                server
+                    .server
+                    .implementation(file_path, line, column)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "Implementation request failed for {:?} LSP server at {}:{}:{}",
+                            language,
+                            file_path.display(),
+                            line,
+                            column
+                        )
+                    })
+            })
+            .await
         })
         .await
     }

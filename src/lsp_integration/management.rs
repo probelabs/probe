@@ -178,6 +178,7 @@ impl LspManager {
                 follow,
                 lines,
                 clear,
+                level: _,
             } => Self::handle_logs(*follow, *lines, *clear).await,
             LspSubcommands::CrashLogs {
                 lines,
@@ -246,9 +247,17 @@ impl LspManager {
                 output,
                 checkpoint,
                 daemon,
+                timeout_secs: _,
+                yes,
             } => {
-                Self::handle_index_export(workspace.clone(), output.clone(), *checkpoint, *daemon)
-                    .await
+                Self::handle_index_export(
+                    workspace.clone(),
+                    output.clone(),
+                    *checkpoint,
+                    *daemon,
+                    *yes,
+                )
+                .await
             }
             LspSubcommands::WalSync {
                 timeout_secs,
@@ -3060,72 +3069,79 @@ impl LspManager {
     }
 
     async fn handle_wal_sync(
-        timeout_secs: u64,
-        quiesce: bool,
-        mode: &str,
-        format: &str,
+        _timeout_secs: u64,
+        _quiesce: bool,
+        _mode: &str,
+        _format: &str,
     ) -> Result<()> {
         use crate::lsp_integration::{types::LspConfig, LspClient};
-        use lsp_daemon::protocol::{DaemonRequest, DaemonResponse};
-        // Expand client timeout to accommodate long WAL syncs
-        let timeout_ms = if timeout_secs == 0 {
-            3_600_000 // 1 hour
-        } else {
-            (timeout_secs.saturating_mul(1000)).saturating_add(10_000) // +10s cushion
-        };
-        let client = LspClient::new(LspConfig {
-            timeout_ms,
+        use colored::Colorize;
+
+        // Capture current workspace and indexing state
+        let cwd = std::env::current_dir()?;
+        let mut client = LspClient::new(LspConfig {
+            timeout_ms: 30_000,
             ..Default::default()
         })
         .await?;
-        let wal_req_id = uuid::Uuid::new_v4();
-        // Pick up --direct flag from outer command by inspecting env passthrough (the caller passes via args in mod.rs)
-        // Since this helper signature is kept stable, read an env var the caller sets: PROBE_LSP_WAL_DIRECT=1
-        let direct = std::env::var("PROBE_LSP_WAL_DIRECT")
-            .ok()
-            .map(|v| v == "1")
+        let db_path = client.get_workspace_db_path(Some(cwd.clone())).await?;
+        let status_before = client.get_indexing_status().await.ok();
+        let was_indexing = status_before
+            .as_ref()
+            .map(|s| s.manager_status == "Indexing")
             .unwrap_or(false);
-        let wal_req = DaemonRequest::WalSync {
-            request_id: wal_req_id,
-            timeout_secs,
-            quiesce,
-            mode: mode.to_string(),
-            direct,
-        };
-        let fut_wal = {
-            let mut c = client;
-            async move { c.send(wal_req).await }
-        };
+        let cfg_before = client.get_indexing_config().await.ok();
 
-        tokio::select! {
-            resp = fut_wal => {
-                match resp? {
-                    DaemonResponse::WalSynced { waited_ms, iterations, .. } => {
-                        match format {
-                            "json" => println!("{}", serde_json::to_string_pretty(&serde_json::json!({"status":"ok","waited_ms": waited_ms, "iterations": iterations}))?),
-                            _ => {
-                                println!("{}", "WAL Sync".bold().green());
-                                println!("  {}: {} ms", "Waited".bold(), waited_ms);
-                                println!("  {}: {}", "Iterations".bold(), iterations);
-                            }
-                        }
-                        Ok(())
-                    }
-                    DaemonResponse::Error { error, .. } => {
-                        match format { "json" => println!("{}", serde_json::to_string_pretty(&serde_json::json!({"status":"error","error": error}))?), _ => eprintln!("{} {}", "WAL sync failed:".red(), error) }
-                        Err(anyhow::anyhow!(error))
-                    }
-                    other => Err(anyhow::anyhow!(format!("Unexpected response: {:?}", other))),
+        // Shutdown daemon to release locks
+        let _ = Self::shutdown_daemon("terminal").await;
+        // Give OS a brief moment to release file locks
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Offline checkpoint via Turso (FULL + TRUNCATE) and set journal to DELETE
+        {
+            use turso::Builder;
+            let builder = Builder::new_local(&db_path.to_string_lossy());
+            let db = builder.build().await?;
+            let conn = db.connect()?;
+            // Retry a few times if file is momentarily locked
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                let full = conn.query("PRAGMA wal_checkpoint(FULL)", ()).await;
+                let trunc = conn.query("PRAGMA wal_checkpoint(TRUNCATE)", ()).await;
+                let jdel = conn.query("PRAGMA journal_mode=DELETE", ()).await;
+                if full.is_ok() && trunc.is_ok() && jdel.is_ok() {
+                    break;
                 }
-            }
-            _ = tokio::signal::ctrl_c() => {
-                println!("{}", "Cancelling WAL sync ...".yellow());
-                let mut cancel_client = LspClient::new(LspConfig { timeout_ms: 10_000, ..Default::default() }).await?;
-                let cancel_req = DaemonRequest::Cancel { request_id: uuid::Uuid::new_v4(), cancel_request_id: wal_req_id };
-                let _ = cancel_client.send(cancel_req).await; // best effort
-                Ok(())
+                if attempt >= 5 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             }
         }
+
+        // Start daemon again
+        Self::start_embedded_daemon(None, String::new(), false, false, 10, true).await?;
+
+        // Resume indexing if it was running before
+        if was_indexing {
+            if let Some(cfg) = cfg_before {
+                let mut c2 = LspClient::new(LspConfig {
+                    timeout_ms: 30_000,
+                    ..Default::default()
+                })
+                .await?;
+                let _ = c2.start_indexing(cwd.clone(), cfg).await?;
+                println!("{}", "Resumed indexing after WAL sync".green());
+            }
+        }
+
+        println!(
+            "{} {}",
+            "WAL sync (offline) done for".green().bold(),
+            db_path.display()
+        );
+        Ok(())
     }
 
     /// Display indexing configuration
@@ -4395,10 +4411,30 @@ impl LspManager {
         output: std::path::PathBuf,
         checkpoint: bool,
         daemon: bool,
+        yes: bool,
     ) -> Result<()> {
         // Ensure daemon is ready if needed
         if daemon {
             Self::ensure_ready().await?;
+        }
+
+        // Confirm overwrite if output exists
+        if output.exists() && !yes {
+            use std::io::{self, Write};
+            eprint!(
+                "Output file '{}' exists. Overwrite? [y/N]: ",
+                output.to_string_lossy()
+            );
+            let _ = io::stderr().flush();
+            let mut line = String::new();
+            io::stdin().read_line(&mut line)?;
+            let ans = line.trim().to_ascii_lowercase();
+            if ans != "y" && ans != "yes" {
+                println!("Aborted. File not overwritten.");
+                return Ok(());
+            }
+            // Remove before export (daemon refuses to overwrite)
+            std::fs::remove_file(&output).ok();
         }
 
         // Create LSP client

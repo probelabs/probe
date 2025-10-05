@@ -1301,7 +1301,24 @@ impl IndexingPipeline {
                 Ok(result)
             }
             Err(e) => {
-                error!("Failed to process {:?}: {}", file_path, e);
+                // Downgrade noise: if this is a binary or unsupported file, log at debug
+                let path_str = file_path.to_string_lossy();
+                let is_asset = path_str.ends_with(".png")
+                    || path_str.ends_with(".jpg")
+                    || path_str.ends_with(".jpeg")
+                    || path_str.ends_with(".gif")
+                    || path_str.ends_with(".svg")
+                    || path_str.ends_with(".ico")
+                    || path_str.ends_with(".pdf")
+                    || path_str.ends_with(".zip")
+                    || path_str.ends_with(".gz")
+                    || path_str.ends_with(".tar")
+                    || path_str.ends_with(".tgz");
+                if is_asset || e.to_string().contains("Failed to read file") {
+                    debug!("Skipping non-source file {:?}: {}", file_path, e);
+                } else {
+                    error!("Failed to process {:?}: {}", file_path, e);
+                }
                 Err(e)
             }
         }

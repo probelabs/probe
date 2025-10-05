@@ -206,11 +206,17 @@ impl LspEnrichmentWorkerPool {
         }
     }
 
+    /// Get a snapshot of worker statistics (cheap, lock-free on hot path)
+    pub fn get_stats_snapshot(&self) -> EnrichmentWorkerStatsSnapshot {
+        self.stats.snapshot()
+    }
+
     /// Start the single worker processing symbols from the queue
     pub async fn start_processing(
         &self,
         queue: Arc<LspEnrichmentQueue>,
         cache_adapter: Arc<DatabaseCacheAdapter>,
+        workspace_root: std::path::PathBuf,
     ) -> Result<Vec<tokio::task::JoinHandle<()>>> {
         info!("Starting LSP enrichment single worker (concurrency handled by SingleServerManager)");
 
@@ -218,7 +224,7 @@ impl LspEnrichmentWorkerPool {
 
         // Start the single worker
         let handle = self
-            .spawn_worker(queue.clone(), cache_adapter.clone())
+            .spawn_worker(queue.clone(), cache_adapter.clone(), workspace_root.clone())
             .await?;
         handles.push(handle);
 
@@ -230,130 +236,193 @@ impl LspEnrichmentWorkerPool {
         &self,
         queue: Arc<LspEnrichmentQueue>,
         cache_adapter: Arc<DatabaseCacheAdapter>,
+        workspace_root: std::path::PathBuf,
     ) -> Result<tokio::task::JoinHandle<()>> {
-        let stats = self.stats.clone();
-        let shutdown = self.shutdown.clone();
-        let config = self.config.clone();
-        let server_manager = self.server_manager.clone();
-        let path_resolver = self.path_resolver.clone();
+        let handle = tokio::spawn(Self::run_worker_loop(
+            self.stats.clone(),
+            self.shutdown.clone(),
+            self.config.clone(),
+            self.server_manager.clone(),
+            self.path_resolver.clone(),
+            self.enrichment_tracker.clone(),
+            self.uid_generator.clone(),
+            queue,
+            cache_adapter,
+            workspace_root,
+        ));
 
-        let enrichment_tracker = self.enrichment_tracker.clone();
-        let uid_generator = self.uid_generator.clone();
+        Ok(handle)
+    }
 
-        let handle = tokio::spawn(async move {
-            info!("LSP enrichment worker started (SingleServerManager handles concurrency)");
-            stats.worker_active.store(true, Ordering::Relaxed);
+    async fn run_worker_loop(
+        stats: Arc<EnrichmentWorkerStats>,
+        shutdown: Arc<AtomicBool>,
+        config: EnrichmentWorkerConfig,
+        server_manager: Arc<SingleServerManager>,
+        path_resolver: Arc<PathResolver>,
+        enrichment_tracker: Arc<EnrichmentTracker>,
+        uid_generator: Arc<SymbolUIDGenerator>,
+        _queue: Arc<LspEnrichmentQueue>,
+        cache_adapter: Arc<DatabaseCacheAdapter>,
+        workspace_root: std::path::PathBuf,
+    ) {
+        info!("LSP enrichment worker started (SingleServerManager handles concurrency)");
+        stats.worker_active.store(true, Ordering::Relaxed);
 
-            while !shutdown.load(Ordering::Relaxed) {
-                // Try to get next symbol from queue
-                match queue.pop_next().await {
-                    Some(queue_item) => {
-                        debug!(
-                            "Processing symbol: {} ({}:{}) using SingleServerManager",
-                            queue_item.name,
-                            queue_item.file_path.display(),
-                            queue_item.def_start_line
-                        );
-
-                        // Language detection and server health checking is handled
-                        // internally by SingleServerManager during LSP operations
-
-                        // Check if symbol has failed recently and is in cooldown
-                        let symbol_uid =
-                            Self::generate_symbol_uid(&queue_item, &uid_generator).await;
-
-                        let should_skip = if let Ok(uid) = &symbol_uid {
-                            enrichment_tracker.has_failed(uid).await
-                                && !enrichment_tracker
-                                    .get_symbols_ready_for_retry()
-                                    .await
-                                    .contains(uid)
-                        } else {
-                            false
-                        };
-
-                        if should_skip {
-                            stats.symbols_skipped_failed.fetch_add(1, Ordering::Relaxed);
-                            debug!(
-                                "Skipping symbol '{}' due to failure tracking (in cooldown)",
-                                queue_item.name
-                            );
-                        } else {
-                            // Process the symbol using SingleServerManager directly
-                            // SingleServerManager handles all concurrency control and health tracking
-                            match Self::process_symbol_with_retries(
-                                &queue_item,
-                                &server_manager,
-                                &path_resolver,
-                                &cache_adapter,
-                                &config,
-                                &stats,
-                                &enrichment_tracker,
-                                &uid_generator,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    stats.symbols_enriched.fetch_add(1, Ordering::Relaxed);
-                                    debug!("Successfully enriched symbol: {}", queue_item.name);
-
-                                    // Clear failure tracking on success
-                                    if let Ok(uid) = symbol_uid {
-                                        enrichment_tracker.clear_failure(&uid).await;
-                                    }
-                                }
-                                Err(e) => {
-                                    // Check if this was a health-related failure
-                                    let err_str = e.to_string();
-                                    if err_str.contains("unhealthy")
-                                        || err_str.contains("consecutive failures")
-                                    {
-                                        stats
-                                            .symbols_skipped_unhealthy
-                                            .fetch_add(1, Ordering::Relaxed);
-                                        debug!(
-                                            "Skipped symbol '{}' due to unhealthy server: {}",
-                                            queue_item.name, e
-                                        );
-                                    } else {
-                                        warn!(
-                                            "Failed to enrich symbol '{}' ({}:{}, kind: {}, lang: {:?}): {}",
-                                            queue_item.name,
-                                            queue_item.file_path.display(),
-                                            queue_item.def_start_line,
-                                            queue_item.kind,
-                                            queue_item.language,
-                                            e
-                                        );
-                                    }
-                                    stats.symbols_failed.fetch_add(1, Ordering::Relaxed);
-                                }
-                            }
-                        }
-
-                        stats.symbols_processed.fetch_add(1, Ordering::Relaxed);
-                    }
-                    None => {
-                        // Queue is empty. Instead of a fixed sleep which can delay reaction
-                        // to new work, wait on the queue's notifier and wake up immediately
-                        // when new items are enqueued.
-                        debug!("Queue is empty, waiting for new items");
-                        // Safety net: if the notify is missed for any reason, use a small
-                        // timed wait to re-check.
-                        let wait = queue.wait_non_empty();
-                        match timeout(Duration::from_millis(5000), wait).await {
-                            Ok(_) => {}
-                            Err(_) => { /* timed out; loop will re-check */ }
+        while !shutdown.load(Ordering::Relaxed) {
+            // Fetch a small batch of pending symbols directly from the DB
+            let plans = match cache_adapter.backend() {
+                BackendType::SQLite(sqlite_backend) => {
+                    let fetch = config.batch_size.max(1);
+                    match sqlite_backend
+                        .find_symbols_pending_enrichment_internal(fetch)
+                        .await
+                    {
+                        Ok(v) => v,
+                        Err(e) => {
+                            debug!("Phase 2 worker: failed to fetch pending symbols: {}", e);
+                            Vec::new()
                         }
                     }
                 }
+            };
+
+            if plans.is_empty() {
+                // No work available, short sleep
+                sleep(config.empty_queue_delay).await;
+                continue;
             }
 
-            stats.worker_active.store(false, Ordering::Relaxed);
-            info!("LSP enrichment worker stopped");
-        });
+            for plan in plans {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
 
-        Ok(handle)
+                // Build QueueItem from plan
+                let language = match Language::from_str(&plan.symbol.language) {
+                    Some(lang) if !matches!(lang, Language::Unknown) => lang,
+                    _ => continue,
+                };
+                let rel = std::path::PathBuf::from(&plan.symbol.file_path);
+                let file_abs = if rel.is_absolute() {
+                    rel
+                } else {
+                    workspace_root.join(rel)
+                };
+
+                let mut ops = Vec::new();
+                if plan.needs_references {
+                    ops.push(EnrichmentOperation::References);
+                }
+                if plan.needs_implementations {
+                    ops.push(EnrichmentOperation::Implementations);
+                }
+                if plan.needs_call_hierarchy {
+                    ops.push(EnrichmentOperation::CallHierarchy);
+                }
+                if ops.is_empty() {
+                    continue;
+                }
+
+                let queue_item = QueueItem::new(
+                    plan.symbol.symbol_uid.clone(),
+                    file_abs.clone(),
+                    plan.symbol.def_start_line,
+                    plan.symbol.def_start_char,
+                    plan.symbol.name.clone(),
+                    language,
+                    plan.symbol.kind.clone(),
+                )
+                .with_operations(ops);
+
+                debug!(
+                    "Processing symbol: {} ({}:{}) using SingleServerManager",
+                    queue_item.name,
+                    queue_item.file_path.display(),
+                    queue_item.def_start_line
+                );
+
+                // Language detection and server health checking is handled
+                // internally by SingleServerManager during LSP operations
+
+                // Check if symbol has failed recently and is in cooldown
+                let symbol_uid = Self::generate_symbol_uid(&queue_item, &uid_generator).await;
+
+                let should_skip = if let Ok(uid) = &symbol_uid {
+                    enrichment_tracker.has_failed(uid).await
+                        && !enrichment_tracker
+                            .get_symbols_ready_for_retry()
+                            .await
+                            .contains(uid)
+                } else {
+                    false
+                };
+
+                if should_skip {
+                    stats.symbols_skipped_failed.fetch_add(1, Ordering::Relaxed);
+                    debug!(
+                        "Skipping symbol '{}' due to failure tracking (in cooldown)",
+                        queue_item.name
+                    );
+                } else {
+                    // Process the symbol using SingleServerManager directly
+                    // SingleServerManager handles all concurrency control and health tracking
+                    match Self::process_symbol_with_retries(
+                        &queue_item,
+                        &server_manager,
+                        &path_resolver,
+                        &cache_adapter,
+                        &config,
+                        &stats,
+                        &enrichment_tracker,
+                        &uid_generator,
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            stats.symbols_enriched.fetch_add(1, Ordering::Relaxed);
+                            debug!("Successfully enriched symbol: {}", queue_item.name);
+
+                            // Clear failure tracking on success
+                            if let Ok(uid) = symbol_uid {
+                                enrichment_tracker.clear_failure(&uid).await;
+                            }
+                        }
+                        Err(e) => {
+                            // Check if this was a health-related failure
+                            let err_str = e.to_string();
+                            if err_str.contains("unhealthy")
+                                || err_str.contains("consecutive failures")
+                            {
+                                stats
+                                    .symbols_skipped_unhealthy
+                                    .fetch_add(1, Ordering::Relaxed);
+                                debug!(
+                                    "Skipped symbol '{}' due to unhealthy server: {}",
+                                    queue_item.name, e
+                                );
+                            } else {
+                                warn!(
+                                    "Failed to enrich symbol '{}' ({}:{}, kind: {}, lang: {:?}): {}",
+                                    queue_item.name,
+                                    queue_item.file_path.display(),
+                                    queue_item.def_start_line,
+                                    queue_item.kind,
+                                    queue_item.language,
+                                    e
+                                );
+                            }
+                            stats.symbols_failed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+
+                stats.symbols_processed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        stats.worker_active.store(false, Ordering::Relaxed);
+        info!("LSP enrichment worker stopped");
     }
 
     /// Detect positions of Trait and Type for a Rust impl header using tree-sitter to bound the impl node.
@@ -624,6 +693,8 @@ impl LspEnrichmentWorkerPool {
             stats
                 .call_hierarchy_attempted
                 .fetch_add(1, Ordering::Relaxed);
+            // Signal enrichment context to the LSP layer to avoid aggressive readiness probing
+            std::env::set_var("PROBE_LSP_ENRICHMENT", "1");
             let call_hierarchy_result = match timeout(
                 config.request_timeout,
                 server_manager.call_hierarchy(language, &queue_item.file_path, adj_line, adj_char),
@@ -653,6 +724,9 @@ impl LspEnrichmentWorkerPool {
                     None
                 }
             };
+
+            // Clear enrichment context flag as soon as call completes (success or error)
+            std::env::remove_var("PROBE_LSP_ENRICHMENT");
 
             if let Some(call_hierarchy_result) = call_hierarchy_result {
                 let (symbols, edges) = database_adapter

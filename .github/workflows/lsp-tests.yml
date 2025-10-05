@@ -74,7 +74,7 @@ jobs:
           composer global require phpactor/phpactor
           echo "Composer global bin path: $(composer global config bin-dir --absolute)"
           # Add composer global bin to PATH for the current job
-          echo "$(composer global config bin-dir --absolute)" >> $GITHUB_PATH
+          composer global config bin-dir --absolute >> "$GITHUB_PATH"
 
       - name: Show LSP tool versions
         run: |

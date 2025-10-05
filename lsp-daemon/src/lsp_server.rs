@@ -1574,28 +1574,47 @@ impl LspServer {
             self.ensure_document_ready(file_path).await?;
         }
 
-        // For rust-analyzer, ensure document is open and use readiness probe
+        // For rust-analyzer, ensure document is open and optionally use readiness probe
         if self.is_rust_analyzer() {
             // Open the document if not already open
             if !self.is_document_open(file_path).await {
                 self.open_file_safely(file_path).await?;
             }
 
-            // Instead of fixed delay, probe for actual readiness with this specific operation
-            debug!("Probing rust-analyzer readiness with call hierarchy request...");
-            let probe_result = self
-                .probe_call_hierarchy_readiness(file_path, line, column)
-                .await;
-            if let Ok(result) = probe_result {
-                debug!("rust-analyzer ready! Returning probe result immediately");
-                return Ok(result);
+            // Allow disabling the aggressive readiness probe in enrichment contexts
+            let disable_probe = std::env::var("PROBE_LSP_ENRICHMENT")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+
+            if !disable_probe {
+                // Instead of fixed delay, probe for actual readiness with this specific operation
+                debug!("Probing rust-analyzer readiness with call hierarchy request...");
+                let probe_result = self
+                    .probe_call_hierarchy_readiness(file_path, line, column)
+                    .await;
+                if let Ok(result) = probe_result {
+                    debug!("rust-analyzer ready! Returning probe result immediately");
+                    return Ok(result);
+                }
+                debug!("rust-analyzer not ready yet, will use retry logic below");
+            } else {
+                debug!(
+                    "Enrichment context detected (PROBE_LSP_ENRICHMENT=1); skipping rust-analyzer readiness probe"
+                );
             }
-            debug!("rust-analyzer not ready yet, will use retry logic below");
         }
 
         // Try call hierarchy with retry logic for gopls and rust-analyzer
         let max_attempts = if self.is_gopls() || self.is_rust_analyzer() {
-            3
+            // In enrichment mode, avoid spamming the server with retries; rely on outer timeout/retries
+            let enrichment = std::env::var("PROBE_LSP_ENRICHMENT")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if enrichment {
+                1
+            } else {
+                3
+            }
         } else {
             1
         };

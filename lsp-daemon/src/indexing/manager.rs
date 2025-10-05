@@ -959,8 +959,11 @@ impl IndexingManager {
 
                     // Only count files (not directories)
                     if path.is_file() {
-                        // Check if file extension is supported by any language
-                        if self.language_detector.detect(path).is_ok() {
+                        // Check if file extension maps to a known language
+                        if let Ok(lang) = self.language_detector.detect(path) {
+                            if lang == Language::Unknown {
+                                continue;
+                            }
                             // Additional size check to avoid huge files
                             if let Ok(metadata) = std::fs::metadata(path) {
                                 if metadata.len() <= self.config.max_file_size_bytes {
@@ -1407,6 +1410,11 @@ impl IndexingManager {
             let language = language_detector
                 .detect(&file_path)
                 .unwrap_or(Language::Unknown);
+
+            // Skip files with unknown language (prevents binary/assets like .png)
+            if language == Language::Unknown {
+                continue;
+            }
 
             // Filter by enabled languages if specified (case-insensitive)
             if !config.enabled_languages.is_empty() {
@@ -2881,8 +2889,9 @@ impl IndexingManager {
                 .sum::<usize>()
         );
 
-        // Step 2: Queue orphan symbols for processing
-        self.queue_symbols_for_enrichment(enrichment_plans).await?;
+        // Step 2: In DB-driven mode, do not use an in-memory queue. The worker
+        // fetches directly from the database each loop. We keep this step as a
+        // no-op to preserve progress logging.
 
         // Step 3: Start worker pool for LSP enrichment
         if let Some(worker_pool) = &self.lsp_enrichment_worker_pool {
@@ -2896,11 +2905,15 @@ impl IndexingManager {
             );
             let cache_adapter = self
                 .workspace_cache_router
-                .cache_for_workspace(workspace_root)
+                .cache_for_workspace(workspace_root.clone())
                 .await?;
 
             let worker_handles = worker_pool
-                .start_processing(self.lsp_enrichment_queue.clone(), cache_adapter)
+                .start_processing(
+                    self.lsp_enrichment_queue.clone(),
+                    cache_adapter,
+                    workspace_root,
+                )
                 .await?;
 
             // Store handles for shutdown
@@ -3152,6 +3165,8 @@ impl IndexingManager {
         let monitor_handle = tokio::spawn(async move {
             info!("Phase 2 enrichment monitor started");
             let mut workers_started = false;
+            let mut last_symbols_processed: u64 = 0;
+            let mut last_progress_instant = tokio::time::Instant::now();
 
             loop {
                 // Wait for signal or timeout every 5 seconds
@@ -3170,6 +3185,136 @@ impl IndexingManager {
                     break;
                 }
 
+                // If workers were started, ensure they are still alive; restart if needed
+                if workers_started {
+                    let mut handles = enrichment_worker_handles.write().await;
+                    let mut alive = Vec::new();
+                    let mut restarted = false;
+                    for h in handles.drain(..) {
+                        if h.is_finished() {
+                            // Join finished handle (non-blocking since finished) and log
+                            match h.await {
+                                Ok(()) => warn!("LSP enrichment worker exited; restarting"),
+                                Err(e) => {
+                                    warn!("LSP enrichment worker panicked: {}; restarting", e)
+                                }
+                            }
+                        } else {
+                            alive.push(h);
+                        }
+                    }
+                    *handles = alive;
+
+                    if handles.is_empty() {
+                        // All workers have exited; try to restart one worker
+                        if let Some(worker_pool) = &lsp_enrichment_worker_pool {
+                            let workspace_root = {
+                                let wr = workspace_root_holder.read().await;
+                                wr.clone().unwrap_or(
+                                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                                )
+                            };
+                            match workspace_cache_router
+                                .cache_for_workspace(workspace_root.clone())
+                                .await
+                            {
+                                Ok(cache_adapter) => {
+                                    match worker_pool
+                                        .start_processing(
+                                            lsp_enrichment_queue.clone(),
+                                            cache_adapter,
+                                            workspace_root.clone(),
+                                        )
+                                        .await
+                                    {
+                                        Ok(new_handles) => {
+                                            handles.extend(new_handles);
+                                            restarted = true;
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to restart LSP enrichment worker: {}", e)
+                                        }
+                                    }
+                                }
+                                Err(e) => warn!("Failed to restart worker (cache adapter): {}", e),
+                            }
+                        }
+                    }
+                    if restarted {
+                        info!("Phase 2 monitor: restarted LSP enrichment worker");
+                        // Reset progress tracking after a restart
+                        last_symbols_processed = 0;
+                        last_progress_instant = tokio::time::Instant::now();
+                    } else {
+                        // Stale-progress detection: if queue has items and no symbols were processed
+                        // for a prolonged period, force-restart the worker to recover from wedges
+                        let queue_size_now = lsp_enrichment_queue.size().await;
+                        if queue_size_now > 0 {
+                            if let Some(pool) = &lsp_enrichment_worker_pool {
+                                let snap = pool.get_stats_snapshot();
+                                if snap.symbols_processed > last_symbols_processed {
+                                    last_symbols_processed = snap.symbols_processed;
+                                    last_progress_instant = tokio::time::Instant::now();
+                                } else if last_progress_instant.elapsed() > Duration::from_secs(60)
+                                {
+                                    warn!(
+                                        "Phase 2 monitor: no enrichment progress for {:?} with {} items queued; restarting worker",
+                                        last_progress_instant.elapsed(),
+                                        queue_size_now
+                                    );
+                                    // Abort existing workers and restart
+                                    let mut handles = enrichment_worker_handles.write().await;
+                                    for h in handles.drain(..) {
+                                        h.abort();
+                                        let _ = h.await;
+                                    }
+                                    // Restart one worker
+                                    let workspace_root = {
+                                        let wr = workspace_root_holder.read().await;
+                                        wr.clone().unwrap_or(
+                                            std::env::current_dir()
+                                                .unwrap_or_else(|_| PathBuf::from(".")),
+                                        )
+                                    };
+                                    match workspace_cache_router
+                                        .cache_for_workspace(workspace_root.clone())
+                                        .await
+                                    {
+                                        Ok(cache_adapter) => {
+                                            match pool
+                                                .start_processing(
+                                                    lsp_enrichment_queue.clone(),
+                                                    cache_adapter,
+                                                    workspace_root,
+                                                )
+                                                .await
+                                            {
+                                                Ok(new_handles) => {
+                                                    handles.extend(new_handles);
+                                                    last_symbols_processed = 0;
+                                                    last_progress_instant = tokio::time::Instant::now();
+                                                    info!("Phase 2 monitor: worker restarted after stale progress");
+                                                }
+                                                Err(e) => warn!(
+                                                    "Phase 2 monitor: failed to restart worker: {}",
+                                                    e
+                                                ),
+                                            }
+                                        }
+                                        Err(e) => warn!(
+                                            "Phase 2 monitor: failed to restart worker (cache adapter): {}",
+                                            e
+                                        ),
+                                    }
+                                }
+                            }
+                        } else {
+                            // Reset progress timer if queue is empty
+                            last_progress_instant = tokio::time::Instant::now();
+                        }
+                    }
+                }
+
                 // Start enrichment workers if not already started
                 if !workers_started {
                     if let Some(worker_pool) = &lsp_enrichment_worker_pool {
@@ -3184,12 +3329,16 @@ impl IndexingManager {
                             workspace_root.display()
                         );
                         match workspace_cache_router
-                            .cache_for_workspace(workspace_root)
+                            .cache_for_workspace(workspace_root.clone())
                             .await
                         {
                             Ok(cache_adapter) => {
                                 match worker_pool
-                                    .start_processing(lsp_enrichment_queue.clone(), cache_adapter)
+                                    .start_processing(
+                                        lsp_enrichment_queue.clone(),
+                                        cache_adapter,
+                                        workspace_root,
+                                    )
                                     .await
                                 {
                                     Ok(worker_handles_vec) => {
@@ -3251,15 +3400,26 @@ impl IndexingManager {
                                         .and_then(|s| s.parse().ok())
                                         .unwrap_or(500);
                                 let queue_size_now = lsp_enrichment_queue.size().await;
+                                // If total LSP in-flight is zero, we want to proactively feed work
+                                // to avoid idling, even if the queue is at/above the watermark.
+                                let inflight_now = server_manager.total_inflight();
+                                let min_when_idle: usize =
+                                    std::env::var("PROBE_LSP_PHASE2_MIN_ENQUEUE_WHEN_IDLE")
+                                        .ok()
+                                        .and_then(|s| s.parse().ok())
+                                        .unwrap_or(25);
                                 // If the DB writer is currently busy, we still allow a trickle of work
                                 // to bootstrap Phase 2. Only skip entirely when the in-memory queue already
                                 // has adequate headroom (reduces lock contention during heavy Phase 1 writes).
                                 let writer_busy_now = cache_adapter.writer_busy();
-                                if writer_busy_now && queue_size_now >= low_watermark {
+                                if writer_busy_now
+                                    && queue_size_now >= low_watermark
+                                    && inflight_now > 0
+                                {
                                     info!("Phase 2 monitor: writer busy and queue_size {} >= low_watermark {}, skipping tick", queue_size_now, low_watermark);
                                     continue;
                                 }
-                                if queue_size_now >= low_watermark {
+                                if queue_size_now >= low_watermark && inflight_now > 0 {
                                     info!("Phase 2 monitor: queue size {} >= low_watermark {}, skipping tick", queue_size_now, low_watermark);
                                     continue;
                                 }
@@ -3271,11 +3431,16 @@ impl IndexingManager {
                                         .unwrap_or(batch_size);
                                 let headroom = low_watermark.saturating_sub(queue_size_now).max(1);
                                 // When writer is busy, throttle fetch limit to a very small trickle to avoid contention
-                                let fetch_limit = if writer_busy_now {
+                                let mut fetch_limit = if writer_busy_now {
                                     headroom.min(25).min(max_per_tick)
                                 } else {
                                     headroom.min(max_per_tick)
                                 };
+                                // If no requests are currently in flight, ensure we enqueue a minimum
+                                // batch to kick the pipeline, even if headroom is tiny or watermark reached.
+                                if inflight_now == 0 {
+                                    fetch_limit = fetch_limit.max(min_when_idle).min(max_per_tick);
+                                }
 
                                 match sqlite_backend
                                     .find_symbols_pending_enrichment_internal(fetch_limit)
@@ -3519,7 +3684,26 @@ impl IndexingManager {
                                         }
                                     }
                                     Err(e) => {
-                                        warn!("Failed to find symbols pending enrichment: {}", e);
+                                        let emsg = e.to_string();
+                                        warn!(
+                                            "Failed to find symbols pending enrichment: {}",
+                                            emsg
+                                        );
+                                        // Soft backoff on transient DB lock to avoid tight retry loops under writer load
+                                        if emsg.contains("database is locked")
+                                            || emsg.contains("reader gate busy")
+                                        {
+                                            let backoff_ms: u64 = 2000; // 2s soft backoff
+                                            info!(
+                                                "Phase 2 monitor: reader unavailable ({}); backing off for {} ms",
+                                                if emsg.contains("database is locked") { "db lock" } else { "gate" },
+                                                backoff_ms
+                                            );
+                                            tokio::time::sleep(std::time::Duration::from_millis(
+                                                backoff_ms,
+                                            ))
+                                            .await;
+                                        }
                                     }
                                 }
                             }
@@ -3530,12 +3714,58 @@ impl IndexingManager {
                     }
                 }
 
-                // Check if Phase 1 is complete and queue is empty
+                // Check if Phase 1 is complete and queue is empty; only exit if the
+                // database also reports no pending enrichment work. This prevents the
+                // monitor from exiting while there is still DB backlog to enqueue.
                 if phase1_complete.load(Ordering::Relaxed) {
                     let queue_size = lsp_enrichment_queue.size().await;
                     if queue_size == 0 {
-                        info!("Phase 1 complete and Phase 2 queue empty, Phase 2 monitor exiting");
-                        break;
+                        // Peek DB-level pending counts with a small timeout
+                        let workspace_root = {
+                            let wr = workspace_root_holder.read().await;
+                            wr.clone().unwrap_or(
+                                std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                            )
+                        };
+                        let pending_ops = match workspace_cache_router
+                            .cache_for_workspace(workspace_root.clone())
+                            .await
+                        {
+                            Ok(cache_adapter) => match cache_adapter.backend() {
+                                crate::database_cache_adapter::BackendType::SQLite(
+                                    sqlite_backend,
+                                ) => {
+                                    let fut = sqlite_backend.get_pending_enrichment_counts();
+                                    match tokio::time::timeout(
+                                        std::time::Duration::from_millis(250),
+                                        fut,
+                                    )
+                                    .await
+                                    {
+                                        Ok(Ok(counts)) => {
+                                            (counts.references_pending
+                                                + counts.implementations_pending
+                                                + counts.call_hierarchy_pending)
+                                                as usize
+                                        }
+                                        _ => 0,
+                                    }
+                                }
+                            },
+                            Err(_) => 0,
+                        };
+
+                        if pending_ops == 0 {
+                            info!(
+                                "Phase 1 complete and no DB backlog (queue empty), Phase 2 monitor exiting"
+                            );
+                            break;
+                        } else {
+                            debug!(
+                                "Phase 1 complete, queue empty, but DB reports {} pending ops — continuing",
+                                pending_ops
+                            );
+                        }
                     } else {
                         debug!(
                             "Phase 1 complete but {} symbols still in Phase 2 queue",

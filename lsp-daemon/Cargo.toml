@@ -58,12 +58,14 @@ blake3 = "1.5"
 moka = { version = "0.12", features = ["future"] }
 thiserror = "1"
 once_cell = "1.19"
-turso = "0.2.0-pre.7"
-turso_core = { version = "0.2.0-pre.7", optional = true }
+# Upgrade to latest stable Turso crates
+# Use latest pre-release (unstable) Turso crates
+turso = "0.2.1"
+turso_core = { version = "0.2.1" }
 sha2 = "0.10.9"
 rayon = "1.8"
 tree-sitter = "0.24.5"
-rusqlite = { version = "0.32", features = ["bundled"] }
+# rusqlite not used; export uses Turso local clone to a single db file
 socket2 = { version = "0.5", features = ["all"] }
 
 # Tree-sitter language parsers - directly included like main probe app
@@ -95,5 +97,5 @@ rand = "0.8"
 
 [features]
 legacy-tests = []
-## Enable engine-direct checkpoint (Connection::checkpoint) via turso_core
-turso-direct-checkpoint = ["turso_core"]
+## Engine-direct checkpoint remains available (turso_core is now always present)
+turso-direct-checkpoint = []
