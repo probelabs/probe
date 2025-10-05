@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, dirname } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { 
   createTools,
@@ -478,23 +478,61 @@ export class ProbeAgent {
   }
 
   /**
-   * Extract directory paths from listFiles tool output
+   * Extract directory paths from tool output (both listFiles and extract tool)
    * @param {string} content - Tool output content
    * @returns {string[]} - Array of directory paths
    */
   extractListFilesDirectories(content) {
     const directories = [];
 
-    // Pattern to match listFiles output format: "/path/to/directory:" at the start of a line
-    const dirPattern = /^([^\n:]+):\s*$/gm;
+    // Pattern 1: Extract directory from extract tool "File:" header
+    // Format: "File: /path/to/file.md" or "File: ./relative/path/file.md"
+    const fileHeaderPattern = /^File:\s+(.+)$/gm;
 
     let match;
+    while ((match = fileHeaderPattern.exec(content)) !== null) {
+      const filePath = match[1].trim();
+      // Get directory from file path
+      const dir = dirname(filePath);
+      if (dir && dir !== '.') {
+        directories.push(dir);
+        if (this.debug) {
+          console.log(`[DEBUG] Extracted directory context from File header: ${dir}`);
+        }
+      }
+    }
+
+    // Pattern 2: Extract directory from listFiles output format: "/path/to/directory:"
+    // Matches absolute paths (/path/to/dir:) or current directory markers (.:) at start of line
+    // Very strict to avoid matching random text like ".Something:" or "./Some text:"
+    const dirPattern = /^(\/[^\n:]+|\.\.?(?:\/[^\n:]+)?):\s*$/gm;
+
     while ((match = dirPattern.exec(content)) !== null) {
       const dirPath = match[1].trim();
-      if (dirPath && dirPath.length > 0) {
-        directories.push(dirPath);
-        if (this.debug) {
-          console.log(`[DEBUG] Extracted directory context from listFiles: ${dirPath}`);
+
+      // Strict validation: must look like an actual filesystem path
+      // Reject if contains spaces or other characters that wouldn't be in listFiles output
+      const hasInvalidChars = /\s/.test(dirPath); // Contains whitespace
+
+      // Validate this looks like an actual path, not random text
+      // Must be either: absolute path, or ./ or ../ followed by valid path chars
+      const isValidPath = (
+        !hasInvalidChars && (
+          dirPath.startsWith('/') ||  // Absolute path
+          dirPath === '.' ||           // Current directory
+          dirPath === '..' ||          // Parent directory
+          (dirPath.startsWith('./') && dirPath.length > 2 && !dirPath.includes(' ')) ||   // ./something (no spaces)
+          (dirPath.startsWith('../') && dirPath.length > 3 && !dirPath.includes(' '))     // ../something (no spaces)
+        )
+      );
+
+      if (isValidPath) {
+        // Avoid duplicates
+        if (!directories.includes(dirPath)) {
+          directories.push(dirPath);
+          if (this.debug) {
+            console.log(`[DEBUG] Extracted directory context from listFiles: ${dirPath}`);
+          }
         }
       }
     }

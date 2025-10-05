@@ -562,15 +562,18 @@ export async function validateMermaidDiagram(diagram) {
     const result = validate(diagram);
 
     // Maid returns { type: string, errors: array }
-    // Valid if errors array is empty
-    if (result.errors && result.errors.length === 0) {
+    // Only count actual errors (severity: 'error'), not warnings
+    const actualErrors = (result.errors || []).filter(err => err.severity === 'error');
+
+    // Valid if no actual errors (warnings are OK)
+    if (actualErrors.length === 0) {
       return {
         isValid: true,
         diagramType: result.type || 'unknown'
       };
     } else {
       // Format maid errors into a readable error message
-      const errorMessages = (result.errors || []).map(err => {
+      const errorMessages = actualErrors.map(err => {
         const location = err.line ? `line ${err.line}${err.column ? `:${err.column}` : ''}` : '';
         return location ? `${location} - ${err.message}` : err.message;
       });
@@ -580,7 +583,7 @@ export async function validateMermaidDiagram(diagram) {
         diagramType: result.type || 'unknown',
         error: errorMessages[0] || 'Validation failed',
         detailedError: errorMessages.join('\n'),
-        errors: result.errors || [] // Include raw maid errors for AI fixing
+        errors: actualErrors // Include only actual errors for AI fixing
       };
     }
 
