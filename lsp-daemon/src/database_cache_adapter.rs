@@ -102,12 +102,22 @@ impl BackendType {
                 .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
         }
     }
+
+    /// Export underlying database into a standalone file (VACUUM INTO when available).
+    pub async fn export_to(&self, out: &std::path::Path) -> Result<usize, anyhow::Error> {
+        match self {
+            BackendType::SQLite(db) => db
+                .export_to(out)
+                .await
+                .map_err(|e| anyhow::anyhow!("Database error: {}", e)),
+        }
+    }
 }
 
 /// Database-backed cache adapter that provides the interface needed by universal cache
 pub struct DatabaseCacheAdapter {
     /// Database backend
-    database: BackendType,
+    pub(crate) database: BackendType,
 }
 
 impl DatabaseCacheAdapter {

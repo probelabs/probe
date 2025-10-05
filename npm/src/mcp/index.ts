@@ -541,5 +541,10 @@ class ProbeServer {
   }
 }
 
-const server = new ProbeServer(cliConfig.timeout, cliConfig.format || 'outline-xml');
+// Instantiate server with (timeout, lspEnabled, format)
+const server = new ProbeServer(
+  cliConfig.timeout ?? 30,
+  cliConfig.lsp ?? false,
+  cliConfig.format || 'outline-xml'
+);
 server.run().catch(console.error);

@@ -85,6 +85,10 @@ pub enum LspSubcommands {
         /// Clear the log file
         #[clap(long = "clear")]
         clear: bool,
+
+        /// Minimum log level to display (trace, debug, info, warn, error)
+        #[clap(long = "level", value_parser = ["trace","debug","info","warn","error"], default_value = "info")]
+        level: String,
     },
 
     /// View LSP daemon crash logs with stack traces
@@ -248,6 +252,14 @@ pub enum LspSubcommands {
         /// Use daemon mode (auto-start if not running)
         #[clap(long = "daemon", default_value = "true")]
         daemon: bool,
+
+        /// Client timeout for export request in seconds (default 300s)
+        #[clap(long = "timeout", default_value = "300")]
+        timeout_secs: u64,
+
+        /// Auto-confirm overwrite of existing output file
+        #[clap(short = 'y', long = "yes", action = clap::ArgAction::SetTrue)]
+        yes: bool,
     },
 
     /// Force a WAL checkpoint and wait until it can acquire the lock

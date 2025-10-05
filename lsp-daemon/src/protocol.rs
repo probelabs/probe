@@ -110,6 +110,10 @@ pub enum DaemonRequest {
     Status {
         request_id: Uuid,
     },
+    /// Lightweight version info (no DB, no server stats). Safe for early boot.
+    Version {
+        request_id: Uuid,
+    },
     ListLanguages {
         request_id: Uuid,
     },
@@ -124,6 +128,13 @@ pub enum DaemonRequest {
         lines: usize,
         #[serde(default)]
         since_sequence: Option<u64>, // New optional field for sequence-based retrieval
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        min_level: Option<LogLevel>, // Optional minimum log level filter
+    },
+    /// Lightweight database writer/lock snapshot for diagnostics
+    DbLockSnapshot {
+        request_id: Uuid,
     },
     // Indexing management requests
     StartIndexing {
@@ -244,6 +255,12 @@ pub enum DaemonRequest {
         detailed: bool,
     },
 
+    /// Get workspace database file path (used by CLI for offline operations)
+    WorkspaceDbPath {
+        request_id: Uuid,
+        workspace_path: Option<PathBuf>,
+    },
+
     // Index export request
     IndexExport {
         request_id: Uuid,
@@ -359,6 +376,13 @@ pub enum DaemonResponse {
         request_id: Uuid,
         status: DaemonStatus,
     },
+    /// Lightweight version info
+    VersionInfo {
+        request_id: Uuid,
+        version: String,
+        git_hash: String,
+        build_date: String,
+    },
     LanguageList {
         request_id: Uuid,
         languages: Vec<LanguageInfo>,
@@ -383,6 +407,21 @@ pub enum DaemonResponse {
     Logs {
         request_id: Uuid,
         entries: Vec<LogEntry>,
+    },
+    /// Lightweight database writer/lock snapshot response
+    DbLockSnapshotResponse {
+        request_id: Uuid,
+        busy: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate_owner_op: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        gate_owner_ms: Option<u128>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section_label: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section_ms: Option<u128>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        active_ms: Option<u128>,
     },
     // Indexing management responses
     IndexingStarted {
@@ -482,6 +521,12 @@ pub enum DaemonResponse {
         offset: usize,
         limit: usize,
         has_more: bool,
+    },
+
+    WorkspaceDbPath {
+        request_id: Uuid,
+        workspace_path: PathBuf,
+        db_path: PathBuf,
     },
 
     // Index export response
@@ -1043,6 +1088,8 @@ pub struct DatabaseInfo {
     pub total_files: u64,             // Count from file table
     pub workspace_id: Option<String>, // Current workspace ID
     #[serde(default)]
+    pub counts_locked: bool, // True if counts could not be fetched due to a DB lock
+    #[serde(default)]
     pub db_quiesced: bool, // True if counts skipped due to quiesce
     // Reader/writer gate status: write-held indicates quiesce write lock is currently held
     #[serde(default)]
@@ -1074,6 +1121,9 @@ pub struct DatabaseInfo {
     pub writer_section_label: String,
     #[serde(default)]
     pub writer_section_ms: u64,
+    // Whether MVCC was enabled for this database
+    #[serde(default)]
+    pub mvcc_enabled: bool,
 }
 
 /// Synchronization status snapshot for the current workspace database.
