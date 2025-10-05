@@ -503,9 +503,9 @@ export class ProbeAgent {
     }
 
     // Pattern 2: Extract directory from listFiles output format: "/path/to/directory:"
-    // Matches absolute paths (/path/to/dir:) or current directory markers (.:) at start of line
+    // Matches absolute paths (/path/to/dir:) or current directory markers (.:) or Windows paths (C:\path:) at start of line
     // Very strict to avoid matching random text like ".Something:" or "./Some text:"
-    const dirPattern = /^(\/[^\n:]+|\.\.?(?:\/[^\n:]+)?):\s*$/gm;
+    const dirPattern = /^(\/[^\n:]+|[A-Z]:\\[^\n:]+|\.\.?(?:\/[^\n:]+)?):\s*$/gm;
 
     while ((match = dirPattern.exec(content)) !== null) {
       const dirPath = match[1].trim();
@@ -515,10 +515,11 @@ export class ProbeAgent {
       const hasInvalidChars = /\s/.test(dirPath); // Contains whitespace
 
       // Validate this looks like an actual path, not random text
-      // Must be either: absolute path, or ./ or ../ followed by valid path chars
+      // Must be either: absolute path (Unix or Windows), or ./ or ../ followed by valid path chars
       const isValidPath = (
         !hasInvalidChars && (
-          dirPath.startsWith('/') ||  // Absolute path
+          dirPath.startsWith('/') ||  // Unix absolute path
+          /^[A-Z]:\\/.test(dirPath) || // Windows absolute path (C:\)
           dirPath === '.' ||           // Current directory
           dirPath === '..' ||          // Parent directory
           (dirPath.startsWith('./') && dirPath.length > 2 && !dirPath.includes(' ')) ||   // ./something (no spaces)
