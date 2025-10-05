@@ -450,12 +450,15 @@ export class ProbeAgent {
     const directories = [];
 
     // Pattern to match listFiles output format: "/path/to/directory:" at the start of a line
-    const dirPattern = /^([^\n:]+):\s*$/gm;
+    // More specific: must start with / or ./ or ../ or a drive letter (Windows)
+    // This prevents matching arbitrary headings like "Token Usage:"
+    const dirPattern = /^([\/.](?:[^\n:]*[\/\\])?[^\n:]*?):\s*$/gm;
 
     let match;
     while ((match = dirPattern.exec(content)) !== null) {
       const dirPath = match[1].trim();
-      if (dirPath && dirPath.length > 0) {
+      // Additional validation: path should contain path separator or be a root path
+      if (dirPath && dirPath.length > 0 && (dirPath.includes('/') || dirPath.includes('\\') || dirPath === '.' || dirPath === '..')) {
         directories.push(dirPath);
         if (this.debug) {
           console.log(`[DEBUG] Extracted directory context from listFiles: ${dirPath}`);
