@@ -1270,7 +1270,7 @@ fn collect_outline_lines(
         // Collect parent contexts for all matched lines
         let mut all_contexts = Vec::new();
         for &line_num in &matched_lines {
-            let contexts = collect_parent_context_for_line(file_path, line_num, &full_source);
+            let contexts = collect_parent_context_for_line(file_path, line_num, full_source);
             if std::env::var("DEBUG").unwrap_or_default() == "1" {
                 eprintln!(
                     "DEBUG: Parent contexts for line {}: {} contexts found",
