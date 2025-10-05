@@ -31,12 +31,14 @@ class ACPSession {
   /**
    * Get or create ProbeAgent for this session
    */
-  getAgent(config = {}) {
+  async getAgent(config = {}) {
     if (!this.agent) {
       this.agent = new ProbeAgent({
         sessionId: this.id,
         ...config
       });
+      // Initialize MCP if enabled
+      await this.agent.initialize();
     }
     return this.agent;
   }
@@ -320,20 +322,23 @@ export class ACPServer {
     }
     
     session.touch();
-    
+
     // Get or create ProbeAgent for this session
-    const agent = session.getAgent({
+    const agent = await session.getAgent({
       path: this.options.path,
       provider: this.options.provider,
       model: this.options.model,
       allowEdit: this.options.allowEdit,
-      debug: this.options.debug
+      debug: this.options.debug,
+      enableMcp: this.options.enableMcp,
+      mcpConfig: this.options.mcpConfig,
+      mcpConfigPath: this.options.mcpConfigPath
     });
-    
+
     if (this.options.debug) {
       console.error(`[ACP] Processing prompt for session ${params.sessionId}:`, params.message.substring(0, 100));
     }
-    
+
     try {
       // Process the message with the ProbeAgent
       const response = await agent.answer(params.message);

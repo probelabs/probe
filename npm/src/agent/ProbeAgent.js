@@ -145,12 +145,48 @@ export class ProbeAgent {
     // Initialize the AI model
     this.initializeModel();
 
+    // Note: MCP initialization is now done in initialize() method
+    // Constructor must remain synchronous for backward compatibility
+  }
+
+  /**
+   * Initialize the agent asynchronously (must be called after constructor)
+   * This method initializes MCP and merges MCP tools into the tool list
+   */
+  async initialize() {
     // Initialize MCP if enabled
     if (this.enableMcp) {
-      this.initializeMCP().catch(error => {
+      try {
+        await this.initializeMCP();
+
+        // Merge MCP tools into toolImplementations for unified access
+        if (this.mcpBridge) {
+          const mcpTools = this.mcpBridge.mcpTools || {};
+          for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
+            this.toolImplementations[toolName] = toolImpl;
+          }
+        }
+
+        // Log all available tools after MCP initialization
+        if (this.debug) {
+          const allToolNames = Object.keys(this.toolImplementations);
+          const nativeToolCount = allToolNames.filter(name => !this.mcpBridge?.mcpTools?.[name]).length;
+          const mcpToolCount = allToolNames.length - nativeToolCount;
+
+          console.error('\n[DEBUG] ========================================');
+          console.error('[DEBUG] All Tools Initialized');
+          console.error(`[DEBUG] Native tools: ${nativeToolCount}, MCP tools: ${mcpToolCount}`);
+          console.error('[DEBUG] Available tools:');
+          for (const toolName of allToolNames) {
+            const isMCP = this.mcpBridge?.mcpTools?.[toolName] ? ' (MCP)' : '';
+            console.error(`[DEBUG]   - ${toolName}${isMCP}`);
+          }
+          console.error('[DEBUG] ========================================\n');
+        }
+      } catch (error) {
         console.error('[MCP] Failed to initialize MCP:', error);
         this.mcpBridge = null;
-      });
+      }
     }
   }
 
