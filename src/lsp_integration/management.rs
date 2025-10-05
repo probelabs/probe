@@ -3131,6 +3131,7 @@ impl LspManager {
         }
 
         // Start daemon again
+        // Restart daemon after offline checkpoint
         Self::start_embedded_daemon(None, String::new(), false, false, 10, true).await?;
 
         // Resume indexing if it was running before
@@ -4503,9 +4504,8 @@ impl LspManager {
         yes: bool,
     ) -> Result<()> {
         // Ensure daemon is ready if needed
-        if daemon {
-            Self::ensure_ready().await?;
-        }
+        // Do NOT auto-start the daemon here. We want an offline export.
+        // If a daemon is already running, we will use it to fetch state; otherwise run fully offline.
 
         // Confirm overwrite if output exists
         if output.exists() && !yes {
@@ -4526,16 +4526,34 @@ impl LspManager {
             std::fs::remove_file(&output).ok();
         }
 
-        // Determine workspace root and capture DB path + indexing state
+        // Determine workspace root and capture DB path + indexing state (without auto-start)
         let ws_root = workspace.clone().unwrap_or(std::env::current_dir()?);
-        let mut client = LspClient::new(LspConfig::default()).await?;
-        let db_path = client.get_workspace_db_path(Some(ws_root.clone())).await?;
-        let status_before = client.get_indexing_status().await.ok();
-        let was_indexing = status_before
-            .as_ref()
-            .map(|s| s.manager_status == "Indexing")
-            .unwrap_or(false);
-        let cfg_before = client.get_indexing_config().await.ok();
+        let quick_cfg = LspConfig {
+            use_daemon: daemon,
+            auto_start: false,
+            timeout_ms: 1000,
+            ..Default::default()
+        };
+        let mut client_opt = LspClient::new_non_blocking(quick_cfg).await;
+        let (db_path, was_indexing, cfg_before) = if let Some(ref mut client) = client_opt {
+            let db = client
+                .get_workspace_db_path(Some(ws_root.clone()))
+                .await
+                .unwrap_or_else(|_| Self::compute_workspace_db_path_offline(&ws_root));
+            let status_before = client.get_indexing_status().await.ok();
+            let was = status_before
+                .as_ref()
+                .map(|s| s.manager_status == "Indexing")
+                .unwrap_or(false);
+            let cfg = client.get_indexing_config().await.ok();
+            (db, was, cfg)
+        } else {
+            (
+                Self::compute_workspace_db_path_offline(&ws_root),
+                false,
+                None,
+            )
+        };
 
         // Shutdown daemon and wait briefly for locks to clear
         let _ = Self::shutdown_daemon("terminal").await;
@@ -4566,8 +4584,11 @@ impl LspManager {
         };
 
         // Restart daemon and resume indexing if necessary
-        Self::start_embedded_daemon(None, String::new(), false, false, 10, true).await?;
-        if was_indexing {
+        // Restart daemon only if it was running before or user requested daemon mode
+        if daemon {
+            Self::start_embedded_daemon(None, String::new(), false, false, 10, true).await?;
+        }
+        if daemon && was_indexing {
             if let Some(cfg) = cfg_before {
                 let mut c2 = LspClient::new(LspConfig::default()).await?;
                 let _ = c2.start_indexing(ws_root.clone(), cfg).await?;
