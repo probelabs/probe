@@ -73,6 +73,7 @@ env_logger = "0.10"
 simsimd = "6.1.0"  # SIMD-accelerated similarity metrics for vector operations
 memchr = "2.7"  # SIMD-accelerated string searching and processing
 aho-corasick = "1.1"  # SIMD-accelerated multi-pattern string matching
+blake3 = "1.5"
 # BERT reranker dependencies - optional for ms-marco-tinybert reranker
 candle-core = { version = "0.8", optional = true }
 candle-nn = { version = "0.8", optional = true }
