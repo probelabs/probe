@@ -242,10 +242,24 @@ export class MCPClientManager {
         console.error(`[MCP] Calling ${toolName} with args:`, args);
       }
 
-      const result = await clientInfo.client.callTool({
-        name: tool.originalName,
-        arguments: args
+      // Get timeout from config (default 30 seconds)
+      const timeout = this.config?.settings?.timeout || 30000;
+
+      // Create a timeout promise
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => {
+          reject(new Error(`MCP tool call timeout after ${timeout}ms`));
+        }, timeout);
       });
+
+      // Race between the actual call and timeout
+      const result = await Promise.race([
+        clientInfo.client.callTool({
+          name: tool.originalName,
+          arguments: args
+        }),
+        timeoutPromise
+      ]);
 
       return result;
     } catch (error) {

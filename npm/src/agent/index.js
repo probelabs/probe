@@ -428,6 +428,8 @@ class ProbeAgentMcpServer {
           };
 
           this.agent = new ProbeAgent(agentConfig);
+          // Initialize MCP if enabled
+          await this.agent.initialize();
         }
 
         const agent = this.agent;
@@ -717,7 +719,9 @@ async function main() {
     };
 
     const agent = new ProbeAgent(agentConfig);
-    
+    // Initialize MCP if enabled
+    await agent.initialize();
+
     // Execute with tracing if available
     let result;
     if (appTracer) {
