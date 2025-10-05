@@ -138,6 +138,20 @@ file    1.2K  policy-1.png`;
       expect(directories).toEqual([testDir]);
     });
 
+    test('should reject paths with spaces (like "./Token Usage:")', () => {
+      const content = `./Token Usage:
+./Some Text Here:
+This behavior is due to a known bug (TT-8839):
+
+${testDir}:
+file    1.2K  policy-1.png`;
+
+      const directories = agent.extractListFilesDirectories(content);
+      expect(directories).toEqual([testDir]);
+      expect(directories).not.toContain('./Token Usage');
+      expect(directories).not.toContain('./Some Text Here');
+    });
+
     test('should extract from both File: header and listFiles output without duplicates', () => {
       const content = `File: ${testDir}/ticket.md
 Lines: 1-10
