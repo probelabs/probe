@@ -44,7 +44,7 @@ Usage:
 
 Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
-  --format <format>       Set output format (json, outline-xml, etc.)
+  --format <format>       Set output format (default: outline)
   --help, -h              Show this help message
 `);
       process.exit(0);
@@ -335,8 +335,8 @@ class ProbeServer {
       if (args.exact !== undefined) options.exact = args.exact;
 
       // Handle format based on server default
-      if (this.defaultFormat === 'outline-xml') {
-        options.format = 'outline-xml';
+      if (this.defaultFormat === 'outline' || this.defaultFormat === 'outline-xml') {
+        options.format = this.defaultFormat;
       } else if (this.defaultFormat === 'json') {
         options.json = true;
       }
@@ -488,5 +488,5 @@ class ProbeServer {
   }
 }
 
-const server = new ProbeServer(cliConfig.timeout, cliConfig.format || 'outline-xml');
+const server = new ProbeServer(cliConfig.timeout, cliConfig.format || 'outline');
 server.run().catch(console.error);
