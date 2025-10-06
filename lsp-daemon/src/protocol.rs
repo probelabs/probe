@@ -290,6 +290,14 @@ pub enum DaemonRequest {
         request_id: Uuid,
         cancel_request_id: Uuid,
     },
+    /// Run an on-demand edge audit scan over the current workspace DB
+    EdgeAuditScan {
+        request_id: Uuid,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workspace_path: Option<PathBuf>,
+        #[serde(default)]
+        samples: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -542,6 +550,12 @@ pub enum DaemonResponse {
         waited_ms: u64,
         iterations: u32,
         details: Option<String>,
+    },
+    /// Edge audit report for on-demand scan
+    EdgeAuditReport {
+        request_id: Uuid,
+        counts: EdgeAuditInfo,
+        samples: Vec<String>,
     },
 
     Error {
@@ -1124,6 +1138,18 @@ pub struct DatabaseInfo {
     // Whether MVCC was enabled for this database
     #[serde(default)]
     pub mvcc_enabled: bool,
+    #[serde(default)]
+    pub edge_audit: Option<EdgeAuditInfo>,
+}
+
+/// Edge audit counters (lightweight summary of malformed IDs detected)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EdgeAuditInfo {
+    pub eid001_abs_path: u64,
+    pub eid002_uid_path_mismatch: u64,
+    pub eid003_malformed_uid: u64,
+    pub eid004_zero_line: u64,
+    pub eid009_non_relative_file_path: u64,
 }
 
 /// Synchronization status snapshot for the current workspace database.
@@ -1151,6 +1177,8 @@ pub struct DaemonStatus {
     pub pools: Vec<PoolStatus>,
     pub total_requests: u64,
     pub active_connections: usize,
+    #[serde(default)]
+    pub lsp_inflight_current: u64,
     #[serde(default)]
     pub version: String,
     #[serde(default)]

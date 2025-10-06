@@ -3,6 +3,7 @@
 #![allow(dead_code, clippy::all)]
 
 // Core modules
+pub mod edge_audit;
 pub mod fqn;
 pub mod git_service;
 #[cfg(test)]

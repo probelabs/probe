@@ -44,6 +44,120 @@ pub struct ResolvedSymbol {
 }
 
 impl LspDatabaseAdapter {
+    /// Audit an edge for common UID/path issues and log warnings with stable codes.
+    /// Enabled via RUST_LOG and always cheap; uses simple string checks.
+    fn audit_edge(
+        edge: &crate::database::Edge,
+        workspace_root: &std::path::Path,
+        origin: &str,
+        site_file: &str,
+        site_line: u32,
+    ) {
+        // Helper to log with a standard prefix and payload
+        macro_rules! log_warn {
+            ($code:expr, $($arg:tt)*) => {
+                tracing::warn!(target: "lsp_daemon::edge_audit", "[edge_audit] {} {}:{} {}: {}",
+                    $code, site_file, site_line, origin, format!($($arg)*));
+            };
+        }
+
+        use crate::edge_audit;
+        // Parse source UID
+        let parts: Vec<&str> = edge.source_symbol_uid.split(':').collect();
+        if parts.len() < 3 {
+            edge_audit::inc("EID003");
+            log_warn!(
+                "EID003",
+                "malformed source_uid='{}'",
+                edge.source_symbol_uid
+            );
+        } else {
+            let fp = parts[0];
+            if fp.starts_with('/') && !fp.starts_with("/dep/") {
+                edge_audit::inc("EID001");
+                log_warn!(
+                    "EID001",
+                    "absolute path in source_uid fp='{}' uid='{}'",
+                    fp,
+                    edge.source_symbol_uid
+                );
+            }
+            if let Some(ref path) = edge.file_path {
+                if !fp.is_empty() && !path.is_empty() && fp != path && !fp.starts_with("dep/") {
+                    edge_audit::inc("EID002");
+                    log_warn!(
+                        "EID002",
+                        "uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}'",
+                        fp,
+                        path,
+                        edge.source_symbol_uid
+                    );
+                }
+            }
+            // Line zero in UID
+            if let Some(line_str) = parts.get(3) {
+                if *line_str == "0" {
+                    edge_audit::inc("EID004");
+                    log_warn!(
+                        "EID004",
+                        "zero line in source uid='{}'",
+                        edge.source_symbol_uid
+                    );
+                }
+            }
+        }
+
+        // Parse target UID if not sentinel
+        if edge.target_symbol_uid != "none" {
+            let tparts: Vec<&str> = edge.target_symbol_uid.split(':').collect();
+            if tparts.len() < 3 {
+                log_warn!(
+                    "EID003",
+                    "malformed target_uid='{}'",
+                    edge.target_symbol_uid
+                );
+            } else {
+                let tfp = tparts[0];
+                if tfp.starts_with('/') && !tfp.starts_with("/dep/") {
+                    edge_audit::inc("EID001");
+                    log_warn!(
+                        "EID001",
+                        "absolute path in target_uid fp='{}' uid='{}'",
+                        tfp,
+                        edge.target_symbol_uid
+                    );
+                }
+                if let Some(line_str) = tparts.get(3) {
+                    if *line_str == "0" {
+                        edge_audit::inc("EID004");
+                        log_warn!(
+                            "EID004",
+                            "zero line in target uid='{}'",
+                            edge.target_symbol_uid
+                        );
+                    }
+                }
+            }
+        }
+
+        // Quick relative path normalization check if we have a file_path
+        if let Some(ref p) = edge.file_path {
+            if p.starts_with('/') && !p.starts_with("/dep/") {
+                // Best-effort: what would PathResolver return?
+                let rel = crate::path_resolver::PathResolver::new()
+                    .get_relative_path(&std::path::PathBuf::from(p), workspace_root);
+                if rel != *p {
+                    edge_audit::inc("EID009");
+                    log_warn!(
+                        "EID009",
+                        "edge.file_path not workspace-relative: '{}' => '{}'",
+                        p,
+                        rel
+                    );
+                }
+            }
+        }
+    }
     /// Create a new LSP database adapter
     pub fn new() -> Self {
         Self {
@@ -197,6 +311,14 @@ impl LspDatabaseAdapter {
                             "Incoming edge: {} calls {}",
                             edge.source_symbol_uid, edge.target_symbol_uid
                         );
+                        // Audit for malformed UIDs or paths
+                        Self::audit_edge(
+                            &edge,
+                            workspace_root,
+                            "call_hierarchy_incoming",
+                            file!(),
+                            line!(),
+                        );
                         edges.push(edge);
                     }
                 }
@@ -257,6 +379,14 @@ impl LspDatabaseAdapter {
                         debug!(
                             "Outgoing edge: {} calls {}",
                             edge.source_symbol_uid, edge.target_symbol_uid
+                        );
+                        // Audit for malformed UIDs or paths
+                        Self::audit_edge(
+                            &edge,
+                            workspace_root,
+                            "call_hierarchy_outgoing",
+                            file!(),
+                            line!(),
                         );
                         edges.push(edge);
                     }
@@ -1390,6 +1520,7 @@ impl LspDatabaseAdapter {
                 stored_start_line
             );
 
+            Self::audit_edge(&edge, workspace_root, "references", file!(), line!());
             edges.push(edge);
         }
 
@@ -1655,6 +1786,7 @@ impl LspDatabaseAdapter {
                 location.range.start.character
             );
 
+            Self::audit_edge(&edge, workspace_root, "implementations", file!(), line!());
             edges.push(edge);
         }
 

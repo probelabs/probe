@@ -8,6 +8,8 @@ pub struct LspDaemonStatus {
     pub uptime: std::time::Duration,
     pub total_requests: u64,
     pub active_connections: usize,
+    #[serde(default)]
+    pub lsp_inflight_current: u64,
     pub language_pools: HashMap<String, LanguagePoolStatus>,
     #[serde(default)]
     pub version: String,

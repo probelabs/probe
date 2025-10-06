@@ -1361,6 +1361,21 @@ impl LspDaemon {
         self.cleanup_stale_connections();
 
         match request {
+            DaemonRequest::EdgeAuditScan {
+                request_id,
+                workspace_path,
+                samples,
+            } => match self.edge_audit_scan(workspace_path, samples).await {
+                Ok((counts, sample_rows)) => DaemonResponse::EdgeAuditReport {
+                    request_id,
+                    counts,
+                    samples: sample_rows,
+                },
+                Err(e) => DaemonResponse::Error {
+                    request_id,
+                    error: format!("Edge audit failed: {}", e),
+                },
+            },
             DaemonRequest::WorkspaceDbPath {
                 request_id,
                 workspace_path,
@@ -1646,6 +1661,7 @@ impl LspDaemon {
                         pools: pool_status,
                         total_requests: *self.request_count.read().await,
                         active_connections: self.connections.len(),
+                        lsp_inflight_current: self.server_manager.total_inflight() as u64,
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         git_hash: env!("GIT_HASH").to_string(),
                         build_date: env!("BUILD_DATE").to_string(),
@@ -5666,6 +5682,7 @@ impl LspDaemon {
             mvcc_enabled: match backend {
                 crate::database_cache_adapter::BackendType::SQLite(sql) => sql.is_mvcc_enabled(),
             },
+            edge_audit: Some(crate::edge_audit::snapshot()),
         })
     }
 
@@ -5729,6 +5746,93 @@ impl LspDaemon {
         }
 
         Ok(info)
+    }
+
+    /// Scan edges in the current workspace DB and produce edge audit counts and samples
+    async fn edge_audit_scan(
+        &self,
+        workspace_path: Option<std::path::PathBuf>,
+        samples: usize,
+    ) -> anyhow::Result<(crate::protocol::EdgeAuditInfo, Vec<String>)> {
+        use crate::database_cache_adapter::BackendType;
+        let ws = workspace_path.unwrap_or(std::env::current_dir()?);
+        let cache = self.workspace_cache_router.cache_for_workspace(&ws).await?;
+        let backend = cache.backend();
+        match backend {
+            BackendType::SQLite(ref db) => {
+                // Direct connection
+                let conn = db
+                    .get_direct_connection()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                let mut rows = conn
+                    .query("SELECT source_symbol_uid, target_symbol_uid FROM edge", ())
+                    .await?;
+                let mut info = crate::protocol::EdgeAuditInfo::default();
+                let mut sample_rows: Vec<String> = Vec::new();
+                while let Some(r) = rows.next().await? {
+                    let src = match r.get_value(0)? {
+                        turso::Value::Text(s) => s,
+                        _ => continue,
+                    };
+                    let tgt = match r.get_value(1)? {
+                        turso::Value::Text(s) => s,
+                        _ => String::new(),
+                    };
+                    // Parse helpers (owned)
+                    let parse = |uid: &str| -> (Option<String>, Option<String>, Option<String>) {
+                        let parts: Vec<&str> = uid.split(':').collect();
+                        let fp = parts.get(0).map(|s| s.to_string());
+                        let name = parts.get(2).map(|s| s.to_string());
+                        let line = parts.get(3).map(|s| s.to_string());
+                        (fp, name, line)
+                    };
+                    let (sfp, _, sline) = parse(&src);
+                    if let Some(ref fp) = sfp {
+                        if fp.starts_with('/') && !fp.starts_with("/dep/") {
+                            info.eid001_abs_path += 1;
+                            if sample_rows.len() < samples {
+                                sample_rows.push(format!("EID001 src uid='{}'", src));
+                            }
+                        }
+                    }
+                    // DB schema doesn't store file_path for edges; skip EID002 here (covered by runtime audit)
+                    if sfp.is_none() {
+                        info.eid003_malformed_uid += 1;
+                        if sample_rows.len() < samples {
+                            sample_rows.push(format!("EID003 src='{}'", src));
+                        }
+                    }
+                    if let Some(l) = sline {
+                        if l == "0" {
+                            info.eid004_zero_line += 1;
+                            if sample_rows.len() < samples {
+                                sample_rows.push(format!("EID004 src='{}'", src));
+                            }
+                        }
+                    }
+                    let (tfp, _, tline) = parse(&tgt);
+                    if let Some(ref fp) = tfp {
+                        if fp.starts_with('/') && !fp.starts_with("/dep/") {
+                            info.eid001_abs_path += 1;
+                            if sample_rows.len() < samples {
+                                sample_rows.push(format!("EID001 tgt uid='{}'", tgt));
+                            }
+                        }
+                    }
+                    if let Some(l) = tline {
+                        if l == "0" {
+                            info.eid004_zero_line += 1;
+                            if sample_rows.len() < samples {
+                                sample_rows.push(format!("EID004 tgt='{}'", tgt));
+                            }
+                        }
+                    }
+                    // DB does not store edge.file_path; skip EID009 here.
+                }
+                Ok((info, sample_rows))
+            }
+        }
     }
 
     async fn handle_set_indexing_config(

@@ -57,6 +57,82 @@ impl LspManager {
         Ok(())
     }
 
+    /// Run an on-demand edge audit via the daemon and print a compact report
+    async fn handle_edge_audit_command(
+        workspace: Option<std::path::PathBuf>,
+        samples: usize,
+        format: &str,
+    ) -> Result<()> {
+        use lsp_daemon::protocol::{DaemonRequest, DaemonResponse};
+        let mut client = LspClient::new(LspConfig::default()).await?;
+        let request = DaemonRequest::EdgeAuditScan {
+            request_id: uuid::Uuid::new_v4(),
+            workspace_path: workspace,
+            samples,
+        };
+        match client.send(request).await? {
+            DaemonResponse::EdgeAuditReport {
+                counts, samples, ..
+            } => {
+                match format {
+                    "json" => {
+                        #[derive(serde::Serialize)]
+                        struct Report<'a> {
+                            counts: &'a lsp_daemon::protocol::EdgeAuditInfo,
+                            samples: &'a Vec<String>,
+                        }
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&Report {
+                                counts: &counts,
+                                samples: &samples
+                            })?
+                        );
+                    }
+                    _ => {
+                        println!("{}", "Edge Audit".bold().cyan());
+                        let mut total = 0u64;
+                        let mut lines = Vec::new();
+                        let mut push = |label: &str, v: u64| {
+                            if v > 0 {
+                                lines.push(format!("  {}: {}", label, v));
+                                total += v;
+                            }
+                        };
+                        push("EID001 abs path", counts.eid001_abs_path);
+                        push("EID002 uid/file mismatch", counts.eid002_uid_path_mismatch);
+                        push("EID003 malformed uid", counts.eid003_malformed_uid);
+                        push("EID004 zero line", counts.eid004_zero_line);
+                        push(
+                            "EID009 non-relative file_path",
+                            counts.eid009_non_relative_file_path,
+                        );
+                        if lines.is_empty() {
+                            println!("  {}", "No issues found".green());
+                        } else {
+                            for l in lines {
+                                println!("{}", l);
+                            }
+                            println!("  {}: {}", "Total".bold(), total);
+                        }
+                        if !samples.is_empty() {
+                            println!("\n{}", "Samples".bold());
+                            for s in samples
+                                .iter()
+                                .take(usize::min(samples.len(), samples.len()))
+                            {
+                                println!("  - {}", s);
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response")),
+        }
+    }
+
     /// Auto-start the LSP daemon in background mode
     async fn auto_start_daemon() -> Result<()> {
         // Delegate to the single, lock-protected spawn path in client.rs
@@ -178,8 +254,8 @@ impl LspManager {
                 follow,
                 lines,
                 clear,
-                level: _,
-            } => Self::handle_logs(*follow, *lines, *clear).await,
+                level,
+            } => Self::handle_logs(*follow, *lines, *clear, Some(level.clone())).await,
             LspSubcommands::CrashLogs {
                 lines,
                 clear,
@@ -249,6 +325,7 @@ impl LspManager {
                 daemon,
                 timeout_secs: _,
                 yes,
+                offline,
             } => {
                 Self::handle_index_export(
                     workspace.clone(),
@@ -256,6 +333,7 @@ impl LspManager {
                     *checkpoint,
                     *daemon,
                     *yes,
+                    *offline,
                 )
                 .await
             }
@@ -274,6 +352,11 @@ impl LspManager {
                 }
                 Self::handle_wal_sync(*timeout_secs, quiesce, mode, format).await
             }
+            LspSubcommands::EdgeAudit {
+                workspace,
+                samples,
+                format,
+            } => Self::handle_edge_audit_command(workspace.clone(), *samples, format).await,
         }
     }
 
@@ -455,6 +538,11 @@ impl LspManager {
                     "  {} {}",
                     "Active Connections:".bold(),
                     status.active_connections.to_string().cyan()
+                );
+                println!(
+                    "  {} {}",
+                    "Current LSP Requests:".bold(),
+                    status.lsp_inflight_current.to_string().cyan()
                 );
 
                 if !status.language_pools.is_empty() {
@@ -659,10 +747,34 @@ impl LspManager {
 
     /// Shutdown daemon
     async fn shutdown_daemon(format: &str) -> Result<()> {
-        let config = LspConfig::default();
-        let mut client = LspClient::new(config).await?;
-
-        client.shutdown_daemon().await?;
+        // Do not auto-start the daemon just to shut it down.
+        let config = LspConfig {
+            use_daemon: true,
+            auto_start: false,
+            ..Default::default()
+        };
+        match LspClient::new(config).await {
+            Ok(mut client) => {
+                client.shutdown_daemon().await?;
+            }
+            Err(_) => {
+                // Daemon was not running — treat as no-op for user convenience.
+                match format {
+                    "json" => {
+                        let json_output = json!({ "status": "not_running", "message": "LSP daemon was not running" });
+                        println!("{}", serde_json::to_string_pretty(&json_output)?);
+                    }
+                    _ => {
+                        println!(
+                            "{} {}",
+                            "✓".green(),
+                            "LSP daemon is not running".bold().green()
+                        );
+                    }
+                }
+                return Ok(());
+            }
+        }
 
         match format {
             "json" => {
@@ -774,7 +886,12 @@ impl LspManager {
     }
 
     /// Handle LSP logs command
-    async fn handle_logs(follow: bool, lines: usize, clear: bool) -> Result<()> {
+    async fn handle_logs(
+        follow: bool,
+        lines: usize,
+        clear: bool,
+        level: Option<String>,
+    ) -> Result<()> {
         // Handle clear flag
         if clear {
             println!(
@@ -829,6 +946,18 @@ impl LspManager {
             }
         };
 
+        // Map CLI level to daemon LogLevel
+        let min_level = level
+            .as_ref()
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "trace" => Some(lsp_daemon::protocol::LogLevel::Trace),
+                "debug" => Some(lsp_daemon::protocol::LogLevel::Debug),
+                "info" => Some(lsp_daemon::protocol::LogLevel::Info),
+                "warn" | "warning" => Some(lsp_daemon::protocol::LogLevel::Warn),
+                "error" => Some(lsp_daemon::protocol::LogLevel::Error),
+                _ => None,
+            });
+
         if follow {
             // Follow mode - poll for new logs using sequence numbers
             println!(
@@ -842,7 +971,7 @@ impl LspManager {
             // First show the last N lines with timeout
             let entries = match time::timeout(
                 Duration::from_millis(LOG_RPC_TIMEOUT_MS),
-                client.get_logs(lines),
+                client.get_logs_filtered(lines, min_level),
             )
             .await
             {
@@ -879,7 +1008,7 @@ impl LspManager {
                 // Bound the RPC to avoid wedging follow-mode forever if the daemon/socket stalls
                 match time::timeout(
                     Duration::from_millis(LOG_RPC_TIMEOUT_MS),
-                    client.get_logs_since(last_seen_sequence, LOG_FETCH_LIMIT),
+                    client.get_logs_since_filtered(last_seen_sequence, LOG_FETCH_LIMIT, min_level),
                 )
                 .await
                 {
@@ -910,7 +1039,7 @@ impl LspManager {
             // Show last N lines with timeout
             match time::timeout(
                 Duration::from_millis(LOG_RPC_TIMEOUT_MS),
-                client.get_logs(lines),
+                client.get_logs_filtered(lines, min_level),
             )
             .await
             {
@@ -2772,24 +2901,7 @@ impl LspManager {
                 );
                 println!("  {}: {}", "Memory".bold(), "N/A".to_string());
 
-                println!("\n{}", "Queue".bold().cyan());
-                let queue = &status.queue;
-                println!("  {}: {}", "Total Items".bold(), queue.total_items);
-                println!("  {}: {}", "Pending".bold(), queue.pending_items);
-                println!(
-                    "  {}: {} / {} / {}",
-                    "Priority (H/M/L)".bold(),
-                    queue.high_priority_items,
-                    queue.medium_priority_items,
-                    queue.low_priority_items
-                );
-
-                if queue.is_paused {
-                    println!("  {}: {}", "Status".bold(), "⏸️  PAUSED".yellow());
-                }
-                if queue.memory_pressure {
-                    println!("  {}: {}", "Memory Pressure".bold(), "⚠️  HIGH".red());
-                }
+                // (Queue section removed: obsolete top-level queue view)
 
                 // Display LSP enrichment stats
                 if let Some(ref lsp_enrichment) = status.lsp_enrichment {
@@ -2945,6 +3057,37 @@ impl LspManager {
                     println!("  {}: {}", "Symbols".bold(), database.total_symbols);
                     println!("  {}: {}", "Edges".bold(), database.total_edges);
                     println!("  {}: {}", "Files".bold(), database.total_files);
+                    if let Some(ref ea) = database.edge_audit {
+                        let total = ea.eid001_abs_path
+                            + ea.eid002_uid_path_mismatch
+                            + ea.eid003_malformed_uid
+                            + ea.eid004_zero_line
+                            + ea.eid009_non_relative_file_path;
+                        if total > 0 {
+                            println!("  {}:", "Edge Audit".bold());
+                            if ea.eid001_abs_path > 0 {
+                                println!("    EID001 abs path: {}", ea.eid001_abs_path);
+                            }
+                            if ea.eid002_uid_path_mismatch > 0 {
+                                println!(
+                                    "    EID002 uid/file mismatch: {}",
+                                    ea.eid002_uid_path_mismatch
+                                );
+                            }
+                            if ea.eid003_malformed_uid > 0 {
+                                println!("    EID003 malformed uid: {}", ea.eid003_malformed_uid);
+                            }
+                            if ea.eid004_zero_line > 0 {
+                                println!("    EID004 zero line: {}", ea.eid004_zero_line);
+                            }
+                            if ea.eid009_non_relative_file_path > 0 {
+                                println!(
+                                    "    EID009 non-relative file_path: {}",
+                                    ea.eid009_non_relative_file_path
+                                );
+                            }
+                        }
+                    }
                     if database.db_quiesced {
                         println!("  {}: {}", "DB Quiesced".bold(), "true".yellow());
                     }
@@ -3004,47 +3147,7 @@ impl LspManager {
                     println!("  {}", "(snapshot unavailable under current load; will appear once readers are allowed)".dimmed());
                 }
 
-                // Display sync information
-                if let Some(ref sync) = status.sync {
-                    println!("\n{}", "Sync".bold().cyan());
-                    println!(
-                        "  {}: {}",
-                        "Client ID".bold(),
-                        if sync.client_id.is_empty() {
-                            "-"
-                        } else {
-                            &sync.client_id
-                        }
-                    );
-                    println!(
-                        "  {}: {}",
-                        "Last Pull".bold(),
-                        sync.last_pull_unix_time
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "-".to_string())
-                    );
-                    println!(
-                        "  {}: {}",
-                        "Last Push".bold(),
-                        sync.last_push_unix_time
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "-".to_string())
-                    );
-                    println!(
-                        "  {}: {}",
-                        "Last Pull Gen".bold(),
-                        sync.last_pull_generation
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "-".to_string())
-                    );
-                    println!(
-                        "  {}: {}",
-                        "Last Change ID".bold(),
-                        sync.last_change_id
-                            .map(|v| v.to_string())
-                            .unwrap_or_else(|| "-".to_string())
-                    );
-                }
+                // (Sync section removed: currently not populated)
 
                 if detailed && !status.workers.is_empty() {
                     println!("\n{}", "Workers".bold().cyan());
@@ -4502,30 +4605,80 @@ impl LspManager {
         _checkpoint: bool,
         daemon: bool,
         yes: bool,
+        offline: bool,
     ) -> Result<()> {
         // Ensure daemon is ready if needed
         // Do NOT auto-start the daemon here. We want an offline export.
         // If a daemon is already running, we will use it to fetch state; otherwise run fully offline.
 
         // Confirm overwrite if output exists
-        if output.exists() && !yes {
-            use std::io::{self, Write};
-            eprint!(
-                "Output file '{}' exists. Overwrite? [y/N]: ",
-                output.to_string_lossy()
-            );
-            let _ = io::stderr().flush();
-            let mut line = String::new();
-            io::stdin().read_line(&mut line)?;
-            let ans = line.trim().to_ascii_lowercase();
-            if ans != "y" && ans != "yes" {
-                println!("Aborted. File not overwritten.");
-                return Ok(());
+        if output.exists() {
+            if yes {
+                // Auto-confirm overwrite
+                std::fs::remove_file(&output).ok();
+            } else {
+                use std::io::{self, Write};
+                eprint!(
+                    "Output file '{}' exists. Overwrite? [y/N]: ",
+                    output.to_string_lossy()
+                );
+                let _ = io::stderr().flush();
+                let mut line = String::new();
+                io::stdin().read_line(&mut line)?;
+                let ans = line.trim().to_ascii_lowercase();
+                if ans != "y" && ans != "yes" {
+                    println!("Aborted. File not overwritten.");
+                    return Ok(());
+                }
+                // Remove before export (daemon refuses to overwrite)
+                std::fs::remove_file(&output).ok();
             }
-            // Remove before export (daemon refuses to overwrite)
-            std::fs::remove_file(&output).ok();
         }
 
+        // Determine workspace root
+        let ws_root = workspace.clone().unwrap_or(std::env::current_dir()?);
+
+        if !offline {
+            // Online export via daemon (default) — no shutdown.
+            let mut client = LspClient::new(LspConfig {
+                use_daemon: true,
+                auto_start: daemon,
+                timeout_ms: 300_000,
+                ..Default::default()
+            })
+            .await?;
+            match client
+                .export_index(Some(ws_root.clone()), output.clone(), false)
+                .await?
+            {
+                lsp_daemon::protocol::DaemonResponse::IndexExported {
+                    workspace_path: ws,
+                    output_path: out,
+                    database_size_bytes: sz,
+                    ..
+                } => {
+                    println!(
+                        "{}",
+                        format!(
+                            "Successfully exported index database from workspace: {}",
+                            ws.to_string_lossy()
+                        )
+                        .green()
+                        .bold()
+                    );
+                    println!("Output file: {}", out.to_string_lossy());
+                    println!("Database size: {}", format_bytes(sz as usize));
+                    println!();
+                    return Ok(());
+                }
+                lsp_daemon::protocol::DaemonResponse::Error { error, .. } => {
+                    return Err(anyhow!("Index export failed: {}", error));
+                }
+                _ => return Err(anyhow!("Unexpected response from daemon")),
+            }
+        }
+
+        // Determine workspace root and capture DB path + indexing state (without auto-start)
         // Determine workspace root and capture DB path + indexing state (without auto-start)
         let ws_root = workspace.clone().unwrap_or(std::env::current_dir()?);
         let quick_cfg = LspConfig {
@@ -4555,9 +4708,23 @@ impl LspManager {
             )
         };
 
-        // Shutdown daemon and wait briefly for locks to clear
+        // Shutdown daemon and wait for locks to clear (slightly longer with retries)
         let _ = Self::shutdown_daemon("terminal").await;
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        {
+            let mut waited = 0u64;
+            // total wait up to ~2 seconds in 200ms steps
+            while waited < 2000 {
+                if std::fs::OpenOptions::new()
+                    .read(true)
+                    .open(&db_path)
+                    .is_ok()
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                waited += 200;
+            }
+        }
 
         // Offline checkpoint: FULL + TRUNCATE + DELETE journaling, then copy base file
         let copied_bytes = {
@@ -4566,19 +4733,16 @@ impl LspManager {
             let db = builder.build().await?;
             let conn = db.connect()?;
             // Try a few times in case of transient locks
-            let mut attempts = 0;
-            loop {
-                attempts += 1;
+            for attempt in 1..=8 {
                 let full = conn.query("PRAGMA wal_checkpoint(FULL)", ()).await;
                 let trunc = conn.query("PRAGMA wal_checkpoint(TRUNCATE)", ()).await;
                 let jdel = conn.query("PRAGMA journal_mode=DELETE", ()).await;
                 if full.is_ok() && trunc.is_ok() && jdel.is_ok() {
                     break;
                 }
-                if attempts >= 5 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                // Exponential-ish backoff up to ~2.5s total
+                let backoff = 100u64 * attempt.min(10) as u64;
+                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
             }
             std::fs::copy(&db_path, &output)? as usize
         };
