@@ -132,17 +132,8 @@ interface GrepArgs {
   pattern: string;
   paths: string | string[];
   ignoreCase?: boolean;
-  lineNumbers?: boolean;
   count?: boolean;
-  filesWithMatches?: boolean;
-  filesWithoutMatches?: boolean;
-  invertMatch?: boolean;
-  beforeContext?: number;
-  afterContext?: number;
   context?: number;
-  noGitignore?: boolean;
-  color?: string;
-  maxCount?: number;
 }
 
 class ProbeServer {
@@ -246,7 +237,7 @@ class ProbeServer {
         },
         {
           name: 'grep',
-          description: "Standard grep-style search that works across multiple operating systems. Use this for searching non-code files (logs, config files, text files, etc.) that are not supported by probe's semantic search. For code files, prefer using search_code which provides AST-aware semantic search.",
+          description: "Standard grep-style search for non-code files (logs, config files, text files). Line numbers are shown by default. For code files, use search_code instead.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -259,56 +250,21 @@ class ProbeServer {
                   { type: 'string' },
                   { type: 'array', items: { type: 'string' } }
                 ],
-                description: 'Path or array of paths to search in (e.g., "/var/log" or ["/etc/config.txt", "/var/log"])',
+                description: 'Path or array of paths to search in',
               },
               ignoreCase: {
                 type: 'boolean',
-                description: 'Case-insensitive search (-i flag)',
-              },
-              lineNumbers: {
-                type: 'boolean',
-                description: 'Show line numbers in output (-n flag)',
+                description: 'Case-insensitive search',
+                default: false
               },
               count: {
                 type: 'boolean',
-                description: 'Only show count of matches per file (-c flag)',
-              },
-              filesWithMatches: {
-                type: 'boolean',
-                description: 'Only show filenames that contain matches (-l flag)',
-              },
-              filesWithoutMatches: {
-                type: 'boolean',
-                description: 'Only show filenames that do not contain matches (-L flag)',
-              },
-              invertMatch: {
-                type: 'boolean',
-                description: 'Invert match: show lines that do NOT match (-v flag)',
-              },
-              beforeContext: {
-                type: 'number',
-                description: 'Number of lines of context to show before each match (-B flag)',
-              },
-              afterContext: {
-                type: 'number',
-                description: 'Number of lines of context to show after each match (-A flag)',
+                description: 'Only show count of matches per file instead of the matches',
+                default: false
               },
               context: {
                 type: 'number',
-                description: 'Number of lines of context to show before and after each match (-C flag)',
-              },
-              noGitignore: {
-                type: 'boolean',
-                description: 'Do not respect .gitignore files (--no-gitignore flag)',
-              },
-              color: {
-                type: 'string',
-                enum: ['always', 'never', 'auto'],
-                description: 'Colorize output (--color flag)',
-              },
-              maxCount: {
-                type: 'number',
-                description: 'Stop reading a file after N matching lines (-m flag)',
+                description: 'Number of lines of context to show before and after each match',
               }
             },
             required: ['pattern', 'paths'],
@@ -554,25 +510,20 @@ class ProbeServer {
         throw new Error("Paths are required");
       }
 
-      // Build options object
+      // Build options object with good defaults
       const options: any = {
         pattern: args.pattern,
-        paths: args.paths
+        paths: args.paths,
+        // Default: show line numbers (makes output more useful)
+        lineNumbers: true,
+        // Default: never use color in MCP context (better for parsing)
+        color: 'never'
       };
 
-      // Add optional parameters if they exist
+      // Only add user-specified optional parameters
       if (args.ignoreCase !== undefined) options.ignoreCase = args.ignoreCase;
-      if (args.lineNumbers !== undefined) options.lineNumbers = args.lineNumbers;
       if (args.count !== undefined) options.count = args.count;
-      if (args.filesWithMatches !== undefined) options.filesWithMatches = args.filesWithMatches;
-      if (args.filesWithoutMatches !== undefined) options.filesWithoutMatches = args.filesWithoutMatches;
-      if (args.invertMatch !== undefined) options.invertMatch = args.invertMatch;
-      if (args.beforeContext !== undefined) options.beforeContext = args.beforeContext;
-      if (args.afterContext !== undefined) options.afterContext = args.afterContext;
       if (args.context !== undefined) options.context = args.context;
-      if (args.noGitignore !== undefined) options.noGitignore = args.noGitignore;
-      if (args.color !== undefined) options.color = args.color;
-      if (args.maxCount !== undefined) options.maxCount = args.maxCount;
 
       console.error("Executing grep with options:", JSON.stringify(options, null, 2));
 
