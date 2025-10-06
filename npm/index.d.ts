@@ -304,6 +304,51 @@ export declare function query(
 ): Promise<any>;
 
 /**
+ * Standard grep-style search that works across multiple operating systems
+ *
+ * Use this for searching non-code files (logs, config files, text files, etc.)
+ * that are not supported by probe's semantic search. For code files, prefer
+ * using the search() function which provides AST-aware semantic search.
+ *
+ * @param options - Grep options
+ * @param options.pattern - Regular expression pattern to search for
+ * @param options.paths - Path or array of paths to search in
+ * @param options.ignoreCase - Case-insensitive search (-i flag)
+ * @param options.lineNumbers - Show line numbers in output (-n flag)
+ * @param options.count - Only show count of matches per file (-c flag)
+ * @param options.filesWithMatches - Only show filenames that contain matches (-l flag)
+ * @param options.filesWithoutMatches - Only show filenames that do not contain matches (-L flag)
+ * @param options.invertMatch - Invert match: show lines that do NOT match (-v flag)
+ * @param options.beforeContext - Number of lines of context before match (-B flag)
+ * @param options.afterContext - Number of lines of context after match (-A flag)
+ * @param options.context - Number of lines of context before and after match (-C flag)
+ * @param options.noGitignore - Do not respect .gitignore files (--no-gitignore flag)
+ * @param options.color - Colorize output: 'always', 'never', 'auto' (--color flag)
+ * @param options.maxCount - Stop reading a file after N matching lines (-m flag)
+ * @returns Promise resolving to grep results as string
+ */
+export declare function grep(options: {
+  pattern: string;
+  paths: string | string[];
+  ignoreCase?: boolean;
+  lineNumbers?: boolean;
+  count?: boolean;
+  filesWithMatches?: boolean;
+  filesWithoutMatches?: boolean;
+  invertMatch?: boolean;
+  beforeContext?: number;
+  afterContext?: number;
+  context?: number;
+  noGitignore?: boolean;
+  color?: 'always' | 'never' | 'auto';
+  maxCount?: number;
+  binaryOptions?: {
+    forceDownload?: boolean;
+    version?: string;
+  };
+}): Promise<string>;
+
+/**
  * Extract code blocks from files
  */
 export declare function extract(
