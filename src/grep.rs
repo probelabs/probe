@@ -4,8 +4,9 @@ use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 pub struct GrepParams {
     pub pattern: String,
@@ -202,6 +203,7 @@ impl<'a> FileProcessor<'a> {
 }
 
 /// Output mode for grep results
+#[derive(Debug, Clone, Copy)]
 enum OutputMode {
     FilesWithMatches,
     FilesWithoutMatch,
@@ -223,178 +225,203 @@ impl OutputMode {
     }
 }
 
-/// Handles output formatting for grep results
-struct OutputFormatter<'a> {
-    config: &'a GrepConfig,
-}
-
-impl<'a> OutputFormatter<'a> {
-    fn new(config: &'a GrepConfig) -> Self {
-        Self { config }
-    }
-
-    fn print_count(&self, file_path: &Path, count: usize) {
-        if self.config.show_line_numbers {
-            println!("{}:{}", file_path.display(), count);
-        } else {
-            println!("{}", count);
-        }
-    }
-
-    fn print_filename(&self, file_path: &Path) {
-        println!("{}", file_path.display());
-    }
-
-    fn print_line(&self, file_path: &Path, line: &MatchedLine, is_match: bool) {
-        let file_str = file_path.display().to_string();
-
-        if self.config.use_color {
-            self.print_colored_line(&file_str, line, is_match);
-        } else {
-            self.print_plain_line(&file_str, line, is_match);
-        }
-    }
-
-    fn print_colored_line(&self, file_str: &str, line: &MatchedLine, is_match: bool) {
-        if is_match {
-            let highlighted = self.highlight_matches(&line.content);
-
-            if self.config.show_line_numbers {
-                println!(
-                    "{}:{}:{}",
-                    file_str.green(),
-                    line.line_number.to_string().green(),
-                    highlighted
-                );
-            } else {
-                println!("{}:{}", file_str.green(), highlighted);
-            }
-        } else {
-            // Context line
-            if self.config.show_line_numbers {
-                println!(
-                    "{}-{}-{}",
-                    file_str.green(),
-                    line.line_number.to_string().cyan(),
-                    line.content
-                );
-            } else {
-                println!("{}-{}", file_str.green(), line.content);
-            }
-        }
-    }
-
-    fn print_plain_line(&self, file_str: &str, line: &MatchedLine, is_match: bool) {
-        if self.config.show_line_numbers {
-            let separator = if is_match { ":" } else { "-" };
-            println!(
-                "{}{}{}{}{}",
-                file_str, separator, line.line_number, separator, line.content
-            );
-        } else {
-            let separator = if is_match { ":" } else { "-" };
-            println!("{}{}{}", file_str, separator, line.content);
-        }
-    }
-
-    fn highlight_matches(&self, line: &str) -> String {
-        let mut last_end = 0;
-        let mut highlighted = String::new();
-
-        for mat in self.config.regex.find_iter(line) {
-            highlighted.push_str(&line[last_end..mat.start()]);
-            highlighted.push_str(&mat.as_str().red().bold().to_string());
-            last_end = mat.end();
-        }
-        highlighted.push_str(&line[last_end..]);
-        highlighted
-    }
-}
-
 /// Main entry point for grep functionality
 pub fn handle_grep(params: GrepParams) -> Result<()> {
     let config = GrepConfig::from_params(&params)?;
     let output_mode = OutputMode::from_params(&params);
-    let file_processor = FileProcessor::new(&config);
-    let output_formatter = OutputFormatter::new(&config);
 
-    for path in &params.paths {
-        let walker = build_walker(path, &params.ignore, params.no_gitignore);
+    // Use Arc to share config across threads
+    let config = std::sync::Arc::new(config);
+    let params = std::sync::Arc::new(params);
 
-        for entry in walker {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
+    // Mutex for synchronized output to prevent interleaved results
+    let stdout = Mutex::new(io::stdout());
 
-            // Skip directories
-            if entry.file_type().is_none_or(|ft| ft.is_dir()) {
-                continue;
-            }
+    for path in params.paths.iter() {
+        let walker = build_walker_parallel(path, &params.ignore, params.no_gitignore);
 
-            let file_path = entry.path();
+        let config = config.clone();
+        let params = params.clone();
+        let stdout_ref = &stdout;
 
-            match output_mode {
-                OutputMode::FullWithContext => {
-                    // Streaming mode: output as we process
-                    let result = file_processor.process_with_output(file_path, |line, is_match| {
-                        output_formatter.print_line(file_path, line, is_match);
-                    });
+        walker.run(|| {
+            let config = config.clone();
+            let params = params.clone();
 
-                    let result = match result {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
+            Box::new(move |entry| {
+                let entry = match entry {
+                    Ok(e) => e,
+                    Err(_) => return ignore::WalkState::Continue,
+                };
 
-                    // Skip files based on match status
-                    if should_skip_file(&result, &params) {
-                        continue;
+                // Skip directories
+                if entry.file_type().is_none_or(|ft| ft.is_dir()) {
+                    return ignore::WalkState::Continue;
+                }
+
+                let file_path = entry.path();
+                let file_processor = FileProcessor::new(&config);
+
+                match output_mode {
+                    OutputMode::FullWithContext => {
+                        // For streaming mode, collect output in a buffer first
+                        let mut buffer = Vec::new();
+
+                        let result = file_processor.process_with_output(
+                            file_path,
+                            |line, is_match| {
+                                // Format line into buffer
+                                let formatted = format_line(&config, file_path, line, is_match);
+                                buffer.push(formatted);
+                            },
+                        );
+
+                        let result = match result {
+                            Ok(r) => r,
+                            Err(_) => return ignore::WalkState::Continue,
+                        };
+
+                        // Skip files based on match status
+                        if should_skip_file(&result, &params) {
+                            return ignore::WalkState::Continue;
+                        }
+
+                        // Write entire buffer atomically
+                        if !buffer.is_empty() {
+                            if let Ok(mut out) = stdout_ref.lock() {
+                                for line in buffer {
+                                    let _ = writeln!(out, "{}", line);
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        // Simple modes: count matches only
+                        let result = match file_processor.count_matches(file_path) {
+                            Ok(r) => r,
+                            Err(_) => return ignore::WalkState::Continue,
+                        };
+
+                        // Apply filtering based on output mode
+                        if should_skip_file(&result, &params) {
+                            return ignore::WalkState::Continue;
+                        }
+
+                        // Format and write output atomically
+                        if let Ok(mut out) = stdout_ref.lock() {
+                            match output_mode {
+                                OutputMode::FilesWithMatches | OutputMode::FilesWithoutMatch => {
+                                    let _ = writeln!(out, "{}", file_path.display());
+                                }
+                                OutputMode::Count => {
+                                    if config.show_line_numbers {
+                                        let _ = writeln!(out, "{}:{}", file_path.display(), result.match_count);
+                                    } else {
+                                        let _ = writeln!(out, "{}", result.match_count);
+                                    }
+                                }
+                                OutputMode::FullWithContext => unreachable!(),
+                            }
+                        }
                     }
                 }
-                _ => {
-                    // Simple modes: count matches only
-                    let result = match file_processor.count_matches(file_path) {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
 
-                    // Apply filtering based on output mode
-                    if should_skip_file(&result, &params) {
-                        continue;
-                    }
-
-                    // Output the results
-                    match output_mode {
-                        OutputMode::FilesWithMatches | OutputMode::FilesWithoutMatch => {
-                            output_formatter.print_filename(file_path);
-                        }
-                        OutputMode::Count => {
-                            output_formatter.print_count(file_path, result.match_count);
-                        }
-                        OutputMode::FullWithContext => unreachable!(),
-                    }
-                }
-            }
-        }
+                ignore::WalkState::Continue
+            })
+        });
     }
 
     Ok(())
 }
 
-/// Build a file walker with the given parameters
-fn build_walker(path: &Path, ignore_patterns: &[String], no_gitignore: bool) -> ignore::Walk {
+/// Format a single line for output
+fn format_line(config: &GrepConfig, file_path: &Path, line: &MatchedLine, is_match: bool) -> String {
+    let file_str = file_path.display().to_string();
+
+    if config.use_color {
+        format_colored_line(config, &file_str, line, is_match)
+    } else {
+        format_plain_line(config, &file_str, line, is_match)
+    }
+}
+
+/// Format a colored line
+fn format_colored_line(config: &GrepConfig, file_str: &str, line: &MatchedLine, is_match: bool) -> String {
+    if is_match {
+        let highlighted = highlight_matches(config, &line.content);
+
+        if config.show_line_numbers {
+            format!(
+                "{}:{}:{}",
+                file_str.green(),
+                line.line_number.to_string().green(),
+                highlighted
+            )
+        } else {
+            format!("{}:{}", file_str.green(), highlighted)
+        }
+    } else {
+        // Context line
+        if config.show_line_numbers {
+            format!(
+                "{}-{}-{}",
+                file_str.green(),
+                line.line_number.to_string().cyan(),
+                line.content
+            )
+        } else {
+            format!("{}-{}", file_str.green(), line.content)
+        }
+    }
+}
+
+/// Format a plain (non-colored) line
+fn format_plain_line(config: &GrepConfig, file_str: &str, line: &MatchedLine, is_match: bool) -> String {
+    if config.show_line_numbers {
+        let separator = if is_match { ":" } else { "-" };
+        format!(
+            "{}{}{}{}{}",
+            file_str, separator, line.line_number, separator, line.content
+        )
+    } else {
+        let separator = if is_match { ":" } else { "-" };
+        format!("{}{}{}", file_str, separator, line.content)
+    }
+}
+
+/// Highlight regex matches in a line
+fn highlight_matches(config: &GrepConfig, line: &str) -> String {
+    let mut last_end = 0;
+    let mut highlighted = String::new();
+
+    for mat in config.regex.find_iter(line) {
+        highlighted.push_str(&line[last_end..mat.start()]);
+        highlighted.push_str(&mat.as_str().red().bold().to_string());
+        last_end = mat.end();
+    }
+    highlighted.push_str(&line[last_end..]);
+    highlighted
+}
+
+/// Build a parallel file walker with the given parameters
+fn build_walker_parallel(
+    path: &Path,
+    ignore_patterns: &[String],
+    no_gitignore: bool,
+) -> ignore::WalkParallel {
     let mut walker_builder = WalkBuilder::new(path);
     walker_builder
         .hidden(false)
         .git_ignore(!no_gitignore)
         .git_global(!no_gitignore)
-        .git_exclude(!no_gitignore);
+        .git_exclude(!no_gitignore)
+        .threads(num_cpus::get()); // Use all available CPU cores
 
     for pattern in ignore_patterns {
         walker_builder.add_custom_ignore_filename(pattern);
     }
 
-    walker_builder.build()
+    walker_builder.build_parallel()
 }
 
 /// Determine if a file should be skipped based on match status and params
