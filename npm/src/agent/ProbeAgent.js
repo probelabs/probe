@@ -141,6 +141,7 @@ export class ProbeAgent {
     this.mcpConfig = options.mcpConfig || null;
     this.mcpServers = options.mcpServers || null; // Deprecated, keep for backward compatibility
     this.mcpBridge = null;
+    this._mcpInitialized = false; // Track if MCP initialization has been attempted
 
     // Initialize the AI model
     this.initializeModel();
@@ -154,8 +155,9 @@ export class ProbeAgent {
    * This method initializes MCP and merges MCP tools into the tool list
    */
   async initialize() {
-    // Initialize MCP if enabled
-    if (this.enableMcp) {
+    // Initialize MCP if enabled and not already initialized
+    if (this.enableMcp && !this._mcpInitialized) {
+      this._mcpInitialized = true; // Prevent multiple initialization attempts
       try {
         await this.initializeMCP();
 
@@ -184,7 +186,10 @@ export class ProbeAgent {
           console.error('[DEBUG] ========================================\n');
         }
       } catch (error) {
-        console.error('[MCP] Failed to initialize MCP:', error);
+        console.error('[MCP ERROR] Failed to initialize MCP:', error.message);
+        if (this.debug) {
+          console.error('[MCP DEBUG] Full error details:', error);
+        }
         this.mcpBridge = null;
       }
     }
@@ -742,14 +747,14 @@ export class ProbeAgent {
         // Direct config object provided (SDK usage)
         mcpConfig = this.mcpConfig;
         if (this.debug) {
-          console.log('[DEBUG] Using provided MCP config object');
+          console.error('[MCP DEBUG] Using provided MCP config object');
         }
       } else if (this.mcpConfigPath) {
         // Explicit config path provided
         try {
           mcpConfig = loadMCPConfigurationFromPath(this.mcpConfigPath);
           if (this.debug) {
-            console.log(`[DEBUG] Loaded MCP config from: ${this.mcpConfigPath}`);
+            console.error(`[MCP DEBUG] Loaded MCP config from: ${this.mcpConfigPath}`);
           }
         } catch (error) {
           throw new Error(`Failed to load MCP config from ${this.mcpConfigPath}: ${error.message}`);
@@ -758,10 +763,17 @@ export class ProbeAgent {
         // Backward compatibility: convert old mcpServers format
         mcpConfig = { mcpServers: this.mcpServers };
         if (this.debug) {
-          console.warn('[DEBUG] Using deprecated mcpServers option. Consider using mcpConfig instead.');
+          console.error('[MCP DEBUG] Using deprecated mcpServers option. Consider using mcpConfig instead.');
         }
+      } else {
+        // No explicit config provided - will attempt auto-discovery
+        // This is important for CLI usage where config files may exist
+        if (this.debug) {
+          console.error('[MCP DEBUG] No explicit MCP config provided, will attempt auto-discovery');
+        }
+        // Pass null to trigger auto-discovery in MCPXmlBridge
+        mcpConfig = null;
       }
-      // Note: auto-discovery fallback is removed - user must explicitly provide config
 
       // Initialize the MCP XML bridge
       this.mcpBridge = new MCPXmlBridge({ debug: this.debug });
@@ -771,24 +783,27 @@ export class ProbeAgent {
       const mcpToolCount = mcpToolNames.length;
       if (mcpToolCount > 0) {
         if (this.debug) {
-          console.error('\n[DEBUG] ========================================');
-          console.error(`[DEBUG] MCP Tools Initialized (${mcpToolCount} tools)`);
-          console.error('[DEBUG] Available MCP tools:');
+          console.error('\n[MCP DEBUG] ========================================');
+          console.error(`[MCP DEBUG] MCP Tools Initialized (${mcpToolCount} tools)`);
+          console.error('[MCP DEBUG] Available MCP tools:');
           for (const toolName of mcpToolNames) {
-            console.error(`[DEBUG]   - ${toolName}`);
+            console.error(`[MCP DEBUG]   - ${toolName}`);
           }
-          console.error('[DEBUG] ========================================\n');
+          console.error('[MCP DEBUG] ========================================\n');
         }
       } else {
         // For backward compatibility: if no tools were loaded, set bridge to null
         // This maintains the behavior expected by existing tests
         if (this.debug) {
-          console.error('[DEBUG] No MCP tools loaded, setting bridge to null');
+          console.error('[MCP DEBUG] No MCP tools loaded, setting bridge to null');
         }
         this.mcpBridge = null;
       }
     } catch (error) {
-      console.error('[MCP] Error initializing MCP:', error);
+      console.error('[MCP ERROR] Error initializing MCP:', error.message);
+      if (this.debug) {
+        console.error('[MCP DEBUG] Full error details:', error);
+      }
       this.mcpBridge = null;
     }
   }
@@ -797,6 +812,27 @@ export class ProbeAgent {
    * Get the system message with instructions for the AI (XML Tool Format)
    */
   async getSystemMessage() {
+    // Lazy initialize MCP if enabled but not yet initialized
+    if (this.enableMcp && !this.mcpBridge && !this._mcpInitialized) {
+      this._mcpInitialized = true; // Prevent multiple initialization attempts
+      try {
+        await this.initializeMCP();
+
+        // Merge MCP tools into toolImplementations for unified access
+        if (this.mcpBridge) {
+          const mcpTools = this.mcpBridge.mcpTools || {};
+          for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
+            this.toolImplementations[toolName] = toolImpl;
+          }
+        }
+      } catch (error) {
+        console.error('[MCP ERROR] Failed to lazy-initialize MCP:', error.message);
+        if (this.debug) {
+          console.error('[MCP DEBUG] Full error details:', error);
+        }
+      }
+    }
+
     // Build tool definitions
     let toolDefinitions = `
 ${searchToolDefinition}

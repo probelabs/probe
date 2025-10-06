@@ -86,12 +86,16 @@ import { ProbeAgent } from '@buger/probe';
 
 // Create an AI agent for your project
 const agent = new ProbeAgent({
-  sessionId: 'my-session',  // Optional: for conversation continuity  
+  sessionId: 'my-session',  // Optional: for conversation continuity
   path: '/path/to/your/project',
   provider: 'anthropic',   // or 'openai', 'google'
   model: 'claude-3-5-sonnet-20241022',  // Optional: override model
   allowEdit: false,        // Optional: enable code modification
-  debug: true             // Optional: enable debug logging
+  debug: true,            // Optional: enable debug logging
+  enableMcp: true,        // Optional: enable MCP tool integration
+  mcpConfig: {           // Optional: MCP configuration (see MCP section below)
+    mcpServers: {...}
+  }
 });
 
 // Ask questions about your codebase
@@ -156,6 +160,36 @@ Add to your AI assistant's MCP configuration:
   }
 }
 ```
+
+### Using MCP with ProbeAgent SDK
+
+When using ProbeAgent programmatically, you can integrate MCP servers to extend the agent's capabilities:
+
+```javascript
+const agent = new ProbeAgent({
+  enableMcp: true,  // Enable MCP support
+
+  // Option 1: Provide MCP configuration directly
+  mcpConfig: {
+    mcpServers: {
+      'my-server': {
+        command: 'node',
+        args: ['path/to/server.js'],
+        transport: 'stdio',
+        enabled: true
+      }
+    }
+  },
+
+  // Option 2: Load from config file
+  mcpConfigPath: '/path/to/mcp-config.json',
+
+  // Option 3: Auto-discovery from standard locations
+  // (~/.mcp/config.json, or via MCP_CONFIG_PATH env var)
+});
+```
+
+**Note:** MCP tools are automatically initialized when needed (lazy initialization), so you don't need to call `agent.initialize()` when using the SDK.
 
 ## API Reference
 

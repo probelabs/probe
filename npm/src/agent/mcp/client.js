@@ -128,14 +128,30 @@ export class MCPClientManager {
     this.config = config || loadMCPConfiguration();
     const servers = parseEnabledServers(this.config);
 
+    // Always log the number of servers found
+    console.error(`[MCP INFO] Found ${servers.length} enabled MCP server${servers.length !== 1 ? 's' : ''}`);
+
+    if (servers.length === 0) {
+      console.error('[MCP INFO] No MCP servers configured or enabled');
+      console.error('[MCP INFO] 0 MCP tools available');
+      return {
+        connected: 0,
+        total: 0,
+        tools: []
+      };
+    }
+
     if (this.debug) {
-      console.error(`[MCP] Found ${servers.length} enabled servers`);
+      console.error('[MCP DEBUG] Server details:');
+      servers.forEach(server => {
+        console.error(`[MCP DEBUG]   - ${server.name} (${server.transport})`);
+      });
     }
 
     // Connect to each enabled server
     const connectionPromises = servers.map(server =>
       this.connectToServer(server).catch(error => {
-        console.error(`[MCP] Failed to connect to ${server.name}:`, error.message);
+        console.error(`[MCP ERROR] Failed to connect to ${server.name}:`, error.message);
         return null;
       })
     );
@@ -143,9 +159,23 @@ export class MCPClientManager {
     const results = await Promise.all(connectionPromises);
     const connectedCount = results.filter(Boolean).length;
 
-    if (this.debug) {
-      console.error(`[MCP] Successfully connected to ${connectedCount}/${servers.length} servers`);
-      console.error(`[MCP] Total tools available: ${this.tools.size}`);
+    // Always log connection results
+    if (connectedCount === 0) {
+      console.error(`[MCP ERROR] Failed to connect to all ${servers.length} server${servers.length !== 1 ? 's' : ''}`);
+      console.error('[MCP INFO] 0 MCP tools available');
+    } else if (connectedCount < servers.length) {
+      console.error(`[MCP INFO] Successfully connected to ${connectedCount}/${servers.length} servers`);
+      console.error(`[MCP INFO] ${this.tools.size} MCP tool${this.tools.size !== 1 ? 's' : ''} available`);
+    } else {
+      console.error(`[MCP INFO] Successfully connected to all ${connectedCount} server${connectedCount !== 1 ? 's' : ''}`);
+      console.error(`[MCP INFO] ${this.tools.size} MCP tool${this.tools.size !== 1 ? 's' : ''} available`);
+    }
+
+    if (this.debug && this.tools.size > 0) {
+      console.error('[MCP DEBUG] Available tools:');
+      Array.from(this.tools.keys()).forEach(toolName => {
+        console.error(`[MCP DEBUG]   - ${toolName}`);
+      });
     }
 
     return {
@@ -164,7 +194,7 @@ export class MCPClientManager {
 
     try {
       if (this.debug) {
-        console.error(`[MCP] Connecting to ${name} via ${serverConfig.transport}...`);
+        console.error(`[MCP DEBUG] Connecting to ${name} via ${serverConfig.transport}...`);
       }
 
       // Create transport
@@ -193,6 +223,7 @@ export class MCPClientManager {
 
       // Fetch and register tools
       const toolsResponse = await client.listTools();
+      const toolCount = toolsResponse?.tools?.length || 0;
 
       if (toolsResponse && toolsResponse.tools) {
         for (const tool of toolsResponse.tools) {
@@ -205,18 +236,19 @@ export class MCPClientManager {
           });
 
           if (this.debug) {
-            console.error(`[MCP]   Registered tool: ${qualifiedName}`);
+            console.error(`[MCP DEBUG]     Registered tool: ${qualifiedName}`);
           }
         }
       }
 
-      if (this.debug) {
-        console.error(`[MCP] Connected to ${name} with ${toolsResponse?.tools?.length || 0} tools`);
-      }
+      console.error(`[MCP INFO] Connected to ${name}: ${toolCount} tool${toolCount !== 1 ? 's' : ''} loaded`);
 
       return true;
     } catch (error) {
-      console.error(`[MCP] Error connecting to ${name}:`, error.message);
+      console.error(`[MCP ERROR] Error connecting to ${name}:`, error.message);
+      if (this.debug) {
+        console.error(`[MCP DEBUG] Full error details:`, error);
+      }
       return false;
     }
   }
@@ -239,7 +271,7 @@ export class MCPClientManager {
 
     try {
       if (this.debug) {
-        console.error(`[MCP] Calling ${toolName} with args:`, args);
+        console.error(`[MCP DEBUG] Calling ${toolName} with args:`, JSON.stringify(args, null, 2));
       }
 
       // Get timeout from config (default 30 seconds)
@@ -261,9 +293,16 @@ export class MCPClientManager {
         timeoutPromise
       ]);
 
+      if (this.debug) {
+        console.error(`[MCP DEBUG] Tool ${toolName} executed successfully`);
+      }
+
       return result;
     } catch (error) {
-      console.error(`[MCP] Error calling tool ${toolName}:`, error);
+      console.error(`[MCP ERROR] Error calling tool ${toolName}:`, error.message);
+      if (this.debug) {
+        console.error(`[MCP DEBUG] Full error details:`, error);
+      }
       throw error;
     }
   }
@@ -316,16 +355,27 @@ export class MCPClientManager {
   async disconnect() {
     const disconnectPromises = [];
 
+    if (this.clients.size === 0) {
+      if (this.debug) {
+        console.error('[MCP DEBUG] No MCP clients to disconnect');
+      }
+      return;
+    }
+
+    if (this.debug) {
+      console.error(`[MCP DEBUG] Disconnecting from ${this.clients.size} MCP server${this.clients.size !== 1 ? 's' : ''}...`);
+    }
+
     for (const [name, clientInfo] of this.clients.entries()) {
       disconnectPromises.push(
         clientInfo.client.close()
           .then(() => {
             if (this.debug) {
-              console.error(`[MCP] Disconnected from ${name}`);
+              console.error(`[MCP DEBUG] Disconnected from ${name}`);
             }
           })
           .catch(error => {
-            console.error(`[MCP] Error disconnecting from ${name}:`, error);
+            console.error(`[MCP ERROR] Error disconnecting from ${name}:`, error.message);
           })
       );
     }
@@ -333,6 +383,10 @@ export class MCPClientManager {
     await Promise.all(disconnectPromises);
     this.clients.clear();
     this.tools.clear();
+
+    if (this.debug) {
+      console.error('[MCP DEBUG] All MCP connections closed');
+    }
   }
 }
 
