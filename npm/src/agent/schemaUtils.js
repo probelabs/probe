@@ -40,7 +40,7 @@ export function decodeHtmlEntities(text) {
 
 /**
  * Clean AI response by extracting JSON content when response contains JSON
- * Only processes responses that contain JSON structures { or [ 
+ * Only processes responses that contain JSON structures { or [
  * @param {string} response - Raw AI response
  * @returns {string} - Cleaned response with JSON boundaries extracted if applicable
  */
@@ -50,34 +50,47 @@ export function cleanSchemaResponse(response) {
   }
 
   const trimmed = response.trim();
-  
-  // First, look for JSON after code block markers
+
+  // First, look for JSON after code block markers - similar to mermaid extraction
+  // Try with json language specifier
+  const jsonBlockMatch = trimmed.match(/```json\s*\n([\s\S]*?)\n```/);
+  if (jsonBlockMatch) {
+    return jsonBlockMatch[1].trim();
+  }
+
+  // Try any code block with JSON content
+  const anyBlockMatch = trimmed.match(/```\s*\n([{\[][\s\S]*?[}\]])\s*```/);
+  if (anyBlockMatch) {
+    return anyBlockMatch[1].trim();
+  }
+
+  // Legacy patterns for more specific matching
   const codeBlockPatterns = [
     /```json\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
     /```\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
     /`([{\[][\s\S]*?[}\]])`/
   ];
-  
+
   for (const pattern of codeBlockPatterns) {
     const match = trimmed.match(pattern);
     if (match) {
       return match[1].trim();
     }
   }
-  
+
   // Look for code block start followed immediately by JSON
   const codeBlockStartPattern = /```(?:json)?\s*\n?\s*([{\[])/;
   const codeBlockMatch = trimmed.match(codeBlockStartPattern);
-  
+
   if (codeBlockMatch) {
     const startIndex = codeBlockMatch.index + codeBlockMatch[0].length - 1; // Position of the bracket
-    
+
     // Find the matching closing bracket
     const openChar = codeBlockMatch[1];
     const closeChar = openChar === '{' ? '}' : ']';
     let bracketCount = 1;
     let endIndex = startIndex + 1;
-    
+
     while (endIndex < trimmed.length && bracketCount > 0) {
       const char = trimmed[endIndex];
       if (char === openChar) {
@@ -87,36 +100,36 @@ export function cleanSchemaResponse(response) {
       }
       endIndex++;
     }
-    
+
     if (bracketCount === 0) {
       return trimmed.substring(startIndex, endIndex);
     }
   }
-  
+
   // Fallback: Find JSON boundaries anywhere in the text
   const firstBracket = Math.min(
     trimmed.indexOf('{') >= 0 ? trimmed.indexOf('{') : Infinity,
     trimmed.indexOf('[') >= 0 ? trimmed.indexOf('[') : Infinity
   );
-  
+
   const lastBracket = Math.max(
     trimmed.lastIndexOf('}'),
     trimmed.lastIndexOf(']')
   );
-  
+
   // Only extract if we found valid JSON boundaries
   if (firstBracket < Infinity && lastBracket >= 0 && firstBracket < lastBracket) {
     // Check if the response likely starts with JSON (directly or after minimal content)
     const beforeFirstBracket = trimmed.substring(0, firstBracket).trim();
-    
+
     // If there's minimal content before the first bracket, extract the JSON
-    if (beforeFirstBracket === '' || 
+    if (beforeFirstBracket === '' ||
         beforeFirstBracket.match(/^```\w*$/) ||
         beforeFirstBracket.split('\n').length <= 2) {
       return trimmed.substring(firstBracket, lastBracket + 1);
     }
   }
-  
+
   return response; // Return original if no extractable JSON found
 }
 

@@ -14,7 +14,7 @@ import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
 
 // Import from parent package
-import { search, query, extract, getBinaryPath, setBinaryPath } from '../index.js';
+import { search, query, extract, grep, getBinaryPath, setBinaryPath } from '../index.js';
 
 // Parse command-line arguments
 function parseArgs(): { timeout?: number; format?: string } {
@@ -113,19 +113,19 @@ interface SearchCodeArgs {
   path: string;
   query: string | string[];
   exact?: boolean;
-  maxResults?: number;
-  maxTokens?: number;
-  allowTests?: boolean;
-  session?: string;
-  noGitignore?: boolean;
 }
-
 
 interface ExtractCodeArgs {
   path: string;
   files: string[];
-  allowTests?: boolean;
-  noGitignore?: boolean;
+}
+
+interface GrepArgs {
+  pattern: string;
+  paths: string | string[];
+  ignoreCase?: boolean;
+  count?: boolean;
+  context?: number;
 }
 
 class ProbeServer {
@@ -165,35 +165,22 @@ class ProbeServer {
       tools: [
         {
           name: 'search_code',
-          description: "Search code in the repository using ElasticSearch. Use this tool first for any code-related questions.",
+          description: "Semantic code search using AST parsing and ElasticSearch-style queries. Use this for finding code, not grep.",
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
+                description: 'Absolute path to the directory to search',
               },
               query: {
                 type: 'string',
-                description: 'Elastic search query. Supports logical operators (AND, OR, NOT), and grouping with parentheses. For exact matches of specific identifiers, use quotes: "MyFunction", "SpecificStruct", "exact_variable_name". Examples: "config", "(term1 OR term2) AND term3", "getUserData", "struct Config".',
+                description: 'Search query. Use quotes for exact matches: "functionName". Supports AND, OR, NOT operators.',
               },
               exact: {
                 type: 'boolean',
-                description: 'When you exactly know what you are looking for, like known function name, struct name, or variable name, set this flag for precise matching'
-              },
-              allowTests: {
-                type: 'boolean',
-                description: 'Allow test files and test code blocks in results (enabled by default)',
-                default: true
-              },
-              session: {
-                type: 'string',
-                description: 'Session identifier for caching. Set to "new" if unknown, or want to reset cache. Re-use session ID returned from previous searches',
-                default: "new",
-              },
-              noGitignore: {
-                type: 'boolean',
-                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
+                description: 'Use when searching for exact function/class/variable names',
+                default: false
               }
             },
             required: ['path', 'query']
@@ -201,30 +188,56 @@ class ProbeServer {
         },
         {
           name: 'extract_code',
-          description: "Extract code blocks from files based on line number, or symbol name. Fetch full file when line number is not provided.",
+          description: "Extract code from files. Formats: file.js (whole file), file.js:42 (from line), file.js#functionName (symbol).",
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
+                description: 'Absolute path to the project directory',
               },
               files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Files and lines or sybmbols to  extract from: /path/to/file.rs:10, /path/to/file.rs#func_name Path should be absolute.',
-              },
-              allowTests: {
-                type: 'boolean',
-                description: 'Allow test files and test code blocks in results (enabled by default)',
-                default: true
-              },
-              noGitignore: {
-                type: 'boolean',
-                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
+                description: 'Array of file paths with optional line/symbol: ["file.rs:10", "file.rs#func_name"]',
               }
             },
             required: ['path', 'files'],
+          },
+        },
+        {
+          name: 'grep',
+          description: "Standard grep-style search for non-code files (logs, config files, text files). Line numbers are shown by default. For code files, use search_code instead.",
+          inputSchema: {
+            type: 'object',
+            properties: {
+              pattern: {
+                type: 'string',
+                description: 'Regular expression pattern to search for',
+              },
+              paths: {
+                oneOf: [
+                  { type: 'string' },
+                  { type: 'array', items: { type: 'string' } }
+                ],
+                description: 'Path or array of paths to search in',
+              },
+              ignoreCase: {
+                type: 'boolean',
+                description: 'Case-insensitive search',
+                default: false
+              },
+              count: {
+                type: 'boolean',
+                description: 'Only show count of matches per file instead of the matches',
+                default: false
+              },
+              context: {
+                type: 'number',
+                description: 'Number of lines of context to show before and after each match',
+              }
+            },
+            required: ['pattern', 'paths'],
           },
         },
       ],
@@ -232,7 +245,7 @@ class ProbeServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (request.params.name !== 'search_code' && request.params.name !== 'extract_code' &&
-          request.params.name !== 'probe' && request.params.name !== 'extract') {
+          request.params.name !== 'grep' && request.params.name !== 'probe' && request.params.name !== 'extract') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
@@ -252,9 +265,9 @@ class ProbeServer {
           if (!request.params.arguments || typeof request.params.arguments !== 'object') {
             throw new Error("Arguments must be an object");
           }
-          
+
           const args = request.params.arguments as unknown as SearchCodeArgs;
-          
+
           // Validate required fields
           if (!args.path) {
             throw new Error("Path is required in arguments");
@@ -262,8 +275,11 @@ class ProbeServer {
           if (!args.query) {
             throw new Error("Query is required in arguments");
           }
-          
+
           result = await this.executeCodeSearch(args);
+        } else if (request.params.name === 'grep') {
+          const args = request.params.arguments as unknown as GrepArgs;
+          result = await this.executeGrep(args);
         } else { // extract_code or extract
           const args = request.params.arguments as unknown as ExtractCodeArgs;
           result = await this.executeCodeExtract(args);
@@ -304,52 +320,40 @@ class ProbeServer {
         throw new Error("Query is required");
       }
 
-      // Log the arguments we received for debugging
-      console.error(`Received search arguments: path=${args.path}, query=${JSON.stringify(args.query)}`);
-
-      // Create a clean options object with only the essential properties first
+      // Build options with smart defaults
       const options: any = {
-        path: args.path.trim(),  // Ensure path is trimmed
-        query: args.query
+        path: args.path.trim(),
+        query: args.query,
+        // Smart defaults for MCP usage
+        allowTests: true,          // Include test files by default
+        session: "new",            // Fresh session each time
+        maxResults: 20,            // Reasonable limit for context window
+        maxTokens: 8000,           // Fits in most AI context windows
       };
-      
-      // Add optional parameters only if they exist
-      if (args.exact !== undefined) options.exact = args.exact;
-      if (args.maxResults !== undefined) options.maxResults = args.maxResults;
-      if (args.maxTokens !== undefined) options.maxTokens = args.maxTokens;
-      // Set allowTests to true by default if not specified
-      if (args.allowTests !== undefined) {
-        options.allowTests = args.allowTests;
-      } else {
-        options.allowTests = true;
-      }
-      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
-      if (args.noGitignore !== undefined) {
-        options.noGitignore = args.noGitignore;
-      } else if (process.env.PROBE_NO_GITIGNORE) {
-        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
-      }
-      if (args.session !== undefined && args.session.trim() !== '') {
-        options.session = args.session;
-      } else {
-        options.session = "new";
-      }
 
+<<<<<<< HEAD
       // Handle format options
       if (this.defaultFormat === 'outline' || this.defaultFormat === 'outline-xml') {
         // For outline/outline-xml format, we pass it as a format flag to the search command
         options.format = this.defaultFormat;
+||||||| d8918b1
+      // Handle format options
+      if (this.defaultFormat === 'outline-xml') {
+        // For outline-xml format, we pass it as a format flag to the search command
+        options.format = 'outline-xml';
+=======
+      // Only override defaults if user explicitly set them
+      if (args.exact !== undefined) options.exact = args.exact;
+
+      // Handle format based on server default
+      if (this.defaultFormat === 'outline-xml') {
+        options.format = 'outline-xml';
+>>>>>>> origin/main
       } else if (this.defaultFormat === 'json') {
         options.json = true;
       }
-      
+
       console.error("Executing search with options:", JSON.stringify(options, null, 2));
-      
-      // Double-check that path is still in the options object
-      if (!options.path) {
-        console.error("Path is missing from options object after construction");
-        throw new Error("Path is missing from options object");
-      }
       
       try {
         // Call search with the options object
@@ -379,26 +383,13 @@ class ProbeServer {
         throw new Error("Files array is required and must not be empty");
       }
 
-      // Create a single options object with files and other parameters
+      // Build options with smart defaults
       const options: any = {
         files: args.files,
         path: args.path,
-        format: 'xml'
+        format: 'xml',
+        allowTests: true,  // Include test files by default
       };
-      
-      // Set allowTests to true by default if not specified
-      if (args.allowTests !== undefined) {
-        options.allowTests = args.allowTests;
-      } else {
-        options.allowTests = true;
-      }
-      
-      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
-      if (args.noGitignore !== undefined) {
-        options.noGitignore = args.noGitignore;
-      } else if (process.env.PROBE_NO_GITIGNORE) {
-        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
-      }
       
       // Call extract with the complete options object
       try {
@@ -450,6 +441,50 @@ class ProbeServer {
       throw new McpError(
         'MethodNotFound' as unknown as ErrorCode,
         `Error executing code extract: ${error.message || String(error)}`
+      );
+    }
+  }
+
+  private async executeGrep(args: GrepArgs): Promise<string> {
+    try {
+      // Validate required parameters
+      if (!args.pattern) {
+        throw new Error("Pattern is required");
+      }
+      if (!args.paths) {
+        throw new Error("Paths are required");
+      }
+
+      // Build options object with good defaults
+      const options: any = {
+        pattern: args.pattern,
+        paths: args.paths,
+        // Default: show line numbers (makes output more useful)
+        lineNumbers: true,
+        // Default: never use color in MCP context (better for parsing)
+        color: 'never'
+      };
+
+      // Only add user-specified optional parameters
+      if (args.ignoreCase !== undefined) options.ignoreCase = args.ignoreCase;
+      if (args.count !== undefined) options.count = args.count;
+      if (args.context !== undefined) options.context = args.context;
+
+      console.error("Executing grep with options:", JSON.stringify(options, null, 2));
+
+      try {
+        // Call grep with the options object
+        const result = await grep(options);
+        return result || 'No matches found';
+      } catch (grepError: any) {
+        console.error("Grep function error:", grepError);
+        throw new Error(`Grep function error: ${grepError.message || String(grepError)}`);
+      }
+    } catch (error: any) {
+      console.error('Error executing grep:', error);
+      throw new McpError(
+        'MethodNotFound' as unknown as ErrorCode,
+        `Error executing grep: ${error.message || String(error)}`
       );
     }
   }
