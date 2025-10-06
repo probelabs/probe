@@ -272,7 +272,7 @@ describe('MCP Configuration', () => {
 
       // Mock console.log to capture output
       const originalLog = console.log;
-      console.log = jest.fn();
+      console.error = jest.fn();
 
       try {
         saveConfig(config, configPath);
@@ -283,9 +283,9 @@ describe('MCP Configuration', () => {
         const parsedConfig = JSON.parse(savedContent);
 
         expect(parsedConfig).toEqual(config);
-        expect(console.log).toHaveBeenCalledWith(`[MCP] Configuration saved to: ${configPath}`);
+        expect(console.error).toHaveBeenCalledWith(`[MCP INFO] Configuration saved to: ${configPath}`);
       } finally {
-        console.log = originalLog;
+        console.error = originalLog;
       }
     });
 

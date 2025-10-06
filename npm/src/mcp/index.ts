@@ -151,7 +151,7 @@ class ProbeServer {
     this.setupToolHandlers();
     
     // Error handling
-    this.server.onerror = (error) => console.error('[MCP Error]', error);
+    this.server.onerror = (error) => console.error('[MCP ERROR]', error);
     process.on('SIGINT', async () => {
       await this.server.close();
       process.exit(0);
