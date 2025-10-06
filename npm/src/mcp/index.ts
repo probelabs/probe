@@ -14,7 +14,7 @@ import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
 
 // Import from parent package
-import { search, query, extract, getBinaryPath, setBinaryPath } from '../index.js';
+import { search, query, extract, grep, getBinaryPath, setBinaryPath } from '../index.js';
 
 // Parse command-line arguments
 function parseArgs(): { timeout?: number; format?: string } {
@@ -128,6 +128,23 @@ interface ExtractCodeArgs {
   noGitignore?: boolean;
 }
 
+interface GrepArgs {
+  pattern: string;
+  paths: string | string[];
+  ignoreCase?: boolean;
+  lineNumbers?: boolean;
+  count?: boolean;
+  filesWithMatches?: boolean;
+  filesWithoutMatches?: boolean;
+  invertMatch?: boolean;
+  beforeContext?: number;
+  afterContext?: number;
+  context?: number;
+  noGitignore?: boolean;
+  color?: string;
+  maxCount?: number;
+}
+
 class ProbeServer {
   private server: Server;
   private defaultTimeout: number;
@@ -227,12 +244,82 @@ class ProbeServer {
             required: ['path', 'files'],
           },
         },
+        {
+          name: 'grep',
+          description: "Standard grep-style search that works across multiple operating systems. Use this for searching non-code files (logs, config files, text files, etc.) that are not supported by probe's semantic search. For code files, prefer using search_code which provides AST-aware semantic search.",
+          inputSchema: {
+            type: 'object',
+            properties: {
+              pattern: {
+                type: 'string',
+                description: 'Regular expression pattern to search for',
+              },
+              paths: {
+                oneOf: [
+                  { type: 'string' },
+                  { type: 'array', items: { type: 'string' } }
+                ],
+                description: 'Path or array of paths to search in (e.g., "/var/log" or ["/etc/config.txt", "/var/log"])',
+              },
+              ignoreCase: {
+                type: 'boolean',
+                description: 'Case-insensitive search (-i flag)',
+              },
+              lineNumbers: {
+                type: 'boolean',
+                description: 'Show line numbers in output (-n flag)',
+              },
+              count: {
+                type: 'boolean',
+                description: 'Only show count of matches per file (-c flag)',
+              },
+              filesWithMatches: {
+                type: 'boolean',
+                description: 'Only show filenames that contain matches (-l flag)',
+              },
+              filesWithoutMatches: {
+                type: 'boolean',
+                description: 'Only show filenames that do not contain matches (-L flag)',
+              },
+              invertMatch: {
+                type: 'boolean',
+                description: 'Invert match: show lines that do NOT match (-v flag)',
+              },
+              beforeContext: {
+                type: 'number',
+                description: 'Number of lines of context to show before each match (-B flag)',
+              },
+              afterContext: {
+                type: 'number',
+                description: 'Number of lines of context to show after each match (-A flag)',
+              },
+              context: {
+                type: 'number',
+                description: 'Number of lines of context to show before and after each match (-C flag)',
+              },
+              noGitignore: {
+                type: 'boolean',
+                description: 'Do not respect .gitignore files (--no-gitignore flag)',
+              },
+              color: {
+                type: 'string',
+                enum: ['always', 'never', 'auto'],
+                description: 'Colorize output (--color flag)',
+              },
+              maxCount: {
+                type: 'number',
+                description: 'Stop reading a file after N matching lines (-m flag)',
+              }
+            },
+            required: ['pattern', 'paths'],
+          },
+        },
       ],
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (request.params.name !== 'search_code' && request.params.name !== 'extract_code' &&
-          request.params.name !== 'probe' && request.params.name !== 'extract') {
+          request.params.name !== 'grep' && request.params.name !== 'probe' && request.params.name !== 'extract') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
@@ -252,9 +339,9 @@ class ProbeServer {
           if (!request.params.arguments || typeof request.params.arguments !== 'object') {
             throw new Error("Arguments must be an object");
           }
-          
+
           const args = request.params.arguments as unknown as SearchCodeArgs;
-          
+
           // Validate required fields
           if (!args.path) {
             throw new Error("Path is required in arguments");
@@ -262,8 +349,11 @@ class ProbeServer {
           if (!args.query) {
             throw new Error("Query is required in arguments");
           }
-          
+
           result = await this.executeCodeSearch(args);
+        } else if (request.params.name === 'grep') {
+          const args = request.params.arguments as unknown as GrepArgs;
+          result = await this.executeGrep(args);
         } else { // extract_code or extract
           const args = request.params.arguments as unknown as ExtractCodeArgs;
           result = await this.executeCodeExtract(args);
@@ -450,6 +540,55 @@ class ProbeServer {
       throw new McpError(
         'MethodNotFound' as unknown as ErrorCode,
         `Error executing code extract: ${error.message || String(error)}`
+      );
+    }
+  }
+
+  private async executeGrep(args: GrepArgs): Promise<string> {
+    try {
+      // Validate required parameters
+      if (!args.pattern) {
+        throw new Error("Pattern is required");
+      }
+      if (!args.paths) {
+        throw new Error("Paths are required");
+      }
+
+      // Build options object
+      const options: any = {
+        pattern: args.pattern,
+        paths: args.paths
+      };
+
+      // Add optional parameters if they exist
+      if (args.ignoreCase !== undefined) options.ignoreCase = args.ignoreCase;
+      if (args.lineNumbers !== undefined) options.lineNumbers = args.lineNumbers;
+      if (args.count !== undefined) options.count = args.count;
+      if (args.filesWithMatches !== undefined) options.filesWithMatches = args.filesWithMatches;
+      if (args.filesWithoutMatches !== undefined) options.filesWithoutMatches = args.filesWithoutMatches;
+      if (args.invertMatch !== undefined) options.invertMatch = args.invertMatch;
+      if (args.beforeContext !== undefined) options.beforeContext = args.beforeContext;
+      if (args.afterContext !== undefined) options.afterContext = args.afterContext;
+      if (args.context !== undefined) options.context = args.context;
+      if (args.noGitignore !== undefined) options.noGitignore = args.noGitignore;
+      if (args.color !== undefined) options.color = args.color;
+      if (args.maxCount !== undefined) options.maxCount = args.maxCount;
+
+      console.error("Executing grep with options:", JSON.stringify(options, null, 2));
+
+      try {
+        // Call grep with the options object
+        const result = await grep(options);
+        return result || 'No matches found';
+      } catch (grepError: any) {
+        console.error("Grep function error:", grepError);
+        throw new Error(`Grep function error: ${grepError.message || String(grepError)}`);
+      }
+    } catch (error: any) {
+      console.error('Error executing grep:', error);
+      throw new McpError(
+        'MethodNotFound' as unknown as ErrorCode,
+        `Error executing grep: ${error.message || String(error)}`
       );
     }
   }

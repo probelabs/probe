@@ -10,6 +10,7 @@
 import { search } from './search.js';
 import { query } from './query.js';
 import { extract } from './extract.js';
+import { grep } from './grep.js';
 import { delegate } from './delegate.js';
 import { getBinaryPath, setBinaryPath } from './utils.js';
 import * as tools from './tools/index.js';
@@ -40,6 +41,7 @@ export {
 	search,
 	query,
 	extract,
+	grep,
 	delegate,
 	getBinaryPath,
 	setBinaryPath,
