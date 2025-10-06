@@ -344,7 +344,7 @@ mod tests {
     fn test_parser_pool_multiple_languages() {
         with_isolated_pool(|| {
             // Use languages not in warmup list to avoid race conditions
-            let extensions = ["php", "rb", "cs", "h"];
+            let extensions = ["html", "md", "yaml", "yml"];
             let mut parsers = Vec::new();
 
             // Get parsers for different languages
