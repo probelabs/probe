@@ -23,8 +23,9 @@ async function buildAgent() {
         // Keep these as external dependencies that need to be installed
         '@modelcontextprotocol/sdk',
         '@ai-sdk/anthropic',
-        '@ai-sdk/openai', 
+        '@ai-sdk/openai',
         '@ai-sdk/google',
+        '@ai-sdk/amazon-bedrock',
         'ai',
         'tiktoken',
         'glob',
