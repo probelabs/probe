@@ -246,7 +246,7 @@ pub enum LspSubcommands {
         output: std::path::PathBuf,
 
         /// Force WAL checkpoint before export (opt-in)
-        #[clap(long = "checkpoint", action = clap::ArgAction::SetTrue)]
+        #[clap(long = "checkpoint", action = clap::ArgAction::SetTrue, hide = true)]
         checkpoint: bool,
 
         /// Use daemon mode (auto-start if not running)
@@ -260,6 +260,25 @@ pub enum LspSubcommands {
         /// Auto-confirm overwrite of existing output file
         #[clap(short = 'y', long = "yes", action = clap::ArgAction::SetTrue)]
         yes: bool,
+
+        /// Run export fully online via daemon without shutdown (default). Use --offline to shutdown/checkpoint/copy
+        #[clap(long = "offline", action = clap::ArgAction::SetTrue)]
+        offline: bool,
+    },
+
+    /// Audit edges in the workspace database and print a compact report
+    EdgeAudit {
+        /// Workspace path to audit (defaults to current directory)
+        #[clap(short = 'w', long = "workspace")]
+        workspace: Option<std::path::PathBuf>,
+
+        /// Maximum number of sample issues to print
+        #[clap(long = "samples", default_value = "10")]
+        samples: usize,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
+        format: String,
     },
 
     /// Force a WAL checkpoint and wait until it can acquire the lock

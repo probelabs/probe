@@ -1152,7 +1152,8 @@ impl ConnectionPool {
                 start_char INTEGER,
                 confidence REAL NOT NULL,
                 language TEXT NOT NULL,
-                metadata TEXT
+                metadata TEXT,
+                edge_file_path TEXT
             )
             "#,
             (),
@@ -1908,6 +1909,8 @@ pub struct SQLiteBackend {
     mvcc_enabled: bool,
     /// Whether engine/index DDL is enabled for this database
     indexes_enabled: bool,
+    /// Enforce graph integrity: auto-create missing symbols for edge endpoints (except deps)
+    strict_graph: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -2105,6 +2108,12 @@ impl SQLiteBackend {
         let (tx, mut rx) = mpsc::channel::<WriteMsg>(writer_queue_size);
         let busy_flag = Arc::new(AtomicBool::new(false));
 
+        let strict_graph_flag = std::env::var("PROBE_LSP_STRICT_GRAPH")
+            .ok()
+            .map(|v| v.to_lowercase())
+            .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
+
         let backend = Self {
             pool: Arc::new(Mutex::new(pool)),
             sqlite_config: sqlite_config.clone(),
@@ -2121,6 +2130,7 @@ impl SQLiteBackend {
             reader_write_held: Arc::new(AtomicBool::new(false)),
             mvcc_enabled: mvcc_enabled_flag,
             indexes_enabled: indexes_enabled_flag,
+            strict_graph: strict_graph_flag,
         };
 
         if sqlite_config.temporary {
@@ -2240,6 +2250,7 @@ impl SQLiteBackend {
             reader_write_held: self.reader_write_held.clone(),
             mvcc_enabled: self.mvcc_enabled,
             indexes_enabled: self.indexes_enabled,
+            strict_graph: self.strict_graph,
         }
     }
 
@@ -2517,6 +2528,148 @@ impl SQLiteBackend {
         safe_execute_with_retry(conn, "BEGIN TRANSACTION", (), &begin_ctx, 6).await?;
 
         if edges_len > 0 {
+            // Edge audit: log suspicious UIDs and normalize issues for debugging.
+            if std::env::var("PROBE_LSP_EDGE_AUDIT")
+                .ok()
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+            {
+                let sample_every: usize = std::env::var("PROBE_LSP_EDGE_AUDIT_SAMPLE")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(1);
+                for (i, e) in edges.iter().enumerate() {
+                    if i % sample_every != 0 {
+                        continue;
+                    }
+                    // Parse UID
+                    let (file_part_opt, _name, line_opt) =
+                        Self::parse_symbol_uid(&e.source_symbol_uid);
+                    if let Some(fp) = &file_part_opt {
+                        if fp.starts_with('/') && !fp.starts_with("/dep/") {
+                            warn!("[edge_audit] EID001 absolute path in source_uid fp='{}' uid='{}' origin={:?}", fp, e.source_symbol_uid, e.metadata);
+                        }
+                        if let Some(ref path) = e.file_path {
+                            if !fp.is_empty()
+                                && !path.is_empty()
+                                && fp != path
+                                && !fp.starts_with("dep/")
+                            {
+                                crate::edge_audit::inc("EID002");
+                                warn!("[edge_audit] EID002 uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}' origin={:?}", fp, path, e.source_symbol_uid, e.metadata);
+                            }
+                        }
+                    } else {
+                        crate::edge_audit::inc("EID003");
+                        warn!(
+                            "[edge_audit] EID003 malformed source_uid='{}' origin={:?}",
+                            e.source_symbol_uid, e.metadata
+                        );
+                    }
+                    if let Some(l) = line_opt {
+                        if l == 0 {
+                            crate::edge_audit::inc("EID004");
+                            warn!(
+                                "[edge_audit] EID004 zero line in uid uid='{}' origin={:?}",
+                                e.source_symbol_uid, e.metadata
+                            );
+                        }
+                    }
+                    // Target checks as well
+                    let (t_fp_opt, _tn, t_line_opt) = Self::parse_symbol_uid(&e.target_symbol_uid);
+                    if let Some(tfp) = &t_fp_opt {
+                        if tfp.starts_with('/') && !tfp.starts_with("/dep/") {
+                            warn!("[edge_audit] EID001 absolute path in target_uid fp='{}' uid='{}' origin={:?}", tfp, e.target_symbol_uid, e.metadata);
+                        }
+                    }
+                    if let Some(tl) = t_line_opt {
+                        if tl == 0 {
+                            crate::edge_audit::inc("EID004");
+                            warn!(
+                                "[edge_audit] EID004 zero line in uid uid='{}' origin={:?}",
+                                e.target_symbol_uid, e.metadata
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Optional strict graph enforcement: ensure both endpoints exist in symbol_state
+            if self.strict_graph {
+                let mut need: std::collections::HashSet<String> = std::collections::HashSet::new();
+                for e in &edges {
+                    if !Self::is_none_uid(&e.source_symbol_uid) {
+                        need.insert(e.source_symbol_uid.clone());
+                    }
+                    if !Self::is_none_uid(&e.target_symbol_uid) {
+                        need.insert(e.target_symbol_uid.clone());
+                    }
+                }
+                if !need.is_empty() {
+                    let mut query = String::from("SELECT symbol_uid FROM symbol_state WHERE ");
+                    let mut params: Vec<turso::Value> = Vec::with_capacity(need.len());
+                    for (i, uid) in need.iter().enumerate() {
+                        if i > 0 {
+                            query.push_str(" OR ");
+                        }
+                        query.push_str("symbol_uid = ?");
+                        params.push(turso::Value::Text(uid.clone()));
+                    }
+                    let mut rows = safe_query_with_retry(
+                        conn,
+                        &query,
+                        params,
+                        "store_edges_with_conn.strict_graph.exist",
+                        3,
+                    )
+                    .await?;
+                    let mut have: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    while let Some(row) =
+                        rows.next()
+                            .await
+                            .map_err(|e| DatabaseError::OperationFailed {
+                                message: format!("strict_graph existence iterate: {}", e),
+                            })?
+                    {
+                        if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                            have.insert(uid);
+                        }
+                    }
+                    for uid in need.into_iter().filter(|u| !have.contains(u)) {
+                        let (file_part_opt, _name, line_from_uid) = Self::parse_symbol_uid(&uid);
+                        if let Some(file_part) = file_part_opt {
+                            if file_part.starts_with("dep/") || file_part.starts_with("/dep/") {
+                                continue;
+                            }
+                            let file_path = std::path::PathBuf::from(&file_part);
+                            let (line, col) = edges
+                                .iter()
+                                .find_map(|e| {
+                                    if e.source_symbol_uid == uid {
+                                        Some((e.start_line.unwrap_or(1), e.start_char.unwrap_or(1)))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or((line_from_uid.unwrap_or(1), 1));
+                            if let Err(e) = self
+                                .ensure_symbol_exists_with_conn(conn, &uid, &file_path, line, col)
+                                .await
+                            {
+                                warn!(
+                                    "strict_graph: failed to auto-create missing symbol '{}': {}",
+                                    uid, e
+                                );
+                            } else {
+                                debug!("strict_graph: auto-created placeholder for '{}'", uid);
+                            }
+                        } else {
+                            debug!("strict_graph: could not parse uid '{}', skipping", uid);
+                        }
+                    }
+                }
+            }
             // Allow tuning batch size via env to mitigate lock pressure under load
             let batch_size = std::env::var("PROBE_LSP_EDGE_BATCH_SIZE")
                 .ok()
@@ -2632,10 +2785,10 @@ impl SQLiteBackend {
 
                 let placeholders = edges_to_insert
                     .iter()
-                    .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?)")
+                    .map(|_| "(?, ?, ?, ?, ?, ?, ?, ?, ?)")
                     .collect::<Vec<_>>()
                     .join(", ");
-                let mut params = Vec::with_capacity(edges_to_insert.len() * 8);
+                let mut params = Vec::with_capacity(edges_to_insert.len() * 9);
                 for edge in edges_to_insert.iter() {
                     params.extend(vec![
                         turso::Value::Text(edge.relation.to_string().to_string()),
@@ -2653,9 +2806,13 @@ impl SQLiteBackend {
                             .clone()
                             .map(turso::Value::Text)
                             .unwrap_or(turso::Value::Null),
+                        edge.file_path
+                            .clone()
+                            .map(turso::Value::Text)
+                            .unwrap_or(turso::Value::Null),
                     ]);
                 }
-                let batch_sql = format!("INSERT INTO edge (relation, source_symbol_uid, target_symbol_uid, start_line, start_char, confidence, language, metadata) VALUES {}", placeholders);
+                let batch_sql = format!("INSERT INTO edge (relation, source_symbol_uid, target_symbol_uid, start_line, start_char, confidence, language, metadata, edge_file_path) VALUES {}", placeholders);
                 let label = format!(
                     "edges.insert_batch {}/{} (+{})",
                     (offset / batch_size) + 1,
@@ -3980,14 +4137,10 @@ impl SQLiteBackend {
                     .join(", "),
                 quote_ident(&name)
             );
-            let placeholders = (1..=cols.len())
-                .map(|i| format!("?{}", i))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let insert_sql = format!(
-                "INSERT INTO {} VALUES({})",
-                quote_ident(&name),
-                placeholders
+            // Use unnumbered positional placeholders so each row binds its own values in order
+            let single_row_placeholders = format!(
+                "({})",
+                (0..cols.len()).map(|_| "?").collect::<Vec<_>>().join(", ")
             );
 
             // Batch insert rows for performance
@@ -4021,22 +4174,15 @@ impl SQLiteBackend {
                         buf.push(rowvals);
                         if buf.len() >= batch_size {
                             // Build multi-row INSERT
-                            let row_placeholders = format!(
-                                "({})",
-                                (1..=cols.len())
-                                    .map(|i| format!("?{}", i))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            );
                             let mut sql = String::with_capacity(
-                                insert_sql.len() + buf.len() * row_placeholders.len(),
+                                64 + buf.len() * (single_row_placeholders.len() + 2),
                             );
                             sql.push_str(&format!("INSERT INTO {} VALUES ", quote_ident(&name)));
                             for i in 0..buf.len() {
                                 if i > 0 {
                                     sql.push(',');
                                 }
-                                sql.push_str(&row_placeholders);
+                                sql.push_str(&single_row_placeholders);
                             }
                             // Flatten params
                             let mut params: Vec<Value> = Vec::with_capacity(buf.len() * cols.len());
@@ -4059,22 +4205,15 @@ impl SQLiteBackend {
                     Ok(None) => {
                         // flush remainder
                         if !buf.is_empty() {
-                            let row_placeholders = format!(
-                                "({})",
-                                (1..=cols.len())
-                                    .map(|i| format!("?{}", i))
-                                    .collect::<Vec<_>>()
-                                    .join(", ")
-                            );
                             let mut sql = String::with_capacity(
-                                insert_sql.len() + buf.len() * row_placeholders.len(),
+                                64 + buf.len() * (single_row_placeholders.len() + 2),
                             );
                             sql.push_str(&format!("INSERT INTO {} VALUES ", quote_ident(&name)));
                             for i in 0..buf.len() {
                                 if i > 0 {
                                     sql.push(',');
                                 }
-                                sql.push_str(&row_placeholders);
+                                sql.push_str(&single_row_placeholders);
                             }
                             let mut params: Vec<Value> = Vec::with_capacity(buf.len() * cols.len());
                             for row in &buf {
@@ -7157,7 +7296,7 @@ impl SQLiteBackend {
     /// # Lock-Free Architecture
     /// This method is part of the lock-free connection management architecture designed to
     /// eliminate the 45+ pool lock acquisitions that create deadlock potential.
-    async fn get_direct_connection(&self) -> Result<Connection, DatabaseError> {
+    pub(crate) async fn get_direct_connection(&self) -> Result<Connection, DatabaseError> {
         debug!("[DIRECT_CONNECTION] Creating fresh database connection without pool locks");
 
         // Get the database instance from the pool (read-only access, no lock needed)
@@ -8042,6 +8181,39 @@ impl SQLiteBackend {
 
         info!("Auto-created placeholder symbol: {}", symbol_uid);
         Ok(placeholder_symbol)
+    }
+
+    /// Variant that inserts via provided connection (safe inside writer task)
+    async fn ensure_symbol_exists_with_conn(
+        &self,
+        conn: &turso::Connection,
+        symbol_uid: &str,
+        file_path: &Path,
+        line: u32,
+        column: u32,
+    ) -> Result<(), DatabaseError> {
+        let (_file_part, name, line_from_uid) = Self::parse_symbol_uid(symbol_uid);
+        let name_str = name.as_deref().unwrap_or("unknown");
+        let symbol_kind = Self::infer_symbol_kind_from_name_and_context(name_str, file_path, line);
+        let placeholder_symbol = SymbolState {
+            symbol_uid: symbol_uid.to_string(),
+            file_path: file_path.to_string_lossy().to_string(),
+            language: Self::determine_language_from_path(file_path),
+            name: name.unwrap_or("unknown".to_string()),
+            fqn: None,
+            kind: symbol_kind,
+            signature: None,
+            visibility: None,
+            def_start_line: line_from_uid.unwrap_or(line),
+            def_start_char: column,
+            def_end_line: line_from_uid.unwrap_or(line),
+            def_end_char: column + 10,
+            is_definition: true,
+            documentation: Some("Auto-created placeholder symbol".to_string()),
+            metadata: Some("auto_created".to_string()),
+        };
+        self.store_symbols_with_conn(conn, &[placeholder_symbol])
+            .await
     }
 }
 

@@ -1734,6 +1734,7 @@ fn convert_daemon_status(status: DaemonStatus) -> LspDaemonStatus {
         uptime: std::time::Duration::from_secs(status.uptime_secs),
         total_requests: status.total_requests,
         active_connections: status.active_connections,
+        lsp_inflight_current: status.lsp_inflight_current,
         language_pools,
         version: status.version.clone(),
         git_hash: status.git_hash.clone(),
