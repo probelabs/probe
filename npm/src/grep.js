@@ -3,11 +3,11 @@
  * @module grep
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getBinaryPath, buildCliArgs } from './utils.js';
+import { getBinaryPath } from './utils.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Flag mapping for grep options
@@ -97,7 +97,8 @@ export async function grep(options) {
 	// Get the binary path
 	const binaryPath = await getBinaryPath(options.binaryOptions || {});
 
-	// Build CLI arguments for grep subcommand
+	// Build CLI arguments array for grep subcommand
+	// Using an array prevents command injection vulnerabilities
 	const cliArgs = ['grep'];
 
 	// Add flags from GREP_FLAG_MAP
@@ -117,24 +118,17 @@ export async function grep(options) {
 		}
 	}
 
-	// Add pattern
+	// Add pattern (no need to escape - execFile handles it securely)
 	cliArgs.push(options.pattern);
 
 	// Add paths (can be single string or array)
 	const paths = Array.isArray(options.paths) ? options.paths : [options.paths];
 	cliArgs.push(...paths);
 
-	// Build command
-	const cmd = `"${binaryPath}" ${cliArgs.map(arg => {
-		// Quote arguments that contain spaces or special characters
-		if (arg.includes(' ') || arg.includes('*') || arg.includes('?')) {
-			return `"${arg}"`;
-		}
-		return arg;
-	}).join(' ')}`;
-
 	try {
-		const { stdout, stderr } = await execAsync(cmd, {
+		// Use execFile instead of exec to prevent command injection
+		// execFile does not spawn a shell and passes arguments as an array
+		const { stdout, stderr } = await execFileAsync(binaryPath, cliArgs, {
 			maxBuffer: 10 * 1024 * 1024, // 10MB buffer
 			env: {
 				...process.env,
