@@ -331,24 +331,12 @@ class ProbeServer {
         maxTokens: 8000,           // Fits in most AI context windows
       };
 
-<<<<<<< HEAD
-      // Handle format options
-      if (this.defaultFormat === 'outline' || this.defaultFormat === 'outline-xml') {
-        // For outline/outline-xml format, we pass it as a format flag to the search command
-        options.format = this.defaultFormat;
-||||||| d8918b1
-      // Handle format options
-      if (this.defaultFormat === 'outline-xml') {
-        // For outline-xml format, we pass it as a format flag to the search command
-        options.format = 'outline-xml';
-=======
       // Only override defaults if user explicitly set them
       if (args.exact !== undefined) options.exact = args.exact;
 
       // Handle format based on server default
-      if (this.defaultFormat === 'outline-xml') {
-        options.format = 'outline-xml';
->>>>>>> origin/main
+      if (this.defaultFormat === 'outline' || this.defaultFormat === 'outline-xml') {
+        options.format = this.defaultFormat;
       } else if (this.defaultFormat === 'json') {
         options.json = true;
       }
