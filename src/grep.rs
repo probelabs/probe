@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use colored::*;
 use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
+use std::collections::VecDeque;
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
@@ -63,22 +64,20 @@ impl GrepConfig {
     }
 }
 
-/// Represents a single line in a file with match status
+/// Represents a single line in a file
 #[derive(Debug, Clone)]
 struct MatchedLine {
     line_number: usize,
     content: String,
-    is_match: bool,
 }
 
-/// Result of processing a single file
+/// Result of processing a single file (for simple modes)
 struct FileMatchResult {
     has_match: bool,
     match_count: usize,
-    matched_lines: Vec<MatchedLine>,
 }
 
-/// Processes a single file and returns match results
+/// Processes a single file with streaming approach
 struct FileProcessor<'a> {
     config: &'a GrepConfig,
 }
@@ -88,17 +87,16 @@ impl<'a> FileProcessor<'a> {
         Self { config }
     }
 
-    fn process_file(&self, file_path: &Path) -> Result<FileMatchResult> {
+    /// Process file and return basic match info (for count/files-only modes)
+    fn count_matches(&self, file_path: &Path) -> Result<FileMatchResult> {
         let file = fs::File::open(file_path)
             .with_context(|| format!("Failed to open file: {}", file_path.display()))?;
 
         let reader = io::BufReader::new(file);
         let mut match_count = 0;
-        let mut matched_lines = Vec::new();
         let mut has_match = false;
 
-        for (line_index, line_result) in reader.lines().enumerate() {
-            let line_number = line_index + 1; // Convert 0-based to 1-based
+        for line_result in reader.lines() {
             let content = match line_result {
                 Ok(l) => l,
                 Err(_) => continue,
@@ -112,23 +110,93 @@ impl<'a> FileProcessor<'a> {
 
                 // Check max count
                 if let Some(max) = self.config.max_count {
-                    if match_count > max {
+                    if match_count >= max {
                         break;
                     }
                 }
             }
-
-            matched_lines.push(MatchedLine {
-                line_number,
-                content,
-                is_match,
-            });
         }
 
         Ok(FileMatchResult {
             has_match,
             match_count,
-            matched_lines,
+        })
+    }
+
+    /// Process file with streaming output (for full context mode)
+    fn process_with_output<F>(&self, file_path: &Path, mut output_fn: F) -> Result<FileMatchResult>
+    where
+        F: FnMut(&MatchedLine, bool),
+    {
+        let file = fs::File::open(file_path)
+            .with_context(|| format!("Failed to open file: {}", file_path.display()))?;
+
+        let reader = io::BufReader::new(file);
+        let mut match_count = 0;
+        let mut has_match = false;
+
+        // Ring buffer for before-context lines
+        let mut before_buffer: VecDeque<MatchedLine> =
+            VecDeque::with_capacity(self.config.before_context);
+
+        // Track lines we need to print after a match
+        let mut after_remaining = 0;
+
+        for (line_index, line_result) in reader.lines().enumerate() {
+            let line_number = line_index + 1;
+            let content = match line_result {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+
+            let is_match = self.config.regex.is_match(&content) != self.config.invert_match;
+
+            let current_line = MatchedLine {
+                line_number,
+                content,
+            };
+
+            if is_match {
+                has_match = true;
+                match_count += 1;
+
+                // Check max count
+                if let Some(max) = self.config.max_count {
+                    if match_count > max {
+                        break;
+                    }
+                }
+
+                // Print before-context lines from buffer
+                for ctx_line in &before_buffer {
+                    output_fn(ctx_line, false);
+                }
+                before_buffer.clear();
+
+                // Print the matching line
+                output_fn(&current_line, true);
+
+                // Set up after-context printing
+                after_remaining = self.config.after_context;
+            } else if after_remaining > 0 {
+                // Print this line as after-context
+                output_fn(&current_line, false);
+                after_remaining -= 1;
+            } else {
+                // Add to before-context buffer
+                if self.config.before_context > 0 {
+                    before_buffer.push_back(current_line);
+                    // Keep buffer size limited
+                    if before_buffer.len() > self.config.before_context {
+                        before_buffer.pop_front();
+                    }
+                }
+            }
+        }
+
+        Ok(FileMatchResult {
+            has_match,
+            match_count,
         })
     }
 }
@@ -158,61 +226,23 @@ impl OutputMode {
 /// Handles output formatting for grep results
 struct OutputFormatter<'a> {
     config: &'a GrepConfig,
-    mode: OutputMode,
 }
 
 impl<'a> OutputFormatter<'a> {
-    fn new(config: &'a GrepConfig, mode: OutputMode) -> Self {
-        Self { config, mode }
+    fn new(config: &'a GrepConfig) -> Self {
+        Self { config }
     }
 
-    fn output_result(&self, file_path: &Path, result: &FileMatchResult) {
-        match self.mode {
-            OutputMode::FilesWithMatches | OutputMode::FilesWithoutMatch => {
-                println!("{}", file_path.display());
-            }
-            OutputMode::Count => {
-                if self.config.show_line_numbers {
-                    println!("{}:{}", file_path.display(), result.match_count);
-                } else {
-                    println!("{}", result.match_count);
-                }
-            }
-            OutputMode::FullWithContext => {
-                self.output_with_context(file_path, &result.matched_lines);
-            }
+    fn print_count(&self, file_path: &Path, count: usize) {
+        if self.config.show_line_numbers {
+            println!("{}:{}", file_path.display(), count);
+        } else {
+            println!("{}", count);
         }
     }
 
-    fn output_with_context(&self, file_path: &Path, matched_lines: &[MatchedLine]) {
-        let mut i = 0;
-        while i < matched_lines.len() {
-            let line = &matched_lines[i];
-
-            if line.is_match {
-                // Print before context
-                let context_start = i.saturating_sub(self.config.before_context);
-                for ctx_line in matched_lines.iter().take(i).skip(context_start) {
-                    self.print_line(file_path, ctx_line, false);
-                }
-
-                // Print matching line
-                self.print_line(file_path, line, true);
-
-                // Print after context
-                let context_end = (i + self.config.after_context + 1).min(matched_lines.len());
-                for ctx_line in matched_lines.iter().take(context_end).skip(i + 1) {
-                    if !ctx_line.is_match {
-                        self.print_line(file_path, ctx_line, false);
-                    }
-                }
-
-                // Skip ahead past the context we just printed
-                i = (i + self.config.after_context + 1).min(matched_lines.len());
-            } else {
-                i += 1;
-            }
-        }
+    fn print_filename(&self, file_path: &Path) {
+        println!("{}", file_path.display());
     }
 
     fn print_line(&self, file_path: &Path, line: &MatchedLine, is_match: bool) {
@@ -286,7 +316,7 @@ pub fn handle_grep(params: GrepParams) -> Result<()> {
     let config = GrepConfig::from_params(&params)?;
     let output_mode = OutputMode::from_params(&params);
     let file_processor = FileProcessor::new(&config);
-    let output_formatter = OutputFormatter::new(&config, output_mode);
+    let output_formatter = OutputFormatter::new(&config);
 
     for path in &params.paths {
         let walker = build_walker(path, &params.ignore, params.no_gitignore);
@@ -304,19 +334,47 @@ pub fn handle_grep(params: GrepParams) -> Result<()> {
 
             let file_path = entry.path();
 
-            // Process the file
-            let result = match file_processor.process_file(file_path) {
-                Ok(r) => r,
-                Err(_) => continue, // Skip files we can't read
-            };
+            match output_mode {
+                OutputMode::FullWithContext => {
+                    // Streaming mode: output as we process
+                    let result = file_processor.process_with_output(file_path, |line, is_match| {
+                        output_formatter.print_line(file_path, line, is_match);
+                    });
 
-            // Apply filtering based on output mode
-            if should_skip_file(&result, &params) {
-                continue;
+                    let result = match result {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+
+                    // Skip files based on match status
+                    if should_skip_file(&result, &params) {
+                        continue;
+                    }
+                }
+                _ => {
+                    // Simple modes: count matches only
+                    let result = match file_processor.count_matches(file_path) {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+
+                    // Apply filtering based on output mode
+                    if should_skip_file(&result, &params) {
+                        continue;
+                    }
+
+                    // Output the results
+                    match output_mode {
+                        OutputMode::FilesWithMatches | OutputMode::FilesWithoutMatch => {
+                            output_formatter.print_filename(file_path);
+                        }
+                        OutputMode::Count => {
+                            output_formatter.print_count(file_path, result.match_count);
+                        }
+                        OutputMode::FullWithContext => unreachable!(),
+                    }
+                }
             }
-
-            // Output the results
-            output_formatter.output_result(file_path, &result);
         }
     }
 
@@ -361,12 +419,10 @@ mod tests {
         let line = MatchedLine {
             line_number: 42,
             content: "test content".to_string(),
-            is_match: true,
         };
 
         assert_eq!(line.line_number, 42);
         assert_eq!(line.content, "test content");
-        assert!(line.is_match);
     }
 
     #[test]
@@ -450,7 +506,6 @@ mod tests {
         let result = FileMatchResult {
             has_match: false,
             match_count: 0,
-            matched_lines: vec![],
         };
 
         // Should skip files without matches when not looking for files without matches
@@ -460,8 +515,49 @@ mod tests {
         let result_with_match = FileMatchResult {
             has_match: true,
             match_count: 1,
-            matched_lines: vec![],
         };
         assert!(!should_skip_file(&result_with_match, &params));
+    }
+
+    #[test]
+    fn test_streaming_context_handling() {
+        // Test that the ring buffer correctly handles before-context
+        let config = GrepConfig {
+            regex: regex::Regex::new("match").unwrap(),
+            before_context: 2,
+            after_context: 1,
+            use_color: false,
+            show_line_numbers: true,
+            invert_match: false,
+            max_count: None,
+        };
+
+        let processor = FileProcessor::new(&config);
+
+        // Create a temp file with test content
+        use std::io::Write;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+        writeln!(file, "line 1").unwrap();
+        writeln!(file, "line 2").unwrap();
+        writeln!(file, "line 3").unwrap();
+        writeln!(file, "match here").unwrap(); // Should trigger output
+        writeln!(file, "line 5").unwrap();
+        writeln!(file, "line 6").unwrap();
+
+        let mut output_lines = Vec::new();
+        let result = processor
+            .process_with_output(&file_path, |line, _is_match| {
+                output_lines.push(line.line_number);
+            })
+            .unwrap();
+
+        // Should have found 1 match
+        assert_eq!(result.match_count, 1);
+        assert!(result.has_match);
+
+        // Should output: line 2 (before), line 3 (before), line 4 (match), line 5 (after)
+        assert_eq!(output_lines, vec![2, 3, 4, 5]);
     }
 }
