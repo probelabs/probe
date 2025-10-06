@@ -267,14 +267,12 @@ pub fn handle_grep(params: GrepParams) -> Result<()> {
                         // For streaming mode, collect output in a buffer first
                         let mut buffer = Vec::new();
 
-                        let result = file_processor.process_with_output(
-                            file_path,
-                            |line, is_match| {
+                        let result =
+                            file_processor.process_with_output(file_path, |line, is_match| {
                                 // Format line into buffer
                                 let formatted = format_line(&config, file_path, line, is_match);
                                 buffer.push(formatted);
-                            },
-                        );
+                            });
 
                         let result = match result {
                             Ok(r) => r,
@@ -315,7 +313,12 @@ pub fn handle_grep(params: GrepParams) -> Result<()> {
                                 }
                                 OutputMode::Count => {
                                     if config.show_line_numbers {
-                                        let _ = writeln!(out, "{}:{}", file_path.display(), result.match_count);
+                                        let _ = writeln!(
+                                            out,
+                                            "{}:{}",
+                                            file_path.display(),
+                                            result.match_count
+                                        );
                                     } else {
                                         let _ = writeln!(out, "{}", result.match_count);
                                     }
@@ -335,7 +338,12 @@ pub fn handle_grep(params: GrepParams) -> Result<()> {
 }
 
 /// Format a single line for output
-fn format_line(config: &GrepConfig, file_path: &Path, line: &MatchedLine, is_match: bool) -> String {
+fn format_line(
+    config: &GrepConfig,
+    file_path: &Path,
+    line: &MatchedLine,
+    is_match: bool,
+) -> String {
     let file_str = file_path.display().to_string();
 
     if config.use_color {
@@ -346,7 +354,12 @@ fn format_line(config: &GrepConfig, file_path: &Path, line: &MatchedLine, is_mat
 }
 
 /// Format a colored line
-fn format_colored_line(config: &GrepConfig, file_str: &str, line: &MatchedLine, is_match: bool) -> String {
+fn format_colored_line(
+    config: &GrepConfig,
+    file_str: &str,
+    line: &MatchedLine,
+    is_match: bool,
+) -> String {
     if is_match {
         let highlighted = highlight_matches(config, &line.content);
 
@@ -376,7 +389,12 @@ fn format_colored_line(config: &GrepConfig, file_str: &str, line: &MatchedLine, 
 }
 
 /// Format a plain (non-colored) line
-fn format_plain_line(config: &GrepConfig, file_str: &str, line: &MatchedLine, is_match: bool) -> String {
+fn format_plain_line(
+    config: &GrepConfig,
+    file_str: &str,
+    line: &MatchedLine,
+    is_match: bool,
+) -> String {
     if config.show_line_numbers {
         let separator = if is_match { ":" } else { "-" };
         format!(
