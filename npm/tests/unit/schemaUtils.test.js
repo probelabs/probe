@@ -181,6 +181,33 @@ describe('Schema Utilities', () => {
       const expected = '{"test": "value"}';
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
+
+    test('should extract JSON from code block after correction prompt (mermaid-style fix)', () => {
+      // This is the exact pattern we see when LLM responds to correction prompts
+      // with ```json blocks instead of raw JSON
+      const input = '```json\n{\n  "issues": [\n    {\n      "file": "test.js",\n      "line": 1\n    }\n  ]\n}\n```';
+      const result = cleanSchemaResponse(input);
+
+      // Should extract the JSON content without the code block markers
+      expect(result).not.toContain('```');
+      expect(result).toContain('"issues"');
+
+      // Verify it can be parsed
+      expect(() => JSON.parse(result)).not.toThrow();
+      const parsed = JSON.parse(result);
+      expect(parsed.issues).toBeDefined();
+      expect(Array.isArray(parsed.issues)).toBe(true);
+    });
+
+    test('should extract multiline JSON from ```json blocks', () => {
+      const input = '```json\n{\n  "key": "value",\n  "nested": {\n    "array": [1, 2, 3]\n  }\n}\n```';
+      const result = cleanSchemaResponse(input);
+
+      expect(result).not.toContain('```');
+      const parsed = JSON.parse(result);
+      expect(parsed.key).toBe('value');
+      expect(parsed.nested.array).toEqual([1, 2, 3]);
+    });
   });
 
   describe('validateJsonResponse', () => {
