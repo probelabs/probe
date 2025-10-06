@@ -27,7 +27,6 @@ async function buildAgent() {
         '@ai-sdk/google',
         '@ai-sdk/amazon-bedrock',
         'ai',
-        'tiktoken',
         'glob',
         // Node.js built-in modules
         'fs',
