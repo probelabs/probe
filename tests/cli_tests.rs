@@ -477,3 +477,204 @@ struct SearchConfig {
         "Should find only 1 result due to limit"
     );
 }
+
+#[test]
+fn test_cli_grep_basic() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_directory_structure(&temp_dir);
+
+    // Run the CLI with basic grep
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "grep",
+            "search", // Pattern to search for
+            temp_dir.path().to_str().unwrap(),
+            "--color",
+            "never",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    // Check that the command succeeded
+    assert!(output.status.success());
+
+    // Convert stdout to string
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Check grep-style output format (file:line:content)
+    assert!(
+        stdout.contains(":"),
+        "Should contain colon separators in grep format"
+    );
+
+    // Check that it found matches in files
+    assert!(
+        stdout.contains("search.rs"),
+        "Should find matches in Rust file"
+    );
+    assert!(
+        stdout.contains("search.js"),
+        "Should find matches in JavaScript file"
+    );
+}
+
+#[test]
+fn test_cli_grep_case_insensitive() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_file(
+        &temp_dir,
+        "test.txt",
+        "Hello World\nHELLO world\nhello WORLD",
+    );
+
+    // Run grep with case-insensitive flag
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "grep",
+            "-i",
+            "HELLO",
+            temp_dir.path().to_str().unwrap(),
+            "--color",
+            "never",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should match all three lines
+    assert!(stdout.contains("Hello World"));
+    assert!(stdout.contains("HELLO world"));
+    assert!(stdout.contains("hello WORLD"));
+}
+
+#[test]
+fn test_cli_grep_count() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_file(&temp_dir, "test.txt", "search\nfoo\nsearch\nbar\nsearch");
+
+    // Run grep with count flag
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "grep",
+            "-c",
+            "search",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should show count of 3 matches
+    assert!(stdout.contains(":3"), "Should show 3 matches");
+}
+
+#[test]
+fn test_cli_grep_files_with_matches() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_directory_structure(&temp_dir);
+
+    // Run grep with files-with-matches flag
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "grep",
+            "-l",
+            "search",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should only show filenames
+    assert!(stdout.contains("search.rs") || stdout.contains("search.js"));
+
+    // Should not show line numbers or content
+    assert!(
+        !stdout.contains("::"),
+        "Should not contain content separators"
+    );
+}
+
+#[test]
+fn test_cli_grep_invert_match() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_file(&temp_dir, "test.txt", "apple\nbanana\napple\norange");
+
+    // Run grep with invert-match flag
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "grep",
+            "-v",
+            "apple",
+            temp_dir.path().to_str().unwrap(),
+            "--color",
+            "never",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should only show non-matching lines
+    assert!(stdout.contains("banana"));
+    assert!(stdout.contains("orange"));
+    assert!(!stdout.contains("apple"), "Should not contain 'apple'");
+}
+
+#[test]
+fn test_cli_grep_context() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_test_file(&temp_dir, "test.txt", "line1\nline2\ntarget\nline4\nline5");
+
+    // Run grep with context flag
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "grep",
+            "-C",
+            "1",
+            "target",
+            temp_dir.path().to_str().unwrap(),
+            "--color",
+            "never",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should show context lines
+    assert!(stdout.contains("line2"));
+    assert!(stdout.contains("target"));
+    assert!(stdout.contains("line4"));
+
+    // Context lines should use '-' separator
+    assert!(
+        stdout.contains("-"),
+        "Should contain context line separator"
+    );
+}
