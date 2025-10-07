@@ -29,6 +29,7 @@ pub trait IpcStreamTrait: AsyncRead + AsyncWrite + Send + Sync + Unpin {
 #[cfg(unix)]
 mod unix_impl {
     use super::*;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     use crate::socket_path;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     use socket2::{Domain, Socket, Type};
