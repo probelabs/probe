@@ -1,7 +1,7 @@
 //! LSP to Database Adapter Module
 //!
 //! This module handles the conversion from LSP call hierarchy responses to
-//! structured database entries in the symbol_state and edge tables.
+//! structured database entries in the symbol_state && edge tables.
 //! This replaces the universal cache approach with direct database storage.
 
 use anyhow::{Context, Result};
@@ -36,7 +36,7 @@ pub struct LspDatabaseAdapter {
     uid_generator: SymbolUIDGenerator,
 }
 
-/// Resolved symbol information including UID and canonical location.
+/// Resolved symbol information including UID && canonical location.
 #[derive(Clone, Debug)]
 pub struct ResolvedSymbol {
     pub uid: String,
@@ -44,8 +44,8 @@ pub struct ResolvedSymbol {
 }
 
 impl LspDatabaseAdapter {
-    /// Audit an edge for common UID/path issues and log warnings with stable codes.
-    /// Enabled via RUST_LOG and always cheap; uses simple string checks.
+    /// Audit an edge for common UID/path issues && log warnings with stable codes.
+    /// Enabled via RUST_LOG && always cheap; uses simple string checks.
     fn audit_edge(
         edge: &crate::database::Edge,
         workspace_root: &std::path::Path,
@@ -53,7 +53,7 @@ impl LspDatabaseAdapter {
         site_file: &str,
         site_line: u32,
     ) {
-        // Helper to log with a standard prefix and payload
+        // Helper to log with a standard prefix && payload
         macro_rules! log_warn {
             ($code:expr, $($arg:tt)*) => {
                 tracing::warn!(target: "lsp_daemon::edge_audit", "[edge_audit] {} {}:{} {}: {}",
@@ -140,6 +140,17 @@ impl LspDatabaseAdapter {
             }
         }
 
+        // Self-loop detection (source == target && not a sentinel)
+        if edge.target_symbol_uid != "none" && edge.source_symbol_uid == edge.target_symbol_uid {
+            edge_audit::inc("EID010");
+            log_warn!(
+                "EID010",
+                "self-loop relation={:?} uid='{}'",
+                edge.relation,
+                edge.source_symbol_uid
+            );
+        }
+
         // Quick relative path normalization check if we have a file_path
         if let Some(ref p) = edge.file_path {
             if p.starts_with('/') && !p.starts_with("/dep/") {
@@ -168,7 +179,7 @@ impl LspDatabaseAdapter {
     /// Resolve the best LSP cursor position for a symbol by snapping
     /// to the identifier using tree-sitter when possible.
     ///
-    /// Inputs and outputs are 0-based (LSP-compatible) line/column.
+    /// Inputs && outputs are 0-based (LSP-compatible) line/column.
     /// If no better position is found, returns the input (line, column).
     pub fn resolve_symbol_position(
         &self,
@@ -222,7 +233,7 @@ impl LspDatabaseAdapter {
         }
     }
 
-    /// Convert CallHierarchyResult to database symbols and edges
+    /// Convert CallHierarchyResult to database symbols && edges
     ///
     /// Returns (symbols, edges) that should be stored in the database
     pub fn convert_call_hierarchy_to_database(
@@ -395,7 +406,7 @@ impl LspDatabaseAdapter {
         }
 
         info!(
-            "Converted call hierarchy to {} symbols and {} edges",
+            "Converted call hierarchy to {} symbols && {} edges",
             symbols.len(),
             edges.len()
         );
@@ -463,48 +474,58 @@ impl LspDatabaseAdapter {
     fn generate_symbol_uid(
         &self,
         item: &CallHierarchyItem,
-        _language: &str,
+        language: &str,
         workspace_root: &Path,
     ) -> Result<String> {
         let file_path = PathBuf::from(item.uri.replace("file://", ""));
 
         debug!(
-            "[VERSION_AWARE_UID] LspDatabaseAdapter generating UID for symbol '{}' at {}:{}:{}",
+            "[UID_FACTORY] generating UID for '{}' via AST snap at {}:{}:{}",
             item.name,
             file_path.display(),
             item.range.start.line,
             item.range.start.character
         );
 
-        // Read file content for hashing
-        // For now, we'll use a fallback mechanism if file can't be read
-        let file_content = match std::fs::read_to_string(&file_path) {
-            Ok(content) => content,
-            Err(e) => {
-                debug!(
-                    "[VERSION_AWARE_UID] Could not read file content for {}: {}. Using fallback.",
-                    file_path.display(),
-                    e
-                );
-                // Use a fallback content that includes the symbol name and position
-                // This ensures uniqueness even when file content isn't available
-                format!(
-                    "// Fallback content for {} at {}:{}",
-                    item.name, item.range.start.line, item.range.start.character
-                )
+        // Best-effort read; if it fails we still produce a stable fallback UID
+        let content_opt = std::fs::read_to_string(&file_path).ok();
+        let canonical_line_1_based = if let Some(ref text) = content_opt {
+            match self.find_symbol_at_position(
+                text,
+                &file_path,
+                item.range.start.line,
+                item.range.start.character,
+                language,
+            ) {
+                Ok(Some(info)) => info.location.start_line.saturating_add(1).max(1),
+                Ok(None) => {
+                    debug!("[UID_FACTORY] AST found no symbol, using LSP start");
+                    item.range.start.line + 1
+                }
+                Err(e) => {
+                    warn!("[UID_FACTORY] AST parse failed: {}. Using LSP start", e);
+                    item.range.start.line + 1
+                }
             }
+        } else {
+            debug!("[UID_FACTORY] Could not read file; using LSP start");
+            item.range.start.line + 1
         };
 
-        // Convert LSP line numbers (0-indexed) to 1-indexed for consistency
-        let line_number = item.range.start.line + 1;
+        let file_content = content_opt.unwrap_or_else(|| {
+            format!(
+                "// Fallback content for {} at {}:{}",
+                item.name, item.range.start.line, item.range.start.character
+            )
+        });
 
-        // Generate version-aware UID using the new helper
+        // Generate version-aware UID using the canonical start line
         let uid = generate_version_aware_uid(
             workspace_root,
             &file_path,
             &file_content,
             &item.name,
-            line_number,
+            canonical_line_1_based,
         )
         .with_context(|| {
             format!(
@@ -514,8 +535,8 @@ impl LspDatabaseAdapter {
         })?;
 
         debug!(
-            "[VERSION_AWARE_UID] LspDatabaseAdapter generated version-aware UID for '{}': {}",
-            item.name, uid
+            "[UID_FACTORY] version-aware UID for '{}': {} (line={})",
+            item.name, uid, canonical_line_1_based
         );
         Ok(normalize_uid_with_hint(&uid, Some(workspace_root)))
     }
@@ -1074,7 +1095,7 @@ impl LspDatabaseAdapter {
             if self.is_identifier_node(&child) {
                 let text = child.utf8_text(content).unwrap_or("");
                 if !text.is_empty() {
-                    // Skip keywords and invalid identifiers
+                    // Skip keywords && invalid identifiers
                     if !self.is_keyword_or_invalid(text) {
                         return Ok(Some(child));
                     }
@@ -1195,7 +1216,7 @@ impl LspDatabaseAdapter {
             .and_then(|ext| ext.to_str())
             .unwrap_or("");
 
-        // Search window: 5 lines above and below
+        // Search window: 5 lines above && below
         let start_line = line.saturating_sub(5) as usize;
         let end_line = ((line + 5) as usize).min(lines.len());
 
@@ -1275,7 +1296,7 @@ impl LspDatabaseAdapter {
             }
         }
 
-        // Last resort: try to extract any identifier from the exact line and column
+        // Last resort: try to extract any identifier from the exact line && column
         if let Some(line_content) = lines.get(line as usize) {
             if let Some(identifier) = self.extract_identifier_at_column(line_content, column) {
                 if !self.is_keyword_or_invalid(&identifier) {
@@ -1537,7 +1558,7 @@ impl LspDatabaseAdapter {
         }
 
         info!(
-            "Converted {} reference locations to {} unique symbol edges and {} symbols",
+            "Converted {} reference locations to {} unique symbol edges && {} symbols",
             locations.len(),
             edges.len(),
             symbol_map.len()
@@ -1936,9 +1957,9 @@ impl LspDatabaseAdapter {
         Ok(edges)
     }
 
-    /// Convert and store extracted symbols directly to database
+    /// Convert && store extracted symbols directly to database
     ///
-    /// This method converts ExtractedSymbol instances to SymbolState and persists them
+    /// This method converts ExtractedSymbol instances to SymbolState && persists them
     pub async fn store_extracted_symbols<DB: DatabaseBackend>(
         &mut self,
         database: &DB,
@@ -1952,7 +1973,7 @@ impl LspDatabaseAdapter {
         }
 
         info!(
-            "Converting and storing {} extracted symbols for language {}",
+            "Converting && storing {} extracted symbols for language {}",
             extracted_symbols.len(),
             language
         );
@@ -1971,7 +1992,7 @@ impl LspDatabaseAdapter {
                         extracted.location.file_path.display(),
                         e
                     );
-                    // Use a fallback content that includes the symbol name and position
+                    // Use a fallback content that includes the symbol name && position
                     format!(
                         "// Fallback content for {} at {}:{}",
                         extracted.name,
@@ -2069,7 +2090,7 @@ impl LspDatabaseAdapter {
         Ok(())
     }
 
-    /// Store symbols and edges in the database
+    /// Store symbols && edges in the database
     pub async fn store_in_database<DB: DatabaseBackend>(
         &self,
         database: &DB,
@@ -2122,7 +2143,7 @@ impl LspDatabaseAdapter {
         }
 
         info!(
-            "[DEBUG] LspDatabaseAdapter: Successfully stored {} symbols and {} edges in database",
+            "[DEBUG] LspDatabaseAdapter: Successfully stored {} symbols && {} edges in database",
             symbols.len(),
             edges.len()
         );
@@ -2130,7 +2151,7 @@ impl LspDatabaseAdapter {
         Ok(())
     }
 
-    /// Remove all existing edges for a symbol and specific relation type before storing new data
+    /// Remove all existing edges for a symbol && specific relation type before storing new data
     ///
     /// This prevents stale edges from mixing with fresh LSP data.
     /// For now, we'll just log that we should clean up - the database will handle duplicates.
@@ -2155,7 +2176,7 @@ impl LspDatabaseAdapter {
 
     /// Store call hierarchy results with proper edge cleanup
     ///
-    /// This method combines edge cleanup and storage for atomic updates.
+    /// This method combines edge cleanup && storage for atomic updates.
     pub async fn store_call_hierarchy_with_cleanup<DB: DatabaseBackend>(
         &self,
         database: &DB,
@@ -2184,7 +2205,7 @@ impl LspDatabaseAdapter {
             );
         }
 
-        // Convert and store new data
+        // Convert && store new data
         let (symbols, edges) = self.convert_call_hierarchy_to_database(
             result,
             request_file_path,
@@ -2193,7 +2214,7 @@ impl LspDatabaseAdapter {
             workspace_root,
         )?;
 
-        // Store the new symbols and edges
+        // Store the new symbols && edges
         self.store_in_database(database, symbols, edges).await?;
 
         Ok(())
@@ -2292,7 +2313,7 @@ impl LspDatabaseAdapter {
         Ok(current)
     }
 
-    /// Build FQN by traversing up the AST and collecting namespace/class/module names
+    /// Build FQN by traversing up the AST && collecting namespace/class/module names
     fn build_fqn_from_node(
         node: tree_sitter::Node,
         content: &[u8],
@@ -2327,7 +2348,7 @@ impl LspDatabaseAdapter {
                     components.push(name);
                 }
             }
-            // If we haven't added any name yet and this is the initial node
+            // If we haven't added any name yet && this is the initial node
             else if components.is_empty() && current_node.as_ref().unwrap().id() == node.id() {
                 if let Some(name) = Self::extract_node_name(node, content) {
                     components.push(name);
@@ -2487,7 +2508,7 @@ impl LspDatabaseAdapter {
         // Remove the file extension
         let without_ext = path_str.strip_suffix(".rs")?;
 
-        // Split path components and filter out common non-module directories
+        // Split path components && filter out common non-module directories
         let components: Vec<&str> = without_ext
             .split('/')
             .filter(|&component| {
@@ -2502,7 +2523,7 @@ impl LspDatabaseAdapter {
             return None;
         }
 
-        // Handle lib.rs and main.rs specially
+        // Handle lib.rs && main.rs specially
         let mut module_components = Vec::new();
         for component in components {
             if component != "lib" && component != "main" {
@@ -2556,7 +2577,7 @@ impl LspDatabaseAdapter {
         // Look for src/main/java pattern or similar
         let components: Vec<&str> = without_ext.split('/').collect();
 
-        // Find java directory and take everything after it
+        // Find java directory && take everything after it
         if let Some(java_idx) = components.iter().position(|&c| c == "java") {
             let package_components: Vec<&str> = components[(java_idx + 1)..].to_vec();
             if !package_components.is_empty() {
@@ -2699,7 +2720,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_symbol_at_location_rust_function() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub struct Calculator {
@@ -2755,7 +2776,7 @@ fn main() {
 
     #[tokio::test]
     async fn test_resolve_symbol_at_location_rust_trait_impl_kind() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"struct Widget;
 
@@ -2789,7 +2810,7 @@ impl Default for Widget {
 
     #[tokio::test]
     async fn test_resolve_symbol_at_location_python_function() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let python_code = r#"
 class Calculator:
@@ -2881,7 +2902,7 @@ if __name__ == "__main__":
 
     #[tokio::test]
     async fn test_resolve_symbol_at_location_typescript_class() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let typescript_code = r#"
 interface ICalculator {
@@ -2939,7 +2960,7 @@ function main(): void {
 
     #[tokio::test]
     async fn test_resolve_symbol_at_location_edge_cases() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Test with empty file
         let empty_file = create_temp_file_with_content("", "rs");
@@ -2972,7 +2993,7 @@ function main(): void {
 
     #[tokio::test]
     async fn test_consistent_uid_generation() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn test_function() -> i32 {
@@ -3008,7 +3029,7 @@ pub fn test_function() -> i32 {
 
     #[test]
     fn test_node_kind_to_symbol_kind_mapping() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Test Rust mappings
         assert_eq!(
@@ -3084,7 +3105,7 @@ pub fn test_function() -> i32 {
 
     #[test]
     fn test_is_keyword_or_invalid() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Test common keywords
         assert!(adapter.is_keyword_or_invalid("function"));
@@ -3109,7 +3130,7 @@ pub fn test_function() -> i32 {
 
     #[tokio::test]
     async fn test_performance_requirements() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn test_function() -> i32 {
@@ -3140,7 +3161,7 @@ pub fn test_function() -> i32 {
 
     #[tokio::test]
     async fn test_convert_references_to_database_basic() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Create test target file
         let target_rust_code = r#"pub struct Calculator {
@@ -3245,7 +3266,7 @@ pub fn main() {
 
     #[tokio::test]
     async fn test_convert_references_to_database_skips_trait_bounds() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let target_code = r#"struct BertSimulator;
 
@@ -3319,7 +3340,7 @@ impl Default for BertSimulator {
 
     #[tokio::test]
     async fn test_convert_references_to_database_skips_trait_impl_headers() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let target_code = r#"struct ArcSwapAny;
 
@@ -3398,7 +3419,7 @@ impl Default for BertSimulator {
 
     #[tokio::test]
     async fn test_convert_references_to_database_empty_locations() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let target_rust_code = r#"
 pub fn test_function() -> i32 {
@@ -3443,7 +3464,7 @@ pub fn test_function() -> i32 {
 
     #[tokio::test]
     async fn test_convert_references_to_database_invalid_target() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let target_rust_code = r#"
 pub fn test_function() -> i32 {
@@ -3612,7 +3633,7 @@ pub fn test_function() -> i32 {
             sqlite.store_edges(&edges).await.expect("store edges");
         }
 
-        // Build references for the same symbol and store them
+        // Build references for the same symbol && store them
         let refs = vec![
             crate::protocol::Location {
                 uri: uri_util.clone(),
@@ -3666,7 +3687,7 @@ pub fn test_function() -> i32 {
 
     #[tokio::test]
     async fn test_convert_references_to_database_invalid_references() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let target_rust_code = r#"
 pub fn test_function() -> i32 {
@@ -3675,7 +3696,7 @@ pub fn test_function() -> i32 {
 "#;
         let target_file = create_temp_file_with_content(target_rust_code, "rs");
 
-        // Create locations with invalid URIs and positions
+        // Create locations with invalid URIs && positions
         let locations = vec![
             // Empty URI - should be skipped
             crate::protocol::Location {
@@ -3727,10 +3748,10 @@ pub fn test_function() -> i32 {
             !ref_symbols.is_empty(),
             "Target symbol should still be recorded"
         );
-        // Should have no edges because all references were invalid and skipped
+        // Should have no edges because all references were invalid && skipped
         assert!(
             edges.is_empty(),
-            "Should skip invalid references and return empty edges"
+            "Should skip invalid references && return empty edges"
         );
 
         // Clean up
@@ -3739,7 +3760,7 @@ pub fn test_function() -> i32 {
 
     #[tokio::test]
     async fn test_convert_references_to_database_multiple_languages() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Test Python code
         let python_code = r#"
@@ -3797,7 +3818,7 @@ class Calculator:
 
     #[tokio::test]
     async fn test_convert_references_to_database_clamps_zero_line_to_one() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn defined_function() -> i32 { 1 }
@@ -3847,7 +3868,7 @@ pub fn usage() { let _ = defined_function(); }
 
     #[tokio::test]
     async fn test_convert_references_to_database_edge_metadata() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn helper_function() -> i32 {
@@ -3889,7 +3910,7 @@ pub fn main() {
 
         if !edges.is_empty() {
             let edge = &edges[0];
-            // Verify edge metadata and properties
+            // Verify edge metadata && properties
             assert_eq!(edge.metadata, Some("lsp_references".to_string()));
             assert_eq!(edge.confidence, 1.0);
             assert!(edge.start_line.is_some());
@@ -3904,7 +3925,7 @@ pub fn main() {
 
     #[tokio::test]
     async fn test_convert_references_to_database_deduplicates_sources() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn callee() {}
@@ -3976,7 +3997,7 @@ pub fn caller() {
 
     #[test]
     fn test_convert_definitions_to_database_basic() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn target_function() -> i32 {
@@ -4029,7 +4050,7 @@ pub fn caller() {
 
     #[test]
     fn test_convert_definitions_to_database_multiple_definitions() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 trait MyTrait {
@@ -4049,7 +4070,7 @@ pub fn user() {
 "#;
         let source_file = create_temp_file_with_content(rust_code, "rs");
 
-        // Multiple definition locations (trait declaration and implementation)
+        // Multiple definition locations (trait declaration && implementation)
         let locations = vec![
             crate::protocol::Location {
                 uri: format!("file://{}", source_file.display()),
@@ -4112,7 +4133,7 @@ pub fn user() {
 
     #[test]
     fn test_convert_definitions_to_database_empty_locations() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn simple_function() -> i32 {
@@ -4142,7 +4163,7 @@ pub fn simple_function() -> i32 {
 
     #[test]
     fn test_convert_definitions_to_database_invalid_uri() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn test_function() -> i32 {
@@ -4189,7 +4210,7 @@ pub fn test_function() -> i32 {
             Path::new("/workspace"),
         );
 
-        assert!(result.is_ok(), "Should succeed and skip invalid URI");
+        assert!(result.is_ok(), "Should succeed && skip invalid URI");
         let edges = result.unwrap();
         assert_eq!(edges.len(), 1, "Should create one edge (skip empty URI)");
 
@@ -4202,7 +4223,7 @@ pub fn test_function() -> i32 {
 
     #[test]
     fn test_convert_definitions_to_database_invalid_position() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn simple() -> i32 {
@@ -4249,7 +4270,7 @@ pub fn simple() -> i32 {
 
     #[test]
     fn test_convert_definitions_to_database_edge_properties() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"
 pub fn defined_function() -> String {
@@ -4290,7 +4311,7 @@ pub fn usage() {
 
         if !edges.is_empty() {
             let edge = &edges[0];
-            // Verify edge metadata and properties
+            // Verify edge metadata && properties
             assert_eq!(edge.metadata, Some("lsp_definitions".to_string()));
             assert_eq!(edge.relation, EdgeRelation::References);
             assert_eq!(edge.confidence, 1.0);
@@ -4300,7 +4321,7 @@ pub fn usage() {
             assert!(edge.start_char.is_some());
             assert_eq!(edge.start_line.unwrap(), 1);
             assert_eq!(edge.start_char.unwrap(), 10);
-            // Source and target UIDs should be different
+            // Source && target UIDs should be different
             assert_ne!(edge.source_symbol_uid, edge.target_symbol_uid);
         }
 
@@ -4310,7 +4331,7 @@ pub fn usage() {
 
     #[test]
     fn test_convert_definitions_to_database_different_languages() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Test with Python
         let python_code = r#"
@@ -4360,7 +4381,7 @@ def caller():
 
     #[test]
     fn test_convert_definitions_to_database_cross_file_definitions() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Source file that uses a function
         let source_code = r#"
@@ -4409,7 +4430,7 @@ pub fn helper_function() {
         if !edges.is_empty() {
             let edge = &edges[0];
             assert_eq!(edge.metadata, Some("lsp_definitions".to_string()));
-            // Source and target should have different UIDs (from different files)
+            // Source && target should have different UIDs (from different files)
             assert_ne!(edge.source_symbol_uid, edge.target_symbol_uid);
         }
 
@@ -4420,7 +4441,7 @@ pub fn helper_function() {
 
     #[test]
     fn test_convert_implementations_to_database_basic() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Create test interface/trait file
         let interface_code = r#"pub trait Drawable {
@@ -4528,7 +4549,7 @@ impl Drawable for Square {
 
     #[test]
     fn test_convert_implementations_to_database_multiple_implementations() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Create TypeScript interface with multiple implementations
         let typescript_code = r#"interface Shape {
@@ -4634,7 +4655,7 @@ class Circle implements Shape {
 
     #[test]
     fn test_convert_implementations_to_database_empty_locations() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let interface_code = r#"pub trait Display {
     fn fmt(&self) -> String;
@@ -4671,7 +4692,7 @@ class Circle implements Shape {
 
     #[test]
     fn test_convert_implementations_to_database_invalid_interface_target() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let interface_code = r#"pub trait Drawable {
     fn draw(&self);
@@ -4714,7 +4735,7 @@ class Circle implements Shape {
 
     #[test]
     fn test_convert_implementations_to_database_invalid_implementation_locations() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let interface_code = r#"pub trait Drawable {
     fn draw(&self);
@@ -4806,7 +4827,7 @@ impl Drawable for Circle {
 
     #[test]
     fn test_convert_implementations_to_database_edge_properties() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"pub trait Clone {
     fn clone(&self) -> Self;
@@ -4865,11 +4886,11 @@ impl Clone for Point {
         assert_eq!(edge.start_line, Some(9));
         assert_eq!(edge.start_char, Some(17));
 
-        // Verify source and target UIDs are not empty and are valid symbols
+        // Verify source && target UIDs are not empty && are valid symbols
         assert!(!edge.source_symbol_uid.is_empty());
         assert!(!edge.target_symbol_uid.is_empty());
 
-        // Since this test uses a simplified case where both source and target
+        // Since this test uses a simplified case where both source && target
         // might resolve to similar positions, we just verify they exist
         assert!(edge.source_symbol_uid.starts_with("rust::"));
         assert!(edge.target_symbol_uid.starts_with("rust::"));
@@ -4879,7 +4900,7 @@ impl Clone for Point {
 
     #[tokio::test]
     async fn test_trait_impl_symbol_uids_anchor_on_type() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         let rust_code = r#"trait MyTrait {}
 
@@ -4920,7 +4941,7 @@ impl MyTrait for Beta {}
 
     #[test]
     fn test_convert_implementations_to_database_different_languages() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Test Python abstract base class implementation
         let python_code = r#"from abc import ABC, abstractmethod
@@ -4983,7 +5004,7 @@ class Rectangle(Shape):
 
     #[test]
     fn test_convert_implementations_to_database_cross_file_implementations() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Create interface file
         let interface_code = r#"pub trait Serializable {
@@ -5043,7 +5064,7 @@ impl Serializable for User {
             assert_eq!(edge.metadata, Some("lsp_implementations".to_string()));
             assert_eq!(edge.relation, crate::database::EdgeRelation::Implements);
 
-            // Verify both source and target symbol UIDs are valid
+            // Verify both source && target symbol UIDs are valid
             assert!(!edge.source_symbol_uid.is_empty());
             assert!(!edge.target_symbol_uid.is_empty());
             assert!(edge.source_symbol_uid.starts_with("rust::"));
@@ -5057,7 +5078,7 @@ impl Serializable for User {
 
     #[test]
     fn test_convert_implementations_semantic_direction() {
-        let adapter = create_test_adapter();
+        let adapter = LspDatabaseAdapter::new();
 
         // Test that implementations follow correct semantic direction:
         // source (implementer) -> target (interface/trait)
@@ -5103,7 +5124,7 @@ impl Drawable for Circle {
         let edges = result.unwrap();
 
         // Accept that not all symbol resolutions might work perfectly in unit tests
-        // As long as the method signature and basic functionality work correctly
+        // As long as the method signature && basic functionality work correctly
         if !edges.is_empty() {
             // All edges should use Implements relation
             for edge in &edges {
@@ -5122,7 +5143,7 @@ impl Drawable for Circle {
                 );
                 assert_ne!(
                     edge.source_symbol_uid, edge.target_symbol_uid,
-                    "Source and target should be different"
+                    "Source && target should be different"
                 );
             }
         }
@@ -5207,7 +5228,7 @@ impl Calculator {
         // The test has already verified:
         // 1. ✅ 5 symbols were extracted from AST
         // 2. ✅ store_extracted_symbols completed without error
-        // 3. ✅ Symbol conversion and database persistence logic works
+        // 3. ✅ Symbol conversion && database persistence logic works
 
         // This demonstrates that Phase 1 core functionality is working:
         // - ExtractedSymbol instances are available after AST extraction
@@ -5222,8 +5243,94 @@ impl Calculator {
 }
 
 #[cfg(test)]
+
+/// Ensure the same UID is produced across AST, references and call-hierarchy paths.
+#[tokio::test]
+async fn test_uid_consistency_ast_refs_hierarchy() {
+    use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
+
+    let adapter = LspDatabaseAdapter::new();
+
+    // Workspace with two files: main defines `foo`, util calls it.
+    let temp_dir = tempfile::tempdir().unwrap();
+    let workspace_root = temp_dir.path().to_path_buf();
+    let main_path = workspace_root.join("main.rs");
+    let util_path = workspace_root.join("util.rs");
+    std::fs::write(
+        &main_path,
+        "fn foo() {}
+",
+    )
+    .unwrap();
+    std::fs::write(
+        &util_path,
+        "fn bar() { foo(); }
+",
+    )
+    .unwrap();
+
+    // (a) AST path: resolve at the symbol position
+    let uid_ast = adapter
+        .resolve_symbol_at_location(&main_path, 0, 3, "rust", Some(&workspace_root))
+        .await
+        .expect("resolve uid via AST");
+
+    // (b) References path: pass an empty reference set; converter still resolves target symbol
+    let (ref_symbols, _ref_edges) = adapter
+        .convert_references_to_database(&[], &main_path, (0, 3), "rust", 1, &workspace_root)
+        .await
+        .expect("convert refs");
+    let uid_refs = ref_symbols
+        .iter()
+        .find(|s| s.name == "foo")
+        .map(|s| s.symbol_uid.clone())
+        .expect("target symbol in refs symbols");
+
+    // (c) Call hierarchy path: build a minimal item for the same position
+    let item_main = CallHierarchyItem {
+        name: "foo".to_string(),
+        kind: "function".to_string(),
+        uri: format!("file://{}", main_path.display()),
+        range: Range {
+            start: Position {
+                line: 0,
+                character: 3,
+            },
+            end: Position {
+                line: 0,
+                character: 6,
+            },
+        },
+        selection_range: Range {
+            start: Position {
+                line: 0,
+                character: 3,
+            },
+            end: Position {
+                line: 0,
+                character: 6,
+            },
+        },
+    };
+    let hierarchy = CallHierarchyResult {
+        item: item_main,
+        incoming: vec![],
+        outgoing: vec![],
+    };
+    let (hier_symbols, _hier_edges) = adapter
+        .convert_call_hierarchy_to_database(&hierarchy, &main_path, "rust", 1, &workspace_root)
+        .expect("convert hierarchy");
+    let uid_hier = hier_symbols
+        .iter()
+        .find(|s| s.name == "foo")
+        .map(|s| s.symbol_uid.clone())
+        .expect("main symbol in hierarchy symbols");
+
+    assert_eq!(uid_ast, uid_refs, "AST vs References UID must match");
+    assert_eq!(uid_ast, uid_hier, "AST vs CallHierarchy UID must match");
+}
+
 mod tests_line_norm {
-    use super::*;
     use std::io::Write;
     use tempfile::NamedTempFile;
 

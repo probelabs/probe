@@ -1903,7 +1903,7 @@ pub struct SQLiteBackend {
     /// Reader tracking: active count and last label
     reader_active: Arc<std::sync::atomic::AtomicUsize>,
     reader_last: Arc<Mutex<Option<SectionInfo>>>,
-    /// True when the per-DB read-write gate is held for writing (quiesced)
+    /// true when the per-DB read-write gate is held for writing (quiesced)
     reader_write_held: Arc<AtomicBool>,
     /// Whether MVCC was enabled when opening the database
     mvcc_enabled: bool,
@@ -2108,11 +2108,13 @@ impl SQLiteBackend {
         let (tx, mut rx) = mpsc::channel::<WriteMsg>(writer_queue_size);
         let busy_flag = Arc::new(AtomicBool::new(false));
 
-        let strict_graph_flag = std::env::var("PROBE_LSP_STRICT_GRAPH")
-            .ok()
-            .map(|v| v.to_lowercase())
-            .map(|s| matches!(s.as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
+        let strict_graph_flag = match std::env::var("PROBE_LSP_STRICT_GRAPH") {
+            Ok(v) => {
+                let s = v.to_lowercase();
+                matches!(s.as_str(), "1" | "true" | "yes" | "on")
+            }
+            Err(_) => true,
+        };
 
         let backend = Self {
             pool: Arc::new(Mutex::new(pool)),
@@ -2509,6 +2511,20 @@ impl SQLiteBackend {
         let normalized_edges: Vec<Edge> = edges_in
             .iter()
             .map(Self::normalize_edge_for_storage)
+            .collect();
+
+        // Drop self-loops for non-call relations (allow only one call self-loop later)
+        let normalized_edges: Vec<Edge> = normalized_edges
+            .into_iter()
+            .filter(|e| {
+                if e.source_symbol_uid == e.target_symbol_uid && e.target_symbol_uid != "none" {
+                    let rel = e.relation.to_string();
+                    // keep only Calls; drop References/Implements (and others)
+                    rel == "calls"
+                } else {
+                    true
+                }
+            })
             .collect();
 
         let mut seen_signatures: HashSet<EdgeDedupKey> = HashSet::new();
@@ -4359,8 +4375,26 @@ impl EdgeDedupKey {
             source: edge.source_symbol_uid.clone(),
             target: edge.target_symbol_uid.clone(),
             language: edge.language.clone(),
-            start_line: edge.start_line.map(|v| v as i64).unwrap_or(-1),
-            start_char: edge.start_char.map(|v| v as i64).unwrap_or(-1),
+            start_line: {
+                if edge.relation.to_string() == "calls"
+                    && edge.source_symbol_uid == edge.target_symbol_uid
+                    && edge.target_symbol_uid != "none"
+                {
+                    -2
+                } else {
+                    edge.start_line.map(|v| v as i64).unwrap_or(-1)
+                }
+            },
+            start_char: {
+                if edge.relation.to_string() == "calls"
+                    && edge.source_symbol_uid == edge.target_symbol_uid
+                    && edge.target_symbol_uid != "none"
+                {
+                    -2
+                } else {
+                    edge.start_char.map(|v| v as i64).unwrap_or(-1)
+                }
+            },
         }
     }
 }
@@ -7519,6 +7553,56 @@ impl SQLiteBackend {
         Ok(())
     }
 
+    /// Insert a single symbol directly using the provided connection, assuming caller manages the transaction.
+    async fn insert_symbol_direct_within_tx(
+        &self,
+        conn: &Connection,
+        symbol: &SymbolState,
+    ) -> Result<(), DatabaseError> {
+        let insert_query = "INSERT INTO symbol_state                         (symbol_uid, file_path, language, name, fqn, kind, signature, visibility,                          def_start_line, def_start_char, def_end_line, def_end_char, is_definition, documentation, metadata)                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+        let params = vec![
+            turso::Value::Text(symbol.symbol_uid.clone()),
+            turso::Value::Text(symbol.file_path.clone()),
+            turso::Value::Text(symbol.language.clone()),
+            turso::Value::Text(symbol.name.clone()),
+            symbol
+                .fqn
+                .as_ref()
+                .map(|s| turso::Value::Text(s.clone()))
+                .unwrap_or(turso::Value::Null),
+            turso::Value::Text(symbol.kind.clone()),
+            symbol
+                .signature
+                .as_ref()
+                .map(|s| turso::Value::Text(s.clone()))
+                .unwrap_or(turso::Value::Null),
+            symbol
+                .visibility
+                .as_ref()
+                .map(|s| turso::Value::Text(s.clone()))
+                .unwrap_or(turso::Value::Null),
+            turso::Value::Integer(symbol.def_start_line as i64),
+            turso::Value::Integer(symbol.def_start_char as i64),
+            turso::Value::Integer(symbol.def_end_line as i64),
+            turso::Value::Integer(symbol.def_end_char as i64),
+            turso::Value::Integer(if symbol.is_definition { 1 } else { 0 }),
+            symbol
+                .documentation
+                .as_ref()
+                .map(|s| turso::Value::Text(s.clone()))
+                .unwrap_or(turso::Value::Null),
+            symbol
+                .metadata
+                .as_ref()
+                .map(|s| turso::Value::Text(s.clone()))
+                .unwrap_or(turso::Value::Null),
+        ];
+        let _ =
+            safe_execute_with_retry(conn, insert_query, params, "strict_graph.insert_symbol", 3)
+                .await?;
+        Ok(())
+    }
+
     // Public trait method now routes through the single-writer
     async fn store_symbols(&self, symbols: &[SymbolState]) -> Result<(), DatabaseError> {
         let (tx, rx) = oneshot::channel();
@@ -8212,7 +8296,7 @@ impl SQLiteBackend {
             documentation: Some("Auto-created placeholder symbol".to_string()),
             metadata: Some("auto_created".to_string()),
         };
-        self.store_symbols_with_conn(conn, &[placeholder_symbol])
+        self.insert_symbol_direct_within_tx(conn, &placeholder_symbol)
             .await
     }
 }
@@ -9751,7 +9835,10 @@ async fn wal_sync_timeout_does_not_leave_quiesced() {
     let sqlite_cfg = SQLiteConfig {
         path: db_path.to_string_lossy().to_string(),
         temporary: false,
+        enable_wal: true,
+        page_size: 4096,
         cache_size: 0,
+        enable_foreign_keys: true,
     };
     let backend = SQLiteBackend::with_sqlite_config(cfg, sqlite_cfg)
         .await
