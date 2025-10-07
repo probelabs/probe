@@ -880,11 +880,12 @@ async fn main() -> Result<()> {
             baseline,
             fast,
         })?,
+
         Some(Commands::Lsp { subcommand }) => {
-            LspManager::handle_command(&subcommand, "color").await?;
-        }
-        Some(Commands::Config { subcommand }) => {
-            handle_config_command(&subcommand)?;
+            // Delegate to LSP manager for actual subcommand handling. Avoid doing
+            // extra readiness work here so each subcommand can control connection
+            // behavior (auto-start, timeouts, formats, etc.).
+            LspManager::handle_command(&subcommand, "terminal").await?;
         }
     }
 
