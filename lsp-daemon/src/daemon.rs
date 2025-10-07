@@ -5770,6 +5770,7 @@ impl LspDaemon {
                     .await?;
                 let mut info = crate::protocol::EdgeAuditInfo::default();
                 let mut sample_rows: Vec<String> = Vec::new();
+                let mut edges: Vec<(String, String)> = Vec::new();
                 while let Some(r) = rows.next().await? {
                     let src = match r.get_value(0)? {
                         turso::Value::Text(s) => s,
@@ -5779,6 +5780,7 @@ impl LspDaemon {
                         turso::Value::Text(s) => s,
                         _ => String::new(),
                     };
+                    edges.push((src.clone(), tgt.clone()));
                     // Parse helpers (owned)
                     let parse = |uid: &str| -> (Option<String>, Option<String>, Option<String>) {
                         let parts: Vec<&str> = uid.split(':').collect();
@@ -5796,7 +5798,6 @@ impl LspDaemon {
                             }
                         }
                     }
-                    // DB schema doesn't store file_path for edges; skip EID002 here (covered by runtime audit)
                     if sfp.is_none() {
                         info.eid003_malformed_uid += 1;
                         if sample_rows.len() < samples {
@@ -5828,7 +5829,114 @@ impl LspDaemon {
                             }
                         }
                     }
-                    // DB does not store edge.file_path; skip EID009 here.
+                    // Self-loop (per edge)
+                    if !src.is_empty() && src == tgt && src != "none" {
+                        info.eid010_self_loop += 1;
+                        if sample_rows.len() < samples {
+                            sample_rows.push(format!("EID010 self-loop uid='{}'", src));
+                        }
+                    }
+                }
+                // Orphan detection
+                use std::collections::{HashMap, HashSet};
+                let mut src_uids: Vec<String> = Vec::new();
+                let mut tgt_uids: Vec<String> = Vec::new();
+                for (s, t) in &edges {
+                    if s != "none" {
+                        src_uids.push(s.clone());
+                    }
+                    if t != "none" {
+                        tgt_uids.push(t.clone());
+                    }
+                }
+                let mut all: HashSet<String> = src_uids.iter().cloned().collect();
+                all.extend(tgt_uids.iter().cloned());
+                let mut existing: HashSet<String> = HashSet::new();
+                let all_vec: Vec<String> = all.into_iter().collect();
+                let batch = 512usize;
+                let mut i = 0;
+                while i < all_vec.len() {
+                    let chunk = &all_vec[i..std::cmp::min(i + batch, all_vec.len())];
+                    let mut q = String::from("SELECT symbol_uid FROM symbol_state WHERE ");
+                    let mut params: Vec<turso::Value> = Vec::with_capacity(chunk.len());
+                    for (k, uid) in chunk.iter().enumerate() {
+                        if k > 0 {
+                            q.push_str(" OR ");
+                        }
+                        q.push_str("symbol_uid = ?");
+                        params.push(turso::Value::Text(uid.clone()));
+                    }
+                    let mut rs = conn.query(&q, params).await?;
+                    while let Some(rw) = rs.next().await? {
+                        if let Ok(turso::Value::Text(u)) = rw.get_value(0) {
+                            existing.insert(u);
+                        }
+                    }
+                    i += batch;
+                }
+                let mut near_cache: HashMap<(String, String), bool> = HashMap::new();
+                let parse2 = |uid: &str| -> (Option<String>, Option<String>, Option<String>) {
+                    let parts: Vec<&str> = uid.split(':').collect();
+                    let fp = parts.get(0).map(|s| s.to_string());
+                    let name = parts.get(2).map(|s| s.to_string());
+                    let line = parts.get(3).map(|s| s.to_string());
+                    (fp, name, line)
+                };
+                for (s, t) in &edges {
+                    if s != "none" && !existing.contains(s) {
+                        info.eid011_orphan_source += 1;
+                        if sample_rows.len() < samples {
+                            sample_rows.push(format!("EID011 orphan source='{}'", s));
+                        }
+                        let (fp, name, _line) = parse2(s);
+                        if let (Some(fp), Some(name)) = (fp, name) {
+                            let key = (fp.clone(), name.clone());
+                            let has = if let Some(v) = near_cache.get(&key) {
+                                *v
+                            } else {
+                                let mut rs = conn.query("SELECT 1 FROM symbol_state WHERE file_path = ? AND name = ? LIMIT 1", [turso::Value::Text(fp.clone()), turso::Value::Text(name.clone())]).await?;
+                                let ex = rs.next().await?.is_some();
+                                near_cache.insert((fp.clone(), name.clone()), ex);
+                                ex
+                            };
+                            if has {
+                                info.eid013_line_mismatch += 1;
+                                if sample_rows.len() < samples {
+                                    sample_rows.push(format!(
+                                        "EID013 near-miss (source) file='{}' name='{}'",
+                                        fp, name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    if t != "none" && !existing.contains(t) {
+                        info.eid012_orphan_target += 1;
+                        if sample_rows.len() < samples {
+                            sample_rows.push(format!("EID012 orphan target='{}'", t));
+                        }
+                        let (fp, name, _line) = parse2(t);
+                        if let (Some(fp), Some(name)) = (fp, name) {
+                            let key = (fp.clone(), name.clone());
+                            let has = if let Some(v) = near_cache.get(&key) {
+                                *v
+                            } else {
+                                let mut rs = conn.query("SELECT 1 FROM symbol_state WHERE file_path = ? AND name = ? LIMIT 1", [turso::Value::Text(fp.clone()), turso::Value::Text(name.clone())]).await?;
+                                let ex = rs.next().await?.is_some();
+                                near_cache.insert((fp.clone(), name.clone()), ex);
+                                ex
+                            };
+                            if has {
+                                info.eid013_line_mismatch += 1;
+                                if sample_rows.len() < samples {
+                                    sample_rows.push(format!(
+                                        "EID013 near-miss (target) file='{}' name='{}'",
+                                        fp, name
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
                 Ok((info, sample_rows))
             }

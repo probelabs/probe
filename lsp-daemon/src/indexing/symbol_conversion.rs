@@ -379,7 +379,7 @@ impl ToSymbolState for AnalyzerExtractedSymbol {
             uid_generator.generate_uid(
                 &relative_path,
                 &self.name,
-                self.location.start_line,
+                self.location.start_line.saturating_add(1),
                 self.location.start_char,
             )?
         };

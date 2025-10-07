@@ -107,6 +107,10 @@ impl LspManager {
                             "EID009 non-relative file_path",
                             counts.eid009_non_relative_file_path,
                         );
+                        push("EID010 self-loop", counts.eid010_self_loop);
+                        push("EID011 orphan source", counts.eid011_orphan_source);
+                        push("EID012 orphan target", counts.eid012_orphan_target);
+                        push("EID013 line mismatch", counts.eid013_line_mismatch);
                         if lines.is_empty() {
                             println!("  {}", "No issues found".green());
                         } else {
@@ -977,9 +981,16 @@ impl LspManager {
             {
                 Err(_) => {
                     println!("{} Failed to get logs: timed out", "❌".red());
+                    println!("{}","(Tip: logs do not depend on the DB; try increasing verbosity with PROBE_LOG_LEVEL=info or use --level info)".dimmed());
                     return Ok(());
                 }
                 Ok(Ok(entries)) => {
+                    if entries.is_empty() {
+                        println!(
+                            "{}",
+                            "(no recent log entries in buffer; waiting for new events…)".dimmed()
+                        );
+                    }
                     for entry in &entries {
                         Self::print_log_entry(entry);
                     }
@@ -1014,6 +1025,7 @@ impl LspManager {
                 {
                     Err(_) => {
                         // Timed out talking to the daemon; continue polling without blocking the UI
+                        // (Logs are served from the daemon's in-memory ring buffer and do not read the DB.)
                         continue;
                     }
                     Ok(Ok(new_entries)) => {
@@ -1045,6 +1057,7 @@ impl LspManager {
             {
                 Err(_) => {
                     println!("{} Failed to get logs: timed out", "❌".red());
+                    println!("{}","(Tip: logs do not depend on the DB; try increasing verbosity with PROBE_LOG_LEVEL=info or use --level info)".dimmed());
                 }
                 Ok(Ok(entries)) => {
                     if entries.is_empty() {
@@ -4657,6 +4670,16 @@ impl LspManager {
                     database_size_bytes: sz,
                     ..
                 } => {
+                    // Remove any legacy/confusing objects (e.g., a stray `symbols` table/view)
+                    {
+                        let builder = turso::Builder::new_local(&out.to_string_lossy());
+                        if let Ok(db) = builder.build().await {
+                            if let Ok(conn) = db.connect() {
+                                let _ = conn.query("DROP VIEW IF EXISTS symbols", ()).await;
+                                let _ = conn.query("DROP TABLE IF EXISTS symbols", ()).await;
+                            }
+                        }
+                    }
                     println!(
                         "{}",
                         format!(
@@ -4746,6 +4769,17 @@ impl LspManager {
             }
             std::fs::copy(&db_path, &output)? as usize
         };
+
+        // Remove any legacy/confusing objects (e.g., a stray `symbols` table/view)
+        {
+            let builder = turso::Builder::new_local(&output.to_string_lossy());
+            if let Ok(db) = builder.build().await {
+                if let Ok(conn) = db.connect() {
+                    let _ = conn.query("DROP VIEW IF EXISTS symbols", ()).await;
+                    let _ = conn.query("DROP TABLE IF EXISTS symbols", ()).await;
+                }
+            }
+        }
 
         // Restart daemon and resume indexing if necessary
         // Restart daemon only if it was running before or user requested daemon mode

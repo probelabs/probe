@@ -1150,6 +1150,10 @@ pub struct EdgeAuditInfo {
     pub eid003_malformed_uid: u64,
     pub eid004_zero_line: u64,
     pub eid009_non_relative_file_path: u64,
+    pub eid010_self_loop: u64,
+    pub eid011_orphan_source: u64,
+    pub eid012_orphan_target: u64,
+    pub eid013_line_mismatch: u64,
 }
 
 /// Synchronization status snapshot for the current workspace database.
@@ -2162,6 +2166,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             lines: 1000,
             since_sequence: None,
+            min_level: None,
         };
         let encoded = MessageCodec::encode(&request).expect("encode");
         let decoded = MessageCodec::decode_request(&encoded).expect("decode");
@@ -2185,6 +2190,7 @@ mod tests {
             request_id: Uuid::new_v4(),
             lines: 50,
             since_sequence: Some(123),
+            min_level: None,
         };
         let encoded = MessageCodec::encode(&request).expect("encode");
         let decoded = MessageCodec::decode_request(&encoded).expect("decode");
