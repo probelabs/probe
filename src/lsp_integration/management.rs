@@ -512,6 +512,7 @@ impl LspManager {
                     "uptime_seconds": status.uptime.as_secs(),
                     "total_requests": status.total_requests,
                     "active_connections": status.active_connections,
+                    "lsp_inflight_current": status.lsp_inflight_current,
                     "language_pools": status.language_pools
                 });
                 println!("{}", serde_json::to_string_pretty(&json_output)?);
