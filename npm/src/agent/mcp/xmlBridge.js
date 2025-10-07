@@ -141,23 +141,44 @@ export class MCPXmlBridge {
 
     if (!config) {
       // No config provided - fall back to auto-discovery for backward compatibility
+      if (this.debug) {
+        console.error('[MCP DEBUG] No config provided, attempting auto-discovery...');
+      }
       mcpConfigs = loadMCPConfiguration();
+
+      // Check if auto-discovery found anything
+      if (!mcpConfigs || !mcpConfigs.mcpServers || Object.keys(mcpConfigs.mcpServers).length === 0) {
+        console.error('[MCP WARNING] MCP enabled but no configuration found');
+        console.error('[MCP INFO] To use MCP, provide configuration via:');
+        console.error('[MCP INFO]   - mcpConfig option when creating ProbeAgent');
+        console.error('[MCP INFO]   - mcpConfigPath option pointing to a config file');
+        console.error('[MCP INFO]   - Config file in standard locations (~/.mcp/config.json, etc.)');
+        console.error('[MCP INFO]   - Environment variable MCP_CONFIG_PATH');
+      }
     } else if (Array.isArray(config)) {
       // Deprecated: Array of server configs (backward compatibility)
+      if (this.debug) {
+        console.error('[MCP DEBUG] Using deprecated array config format (consider using mcpConfig object)');
+      }
       mcpConfigs = { mcpServers: config };
     } else {
       // New: Full config object provided directly
+      if (this.debug) {
+        console.error('[MCP DEBUG] Using provided MCP config object');
+      }
       mcpConfigs = config;
     }
 
     if (!mcpConfigs || !mcpConfigs.mcpServers || Object.keys(mcpConfigs.mcpServers).length === 0) {
-      if (this.debug) {
-        console.error('[MCP] No MCP servers configured');
-      }
+      console.error('[MCP INFO] 0 MCP tools available');
       return;
     }
 
     try {
+      if (this.debug) {
+        console.error('[MCP DEBUG] Initializing MCP client manager...');
+      }
+
       // Initialize the MCP client manager
       this.mcpManager = new MCPClientManager({ debug: this.debug });
       const result = await this.mcpManager.initialize(mcpConfigs);
@@ -165,17 +186,27 @@ export class MCPXmlBridge {
       // Get tools from the manager
       const vercelTools = this.mcpManager.getVercelTools();
       this.mcpTools = vercelTools;
+      const toolCount = Object.keys(vercelTools).length;
 
       // Generate XML definitions for all tools
       for (const [name, tool] of Object.entries(vercelTools)) {
         this.xmlDefinitions[name] = mcpToolToXmlDefinition(name, tool);
       }
 
-      if (this.debug) {
-        console.error(`[MCP] Loaded ${Object.keys(vercelTools).length} MCP tools from ${result.connected} server(s)`);
+      if (toolCount === 0) {
+        console.error('[MCP INFO] MCP initialization complete: 0 tools loaded');
+      } else {
+        console.error(`[MCP INFO] MCP initialization complete: ${toolCount} tool${toolCount !== 1 ? 's' : ''} loaded from ${result.connected} server${result.connected !== 1 ? 's' : ''}`);
+
+        if (this.debug) {
+          console.error('[MCP DEBUG] Tool definitions generated for XML bridge');
+        }
       }
     } catch (error) {
-      console.error('[MCP] Failed to initialize MCP connections:', error);
+      console.error('[MCP ERROR] Failed to initialize MCP connections:', error.message);
+      if (this.debug) {
+        console.error('[MCP DEBUG] Full error details:', error);
+      }
     }
   }
 
@@ -204,28 +235,42 @@ export class MCPXmlBridge {
     const parsed = parseXmlMcpToolCall(xmlString, this.getToolNames());
 
     if (!parsed) {
+      console.error('[MCP ERROR] No valid MCP tool call found in XML');
       throw new Error('No valid MCP tool call found in XML');
     }
 
     const { toolName, params } = parsed;
 
     if (this.debug) {
-      console.error(`[MCP] Executing MCP tool: ${toolName} with params:`, params);
+      console.error(`[MCP DEBUG] Executing MCP tool: ${toolName}`);
+      console.error(`[MCP DEBUG] Parameters:`, JSON.stringify(params, null, 2));
     }
 
     const tool = this.mcpTools[toolName];
     if (!tool) {
+      console.error(`[MCP ERROR] Unknown MCP tool: ${toolName}`);
+      console.error(`[MCP ERROR] Available tools: ${this.getToolNames().join(', ')}`);
       throw new Error(`Unknown MCP tool: ${toolName}`);
     }
 
     try {
       const result = await tool.execute(params);
+
+      if (this.debug) {
+        console.error(`[MCP DEBUG] Tool ${toolName} executed successfully`);
+      }
+
       return {
         success: true,
         toolName,
         result
       };
     } catch (error) {
+      console.error(`[MCP ERROR] Tool ${toolName} execution failed:`, error.message);
+      if (this.debug) {
+        console.error(`[MCP DEBUG] Full error details:`, error);
+      }
+
       return {
         success: false,
         toolName,

@@ -252,7 +252,7 @@ The MCP integration is ${hasMCPSection && hasProbeSearch ? 'fully functional' : 
 
 // Import functions we need
 import { parseHybridXmlToolCall } from '@probelabs/probe/agent/mcp';
-import { parseXmlToolCallWithThinking } from './tools.js';
+import { parseXmlToolCallWithThinking } from '../../npm/src/agent/tools.js';
 
 // Run the test
 testFullMCPIntegration().catch(console.error);

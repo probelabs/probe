@@ -36,6 +36,8 @@ pub fn format_and_print_search_results(
     dry_run: bool,
     format: &str,
     query_plan: Option<&QueryPlan>,
+    skipped_files: Option<&[SearchResult]>,
+    limits: Option<&probe_code::models::SearchLimits>,
 ) {
     let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
@@ -54,13 +56,13 @@ pub fn format_and_print_search_results(
             format_and_print_color_results(&valid_results, dry_run, query_plan, debug_mode);
         }
         "json" => {
-            if let Err(e) = format_and_print_json_results(&valid_results) {
+            if let Err(e) = format_and_print_json_results(&valid_results, skipped_files, limits) {
                 eprintln!("Error formatting JSON: {e}");
             }
             return; // Skip the summary output at the end
         }
         "xml" => {
-            if let Err(e) = format_and_print_xml_results(&valid_results) {
+            if let Err(e) = format_and_print_xml_results(&valid_results, skipped_files, limits) {
                 eprintln!("Error formatting XML: {e}");
             }
             return; // Skip the summary output at the end
@@ -72,9 +74,13 @@ pub fn format_and_print_search_results(
         }
         "outline-xml" => {
             let file_cache = create_file_content_cache(&valid_results);
-            if let Err(e) =
-                format_and_print_outline_xml_results(&valid_results, dry_run, &file_cache)
-            {
+            if let Err(e) = format_and_print_outline_xml_results(
+                &valid_results,
+                dry_run,
+                &file_cache,
+                skipped_files,
+                limits,
+            ) {
                 eprintln!("Error formatting outline XML: {e}");
             }
             return; // Skip the duplicate summary output at the end
@@ -1001,7 +1007,11 @@ fn escape_xml(s: &str) -> String {
 }
 
 /// Format and print search results in JSON format
-fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
+fn format_and_print_json_results(
+    results: &[&SearchResult],
+    skipped_files: Option<&[SearchResult]>,
+    limits: Option<&probe_code::models::SearchLimits>,
+) -> Result<()> {
     // Create a simplified version of the results for JSON output
     #[derive(serde::Serialize)]
     struct JsonResult<'a> {
@@ -1021,6 +1031,13 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         block_unique_terms: Option<usize>,
         block_total_matches: Option<usize>,
         lsp_info: Option<&'a serde_json::Value>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct SkippedFileInfo {
+        file: String,
+        uniq: usize,
+        all: usize,
     }
 
     let json_results: Vec<JsonResult> = results
@@ -1063,8 +1080,42 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
     let code_blocks: Vec<&str> = results.iter().map(|r| r.code.as_str()).collect();
     let total_tokens = sum_tokens_with_deduplication(&code_blocks);
 
+    // Process skipped files if provided
+    let skipped_file_list: Option<Vec<SkippedFileInfo>> = skipped_files.map(|skipped| {
+        use std::collections::HashMap;
+        use std::collections::HashSet;
+
+        let mut file_matches: HashMap<String, (HashSet<String>, usize)> = HashMap::new();
+
+        for result in skipped {
+            let entry = file_matches
+                .entry(result.file.clone())
+                .or_insert((HashSet::new(), 0));
+
+            if let Some(keywords) = &result.matched_keywords {
+                for keyword in keywords {
+                    entry.0.insert(keyword.clone());
+                }
+            }
+            entry.1 += 1;
+        }
+
+        let mut list: Vec<SkippedFileInfo> = file_matches
+            .into_iter()
+            .map(|(file, (unique, total))| SkippedFileInfo {
+                file,
+                uniq: unique.len(),
+                all: total,
+            })
+            .collect();
+
+        list.sort_by(|a, b| b.uniq.cmp(&a.uniq).then(b.all.cmp(&a.all)));
+
+        list
+    });
+
     // Create a wrapper object with results and summary
-    let wrapper = serde_json::json!({
+    let mut wrapper = serde_json::json!({
         "results": json_results,
         "summary": {
             "count": results.len(),
@@ -1074,42 +1125,54 @@ fn format_and_print_json_results(results: &[&SearchResult]) -> Result<()> {
         "version": probe_code::version::get_version()
     });
 
+    // Add limits if provided
+    if let Some(limits_data) = limits {
+        wrapper["limits"] = serde_json::json!({
+            "max_results": limits_data.max_results,
+            "max_bytes": limits_data.max_bytes,
+            "max_tokens": limits_data.max_tokens,
+            "total_bytes": limits_data.total_bytes,
+            "total_tokens": limits_data.total_tokens,
+        });
+    }
+
+    // Add skipped files if provided
+    if let Some(skipped_list) = skipped_file_list {
+        if !skipped_list.is_empty() {
+            wrapper["skipped_files"] = serde_json::json!(skipped_list);
+        }
+    }
+
     println!("{json}", json = serde_json::to_string_pretty(&wrapper)?);
     Ok(())
 }
 
 /// Format and print search results in XML format
-fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
-    println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
+fn format_and_print_xml_results(
+    results: &[&SearchResult],
+    skipped_files: Option<&[SearchResult]>,
+    limits: Option<&probe_code::models::SearchLimits>,
+) -> Result<()> {
     println!("<probe_results>");
 
     for result in results {
         println!("  <result>");
-        println!("    <file>{file}</file>", file = escape_xml(&result.file));
+        println!("    <file>{}</file>", result.file);
         println!(
             "    <lines>{start}-{end}</lines>",
             start = result.lines.0,
             end = result.lines.1
         );
-        println!(
-            "    <node_type>{}</node_type>",
-            escape_xml(&result.node_type)
-        );
+        println!("    <node_type>{}</node_type>", result.node_type);
 
         if let Some(symbol_signature) = &result.symbol_signature {
-            println!(
-                "    <symbol_signature>{}</symbol_signature>",
-                escape_xml(symbol_signature)
-            );
+            println!("    <symbol_signature>{symbol_signature}</symbol_signature>");
         }
 
         if let Some(keywords) = &result.matched_keywords {
             println!("    <matched_keywords>");
             for keyword in keywords {
-                println!(
-                    "      <keyword>{keyword}</keyword>",
-                    keyword = escape_xml(keyword)
-                );
+                println!("      <keyword>{keyword}</keyword>");
             }
             println!("    </matched_keywords>");
         }
@@ -1142,7 +1205,7 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
             println!("    <block_total_matches>{block_total_matches}</block_total_matches>");
         }
 
-        println!("    <code><![CDATA[{code}]]></code>", code = result.code);
+        println!("    <code>{}</code>", result.code);
         println!("  </result>");
     }
 
@@ -1160,6 +1223,66 @@ fn format_and_print_xml_results(results: &[&SearchResult]) -> Result<()> {
 
     println!("    <total_tokens>{total_tokens}</total_tokens>");
     println!("  </summary>");
+
+    // Add limits if provided
+    if let Some(limits_data) = limits {
+        println!("  <limits>");
+        if let Some(max_results) = limits_data.max_results {
+            println!("    <max_results>{max_results}</max_results>");
+        }
+        if let Some(max_bytes) = limits_data.max_bytes {
+            println!("    <max_bytes>{max_bytes}</max_bytes>");
+        }
+        if let Some(max_tokens) = limits_data.max_tokens {
+            println!("    <max_tokens>{max_tokens}</max_tokens>");
+        }
+        println!("    <total_bytes>{}</total_bytes>", limits_data.total_bytes);
+        println!(
+            "    <total_tokens>{}</total_tokens>",
+            limits_data.total_tokens
+        );
+        println!("  </limits>");
+    }
+
+    // Add skipped files if provided
+    if let Some(skipped) = skipped_files {
+        if !skipped.is_empty() {
+            use std::collections::HashMap;
+            use std::collections::HashSet;
+
+            let mut file_matches: HashMap<String, (HashSet<String>, usize)> = HashMap::new();
+
+            for result in skipped {
+                let entry = file_matches
+                    .entry(result.file.clone())
+                    .or_insert((HashSet::new(), 0));
+
+                if let Some(keywords) = &result.matched_keywords {
+                    for keyword in keywords {
+                        entry.0.insert(keyword.clone());
+                    }
+                }
+                entry.1 += 1;
+            }
+
+            let mut list: Vec<(String, usize, usize)> = file_matches
+                .into_iter()
+                .map(|(file, (unique, total))| (file, unique.len(), total))
+                .collect();
+
+            list.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+
+            println!("  <skipped_files count=\"{}\">", list.len());
+            for (file, unique_matches, total_matches) in list {
+                println!("    <file>");
+                println!("      <path>{}</path>", escape_xml(&file));
+                println!("      <uniq>{unique_matches}</uniq>");
+                println!("      <all>{total_matches}</all>");
+                println!("    </file>");
+            }
+            println!("  </skipped_files>");
+        }
+    }
 
     println!(
         "  <version>{}</version>",
@@ -1666,6 +1789,7 @@ enum OutlineLineType {
 fn collect_outline_lines(
     result: &SearchResult,
     file_path: &str,
+    file_cache: &HashMap<PathBuf, Arc<String>>,
 ) -> (
     Vec<(usize, OutlineLineType)>,
     std::collections::HashMap<usize, crate::models::ParentContext>,
@@ -1673,10 +1797,11 @@ fn collect_outline_lines(
     let mut lines = Vec::new();
     let mut closing_brace_contexts = std::collections::HashMap::new();
 
-    // Read the full source file
-    let full_source = match std::fs::read_to_string(file_path) {
-        Ok(content) => content,
-        Err(_) => return (lines, closing_brace_contexts),
+    // Get the source file from cache
+    let file_path_buf = PathBuf::from(file_path);
+    let full_source = match file_cache.get(&file_path_buf) {
+        Some(content) => content.as_str(),
+        None => return (lines, closing_brace_contexts),
     };
 
     // Debug: Check if we have matched lines
@@ -1742,7 +1867,7 @@ fn collect_outline_lines(
         // Collect parent contexts for all matched lines
         let mut all_contexts = Vec::new();
         for &line_num in &matched_lines {
-            let contexts = collect_parent_context_for_line(file_path, line_num, &full_source);
+            let contexts = collect_parent_context_for_line(file_path, line_num, full_source);
             if std::env::var("DEBUG").unwrap_or_default() == "1" {
                 eprintln!(
                     "DEBUG: Parent contexts for line {}: {} contexts found",
@@ -2692,7 +2817,7 @@ fn format_and_print_outline_results(
         for result in file_results {
             // Collect lines for this result
             let (lines_to_display, closing_brace_contexts) =
-                collect_outline_lines(result, &result.file);
+                collect_outline_lines(result, &result.file, file_cache);
 
             // Merge into the file-level collections
             for line in lines_to_display {
@@ -2780,6 +2905,8 @@ fn format_and_print_outline_xml_results(
     results: &[&SearchResult],
     dry_run: bool,
     file_cache: &HashMap<PathBuf, Arc<String>>,
+    skipped_files: Option<&[SearchResult]>,
+    limits: Option<&probe_code::models::SearchLimits>,
 ) -> Result<()> {
     // Track content for accounting
     let mut displayed_content = Vec::new();
@@ -2824,7 +2951,7 @@ fn format_and_print_outline_xml_results(
         for result in file_results {
             // Collect lines for this result
             let (lines_to_display, closing_brace_contexts) =
-                collect_outline_lines(result, &result.file);
+                collect_outline_lines(result, &result.file, file_cache);
 
             // Merge into the file-level collections
             for line in lines_to_display {
@@ -2907,6 +3034,66 @@ fn format_and_print_outline_xml_results(
 
         eprintln!("Total bytes returned: {total_bytes}");
         eprintln!("Total tokens returned: {total_tokens}");
+    }
+
+    // Add limits if provided
+    if let Some(limits_data) = limits {
+        println!("<limits>");
+        if let Some(max_results) = limits_data.max_results {
+            println!("  <max_results>{max_results}</max_results>");
+        }
+        if let Some(max_bytes) = limits_data.max_bytes {
+            println!("  <max_bytes>{max_bytes}</max_bytes>");
+        }
+        if let Some(max_tokens) = limits_data.max_tokens {
+            println!("  <max_tokens>{max_tokens}</max_tokens>");
+        }
+        println!("  <total_bytes>{}</total_bytes>", limits_data.total_bytes);
+        println!(
+            "  <total_tokens>{}</total_tokens>",
+            limits_data.total_tokens
+        );
+        println!("</limits>");
+    }
+
+    // Add skipped files if provided
+    if let Some(skipped) = skipped_files {
+        if !skipped.is_empty() {
+            use std::collections::HashMap;
+            use std::collections::HashSet;
+
+            let mut file_matches: HashMap<String, (HashSet<String>, usize)> = HashMap::new();
+
+            for result in skipped {
+                let entry = file_matches
+                    .entry(result.file.clone())
+                    .or_insert((HashSet::new(), 0));
+
+                if let Some(keywords) = &result.matched_keywords {
+                    for keyword in keywords {
+                        entry.0.insert(keyword.clone());
+                    }
+                }
+                entry.1 += 1;
+            }
+
+            let mut list: Vec<(String, usize, usize)> = file_matches
+                .into_iter()
+                .map(|(file, (unique, total))| (file, unique.len(), total))
+                .collect();
+
+            list.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+
+            println!("<skipped_files count=\"{}\">", list.len());
+            for (file, unique_matches, total_matches) in list {
+                println!("  <file>");
+                println!("    <path>{}</path>", escape_xml(&file));
+                println!("    <uniq>{unique_matches}</uniq>");
+                println!("    <all>{total_matches}</all>");
+                println!("  </file>");
+            }
+            println!("</skipped_files>");
+        }
     }
 
     Ok(())

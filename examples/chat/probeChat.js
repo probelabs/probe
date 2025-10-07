@@ -275,7 +275,53 @@ export class ProbeChat {
 
     if (this.debug) {
       console.log(`[DEBUG] ProbeChat initialized with MCP ${agentOptions.enableMcp ? 'enabled' : 'disabled'}`);
+
+      // Log available tools after a short delay to allow MCP initialization
+      setTimeout(() => {
+        this.logAvailableTools();
+      }, 100);
     }
+  }
+
+  /**
+   * Log all available tools (native + MCP) in debug mode
+   */
+  logAvailableTools() {
+    if (!this.debug) return;
+
+    console.log('\n[DEBUG] ========================================');
+    console.log('[DEBUG] All Available Tools:');
+    console.log('[DEBUG] ========================================');
+
+    // Get native tools from agent
+    if (this.agent.toolImplementations) {
+      console.log('[DEBUG] Native Tools:');
+      const nativeTools = Object.keys(this.agent.toolImplementations);
+      nativeTools.forEach(toolName => {
+        const tool = this.agent.toolImplementations[toolName];
+        const desc = tool.description || 'No description';
+        console.log(`[DEBUG]   - ${toolName}: ${desc}`);
+      });
+    }
+
+    // Get MCP tools if available
+    if (this.agent.mcpBridge && this.agent.mcpBridge.mcpTools) {
+      const mcpTools = Object.keys(this.agent.mcpBridge.mcpTools);
+      if (mcpTools.length > 0) {
+        console.log('[DEBUG] MCP Tools:');
+        mcpTools.forEach(toolName => {
+          const tool = this.agent.mcpBridge.mcpTools[toolName];
+          const desc = tool.description || 'No description';
+          console.log(`[DEBUG]   - ${toolName}: ${desc}`);
+        });
+      } else {
+        console.log('[DEBUG] MCP Tools: None loaded');
+      }
+    } else {
+      console.log('[DEBUG] MCP Tools: MCP not enabled or not initialized');
+    }
+
+    console.log('[DEBUG] ========================================\n');
   }
 
   /**

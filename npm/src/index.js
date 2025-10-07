@@ -10,6 +10,7 @@
 import { search } from './search.js';
 import { query } from './query.js';
 import { extract } from './extract.js';
+import { grep } from './grep.js';
 import { delegate } from './delegate.js';
 import { getBinaryPath, setBinaryPath } from './utils.js';
 import * as tools from './tools/index.js';
@@ -34,11 +35,13 @@ import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel
 import { bashTool } from './tools/bash.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
+import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
 
 export {
 	search,
 	query,
 	extract,
+	grep,
 	delegate,
 	getBinaryPath,
 	setBinaryPath,
@@ -57,6 +60,9 @@ export {
 	extractTool,
 	delegateTool,
 	bashTool,
+	// Export tool instances
+	listFilesToolInstance,
+	searchFilesToolInstance,
 	// Export schemas
 	searchSchema,
 	querySchema,

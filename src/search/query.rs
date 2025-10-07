@@ -48,6 +48,9 @@ pub struct QueryPlan {
     pub has_only_excluded_terms: bool,
     /// Evaluation result cache for matched term patterns
     pub evaluation_cache: Arc<Mutex<LruCache<u64, bool>>>,
+    /// Flag indicating this is a universal query that should match all content
+    /// (typically used when only filename filters are specified)
+    pub is_universal_query: bool,
 }
 
 impl std::fmt::Debug for QueryPlan {
@@ -62,6 +65,7 @@ impl std::fmt::Debug for QueryPlan {
             .field("has_required_anywhere", &self.has_required_anywhere)
             .field("required_terms_indices", &self.required_terms_indices)
             .field("has_only_excluded_terms", &self.has_only_excluded_terms)
+            .field("is_universal_query", &self.is_universal_query)
             .field("evaluation_cache", &"<LruCache>")
             .finish()
     }
@@ -197,6 +201,7 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
         required_terms_indices,
         has_only_excluded_terms,
         evaluation_cache,
+        is_universal_query: false,
     })
 }
 
@@ -810,14 +815,16 @@ pub fn create_query_plan_from_ast(
         required_terms_indices,
         has_only_excluded_terms,
         evaluation_cache,
+        is_universal_query: false,
     })
 }
 
 /// Create a universal query plan that matches everything (used when all terms are filters)
 pub fn create_universal_query_plan() -> QueryPlan {
     // Create a simple term that will match anything in the content
+    // Use common characters that will appear in almost any file
     let universal_ast = elastic_query::Expr::Term {
-        keywords: vec![".*".to_string()], // This will be converted to a regex that matches anything
+        keywords: vec![".".to_string()], // Match any single character - will match almost everything
         field: None,
         required: false,
         excluded: false,
@@ -825,7 +832,7 @@ pub fn create_universal_query_plan() -> QueryPlan {
     };
 
     let mut term_indices = HashMap::new();
-    term_indices.insert(".*".to_string(), 0);
+    term_indices.insert(".".to_string(), 0);
 
     QueryPlan {
         ast: universal_ast,
@@ -838,5 +845,6 @@ pub fn create_universal_query_plan() -> QueryPlan {
         required_terms_indices: HashSet::new(),
         has_only_excluded_terms: false,
         evaluation_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap()))),
+        is_universal_query: true, // This is a universal query that should match all content
     }
 }

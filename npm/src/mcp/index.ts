@@ -14,12 +14,13 @@ import fs from 'fs-extra';
 import { fileURLToPath } from 'url';
 
 // Import from parent package
-import { search, query, extract, getBinaryPath, setBinaryPath } from '../index.js';
+import { search, query, extract, grep, getBinaryPath, setBinaryPath } from '../index.js';
 
 // Parse command-line arguments
-function parseArgs(): { timeout?: number; lsp?: boolean; format?: string } {
+function parseArgs(): { timeout?: number; format?: string } {
   const args = process.argv.slice(2);
-  const config: { timeout?: number; lsp?: boolean; format?: string } = {};
+  const config: { timeout?: number; format?: string } = {};
+
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--timeout' || args[i] === '-t') && i + 1 < args.length) {
       const timeout = parseInt(args[i + 1], 10);
@@ -30,15 +31,12 @@ function parseArgs(): { timeout?: number; lsp?: boolean; format?: string } {
         console.error(`Invalid timeout value: ${args[i + 1]}. Using default.`);
       }
       i++; // Skip the next argument
-    } else if (args[i] === '--lsp') {
-      config.lsp = true;
-      console.error('LSP mode enabled');
     } else if (args[i] === '--format' && i + 1 < args.length) {
       config.format = args[i + 1];
       console.error(`Format set to ${config.format}`);
       i++; // Skip the next argument
     } else if (args[i] === '--help' || args[i] === '-h') {
-      console.log(`
+      console.error(`
 Probe MCP Server
 
 Usage:
@@ -46,9 +44,7 @@ Usage:
 
 Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
-  --lsp                    Enable LSP (Language Server Protocol) for enhanced features
-                           Automatically initializes language servers for the current workspace
-  --format <format>       Set output format (json, outline-xml, etc.)
+  --format <format>       Set output format (default: outline)
   --help, -h              Show this help message
 `);
       process.exit(0);
@@ -76,11 +72,11 @@ const possiblePaths = [
 for (const packageJsonPath of possiblePaths) {
   try {
     if (fs.existsSync(packageJsonPath)) {
-      console.log(`Found package.json at: ${packageJsonPath}`);
+      console.error(`Found package.json at: ${packageJsonPath}`);
       const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
       if (packageJson.version) {
         packageVersion = packageJson.version;
-        console.log(`Using version from package.json: ${packageVersion}`);
+        console.error(`Using version from package.json: ${packageVersion}`);
         break;
       }
     }
@@ -97,7 +93,7 @@ if (packageVersion === '0.0.0') {
     const npmList = JSON.parse(result.stdout);
     if (npmList.dependencies && npmList.dependencies['@probelabs/probe']) {
       packageVersion = npmList.dependencies['@probelabs/probe'].version;
-      console.log(`Using version from npm list: ${packageVersion}`);
+      console.error(`Using version from npm list: ${packageVersion}`);
     }
   } catch (error) {
     console.error('Error getting version from npm:', error);
@@ -108,7 +104,7 @@ import { existsSync } from 'fs';
 
 // Get the path to the bin directory
 const binDir = path.resolve(__dirname, '..', 'bin');
-console.log(`Bin directory: ${binDir}`);
+console.error(`Bin directory: ${binDir}`);
 
 // The @probelabs/probe package now handles binary path management internally
 // We don't need to manage the binary path in the MCP server anymore
@@ -117,32 +113,28 @@ interface SearchCodeArgs {
   path: string;
   query: string | string[];
   exact?: boolean;
-  maxResults?: number;
-  maxTokens?: number;
-  allowTests?: boolean;
-  session?: string;
-  noGitignore?: boolean;
-  lsp?: boolean;
 }
-
 
 interface ExtractCodeArgs {
   path: string;
   files: string[];
-  allowTests?: boolean;
-  noGitignore?: boolean;
-  lsp?: boolean;
+}
+
+interface GrepArgs {
+  pattern: string;
+  paths: string | string[];
+  ignoreCase?: boolean;
+  count?: boolean;
+  context?: number;
 }
 
 class ProbeServer {
   private server: Server;
   private defaultTimeout: number;
-  private lspEnabled: boolean;
   private defaultFormat?: string;
 
-  constructor(timeout: number = 30, lspEnabled: boolean = false, format?: string) {
+  constructor(timeout: number = 30, format?: string) {
     this.defaultTimeout = timeout;
-    this.lspEnabled = lspEnabled;
     this.defaultFormat = format;
     this.server = new Server(
       {
@@ -159,7 +151,7 @@ class ProbeServer {
     this.setupToolHandlers();
     
     // Error handling
-    this.server.onerror = (error) => console.error('[MCP Error]', error);
+    this.server.onerror = (error) => console.error('[MCP ERROR]', error);
     process.on('SIGINT', async () => {
       await this.server.close();
       process.exit(0);
@@ -173,39 +165,22 @@ class ProbeServer {
       tools: [
         {
           name: 'search_code',
-          description: "Search code in the repository using ElasticSearch. Use this tool first for any code-related questions.",
+          description: "Semantic code search using AST parsing and ElasticSearch-style queries. Use this for finding code, not grep.",
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
+                description: 'Absolute path to the directory to search',
               },
               query: {
                 type: 'string',
-                description: 'Elastic search query. Supports logical operators (AND, OR, NOT), and grouping with parentheses. For exact matches of specific identifiers, use quotes: "MyFunction", "SpecificStruct", "exact_variable_name". Examples: "config", "(term1 OR term2) AND term3", "getUserData", "struct Config".',
+                description: 'Search query. Use quotes for exact matches: "functionName". Supports AND, OR, NOT operators.',
               },
               exact: {
                 type: 'boolean',
-                description: 'When you exactly know what you are looking for, like known function name, struct name, or variable name, set this flag for precise matching'
-              },
-              allowTests: {
-                type: 'boolean',
-                description: 'Allow test files and test code blocks in results (enabled by default)',
-                default: true
-              },
-              session: {
-                type: 'string',
-                description: 'Session identifier for caching. Set to "new" if unknown, or want to reset cache. Re-use session ID returned from previous searches',
-                default: "new",
-              },
-              noGitignore: {
-                type: 'boolean',
-                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
-              },
-              lsp: {
-                type: 'boolean',
-                description: 'Use LSP (Language Server Protocol) for call hierarchy, reference counts, and enhanced symbol information',
+                description: 'Use when searching for exact function/class/variable names',
+                default: false
               }
             },
             required: ['path', 'query']
@@ -213,34 +188,56 @@ class ProbeServer {
         },
         {
           name: 'extract_code',
-          description: "Extract code blocks from files based on line number, or symbol name. Fetch full file when line number is not provided.",
+          description: "Extract code from files. Formats: file.js (whole file), file.js:42 (from line), file.js#functionName (symbol).",
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: 'Absolute path to the directory to search in (e.g., "/Users/username/projects/myproject").',
+                description: 'Absolute path to the project directory',
               },
               files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Files and lines or sybmbols to  extract from: /path/to/file.rs:10, /path/to/file.rs#func_name Path should be absolute.',
-              },
-              allowTests: {
-                type: 'boolean',
-                description: 'Allow test files and test code blocks in results (enabled by default)',
-                default: true
-              },
-              noGitignore: {
-                type: 'boolean',
-                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
-              },
-              lsp: {
-                type: 'boolean',
-                description: 'Use LSP (Language Server Protocol) for call hierarchy, reference counts, and enhanced symbol information',
+                description: 'Array of file paths with optional line/symbol: ["file.rs:10", "file.rs#func_name"]',
               }
             },
             required: ['path', 'files'],
+          },
+        },
+        {
+          name: 'grep',
+          description: "Standard grep-style search for non-code files (logs, config files, text files). Line numbers are shown by default. For code files, use search_code instead.",
+          inputSchema: {
+            type: 'object',
+            properties: {
+              pattern: {
+                type: 'string',
+                description: 'Regular expression pattern to search for',
+              },
+              paths: {
+                oneOf: [
+                  { type: 'string' },
+                  { type: 'array', items: { type: 'string' } }
+                ],
+                description: 'Path or array of paths to search in',
+              },
+              ignoreCase: {
+                type: 'boolean',
+                description: 'Case-insensitive search',
+                default: false
+              },
+              count: {
+                type: 'boolean',
+                description: 'Only show count of matches per file instead of the matches',
+                default: false
+              },
+              context: {
+                type: 'number',
+                description: 'Number of lines of context to show before and after each match',
+              }
+            },
+            required: ['pattern', 'paths'],
           },
         },
       ],
@@ -248,7 +245,7 @@ class ProbeServer {
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (request.params.name !== 'search_code' && request.params.name !== 'extract_code' &&
-          request.params.name !== 'probe' && request.params.name !== 'extract') {
+          request.params.name !== 'grep' && request.params.name !== 'probe' && request.params.name !== 'extract') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
@@ -268,9 +265,9 @@ class ProbeServer {
           if (!request.params.arguments || typeof request.params.arguments !== 'object') {
             throw new Error("Arguments must be an object");
           }
-          
+
           const args = request.params.arguments as unknown as SearchCodeArgs;
-          
+
           // Validate required fields
           if (!args.path) {
             throw new Error("Path is required in arguments");
@@ -278,8 +275,11 @@ class ProbeServer {
           if (!args.query) {
             throw new Error("Query is required in arguments");
           }
-          
+
           result = await this.executeCodeSearch(args);
+        } else if (request.params.name === 'grep') {
+          const args = request.params.arguments as unknown as GrepArgs;
+          result = await this.executeGrep(args);
         } else { // extract_code or extract
           const args = request.params.arguments as unknown as ExtractCodeArgs;
           result = await this.executeCodeExtract(args);
@@ -320,64 +320,28 @@ class ProbeServer {
         throw new Error("Query is required");
       }
 
-      // Log the arguments we received for debugging
-      console.error(`Received search arguments: path=${args.path}, query=${JSON.stringify(args.query)}`);
-
-      // Create a clean options object with only the essential properties first
+      // Build options with smart defaults
       const options: any = {
-        path: args.path.trim(),  // Ensure path is trimmed
-        query: args.query
+        path: args.path.trim(),
+        query: args.query,
+        // Smart defaults for MCP usage
+        allowTests: true,          // Include test files by default
+        session: "new",            // Fresh session each time
+        maxResults: 20,            // Reasonable limit for context window
+        maxTokens: 8000,           // Fits in most AI context windows
       };
-      
-      // Add optional parameters only if they exist
-      if (args.exact !== undefined) options.exact = args.exact;
-      if (args.maxResults !== undefined) options.maxResults = args.maxResults;
-      if (args.maxTokens !== undefined) options.maxTokens = args.maxTokens;
-      // Set allowTests to true by default if not specified
-      if (args.allowTests !== undefined) {
-        options.allowTests = args.allowTests;
-      } else {
-        options.allowTests = true;
-      }
-      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
-      if (args.noGitignore !== undefined) {
-        options.noGitignore = args.noGitignore;
-      } else if (process.env.PROBE_NO_GITIGNORE) {
-        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
-      }
-      if (args.session !== undefined && args.session.trim() !== '') {
-        options.session = args.session;
-      } else {
-        options.session = "new";
-      }
-      // Use timeout from args, or fall back to instance default
-      if (args.timeout !== undefined) {
-        options.timeout = args.timeout;
-      } else if (this.defaultTimeout !== undefined) {
-        options.timeout = this.defaultTimeout;
-      }
-      // Pass LSP flag if enabled globally or per-request
-      if (args.lsp !== undefined) {
-        options.lsp = args.lsp;
-      } else if (this.lspEnabled) {
-        options.lsp = true;
-      }
 
-      // Handle format options
-      if (this.defaultFormat === 'outline-xml') {
-        // For outline-xml format, we pass it as a format flag to the search command
-        options.format = 'outline-xml';
+      // Only override defaults if user explicitly set them
+      if (args.exact !== undefined) options.exact = args.exact;
+
+      // Handle format based on server default
+      if (this.defaultFormat === 'outline' || this.defaultFormat === 'outline-xml') {
+        options.format = this.defaultFormat;
       } else if (this.defaultFormat === 'json') {
         options.json = true;
       }
-      
+
       console.error("Executing search with options:", JSON.stringify(options, null, 2));
-      
-      // Double-check that path is still in the options object
-      if (!options.path) {
-        console.error("Path is missing from options object after construction");
-        throw new Error("Path is missing from options object");
-      }
       
       try {
         // Call search with the options object
@@ -407,32 +371,13 @@ class ProbeServer {
         throw new Error("Files array is required and must not be empty");
       }
 
-      // Create a single options object with files and other parameters
+      // Build options with smart defaults
       const options: any = {
         files: args.files,
         path: args.path,
-        format: 'xml'
+        format: 'xml',
+        allowTests: true,  // Include test files by default
       };
-      
-      // Set allowTests to true by default if not specified
-      if (args.allowTests !== undefined) {
-        options.allowTests = args.allowTests;
-      } else {
-        options.allowTests = true;
-      }
-      
-      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
-      if (args.noGitignore !== undefined) {
-        options.noGitignore = args.noGitignore;
-      } else if (process.env.PROBE_NO_GITIGNORE) {
-        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
-      }
-      // Pass LSP flag if enabled globally or per-request
-      if (args.lsp !== undefined) {
-        options.lsp = args.lsp;
-      } else if (this.lspEnabled) {
-        options.lsp = true;
-      }
       
       // Call extract with the complete options object
       try {
@@ -488,51 +433,53 @@ class ProbeServer {
     }
   }
 
+  private async executeGrep(args: GrepArgs): Promise<string> {
+    try {
+      // Validate required parameters
+      if (!args.pattern) {
+        throw new Error("Pattern is required");
+      }
+      if (!args.paths) {
+        throw new Error("Paths are required");
+      }
+
+      // Build options object with good defaults
+      const options: any = {
+        pattern: args.pattern,
+        paths: args.paths,
+        // Default: show line numbers (makes output more useful)
+        lineNumbers: true,
+        // Default: never use color in MCP context (better for parsing)
+        color: 'never'
+      };
+
+      // Only add user-specified optional parameters
+      if (args.ignoreCase !== undefined) options.ignoreCase = args.ignoreCase;
+      if (args.count !== undefined) options.count = args.count;
+      if (args.context !== undefined) options.context = args.context;
+
+      console.error("Executing grep with options:", JSON.stringify(options, null, 2));
+
+      try {
+        // Call grep with the options object
+        const result = await grep(options);
+        return result || 'No matches found';
+      } catch (grepError: any) {
+        console.error("Grep function error:", grepError);
+        throw new Error(`Grep function error: ${grepError.message || String(grepError)}`);
+      }
+    } catch (error: any) {
+      console.error('Error executing grep:', error);
+      throw new McpError(
+        'MethodNotFound' as unknown as ErrorCode,
+        `Error executing grep: ${error.message || String(error)}`
+      );
+    }
+  }
+
   async run() {
     // The @probelabs/probe package now handles binary path management internally
     // We don't need to verify or download the binary in the MCP server anymore
-    
-    // Initialize LSP servers for the current workspace if --lsp flag is enabled
-    if (this.lspEnabled) {
-      const workspaceRoot = process.cwd();
-      console.error(`Initializing LSP servers for workspace: ${workspaceRoot}`);
-      
-      try {
-        // Execute probe lsp init command to pre-warm language servers
-        // Use recursive flag to discover nested projects in monorepos
-        const initCmd = process.platform === 'win32' 
-          ? `probe lsp init -w "${workspaceRoot}" --recursive`
-          : `probe lsp init -w '${workspaceRoot}' --recursive`;
-        
-        const { stdout, stderr } = await execAsync(initCmd, {
-          timeout: 10000, // 10 second timeout for initialization - don't wait too long
-          env: { ...process.env }
-        });
-        
-        if (stderr && !stderr.includes('Successfully initialized')) {
-          console.error(`LSP initialization warnings: ${stderr}`);
-        }
-        
-        console.error(`LSP servers initialized successfully for workspace: ${workspaceRoot}`);
-        
-        // Parse initialization output to show what was initialized
-        if (stdout) {
-          const lines = stdout.split('\n');
-          const initializedServers = lines.filter(line => 
-            line.includes('✓') || line.includes('language server')
-          );
-          if (initializedServers.length > 0) {
-            console.error('Initialized language servers:');
-            initializedServers.forEach(line => console.error(`  ${line.trim()}`));
-          }
-        }
-      } catch (error: any) {
-        // Don't fail MCP server startup if LSP initialization fails
-        // LSP will still work with cold start on first use
-        console.error(`Warning: Failed to initialize LSP servers: ${error.message || error}`);
-        console.error('LSP features will still be available but may have slower first-use performance');
-      }
-    }
     
     // Just connect the server to the transport
     const transport = new StdioServerTransport();
@@ -541,10 +488,5 @@ class ProbeServer {
   }
 }
 
-// Instantiate server with (timeout, lspEnabled, format)
-const server = new ProbeServer(
-  cliConfig.timeout ?? 30,
-  cliConfig.lsp ?? false,
-  cliConfig.format || 'outline-xml'
-);
+const server = new ProbeServer(cliConfig.timeout, cliConfig.format || 'outline');
 server.run().catch(console.error);

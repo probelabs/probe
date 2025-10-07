@@ -729,6 +729,7 @@ fn test_filter_code_block_with_ast() {
         required_terms_indices,
         has_only_excluded_terms,
         evaluation_cache,
+        is_universal_query: false,
     };
 
     // Create term matches for a block
@@ -816,6 +817,7 @@ fn test_filter_tokenized_block() {
         required_terms_indices,
         has_only_excluded_terms,
         evaluation_cache,
+        is_universal_query: false,
     };
 
     // Import the function from probe crate
@@ -899,6 +901,7 @@ fn test_filter_tokenized_block() {
         required_terms_indices,
         has_only_excluded_terms,
         evaluation_cache,
+        is_universal_query: false,
     };
 
     // Test with only keywordGamma

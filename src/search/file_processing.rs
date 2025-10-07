@@ -146,7 +146,7 @@ pub fn filter_code_block_with_ast(
     }
 
     // Check if we have any matches at all
-    if matched_terms.is_empty() && !plan.has_only_excluded_terms {
+    if matched_terms.is_empty() && !plan.has_only_excluded_terms && !plan.is_universal_query {
         if debug_mode {
             println!(
                 "DEBUG: No matched terms in block {}-{}, returning false",
@@ -154,6 +154,17 @@ pub fn filter_code_block_with_ast(
             );
         }
         return false;
+    }
+
+    // Universal query - accept all blocks
+    if plan.is_universal_query && matched_terms.is_empty() {
+        if debug_mode {
+            println!(
+                "DEBUG: Universal query - accepting block {}-{}",
+                block_lines.0, block_lines.1
+            );
+        }
+        return true;
     }
 
     // Use the AST evaluation directly
@@ -308,6 +319,13 @@ pub fn filter_tokenized_block(
     if matched_terms.is_empty() {
         // Check if the query only contains excluded terms
         if plan.has_only_excluded_terms {
+            return true;
+        }
+        // Check if this is a universal query (e.g., filename-only search)
+        if plan.is_universal_query {
+            if debug_mode {
+                println!("DEBUG: Universal query - accepting all blocks");
+            }
             return true;
         }
         if debug_mode {

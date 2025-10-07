@@ -25,5 +25,6 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           installation-id: ${{ secrets.APP_INSTALLATION_ID }}
+          debug: 'true'
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}

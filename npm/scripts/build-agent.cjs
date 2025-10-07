@@ -20,14 +20,17 @@ async function buildAgent() {
       target: 'node18',
       format: 'esm',
       external: [
-        // Keep these as external dependencies that need to be installed
+        // AI SDK packages - use dynamic requires, must be external
         '@modelcontextprotocol/sdk',
         '@ai-sdk/anthropic',
-        '@ai-sdk/openai', 
+        '@ai-sdk/openai',
         '@ai-sdk/google',
+        '@ai-sdk/amazon-bedrock',
         'ai',
-        'tiktoken',
-        'glob',
+        // Packages with dynamic requires
+        'fs-extra',
+        'tar',
+        'axios',
         // Node.js built-in modules
         'fs',
         'path',
@@ -38,12 +41,8 @@ async function buildAgent() {
         'events',
         'url',
         'os',
-        'process',
-        // Additional problematic modules that use dynamic requires
-        'fs-extra',
-        'tar',
-        'axios',
-        'zod'
+        'process'
+        // Will bundle: glob, zod
       ],
       banner: {
         js: '#!/usr/bin/env node'

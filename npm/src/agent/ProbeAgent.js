@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, dirname } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { 
   createTools,
@@ -141,16 +141,57 @@ export class ProbeAgent {
     this.mcpConfig = options.mcpConfig || null;
     this.mcpServers = options.mcpServers || null; // Deprecated, keep for backward compatibility
     this.mcpBridge = null;
+    this._mcpInitialized = false; // Track if MCP initialization has been attempted
 
     // Initialize the AI model
     this.initializeModel();
 
-    // Initialize MCP if enabled
-    if (this.enableMcp) {
-      this.initializeMCP().catch(error => {
-        console.error('[MCP] Failed to initialize MCP:', error);
+    // Note: MCP initialization is now done in initialize() method
+    // Constructor must remain synchronous for backward compatibility
+  }
+
+  /**
+   * Initialize the agent asynchronously (must be called after constructor)
+   * This method initializes MCP and merges MCP tools into the tool list
+   */
+  async initialize() {
+    // Initialize MCP if enabled and not already initialized
+    if (this.enableMcp && !this._mcpInitialized) {
+      this._mcpInitialized = true; // Prevent multiple initialization attempts
+      try {
+        await this.initializeMCP();
+
+        // Merge MCP tools into toolImplementations for unified access
+        if (this.mcpBridge) {
+          const mcpTools = this.mcpBridge.mcpTools || {};
+          for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
+            this.toolImplementations[toolName] = toolImpl;
+          }
+        }
+
+        // Log all available tools after MCP initialization
+        if (this.debug) {
+          const allToolNames = Object.keys(this.toolImplementations);
+          const nativeToolCount = allToolNames.filter(name => !this.mcpBridge?.mcpTools?.[name]).length;
+          const mcpToolCount = allToolNames.length - nativeToolCount;
+
+          console.error('\n[DEBUG] ========================================');
+          console.error('[DEBUG] All Tools Initialized');
+          console.error(`[DEBUG] Native tools: ${nativeToolCount}, MCP tools: ${mcpToolCount}`);
+          console.error('[DEBUG] Available tools:');
+          for (const toolName of allToolNames) {
+            const isMCP = this.mcpBridge?.mcpTools?.[toolName] ? ' (MCP)' : '';
+            console.error(`[DEBUG]   - ${toolName}${isMCP}`);
+          }
+          console.error('[DEBUG] ========================================\n');
+        }
+      } catch (error) {
+        console.error('[MCP ERROR] Failed to initialize MCP:', error.message);
+        if (this.debug) {
+          console.error('[MCP DEBUG] Full error details:', error);
+        }
         this.mcpBridge = null;
-      });
+      }
     }
   }
 
@@ -188,9 +229,23 @@ export class ProbeAgent {
     if (this.enableBash && wrappedTools.bashToolInstance) {
       this.toolImplementations.bash = wrappedTools.bashToolInstance;
     }
-    
+
     // Store wrapped tools for ACP system
     this.wrappedTools = wrappedTools;
+
+    // Log available tools in debug mode
+    if (this.debug) {
+      console.error('\n[DEBUG] ========================================');
+      console.error('[DEBUG] ProbeAgent Tools Initialized');
+      console.error('[DEBUG] Session ID:', this.sessionId);
+      console.error('[DEBUG] Available tools:');
+      for (const toolName of Object.keys(this.toolImplementations)) {
+        console.error(`[DEBUG]   - ${toolName}`);
+      }
+      console.error('[DEBUG] Allowed folders:', this.allowedFolders);
+      console.error('[DEBUG] Outline mode:', this.outline);
+      console.error('[DEBUG] ========================================\n');
+    }
   }
 
   /**
@@ -366,6 +421,9 @@ export class ProbeAgent {
   async processImageReferences(content) {
     if (!content) return;
 
+    // First, try to parse listFiles output format to extract directory context
+    const listFilesDirectories = this.extractListFilesDirectories(content);
+
     // Enhanced pattern to detect image file mentions in various contexts
     // Looks for: "image", "file", "screenshot", etc. followed by path-like strings with image extensions
     const extensionsPattern = `(?:${SUPPORTED_IMAGE_EXTENSIONS.join('|')})`;
@@ -400,8 +458,92 @@ export class ProbeAgent {
 
     // Process each found path
     for (const imagePath of foundPaths) {
-      await this.loadImageIfValid(imagePath);
+      // Try to resolve the path with directory context from listFiles output
+      let resolvedPath = imagePath;
+
+      // If the path is just a filename (no directory separator), try to find it in listFiles directories
+      if (!imagePath.includes('/') && !imagePath.includes('\\')) {
+        for (const dir of listFilesDirectories) {
+          const potentialPath = resolve(dir, imagePath);
+          // Check if this file exists by attempting to load it
+          const loaded = await this.loadImageIfValid(potentialPath);
+          if (loaded) {
+            // Successfully loaded with this directory context
+            if (this.debug) {
+              console.log(`[DEBUG] Resolved ${imagePath} to ${potentialPath} using listFiles context`);
+            }
+            break; // Found it, no need to try other directories
+          }
+        }
+      } else {
+        // Path already has directory info, load as-is
+        await this.loadImageIfValid(resolvedPath);
+      }
     }
+  }
+
+  /**
+   * Extract directory paths from tool output (both listFiles and extract tool)
+   * @param {string} content - Tool output content
+   * @returns {string[]} - Array of directory paths
+   */
+  extractListFilesDirectories(content) {
+    const directories = [];
+
+    // Pattern 1: Extract directory from extract tool "File:" header
+    // Format: "File: /path/to/file.md" or "File: ./relative/path/file.md"
+    const fileHeaderPattern = /^File:\s+(.+)$/gm;
+
+    let match;
+    while ((match = fileHeaderPattern.exec(content)) !== null) {
+      const filePath = match[1].trim();
+      // Get directory from file path
+      const dir = dirname(filePath);
+      if (dir && dir !== '.') {
+        directories.push(dir);
+        if (this.debug) {
+          console.log(`[DEBUG] Extracted directory context from File header: ${dir}`);
+        }
+      }
+    }
+
+    // Pattern 2: Extract directory from listFiles output format: "/path/to/directory:"
+    // Matches absolute paths (/path/to/dir:) or current directory markers (.:) or Windows paths (C:\path:) at start of line
+    // Very strict to avoid matching random text like ".Something:" or "./Some text:"
+    const dirPattern = /^(\/[^\n:]+|[A-Z]:\\[^\n:]+|\.\.?(?:\/[^\n:]+)?):\s*$/gm;
+
+    while ((match = dirPattern.exec(content)) !== null) {
+      const dirPath = match[1].trim();
+
+      // Strict validation: must look like an actual filesystem path
+      // Reject if contains spaces or other characters that wouldn't be in listFiles output
+      const hasInvalidChars = /\s/.test(dirPath); // Contains whitespace
+
+      // Validate this looks like an actual path, not random text
+      // Must be either: absolute path (Unix or Windows), or ./ or ../ followed by valid path chars
+      const isValidPath = (
+        !hasInvalidChars && (
+          dirPath.startsWith('/') ||  // Unix absolute path
+          /^[A-Z]:\\/.test(dirPath) || // Windows absolute path (C:\)
+          dirPath === '.' ||           // Current directory
+          dirPath === '..' ||          // Parent directory
+          (dirPath.startsWith('./') && dirPath.length > 2 && !dirPath.includes(' ')) ||   // ./something (no spaces)
+          (dirPath.startsWith('../') && dirPath.length > 3 && !dirPath.includes(' '))     // ../something (no spaces)
+        )
+      );
+
+      if (isValidPath) {
+        // Avoid duplicates
+        if (!directories.includes(dirPath)) {
+          directories.push(dirPath);
+          if (this.debug) {
+            console.log(`[DEBUG] Extracted directory context from listFiles: ${dirPath}`);
+          }
+        }
+      }
+    }
+
+    return directories;
   }
 
   /**
@@ -605,14 +747,14 @@ export class ProbeAgent {
         // Direct config object provided (SDK usage)
         mcpConfig = this.mcpConfig;
         if (this.debug) {
-          console.log('[DEBUG] Using provided MCP config object');
+          console.error('[MCP DEBUG] Using provided MCP config object');
         }
       } else if (this.mcpConfigPath) {
         // Explicit config path provided
         try {
           mcpConfig = loadMCPConfigurationFromPath(this.mcpConfigPath);
           if (this.debug) {
-            console.log(`[DEBUG] Loaded MCP config from: ${this.mcpConfigPath}`);
+            console.error(`[MCP DEBUG] Loaded MCP config from: ${this.mcpConfigPath}`);
           }
         } catch (error) {
           throw new Error(`Failed to load MCP config from ${this.mcpConfigPath}: ${error.message}`);
@@ -621,30 +763,47 @@ export class ProbeAgent {
         // Backward compatibility: convert old mcpServers format
         mcpConfig = { mcpServers: this.mcpServers };
         if (this.debug) {
-          console.warn('[DEBUG] Using deprecated mcpServers option. Consider using mcpConfig instead.');
+          console.error('[MCP DEBUG] Using deprecated mcpServers option. Consider using mcpConfig instead.');
         }
+      } else {
+        // No explicit config provided - will attempt auto-discovery
+        // This is important for CLI usage where config files may exist
+        if (this.debug) {
+          console.error('[MCP DEBUG] No explicit MCP config provided, will attempt auto-discovery');
+        }
+        // Pass null to trigger auto-discovery in MCPXmlBridge
+        mcpConfig = null;
       }
-      // Note: auto-discovery fallback is removed - user must explicitly provide config
 
       // Initialize the MCP XML bridge
       this.mcpBridge = new MCPXmlBridge({ debug: this.debug });
       await this.mcpBridge.initialize(mcpConfig);
 
-      const mcpToolCount = this.mcpBridge.getToolNames().length;
+      const mcpToolNames = this.mcpBridge.getToolNames();
+      const mcpToolCount = mcpToolNames.length;
       if (mcpToolCount > 0) {
         if (this.debug) {
-          console.log(`[DEBUG] Loaded ${mcpToolCount} MCP tools`);
+          console.error('\n[MCP DEBUG] ========================================');
+          console.error(`[MCP DEBUG] MCP Tools Initialized (${mcpToolCount} tools)`);
+          console.error('[MCP DEBUG] Available MCP tools:');
+          for (const toolName of mcpToolNames) {
+            console.error(`[MCP DEBUG]   - ${toolName}`);
+          }
+          console.error('[MCP DEBUG] ========================================\n');
         }
       } else {
         // For backward compatibility: if no tools were loaded, set bridge to null
         // This maintains the behavior expected by existing tests
         if (this.debug) {
-          console.log('[DEBUG] No MCP tools loaded, setting bridge to null');
+          console.error('[MCP DEBUG] No MCP tools loaded, setting bridge to null');
         }
         this.mcpBridge = null;
       }
     } catch (error) {
-      console.error('[MCP] Error initializing MCP:', error);
+      console.error('[MCP ERROR] Error initializing MCP:', error.message);
+      if (this.debug) {
+        console.error('[MCP DEBUG] Full error details:', error);
+      }
       this.mcpBridge = null;
     }
   }
@@ -653,6 +812,27 @@ export class ProbeAgent {
    * Get the system message with instructions for the AI (XML Tool Format)
    */
   async getSystemMessage() {
+    // Lazy initialize MCP if enabled but not yet initialized
+    if (this.enableMcp && !this.mcpBridge && !this._mcpInitialized) {
+      this._mcpInitialized = true; // Prevent multiple initialization attempts
+      try {
+        await this.initializeMCP();
+
+        // Merge MCP tools into toolImplementations for unified access
+        if (this.mcpBridge) {
+          const mcpTools = this.mcpBridge.mcpTools || {};
+          for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
+            this.toolImplementations[toolName] = toolImpl;
+          }
+        }
+      } catch (error) {
+        console.error('[MCP ERROR] Failed to lazy-initialize MCP:', error.message);
+        if (this.debug) {
+          console.error('[MCP DEBUG] Full error details:', error);
+        }
+      }
+    }
+
     // Build tool definitions
     let toolDefinitions = `
 ${searchToolDefinition}
@@ -1117,34 +1297,74 @@ When troubleshooting:
             if (type === 'mcp' && this.mcpBridge && this.mcpBridge.isMcpTool(toolName)) {
               // Execute MCP tool
               try {
-                if (this.debug) console.log(`[DEBUG] Executing MCP tool '${toolName}' with params:`, params);
+                // Log MCP tool execution in debug mode
+                if (this.debug) {
+                  console.error(`\n[DEBUG] ========================================`);
+                  console.error(`[DEBUG] Executing MCP tool: ${toolName}`);
+                  console.error(`[DEBUG] Arguments:`);
+                  for (const [key, value] of Object.entries(params)) {
+                    const displayValue = typeof value === 'string' && value.length > 100
+                      ? value.substring(0, 100) + '...'
+                      : value;
+                    console.error(`[DEBUG]   ${key}: ${JSON.stringify(displayValue)}`);
+                  }
+                  console.error(`[DEBUG] ========================================\n`);
+                }
 
                 // Execute MCP tool through the bridge
                 const executionResult = await this.mcpBridge.mcpTools[toolName].execute(params);
 
                 const toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
-                const preview = createMessagePreview(toolResultContent);
+
+                // Log MCP tool result in debug mode
                 if (this.debug) {
-                  console.log(`[DEBUG] MCP tool '${toolName}' executed successfully. Result preview: ${preview}`);
+                  const preview = toolResultContent.length > 500 ? toolResultContent.substring(0, 500) + '...' : toolResultContent;
+                  console.error(`[DEBUG] ========================================`);
+                  console.error(`[DEBUG] MCP tool '${toolName}' completed successfully`);
+                  console.error(`[DEBUG] Result preview:`);
+                  console.error(preview);
+                  console.error(`[DEBUG] ========================================\n`);
                 }
 
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
               } catch (error) {
                 console.error(`Error executing MCP tool ${toolName}:`, error);
                 const toolResultContent = `Error executing MCP tool ${toolName}: ${error.message}`;
-                if (this.debug) console.log(`[DEBUG] MCP tool '${toolName}' execution FAILED.`);
+
+                // Log MCP tool error in debug mode
+                if (this.debug) {
+                  console.error(`[DEBUG] ========================================`);
+                  console.error(`[DEBUG] MCP tool '${toolName}' failed with error:`);
+                  console.error(`[DEBUG] ${error.message}`);
+                  console.error(`[DEBUG] ========================================\n`);
+                }
+
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
               }
             } else if (this.toolImplementations[toolName]) {
               // Execute native tool
               try {
                 // Add sessionId and workingDirectory to params for tool execution
-                const toolParams = { 
-                  ...params, 
+                const toolParams = {
+                  ...params,
                   sessionId: this.sessionId,
                   workingDirectory: (this.allowedFolders && this.allowedFolders[0]) || process.cwd()
                 };
-                
+
+                // Log tool execution in debug mode
+                if (this.debug) {
+                  console.error(`\n[DEBUG] ========================================`);
+                  console.error(`[DEBUG] Executing tool: ${toolName}`);
+                  console.error(`[DEBUG] Arguments:`);
+                  for (const [key, value] of Object.entries(params)) {
+                    const displayValue = typeof value === 'string' && value.length > 100
+                      ? value.substring(0, 100) + '...'
+                      : value;
+                    console.error(`[DEBUG]   ${key}: ${JSON.stringify(displayValue)}`);
+                  }
+                  console.error(`[DEBUG] ========================================\n`);
+                }
+
                 // Emit tool start event
                 this.events.emit('toolCall', {
                   timestamp: new Date().toISOString(),
@@ -1196,6 +1416,18 @@ When troubleshooting:
                     toolResult = await executeToolCall();
                   }
                   
+                  // Log tool result in debug mode
+                  if (this.debug) {
+                    const resultPreview = typeof toolResult === 'string'
+                      ? (toolResult.length > 500 ? toolResult.substring(0, 500) + '...' : toolResult)
+                      : (toolResult ? JSON.stringify(toolResult, null, 2).substring(0, 500) + '...' : 'No Result');
+                    console.error(`[DEBUG] ========================================`);
+                    console.error(`[DEBUG] Tool '${toolName}' completed successfully`);
+                    console.error(`[DEBUG] Result preview:`);
+                    console.error(resultPreview);
+                    console.error(`[DEBUG] ========================================\n`);
+                  }
+
                   // Emit tool success event
                   this.events.emit('toolCall', {
                     timestamp: new Date().toISOString(),
@@ -1206,8 +1438,16 @@ When troubleshooting:
                       : (toolResult ? JSON.stringify(toolResult).substring(0, 200) + '...' : 'No Result'),
                     status: 'completed'
                   });
-                  
+
                 } catch (toolError) {
+                  // Log tool error in debug mode
+                  if (this.debug) {
+                    console.error(`[DEBUG] ========================================`);
+                    console.error(`[DEBUG] Tool '${toolName}' failed with error:`);
+                    console.error(`[DEBUG] ${toolError.message}`);
+                    console.error(`[DEBUG] ========================================\n`);
+                  }
+
                   // Emit tool error event
                   this.events.emit('toolCall', {
                     timestamp: new Date().toISOString(),
@@ -1262,7 +1502,23 @@ When troubleshooting:
             }
           }
         } else {
-          // No tool call found, add assistant response and ask for tool usage
+          // No tool call found
+          // Special case: If response contains a mermaid code block and no schema was provided,
+          // treat it as a valid completion (for mermaid diagram fixing workflow)
+          const hasMermaidCodeBlock = /```mermaid\s*\n[\s\S]*?\n```/.test(assistantResponseContent);
+          const hasNoSchemaOrTools = !options.schema && validTools.length === 0;
+
+          if (hasMermaidCodeBlock && hasNoSchemaOrTools) {
+            // Accept mermaid code block as final answer for diagram fixing
+            finalResult = assistantResponseContent;
+            completionAttempted = true;
+            if (this.debug) {
+              console.error(`[DEBUG] Accepting mermaid code block as valid completion (no schema, no tools)`);
+            }
+            break;
+          }
+
+          // Add assistant response and ask for tool usage
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
 
           // Build appropriate reminder message based on whether schema is provided

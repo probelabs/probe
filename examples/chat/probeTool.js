@@ -1,14 +1,15 @@
-// Import tool generators from @probelabs/probe package
-import { searchTool, queryTool, extractTool, DEFAULT_SYSTEM_MESSAGE, listFilesByLevel } from '@probelabs/probe';
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
+// Import tool generators and instances from @probelabs/probe package
+import {
+	searchTool,
+	queryTool,
+	extractTool,
+	DEFAULT_SYSTEM_MESSAGE,
+	listFilesToolInstance as packageListFilesToolInstance,
+	searchFilesToolInstance as packageSearchFilesToolInstance
+} from '@probelabs/probe';
+import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
-import fs from 'fs';
-import { promises as fsPromises } from 'fs';
-import path from 'path';
-import os from 'os';
-import { glob } from 'glob';
 
 // Import the new pluggable implementation tool
 import { createImplementTool } from './implement/core/ImplementTool.js';
@@ -81,6 +82,27 @@ const configOptions = {
 	debug: process.env.DEBUG_CHAT === '1'
 };
 
+// Helper function to truncate long argument values for logging
+function truncateArgValue(value, maxLength = 200) {
+	if (typeof value !== 'string') {
+		value = JSON.stringify(value);
+	}
+	if (value.length <= maxLength * 2) {
+		return value;
+	}
+	// Show first 200 and last 200 characters
+	return `${value.substring(0, maxLength)}...${value.substring(value.length - maxLength)}`;
+}
+
+// Helper function to format tool arguments for debug logging
+function formatToolArgs(args) {
+	const formatted = {};
+	for (const [key, value] of Object.entries(args)) {
+		formatted[key] = truncateArgValue(value);
+	}
+	return formatted;
+}
+
 // Create the base tools using the imported generators
 const baseSearchTool = searchTool(configOptions);
 const baseQueryTool = queryTool(configOptions);
@@ -97,8 +119,15 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 			const toolSessionId = params.sessionId || defaultSessionId; // Fallback, but should always have sessionId
 
 			if (debug) {
-				console.log(`[DEBUG] probeTool: Executing ${toolName} for session ${toolSessionId}`);
-				console.log(`[DEBUG] probeTool: Received params:`, params);
+				console.log(`\n[DEBUG] ========================================`);
+				console.log(`[DEBUG] Tool Call: ${toolName}`);
+				console.log(`[DEBUG] Session: ${toolSessionId}`);
+				console.log(`[DEBUG] Arguments:`);
+				const formattedArgs = formatToolArgs(params);
+				for (const [key, value] of Object.entries(formattedArgs)) {
+					console.log(`[DEBUG]   ${key}: ${value}`);
+				}
+				console.log(`[DEBUG] ========================================\n`);
 			}
 
 			// Register this tool execution (and reset cancel flag if needed)
@@ -295,28 +324,18 @@ const baseImplementTool = {
 	}
 };
 
-// Create the listFiles tool
+// Wrapper for listFiles tool with ALLOWED_FOLDERS security
 const baseListFilesTool = {
-	name: "listFiles",
-	description: 'List files in a specified directory',
-	inputSchema: {
-		type: 'object',
-		properties: {
-			directory: {
-				type: 'string',
-				description: 'The directory path to list files from. Defaults to current directory if not specified.'
-			}
-		},
-		required: []
-	},
-	execute: async ({ directory = '.', sessionId }) => {
+	...packageListFilesToolInstance,
+	execute: async (params) => {
+		const { directory = '.', sessionId } = params;
 		const debug = process.env.DEBUG_CHAT === '1';
 		const currentWorkingDir = process.cwd();
-		
+
 		// Get allowed folders from environment variable
 		const allowedFoldersEnv = process.env.ALLOWED_FOLDERS;
 		let allowedFolders = [];
-		
+
 		if (allowedFoldersEnv) {
 			allowedFolders = allowedFoldersEnv.split(',').map(folder => folder.trim()).filter(folder => folder.length > 0);
 		}
@@ -331,13 +350,13 @@ const baseListFilesTool = {
 			}
 		}
 
-		const targetDir = path.resolve(currentWorkingDir, targetDirectory);
+		const targetDir = require('path').resolve(currentWorkingDir, targetDirectory);
 
 		// Validate that the target directory is within allowed folders
 		if (allowedFolders.length > 0) {
 			const isAllowed = allowedFolders.some(allowedFolder => {
-				const resolvedAllowedFolder = path.resolve(currentWorkingDir, allowedFolder);
-				return targetDir === resolvedAllowedFolder || targetDir.startsWith(resolvedAllowedFolder + path.sep);
+				const resolvedAllowedFolder = require('path').resolve(currentWorkingDir, allowedFolder);
+				return targetDir === resolvedAllowedFolder || targetDir.startsWith(resolvedAllowedFolder + require('path').sep);
 			});
 
 			if (!isAllowed) {
@@ -345,88 +364,31 @@ const baseListFilesTool = {
 				if (debug) {
 					console.log(`[DEBUG] ${error}`);
 				}
-				return {
-					success: false,
-					directory: targetDir,
-					error: error,
-					timestamp: new Date().toISOString()
-				};
+				return `Error: ${error}`;
 			}
 		}
 
-		if (debug) {
-			console.log(`[DEBUG] Listing files in directory: ${targetDir}`);
-		}
-
-		try {
-			// Read the directory contents
-			const files = await fs.promises.readdir(targetDir, { withFileTypes: true });
-
-			// Format the results
-			const result = files.map(file => {
-				const isDirectory = file.isDirectory();
-				return {
-					name: file.name,
-					type: isDirectory ? 'directory' : 'file',
-					path: path.join(targetDirectory, file.name)
-				};
-			});
-
-			if (debug) {
-				console.log(`[DEBUG] Found ${result.length} files/directories in ${targetDir}`);
-			}
-
-			return {
-				success: true,
-				directory: targetDir,
-				files: result,
-				timestamp: new Date().toISOString()
-			};
-		} catch (error) {
-			console.error(`Error listing files in ${targetDir}:`, error);
-			return {
-				success: false,
-				directory: targetDir,
-				error: error.message || 'Unknown error listing files',
-				timestamp: new Date().toISOString()
-			};
-		}
+		// Call the package tool with workingDirectory parameter
+		return packageListFilesToolInstance.execute({
+			...params,
+			directory: targetDirectory,
+			workingDirectory: currentWorkingDir
+		});
 	}
 };
 
-// Create the searchFiles tool
+// Wrapper for searchFiles tool with ALLOWED_FOLDERS security
 const baseSearchFilesTool = {
-	name: "searchFiles",
-	description: 'Search for files using a glob pattern, recursively by default',
-	inputSchema: {
-		type: 'object',
-		properties: {
-			pattern: {
-				type: 'string',
-				description: 'The glob pattern to search for (e.g., "**/*.js", "*.md")'
-			},
-			directory: {
-				type: 'string',
-				description: 'The directory to search in. Defaults to current directory if not specified.'
-			},
-			recursive: {
-				type: 'boolean',
-				description: 'Whether to search recursively. Defaults to true.'
-			}
-		},
-		required: ['pattern']
-	},
-	execute: async ({ pattern, directory, recursive = true, sessionId }) => {
-		// Ensure directory defaults to current directory
-		directory = directory || '.';
-
+	...packageSearchFilesToolInstance,
+	execute: async (params) => {
+		const { pattern, directory = '.', recursive = true, sessionId } = params;
 		const debug = process.env.DEBUG_CHAT === '1';
 		const currentWorkingDir = process.cwd();
-		
+
 		// Get allowed folders from environment variable
 		const allowedFoldersEnv = process.env.ALLOWED_FOLDERS;
 		let allowedFolders = [];
-		
+
 		if (allowedFoldersEnv) {
 			allowedFolders = allowedFoldersEnv.split(',').map(folder => folder.trim()).filter(folder => folder.length > 0);
 		}
@@ -441,13 +403,13 @@ const baseSearchFilesTool = {
 			}
 		}
 
-		const targetDir = path.resolve(currentWorkingDir, targetDirectory);
+		const targetDir = require('path').resolve(currentWorkingDir, targetDirectory);
 
 		// Validate that the target directory is within allowed folders
 		if (allowedFolders.length > 0) {
 			const isAllowed = allowedFolders.some(allowedFolder => {
-				const resolvedAllowedFolder = path.resolve(currentWorkingDir, allowedFolder);
-				return targetDir === resolvedAllowedFolder || targetDir.startsWith(resolvedAllowedFolder + path.sep);
+				const resolvedAllowedFolder = require('path').resolve(currentWorkingDir, allowedFolder);
+				return targetDir === resolvedAllowedFolder || targetDir.startsWith(resolvedAllowedFolder + require('path').sep);
 			});
 
 			if (!isAllowed) {
@@ -467,160 +429,34 @@ const baseSearchFilesTool = {
 
 		// Log execution parameters to stderr for visibility
 		console.error(`Executing searchFiles with params: pattern="${pattern}", directory="${targetDirectory}", recursive=${recursive}`);
-		console.error(`Resolved target directory: ${targetDir}`);
-		console.error(`Current working directory: ${currentWorkingDir}`);
-
-		if (debug) {
-			console.log(`[DEBUG] Searching for files with pattern: ${pattern}`);
-			console.log(`[DEBUG] In directory: ${targetDir}`);
-			console.log(`[DEBUG] Recursive: ${recursive}`);
-		}
-
-		// Validate pattern to prevent overly complex patterns
-		if (pattern.includes('**/**') || pattern.split('*').length > 10) {
-			console.error(`Pattern too complex: ${pattern}`);
-			return {
-				success: false,
-				directory: targetDir,
-				pattern: pattern,
-				error: 'Pattern too complex. Please use a simpler glob pattern.',
-				timestamp: new Date().toISOString()
-			};
-		}
 
 		try {
-			// Set glob options with timeout and limits
-			const options = {
-				cwd: targetDir,
-				dot: true, // Include dotfiles
-				nodir: true, // Only return files, not directories
-				absolute: false, // Return paths relative to the search directory
-				timeout: 10000, // 10 second timeout
-				maxDepth: recursive ? 10 : 1, // Limit recursion depth
-			};
-
-			// If not recursive, modify the pattern to only search the top level
-			const searchPattern = recursive ? pattern : pattern.replace(/^\*\*\//, '');
-
-			console.error(`Starting glob search with pattern: ${searchPattern} in ${targetDir}`);
-			console.error(`Glob options: ${JSON.stringify(options)}`);
-
-			// Use a safer approach with manual file searching if the pattern is simple enough
-			let files = [];
-
-			// For simple patterns like "*.js" or "bin/*.js", use a more direct approach
-			if (pattern.includes('*') && !pattern.includes('**') && pattern.split('/').length <= 2) {
-				console.error(`Using direct file search for simple pattern: ${pattern}`);
-
-				try {
-					// Handle patterns like "dir/*.ext" or "*.ext"
-					const parts = pattern.split('/');
-					let searchDir = targetDir;
-					let filePattern;
-
-					if (parts.length === 2) {
-						// Pattern like "dir/*.ext"
-						searchDir = path.join(targetDir, parts[0]);
-						filePattern = parts[1];
-					} else {
-						// Pattern like "*.ext"
-						filePattern = parts[0];
-					}
-
-					console.error(`Searching in directory: ${searchDir} for files matching: ${filePattern}`);
-
-					// Check if directory exists
-					try {
-						await fsPromises.access(searchDir);
-					} catch (err) {
-						console.error(`Directory does not exist: ${searchDir}`);
-						console.error(`Falling back to search in parent directory: ${targetDir}`);
-						// Fall back to searching in the parent directory instead of failing
-						searchDir = targetDir;
-						// Adjust the pattern to include the subdirectory in the search
-						filePattern = pattern; // Use the original pattern for glob matching
-					}
-
-					// Read directory contents
-					const dirEntries = await fsPromises.readdir(searchDir, { withFileTypes: true });
-
-					// Convert glob pattern to regex
-					const regexPattern = filePattern
-						.replace(/\./g, '\\.')
-						.replace(/\*/g, '.*');
-					const regex = new RegExp(`^${regexPattern}$`);
-
-					// Filter files based on pattern
-					files = dirEntries
-						.filter(entry => entry.isFile() && regex.test(entry.name))
-						.map(entry => {
-							const relativePath = parts.length === 2
-								? path.join(parts[0], entry.name)
-								: entry.name;
-							return relativePath;
-						});
-
-					console.error(`Direct search found ${files.length} files matching ${filePattern}`);
-				} catch (err) {
-					console.error(`Error in direct file search: ${err.message}`);
-					// Fall back to glob if direct search fails
-					console.error(`Falling back to glob search`);
-
-					// Create a promise that rejects after a timeout
-					const timeoutPromise = new Promise((_, reject) => {
-						setTimeout(() => reject(new Error('Search operation timed out after 10 seconds')), 10000);
-					});
-
-					// Use glob without promisify since it might already return a Promise
-					files = await Promise.race([
-						glob(searchPattern, options),
-						timeoutPromise
-					]);
-				}
-			} else {
-				console.error(`Using glob for complex pattern: ${pattern}`);
-
-				// Create a promise that rejects after a timeout
-				const timeoutPromise = new Promise((_, reject) => {
-					setTimeout(() => reject(new Error('Search operation timed out after 10 seconds')), 10000);
-				});
-
-				// Use glob without promisify since it might already return a Promise
-				files = await Promise.race([
-					glob(searchPattern, options),
-					timeoutPromise
-				]);
-			}
-
-			console.error(`Search completed, found ${files.length} files in ${targetDir}`);
-			console.error(`Pattern: ${pattern}, Recursive: ${recursive}`);
+			// Call the package tool with workingDirectory parameter
+			const files = await packageSearchFilesToolInstance.execute({
+				...params,
+				directory: targetDirectory,
+				recursive,
+				workingDirectory: currentWorkingDir
+			});
 
 			if (debug) {
 				console.log(`[DEBUG] Found ${files.length} files matching pattern ${pattern}`);
 			}
 
-			// Limit the number of results to prevent memory issues
-			const maxResults = 1000;
-			const limitedFiles = files.length > maxResults ? files.slice(0, maxResults) : files;
-
-			if (files.length > maxResults) {
-				console.warn(`Warning: Limited results to ${maxResults} files out of ${files.length} total matches`);
-			}
-
+			// Return in the expected format for backward compatibility
 			return {
 				success: true,
 				directory: targetDir,
 				pattern: pattern,
 				recursive: recursive,
-				files: limitedFiles.map(file => path.join(targetDirectory, file)),
-				count: limitedFiles.length,
+				files: files.map(file => require('path').join(targetDirectory, file)),
+				count: files.length,
 				totalMatches: files.length,
-				limited: files.length > maxResults,
+				limited: false,
 				timestamp: new Date().toISOString()
 			};
 		} catch (error) {
 			console.error(`Error searching files with pattern "${pattern}" in ${targetDir}:`, error);
-			console.error(`Search parameters: directory="${targetDirectory}", recursive=${recursive}, sessionId=${sessionId}`);
 			return {
 				success: false,
 				directory: targetDir,
@@ -640,71 +476,16 @@ export const implementToolInstance = wrapToolWithEmitter(baseImplementTool, 'imp
 export const listFilesToolInstance = wrapToolWithEmitter(baseListFilesTool, 'listFiles', baseListFilesTool.execute);
 export const searchFilesToolInstance = wrapToolWithEmitter(baseSearchFilesTool, 'searchFiles', baseSearchFilesTool.execute);
 
-// --- Backward Compatibility Layer (probeTool mapping to searchToolInstance) ---
-// This might be less relevant if the AI is strictly using the new XML format,
-// but keep it for potential direct API calls or older UI elements.
-export const probeTool = {
-	...searchToolInstance, // Inherit schema description etc. from the wrapped search tool
-	name: "search", // Explicitly set name
-	description: 'DEPRECATED: Use <search> tool instead. Search code using keywords.',
-	// parameters: searchSchema, // Use the imported schema
-	execute: async (params) => { // Expects { keywords, folder, ..., sessionId }
-		const debug = process.env.DEBUG_CHAT === '1';
-		if (debug) {
-			console.log(`[DEBUG] probeTool (Compatibility Layer) executing for session ${params.sessionId}`);
-		}
+// Log available tools at startup in debug mode
+if (process.env.DEBUG_CHAT === '1') {
+	console.log('\n[DEBUG] ========================================');
+	console.log('[DEBUG] Probe Tools Loaded:');
+	console.log('[DEBUG]   - search: Search for code patterns');
+	console.log('[DEBUG]   - query: Semantic code search');
+	console.log('[DEBUG]   - extract: Extract code snippets');
+	console.log('[DEBUG]   - implement: Generate code implementations');
+	console.log('[DEBUG]   - listFiles: List directory contents');
+	console.log('[DEBUG]   - searchFiles: Search files by pattern');
+	console.log('[DEBUG] ========================================\n');
+}
 
-		// Map old params ('keywords', 'folder') to new ones ('query', 'path')
-		const { keywords, folder, sessionId, ...rest } = params;
-		const mappedParams = {
-			query: keywords,
-			path: folder || '.', // Default path if folder is missing
-			sessionId: sessionId, // Pass session ID through
-			...rest // Pass other params like allow_tests, maxResults etc.
-		};
-
-		if (debug) {
-			console.log("[DEBUG] probeTool mapped params: ", mappedParams);
-		}
-
-		// Call the *wrapped* searchToolInstance execute function
-		// It will handle cancellation checks and event emitting internally
-		try {
-			// Note: The name emitted by searchToolInstance will be 'search', not 'probeTool' or 'searchCode'
-			const result = await searchToolInstance.execute(mappedParams);
-
-			// Format the result for backward compatibility if needed by caller
-			// The raw result from searchToolInstance is likely just the search results array/string
-			const formattedResult = {
-				results: result, // Assuming result is the direct data
-				command: `probe search --query "${keywords}" --path "${folder || '.'}"`, // Reconstruct approx command
-				timestamp: new Date().toISOString()
-			};
-			if (debug) {
-				console.log("[DEBUG] probeTool compatibility layer returning formatted result.");
-			}
-			return formattedResult;
-
-		} catch (error) {
-			if (debug) {
-				console.error(`[DEBUG] Error in probeTool compatibility layer:`, error);
-			}
-			// Error is already emitted by the wrapped searchToolInstance, just re-throw
-			throw error;
-		}
-	}
-};
-// Export necessary items
-export { DEFAULT_SYSTEM_MESSAGE, listFilesByLevel };
-// Export the tool generator functions if needed elsewhere
-export { searchTool, queryTool, extractTool };
-
-// Export capabilities information for the new tools
-export const toolCapabilities = {
-	search: "Search code using keywords and patterns",
-	query: "Query code with structured parameters for more precise results",
-	extract: "Extract code blocks and context from files",
-	implement: "Implement features or fix bugs using aider (requires --allow-edit)",
-	listFiles: "List files and directories in a specified location",
-	searchFiles: "Find files matching a glob pattern with recursive search capability"
-};

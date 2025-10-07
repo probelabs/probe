@@ -388,8 +388,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     let initial_ast = initial_ast_result.unwrap();
 
-    // Extract filters and simplify AST
-    let (search_filters, simplified_ast) = SearchFilters::extract_and_simplify(initial_ast);
+    // Extract filters and simplify AST (with auto-detection of filename-like terms)
+    let (search_filters, simplified_ast) =
+        SearchFilters::extract_and_simplify_with_autodetect(initial_ast);
 
     if debug_mode && !search_filters.is_empty() {
         println!("DEBUG: Extracted search filters: {search_filters:?}");

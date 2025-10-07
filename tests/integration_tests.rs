@@ -753,3 +753,103 @@ fn calculate_product(a: i32, b: i32) -> i32 {
         }
     }
 }
+
+#[test]
+fn test_skipped_files_with_match_counts() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    // Create multiple files with different numbers of matches
+    let files = vec![
+        (
+            "file1.rs",
+            "fn search_function() { let search = 1; let limiter = 2; }",
+        ),
+        ("file2.rs", "fn another_search() { let search = 1; }"),
+        ("file3.rs", "fn limiter_function() { let limiter = 1; }"),
+        (
+            "file4.rs",
+            "fn test_search() { search(); search(); limiter(); }",
+        ),
+        ("file5.rs", "fn search_limiter() { search_and_limiter(); }"),
+    ];
+
+    for (filename, content) in &files {
+        let file_path = temp_dir.path().join(filename);
+        std::fs::write(&file_path, content).expect("Failed to write test file");
+    }
+
+    // Create search query with multiple terms
+    let queries = vec!["search limiter".to_string()];
+    let custom_ignores: Vec<String> = vec![];
+
+    // Create SearchOptions with a very low limit to force skipping
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        exclude_filenames: true,
+        language: None,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: Some(2), // Very low limit to force skipping
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: false,
+        no_merge: true,
+        merge_threshold: None,
+        dry_run: false,
+        session: None,
+        timeout: 30,
+        question: None,
+        exact: false,
+        no_gitignore: false,
+        lsp: false,
+    };
+
+    // Perform search
+    let search_result = perform_probe(&options).expect("Search should succeed");
+
+    // Should have results
+    assert!(
+        !search_result.results.is_empty(),
+        "Search should return results"
+    );
+
+    // Should be limited to 2 results
+    assert!(
+        search_result.results.len() <= 2,
+        "Results should be limited to 2"
+    );
+
+    // Should have limits applied
+    assert!(
+        search_result.limits_applied.is_some(),
+        "Limits should be applied"
+    );
+
+    // Should have skipped files (since we have 5 files but limit to 2 results)
+    assert!(
+        !search_result.skipped_files.is_empty(),
+        "Should have skipped files when limit is reached"
+    );
+
+    // Verify that skipped files have the expected structure
+    for skipped in &search_result.skipped_files {
+        // Each skipped file should have a file path
+        assert!(
+            !skipped.file.is_empty(),
+            "Skipped file should have a file path"
+        );
+
+        // Should have a rank (since we're ranking before limiting)
+        assert!(skipped.rank.is_some(), "Skipped file should have a rank");
+    }
+
+    // Verify the total number of results + skipped equals roughly what we expect
+    let total_items = search_result.results.len() + search_result.skipped_files.len();
+    assert!(
+        total_items >= 2,
+        "Total results + skipped should be at least 2"
+    );
+}

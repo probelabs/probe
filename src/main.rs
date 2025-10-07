@@ -1,11 +1,13 @@
 use anyhow::{Context, Result};
 use clap::{CommandFactory, Parser as ClapParser};
 use colored::*;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 use tracing_subscriber::EnvFilter;
 
 mod cli;
+mod grep;
 
 use cli::{Args, Commands};
 use probe_code::{
@@ -261,7 +263,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         advanced_options.push(format!("Timeout: {} seconds", params.timeout));
     }
 
-    if !advanced_options.is_empty() {
+    if !advanced_options.is_empty() && params.format != "json" && params.format != "xml" {
         println!(
             "{} {}",
             "Options:".bold().green(),
@@ -321,6 +323,8 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 search_options.dry_run,
                 &params.format,
                 query_plan.as_ref(),
+                Some(&limited_results.skipped_files),
+                limited_results.limits_applied.as_ref(),
             );
         } else {
             // For other formats, print the "No results found" message
@@ -339,23 +343,43 @@ fn handle_search(params: SearchParams) -> Result<()> {
             search_options.dry_run,
             &params.format,
             query_plan.as_ref(),
+            Some(&limited_results.skipped_files),
+            limited_results.limits_applied.as_ref(),
         );
 
-        if !limited_results.skipped_files.is_empty() {
+        // Don't print skipped files info for JSON/XML/outline-xml formats (they include it in structured output)
+        if !limited_results.skipped_files.is_empty()
+            && params.format != "json"
+            && params.format != "xml"
+            && params.format != "outline-xml"
+        {
+            let use_stderr = false;
+
+            // Helper macro to print to stdout or stderr based on format
+            macro_rules! output {
+                ($($arg:tt)*) => {
+                    if use_stderr {
+                        eprintln!($($arg)*);
+                    } else {
+                        println!($($arg)*);
+                    }
+                };
+            }
+
             if let Some(limits) = &limited_results.limits_applied {
-                println!();
-                println!("{}", "Limits applied:".yellow().bold());
+                output!();
+                output!("{}", "Limits applied:".yellow().bold());
                 if let Some(max_results) = limits.max_results {
-                    println!("  {} {max_results}", "Max results:".yellow());
+                    output!("  {} {max_results}", "Max results:".yellow());
                 }
                 if let Some(max_bytes) = limits.max_bytes {
-                    println!("  {} {max_bytes}", "Max bytes:".yellow());
+                    output!("  {} {max_bytes}", "Max bytes:".yellow());
                 }
                 if let Some(max_tokens) = limits.max_tokens {
-                    println!("  {} {max_tokens}", "Max tokens:".yellow());
+                    output!("  {} {max_tokens}", "Max tokens:".yellow());
                 }
 
-                println!();
+                output!();
 
                 // Calculate total skipped files (results skipped + files not processed)
                 let results_skipped = limited_results.skipped_files.len();
@@ -363,36 +387,100 @@ fn handle_search(params: SearchParams) -> Result<()> {
                     limited_results.files_skipped_early_termination.unwrap_or(0);
                 let total_skipped = results_skipped + files_not_processed;
 
-                println!(
+                output!(
                     "{} {}",
                     "Skipped files due to limits:".yellow().bold(),
                     total_skipped
                 );
 
+                // Show list of skipped files with match counts
+                if results_skipped > 0 {
+                    output!();
+                    output!("{}", "Remaining files not shown:".yellow());
+
+                    // Group skipped files by file path and aggregate match counts
+                    let mut file_matches: HashMap<String, (HashSet<String>, usize)> =
+                        HashMap::new();
+
+                    for skipped in &limited_results.skipped_files {
+                        // Convert to relative path
+                        let relative_path =
+                            if let Ok(abs_path) = std::fs::canonicalize(&skipped.file) {
+                                if let Ok(current_dir) = std::env::current_dir() {
+                                    if let Ok(rel) = abs_path.strip_prefix(&current_dir) {
+                                        rel.to_string_lossy().to_string()
+                                    } else {
+                                        skipped.file.clone()
+                                    }
+                                } else {
+                                    skipped.file.clone()
+                                }
+                            } else {
+                                skipped.file.clone()
+                            };
+
+                        let entry = file_matches
+                            .entry(relative_path)
+                            .or_insert((HashSet::new(), 0));
+
+                        // Count unique terms (unique matches)
+                        if let Some(keywords) = &skipped.matched_keywords {
+                            for keyword in keywords {
+                                entry.0.insert(keyword.clone());
+                            }
+                        }
+
+                        // Count total matches (all occurrences)
+                        entry.1 += 1;
+                    }
+
+                    // Convert to sorted vec for consistent display
+                    let mut file_list: Vec<(String, usize, usize)> = file_matches
+                        .into_iter()
+                        .map(|(path, (unique, total))| (path, unique.len(), total))
+                        .collect();
+
+                    // Sort by unique matches (descending), then by total matches (descending)
+                    file_list.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)));
+
+                    // Display the files
+                    for (file_path, unique_matches, total_matches) in file_list {
+                        output!("  {} <{}> <{}>", file_path, unique_matches, total_matches);
+                    }
+
+                    output!();
+                    output!(
+                        "💡 {} <uniq> = unique search terms matched, <all> = total match blocks",
+                        "Hint:".dimmed()
+                    );
+                }
+
                 // Show guidance message to get more results
                 if total_skipped > 0 {
+                    output!();
                     if let Some(session_id) = search_options.session {
                         if !session_id.is_empty() && session_id != "new" {
-                            println!("💡 To get more results from this search query, repeat it with the same params and session ID: {session_id}");
+                            output!("💡 To get more results from this search query, repeat it with the same params and session ID: {session_id}");
                         } else {
-                            println!("💡 To get more results from this search query, repeat it with the same params and session ID (see above)");
+                            output!("💡 To get more results from this search query, repeat it with the same params and session ID (see above)");
                         }
                     } else {
-                        println!("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above");
+                        output!("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above");
                     }
                 }
 
                 // Show breakdown in debug mode
+
                 if std::env::var("PROBE_DEBUG").is_ok() && total_skipped > 0 {
                     if results_skipped > 0 {
-                        println!(
+                        output!(
                             "  {} {}",
                             "Results skipped after processing:".yellow(),
                             results_skipped
                         );
                     }
                     if files_not_processed > 0 {
-                        println!(
+                        output!(
                             "  {} {}",
                             "Files not processed (early termination):".yellow(),
                             files_not_processed
@@ -415,9 +503,11 @@ fn handle_search(params: SearchParams) -> Result<()> {
         }
     }
 
-    // Add helpful tip at the very bottom of output
-    println!();
-    println!("💡 Tip: Use --exact flag when searching for specific function names or variables for more precise results");
+    // Add helpful tip at the very bottom of output (but not for JSON/XML formats)
+    if params.format != "json" && params.format != "xml" {
+        println!();
+        println!("💡 Tip: Use --exact flag when searching for specific function names or variables for more precise results");
+    }
 
     Ok(())
 }
@@ -747,12 +837,47 @@ async fn main() -> Result<()> {
             baseline,
             fast,
         })?,
-        Some(Commands::Lsp { subcommand }) => {
-            LspManager::handle_command(&subcommand, "color").await?;
+
+        Some(Commands::Lsp { .. }) => {
+            LspManager::ensure_ready().await?;
         }
-        Some(Commands::Config { subcommand }) => {
-            handle_config_command(&subcommand)?;
-        }
+
+        Some(Commands::Config { subcommand }) => handle_config_command(&subcommand)?,
+
+        Some(Commands::Grep {
+            pattern,
+            paths,
+            ignore_case,
+            line_number,
+            count,
+            files_with_matches,
+            files_without_match,
+            invert_match,
+            before_context,
+            after_context,
+            context,
+            ignore,
+            no_gitignore,
+            color,
+            max_count,
+        }) => grep::handle_grep(grep::GrepParams {
+            pattern,
+            paths,
+            ignore_case,
+            line_number,
+            count,
+            files_with_matches,
+            files_without_match,
+            invert_match,
+            before_context,
+            after_context,
+            context,
+            ignore,
+            no_gitignore: no_gitignore
+                || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            color,
+            max_count,
+        })?,
     }
 
     Ok(())

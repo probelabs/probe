@@ -29,12 +29,12 @@ async function ensureBinary(binaryPath) {
   try {
     // Try to import the downloader and download the binary
     const { downloadProbeBinary } = await import('../src/downloader.js');
-    console.log('Probe binary not found, downloading...');
+    console.error('Probe binary not found, downloading...');
     await downloadProbeBinary();
     
     // Check if the binary now exists and is executable
     if (await isExecutable(binaryPath)) {
-      console.log('Binary downloaded successfully.');
+      console.error('Binary downloaded successfully.');
       
       // On macOS, try to remove quarantine attributes that might prevent execution
       if (process.platform === 'darwin') {
@@ -133,7 +133,7 @@ async function main() {
       
       // Check if binary exists and is executable
       if (!(await isExecutable(binaryPath))) {
-        console.log('Probe binary not found or not executable, attempting to download...');
+        console.error('Probe binary not found or not executable, attempting to download...');
         const downloadSuccess = await ensureBinary(binaryPath);
         if (!downloadSuccess) {
           console.error('Failed to download probe binary. Please try installing again or check your internet connection.');

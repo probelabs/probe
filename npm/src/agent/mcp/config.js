@@ -51,8 +51,8 @@ export function loadMCPConfigurationFromPath(configPath) {
     const content = readFileSync(configPath, 'utf8');
     const config = JSON.parse(content);
 
-    if (process.env.DEBUG === '1') {
-      console.error(`[MCP] Loaded configuration from: ${configPath}`);
+    if (process.env.DEBUG === '1' || process.env.DEBUG_MCP === '1') {
+      console.error(`[MCP DEBUG] Loaded configuration from: ${configPath}`);
     }
 
     // Merge with environment variable overrides
@@ -94,12 +94,12 @@ export function loadMCPConfiguration() {
       try {
         const content = readFileSync(configPath, 'utf8');
         config = JSON.parse(content);
-        if (process.env.DEBUG === '1') {
-          console.error(`[MCP] Loaded configuration from: ${configPath}`);
+        if (process.env.DEBUG === '1' || process.env.DEBUG_MCP === '1') {
+          console.error(`[MCP DEBUG] Loaded configuration from: ${configPath}`);
         }
         break;
       } catch (error) {
-        console.error(`[MCP] Failed to parse config from ${configPath}:`, error.message);
+        console.error(`[MCP ERROR] Failed to parse config from ${configPath}:`, error.message);
       }
     }
   }
@@ -209,12 +209,12 @@ export function parseEnabledServers(config) {
     // Validate required fields based on transport
     if (server.transport === 'stdio') {
       if (!server.command) {
-        console.error(`[MCP] Server ${name} missing required 'command' for stdio transport`);
+        console.error(`[MCP ERROR] Server ${name} missing required 'command' for stdio transport`);
         continue;
       }
     } else if (['websocket', 'sse', 'http'].includes(server.transport)) {
       if (!server.url) {
-        console.error(`[MCP] Server ${name} missing required 'url' for ${server.transport} transport`);
+        console.error(`[MCP ERROR] Server ${name} missing required 'url' for ${server.transport} transport`);
         continue;
       }
     }
@@ -301,7 +301,7 @@ export function saveConfig(config, path) {
   }
 
   writeFileSync(path, JSON.stringify(config, null, 2), 'utf8');
-  console.log(`[MCP] Configuration saved to: ${path}`);
+  console.error(`[MCP INFO] Configuration saved to: ${path}`);
 }
 
 export default {

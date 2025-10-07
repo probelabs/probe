@@ -214,7 +214,7 @@ function parseArgs() {
 
 // Show help message
 function showHelp() {
-  console.log(`
+  console.error(`
 probe agent - AI-powered code exploration tool
 
 Usage:
@@ -305,7 +305,7 @@ class ProbeAgentMcpServer {
     this.agent = null;
 
     this.setupToolHandlers();
-    this.server.onerror = (error) => console.error('[MCP Error]', error);
+    this.server.onerror = (error) => console.error('[MCP ERROR]', error);
     process.on('SIGINT', async () => {
       await this.server.close();
       process.exit(0);
@@ -428,6 +428,8 @@ class ProbeAgentMcpServer {
           };
 
           this.agent = new ProbeAgent(agentConfig);
+          // Initialize MCP if enabled
+          await this.agent.initialize();
         }
 
         const agent = this.agent;
@@ -696,7 +698,7 @@ async function main() {
       }
       
       if (config.verbose) {
-        console.log('Bash command execution enabled');
+        console.error('Bash command execution enabled');
       }
     }
 
@@ -717,7 +719,9 @@ async function main() {
     };
 
     const agent = new ProbeAgent(agentConfig);
-    
+    // Initialize MCP if enabled
+    await agent.initialize();
+
     // Execute with tracing if available
     let result;
     if (appTracer) {

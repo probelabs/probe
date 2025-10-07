@@ -213,65 +213,166 @@ export function createWrappedTools(baseTools) {
   return wrappedTools;
 }
 
-// Simple file listing tool
+// Simple file listing tool with ls-like formatted output
 export const listFilesTool = {
   execute: async (params) => {
     const { directory = '.', workingDirectory } = params;
-    
+
     // Use the provided working directory, or fall back to process.cwd()
     const baseCwd = workingDirectory || process.cwd();
-    
+
     // Security: Validate path to prevent traversal attacks
     const secureBaseDir = path.resolve(baseCwd);
-    const targetDir = path.resolve(secureBaseDir, directory);
-    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
-      throw new Error('Path traversal attempt detected. Access denied.');
+
+    // If directory is absolute, check if it's within the secure base directory
+    // If it's relative, resolve it against the secure base directory
+    let targetDir;
+    if (path.isAbsolute(directory)) {
+      targetDir = path.resolve(directory);
+      // Check if the absolute path is within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Cannot access directory outside workspace: ${directory}`);
+      }
+    } else {
+      targetDir = path.resolve(secureBaseDir, directory);
+      // Double-check the resolved path is still within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Access denied: ${directory}`);
+      }
     }
-    
+
+    const debug = process.env.DEBUG === '1';
+
+    if (debug) {
+      console.log(`[DEBUG] Listing files in directory: ${targetDir}`);
+    }
+
     try {
-      const files = await listFilesByLevel({
-        directory: targetDir,
-        maxFiles: 100,
-        respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
-        cwd: secureBaseDir
+      // Read the directory contents
+      const files = await fsPromises.readdir(targetDir, { withFileTypes: true });
+
+      // Format size for human readability
+      const formatSize = (size) => {
+        if (size < 1024) return `${size}B`;
+        if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)}K`;
+        if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)}M`;
+        return `${(size / (1024 * 1024 * 1024)).toFixed(1)}G`;
+      };
+
+      // Format the results as ls-style output
+      const entries = await Promise.all(files.map(async (file) => {
+        const isDirectory = file.isDirectory();
+        const fullPath = path.join(targetDir, file.name);
+
+        let size = 0;
+        try {
+          const stats = await fsPromises.stat(fullPath);
+          size = stats.size;
+        } catch (statError) {
+          if (debug) {
+            console.log(`[DEBUG] Could not stat file ${file.name}:`, statError.message);
+          }
+        }
+
+        return {
+          name: file.name,
+          isDirectory,
+          size
+        };
+      }));
+
+      // Sort: directories first, then files, both alphabetically
+      entries.sort((a, b) => {
+        if (a.isDirectory && !b.isDirectory) return -1;
+        if (!a.isDirectory && b.isDirectory) return 1;
+        return a.name.localeCompare(b.name);
       });
-      
-      return files;
+
+      // Format entries
+      const formatted = entries.map(entry => {
+        const type = entry.isDirectory ? 'dir ' : 'file';
+        const sizeStr = formatSize(entry.size).padStart(8);
+        return `${type} ${sizeStr}  ${entry.name}`;
+      });
+
+      if (debug) {
+        console.log(`[DEBUG] Found ${entries.length} files/directories in ${targetDir}`);
+      }
+
+      // Return as formatted text output
+      const header = `${targetDir}:\n`;
+      const output = header + formatted.join('\n');
+
+      return output;
     } catch (error) {
       throw new Error(`Failed to list files: ${error.message}`);
     }
   }
 };
 
-// Simple file search tool
+// Simple file search tool with timeout protection
 export const searchFilesTool = {
   execute: async (params) => {
     const { pattern, directory = '.', recursive = true, workingDirectory } = params;
-    
+
     if (!pattern) {
       throw new Error('Pattern is required for file search');
     }
-    
+
     // Security: Validate path to prevent traversal attacks
     const baseCwd = workingDirectory || process.cwd();
     const secureBaseDir = path.resolve(baseCwd);
-    const targetDir = path.resolve(secureBaseDir, directory);
-    if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
-      throw new Error('Path traversal attempt detected. Access denied.');
+
+    // If directory is absolute, check if it's within the secure base directory
+    // If it's relative, resolve it against the secure base directory
+    let targetDir;
+    if (path.isAbsolute(directory)) {
+      targetDir = path.resolve(directory);
+      // Check if the absolute path is within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Cannot access directory outside workspace: ${directory}`);
+      }
+    } else {
+      targetDir = path.resolve(secureBaseDir, directory);
+      // Double-check the resolved path is still within the secure base directory
+      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+        throw new Error(`Path traversal attempt detected. Access denied: ${directory}`);
+      }
     }
-    
+
+    // Validate pattern complexity to prevent DoS
+    if (pattern.includes('**/**') || pattern.split('*').length > 10) {
+      throw new Error('Pattern too complex. Please use a simpler glob pattern.');
+    }
+
     try {
       const options = {
         cwd: targetDir,
         ignore: ['node_modules/**', '.git/**'],
         absolute: false
       };
-      
+
       if (!recursive) {
         options.deep = 1;
       }
-      
-      const files = await glob(pattern, options);
+
+      // Create a timeout promise (10 seconds)
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Search operation timed out after 10 seconds')), 10000);
+      });
+
+      // Race glob against timeout
+      const files = await Promise.race([
+        glob(pattern, options),
+        timeoutPromise
+      ]);
+
+      // Limit results to prevent memory issues
+      const maxResults = 1000;
+      if (files.length > maxResults) {
+        return files.slice(0, maxResults);
+      }
+
       return files;
     } catch (error) {
       throw new Error(`Failed to search files: ${error.message}`);

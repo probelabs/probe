@@ -407,6 +407,67 @@ pub enum Commands {
         #[command(subcommand)]
         subcommand: ConfigSubcommands,
     },
+    Grep {
+        /// Pattern to search for (regex supported)
+        #[arg(value_name = "PATTERN")]
+        pattern: String,
+
+        /// Files or directories to search (defaults to current directory)
+        #[arg(value_name = "PATH", default_value = ".")]
+        paths: Vec<PathBuf>,
+
+        /// Case-insensitive search
+        #[arg(short = 'i', long = "ignore-case")]
+        ignore_case: bool,
+
+        /// Show line numbers (enabled by default)
+        #[arg(short = 'n', long = "line-number", default_value = "true")]
+        line_number: bool,
+
+        /// Count matching lines per file instead of showing matches
+        #[arg(short = 'c', long = "count")]
+        count: bool,
+
+        /// Show only filenames with matches
+        #[arg(short = 'l', long = "files-with-matches")]
+        files_with_matches: bool,
+
+        /// Show only filenames without matches
+        #[arg(short = 'L', long = "files-without-match")]
+        files_without_match: bool,
+
+        /// Invert match (show non-matching lines)
+        #[arg(short = 'v', long = "invert-match")]
+        invert_match: bool,
+
+        /// Show NUM lines before each match
+        #[arg(short = 'B', long = "before-context", value_name = "NUM")]
+        before_context: Option<usize>,
+
+        /// Show NUM lines after each match
+        #[arg(short = 'A', long = "after-context", value_name = "NUM")]
+        after_context: Option<usize>,
+
+        /// Show NUM lines before and after each match
+        #[arg(short = 'C', long = "context", value_name = "NUM")]
+        context: Option<usize>,
+
+        /// Custom patterns to ignore (in addition to .gitignore)
+        #[arg(long = "ignore")]
+        ignore: Vec<String>,
+
+        /// Do not respect .gitignore files
+        #[arg(long = "no-gitignore")]
+        no_gitignore: bool,
+
+        /// Enable colored output
+        #[arg(long = "color", value_parser = ["auto", "always", "never"], default_value = "auto")]
+        color: String,
+
+        /// Maximum number of matches to show
+        #[arg(short = 'm', long = "max-count")]
+        max_count: Option<usize>,
+    },
 }
 
 #[derive(Subcommand, Debug)]

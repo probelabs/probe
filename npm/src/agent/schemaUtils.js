@@ -40,7 +40,7 @@ export function decodeHtmlEntities(text) {
 
 /**
  * Clean AI response by extracting JSON content when response contains JSON
- * Only processes responses that contain JSON structures { or [ 
+ * Only processes responses that contain JSON structures { or [
  * @param {string} response - Raw AI response
  * @returns {string} - Cleaned response with JSON boundaries extracted if applicable
  */
@@ -50,34 +50,47 @@ export function cleanSchemaResponse(response) {
   }
 
   const trimmed = response.trim();
-  
-  // First, look for JSON after code block markers
+
+  // First, look for JSON after code block markers - similar to mermaid extraction
+  // Try with json language specifier
+  const jsonBlockMatch = trimmed.match(/```json\s*\n([\s\S]*?)\n```/);
+  if (jsonBlockMatch) {
+    return jsonBlockMatch[1].trim();
+  }
+
+  // Try any code block with JSON content
+  const anyBlockMatch = trimmed.match(/```\s*\n([{\[][\s\S]*?[}\]])\s*```/);
+  if (anyBlockMatch) {
+    return anyBlockMatch[1].trim();
+  }
+
+  // Legacy patterns for more specific matching
   const codeBlockPatterns = [
     /```json\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
     /```\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
     /`([{\[][\s\S]*?[}\]])`/
   ];
-  
+
   for (const pattern of codeBlockPatterns) {
     const match = trimmed.match(pattern);
     if (match) {
       return match[1].trim();
     }
   }
-  
+
   // Look for code block start followed immediately by JSON
   const codeBlockStartPattern = /```(?:json)?\s*\n?\s*([{\[])/;
   const codeBlockMatch = trimmed.match(codeBlockStartPattern);
-  
+
   if (codeBlockMatch) {
     const startIndex = codeBlockMatch.index + codeBlockMatch[0].length - 1; // Position of the bracket
-    
+
     // Find the matching closing bracket
     const openChar = codeBlockMatch[1];
     const closeChar = openChar === '{' ? '}' : ']';
     let bracketCount = 1;
     let endIndex = startIndex + 1;
-    
+
     while (endIndex < trimmed.length && bracketCount > 0) {
       const char = trimmed[endIndex];
       if (char === openChar) {
@@ -87,36 +100,36 @@ export function cleanSchemaResponse(response) {
       }
       endIndex++;
     }
-    
+
     if (bracketCount === 0) {
       return trimmed.substring(startIndex, endIndex);
     }
   }
-  
+
   // Fallback: Find JSON boundaries anywhere in the text
   const firstBracket = Math.min(
     trimmed.indexOf('{') >= 0 ? trimmed.indexOf('{') : Infinity,
     trimmed.indexOf('[') >= 0 ? trimmed.indexOf('[') : Infinity
   );
-  
+
   const lastBracket = Math.max(
     trimmed.lastIndexOf('}'),
     trimmed.lastIndexOf(']')
   );
-  
+
   // Only extract if we found valid JSON boundaries
   if (firstBracket < Infinity && lastBracket >= 0 && firstBracket < lastBracket) {
     // Check if the response likely starts with JSON (directly or after minimal content)
     const beforeFirstBracket = trimmed.substring(0, firstBracket).trim();
-    
+
     // If there's minimal content before the first bracket, extract the JSON
-    if (beforeFirstBracket === '' || 
+    if (beforeFirstBracket === '' ||
         beforeFirstBracket.match(/^```\w*$/) ||
         beforeFirstBracket.split('\n').length <= 2) {
       return trimmed.substring(firstBracket, lastBracket + 1);
     }
   }
-  
+
   return response; // Return original if no extractable JSON found
 }
 
@@ -562,15 +575,18 @@ export async function validateMermaidDiagram(diagram) {
     const result = validate(diagram);
 
     // Maid returns { type: string, errors: array }
-    // Valid if errors array is empty
-    if (result.errors && result.errors.length === 0) {
+    // Only count actual errors (severity: 'error'), not warnings
+    const actualErrors = (result.errors || []).filter(err => err.severity === 'error');
+
+    // Valid if no actual errors (warnings are OK)
+    if (actualErrors.length === 0) {
       return {
         isValid: true,
         diagramType: result.type || 'unknown'
       };
     } else {
       // Format maid errors into a readable error message
-      const errorMessages = (result.errors || []).map(err => {
+      const errorMessages = actualErrors.map(err => {
         const location = err.line ? `line ${err.line}${err.column ? `:${err.column}` : ''}` : '';
         return location ? `${location} - ${err.message}` : err.message;
       });
@@ -580,7 +596,7 @@ export async function validateMermaidDiagram(diagram) {
         diagramType: result.type || 'unknown',
         error: errorMessages[0] || 'Validation failed',
         detailedError: errorMessages.join('\n'),
-        errors: result.errors || [] // Include raw maid errors for AI fixing
+        errors: actualErrors // Include only actual errors for AI fixing
       };
     }
 
@@ -777,6 +793,7 @@ FIXING METHODOLOGY:
    - Incorrect formatting for diagram-specific elements
    - **Parentheses in node labels or subgraph names**: Wrap text containing parentheses in double quotes to prevent GitHub parsing errors
    - Single quotes in node labels (GitHub's parser expects double quotes)
+   - **Edge/Arrow labels with spaces**: MUST use pipe syntax like "A --|Label Text|--> B" or "A -- |Label Text| --> B". NEVER use double quotes like "A -- \\"Label\\" --> B" which is INVALID
 4. **Preserve semantic meaning** - never change the intended flow or relationships
 5. **Use proper escaping** for special characters and spaces
 6. **Ensure consistency** in naming conventions and formatting
@@ -812,7 +829,8 @@ When presented with a broken Mermaid diagram, analyze it thoroughly and provide 
         debug: this.options.debug,
         tracer: this.options.tracer,
         allowEdit: this.options.allowEdit,
-        maxIterations: 2  // Limit mermaid fixing to 2 iterations to prevent long loops
+        maxIterations: 10,  // Allow more iterations for mermaid fixing to handle complex diagrams
+        disableMermaidValidation: true  // CRITICAL: Disable mermaid validation in nested agent to prevent infinite recursion
       });
     }
 
