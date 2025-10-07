@@ -838,8 +838,11 @@ async fn main() -> Result<()> {
             fast,
         })?,
 
-        Some(Commands::Lsp { .. }) => {
-            LspManager::ensure_ready().await?;
+        Some(Commands::Lsp { subcommand }) => {
+            // Delegate to LSP manager for actual subcommand handling. Avoid doing
+            // extra readiness work here so each subcommand can control connection
+            // behavior (auto-start, timeouts, formats, etc.).
+            LspManager::handle_command(&subcommand, "terminal").await?;
         }
 
         Some(Commands::Config { subcommand }) => handle_config_command(&subcommand)?,
