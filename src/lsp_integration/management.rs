@@ -361,6 +361,11 @@ impl LspManager {
                 samples,
                 format,
             } => Self::handle_edge_audit_command(workspace.clone(), *samples, format).await,
+            LspSubcommands::EnrichSymbol {
+                target,
+                workspace_hint,
+                format,
+            } => Self::handle_enrich_symbol(target, workspace_hint.clone(), format).await,
         }
     }
 
@@ -2699,8 +2704,35 @@ impl LspManager {
 
     /// Handle index stop command
     async fn handle_index_stop_command(force: bool, format: &str) -> Result<()> {
-        let config = LspConfig::default();
-        let mut client = LspClient::new(config).await?;
+        // Do not auto-start the daemon for a stop request; if it's not
+        // running, there is nothing to stop. Use a shorter timeout.
+        let cfg = LspConfig {
+            use_daemon: true,
+            workspace_hint: None,
+            timeout_ms: 10_000,
+            include_stdlib: false,
+            auto_start: false,
+        };
+        let mut client = match LspClient::new_non_blocking(cfg).await {
+            Some(c) => c,
+            None => {
+                match format {
+                    "json" => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "status": "stopped",
+                                "was_running": false,
+                                "force": force,
+                                "note": "daemon not running"
+                            }))?
+                        );
+                    }
+                    _ => println!("{}", "No indexing was running".yellow()),
+                }
+                return Ok(());
+            }
+        };
 
         match client.stop_indexing(force).await {
             Ok(was_running) => {
@@ -4832,9 +4864,8 @@ fn format_bytes(bytes: usize) -> String {
 
 impl LspManager {
     /// Parse language string to Language enum
-    fn parse_language(lang_str: &str) -> Result<lsp_daemon::Language> {
+    fn parse_language(lang_str: &str) -> anyhow::Result<lsp_daemon::Language> {
         use lsp_daemon::Language;
-
         match lang_str.to_lowercase().as_str() {
             "rust" | "rs" => Ok(Language::Rust),
             "typescript" | "ts" => Ok(Language::TypeScript),
@@ -4850,7 +4881,108 @@ impl LspManager {
             "swift" => Ok(Language::Swift),
             "kotlin" | "kt" => Ok(Language::Kotlin),
             "scala" => Ok(Language::Scala),
-            _ => Err(anyhow!("Unsupported language: {}", lang_str)),
+            _ => Err(anyhow::anyhow!("Unsupported language: {}", lang_str)),
+        }
+    }
+
+    /// Force-enrich a single symbol by running Call Hierarchy and persisting edges.
+    async fn handle_enrich_symbol(
+        target: &str,
+        workspace_hint: Option<String>,
+        format: &str,
+    ) -> anyhow::Result<()> {
+        use uuid::Uuid;
+        // Parse target in the form file:line[:column] (1-based for UX). Column optional.
+        let (file_str, line0, col0) = {
+            let mut parts = target.split(':');
+            let file = parts
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("Missing file in target"))?;
+            let line_s = parts.next().ok_or_else(|| {
+                anyhow::anyhow!("Missing line in target; expected file:line[:col]")
+            })?;
+            let col_s = parts.next();
+            let line: u32 = line_s
+                .parse()
+                .map_err(|_| anyhow::anyhow!("Invalid line number"))?;
+            let col: u32 = match col_s {
+                Some(s) if !s.is_empty() => {
+                    s.parse().map_err(|_| anyhow::anyhow!("Invalid column"))?
+                }
+                _ => 1,
+            };
+            (
+                file.to_string(),
+                line.saturating_sub(1),
+                col.saturating_sub(1),
+            )
+        };
+
+        let file_path = std::path::PathBuf::from(&file_str);
+        let file_path = if file_path.is_absolute() {
+            file_path
+        } else {
+            std::env::current_dir()?.join(file_path)
+        };
+        if !file_path.exists() {
+            return Err(anyhow::anyhow!(format!(
+                "File not found: {}",
+                file_path.display()
+            )));
+        }
+
+        let mut client = crate::lsp_integration::client::LspClient::new(Default::default()).await?;
+        let request = lsp_daemon::protocol::DaemonRequest::CallHierarchy {
+            request_id: Uuid::new_v4(),
+            file_path: file_path.clone(),
+            line: line0,
+            column: col0,
+            workspace_hint: workspace_hint.clone().map(std::path::PathBuf::from),
+        };
+
+        match client.send(request).await? {
+            lsp_daemon::protocol::DaemonResponse::CallHierarchy { result, .. } => {
+                let incoming = result.incoming.len();
+                let outgoing = result.outgoing.len();
+                match format {
+                    "json" => {
+                        #[derive(serde::Serialize)]
+                        struct Summary<'a> {
+                            file: &'a str,
+                            line0: u32,
+                            col0: u32,
+                            incoming: usize,
+                            outgoing: usize,
+                        }
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&Summary {
+                                file: &file_str,
+                                line0,
+                                col0,
+                                incoming,
+                                outgoing
+                            })?
+                        );
+                    }
+                    _ => {
+                        println!("{}", "Enrich Symbol".bold().green());
+                        println!("  File: {}", file_path.display());
+                        println!("  Pos:  {}:{} (0-based)", line0, col0);
+                        println!("  Incoming calls: {}", incoming);
+                        println!("  Outgoing calls: {}", outgoing);
+                        println!("  {}", "Edges will be persisted by the daemon".dimmed());
+                    }
+                }
+                Ok(())
+            }
+            lsp_daemon::protocol::DaemonResponse::Error { error, .. } => {
+                Err(anyhow::anyhow!(error))
+            }
+            other => Err(anyhow::anyhow!(format!(
+                "Unexpected daemon response: {:?}",
+                other
+            ))),
         }
     }
 }

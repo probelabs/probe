@@ -3058,14 +3058,10 @@ impl IndexingManager {
                 {
                     info!(
                         "[TRACE] Enqueue enrichment: name='{}' uid='{}' file='{}' ops={:?}",
-                        plan.symbol.name,
-                        plan.symbol.symbol_uid,
-                        plan.symbol.file_path,
-                        operations
+                        plan.symbol.name, plan.symbol.symbol_uid, plan.symbol.file_path, operations
                     );
                 }
             }
-
 
             let queue_item = EnrichmentQueueItem::new(
                 plan.symbol.symbol_uid.clone(),

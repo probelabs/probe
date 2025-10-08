@@ -338,7 +338,7 @@ impl LspEnrichmentWorkerPool {
                 debug!(
                     "Processing symbol: {} ({}:{}) using SingleServerManager",
                     queue_item.name,
-                    abs_file_path.display(),
+                    queue_item.file_path.display(),
                     queue_item.def_start_line
                 );
 
@@ -405,7 +405,7 @@ impl LspEnrichmentWorkerPool {
                                 warn!(
                                     "Failed to enrich symbol '{}' ({}:{}, kind: {}, lang: {:?}): {}",
                                     queue_item.name,
-                                    abs_file_path.display(),
+                                    queue_item.file_path.display(),
                                     queue_item.def_start_line,
                                     queue_item.kind,
                                     queue_item.language,
@@ -590,7 +590,7 @@ impl LspEnrichmentWorkerPool {
                         "Attempt {} failed for symbol '{}' ({}:{}, kind: {}, lang: {:?}): {}",
                         attempt + 1,
                         queue_item.name,
-                        abs_file_path.display(),
+                        queue_item.file_path.display(),
                         queue_item.def_start_line,
                         queue_item.kind,
                         queue_item.language,
@@ -691,7 +691,7 @@ impl LspEnrichmentWorkerPool {
             "Using adjusted LSP position {}:{} for {}",
             adj_line,
             adj_char,
-            abs_file_path.display()
+            queue_item.file_path.display()
         );
 
         let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
@@ -714,7 +714,7 @@ impl LspEnrichmentWorkerPool {
                     debug!(
                         "Call hierarchy unavailable for '{}' ({}:{}:{}): {}",
                         queue_item.name,
-                        abs_file_path.display(),
+                        queue_item.file_path.display(),
                         queue_item.def_start_line,
                         queue_item.def_start_char,
                         e
@@ -725,7 +725,7 @@ impl LspEnrichmentWorkerPool {
                     debug!(
                         "Call hierarchy request timed out for '{}' at {}:{}:{}",
                         queue_item.name,
-                        abs_file_path.display(),
+                        queue_item.file_path.display(),
                         queue_item.def_start_line,
                         queue_item.def_start_char
                     );
@@ -904,7 +904,7 @@ impl LspEnrichmentWorkerPool {
                 {
                     debug!(
                         "Deriving Implements edge locally from impl header at {}:{}",
-                        abs_file_path.display(),
+                        queue_item.file_path.display(),
                         adj_line + 1
                     );
                     // Resolve UIDs at the trait and type positions
@@ -1025,7 +1025,7 @@ impl LspEnrichmentWorkerPool {
                         debug!(
                             "Implementations unavailable for '{}' ({}:{}:{}): {}",
                             queue_item.name,
-                            abs_file_path.display(),
+                            queue_item.file_path.display(),
                             queue_item.def_start_line,
                             queue_item.def_start_char,
                             e
@@ -1036,7 +1036,7 @@ impl LspEnrichmentWorkerPool {
                         debug!(
                             "Implementation request timed out for '{}' at {}:{}:{}",
                             queue_item.name,
-                            abs_file_path.display(),
+                            queue_item.file_path.display(),
                             queue_item.def_start_line,
                             queue_item.def_start_char,
                         );

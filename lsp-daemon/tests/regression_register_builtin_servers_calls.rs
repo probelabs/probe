@@ -11,7 +11,9 @@
 
 use anyhow::Result;
 use lsp_daemon::lsp_database_adapter::LspDatabaseAdapter;
-use lsp_daemon::protocol::{CallHierarchyCall, CallHierarchyItem, CallHierarchyResult, Position, Range};
+use lsp_daemon::protocol::{
+    CallHierarchyCall, CallHierarchyItem, CallHierarchyResult, Position, Range,
+};
 use std::path::PathBuf;
 
 fn repo_root() -> PathBuf {
@@ -34,11 +36,17 @@ fn mk_item(name: &str, uri: &str, line: u32, character: u32) -> CallHierarchyIte
         uri: uri.to_string(),
         range: Range {
             start: Position { line, character },
-            end: Position { line: line + 1, character: 0 },
+            end: Position {
+                line: line + 1,
+                character: 0,
+            },
         },
         selection_range: Range {
             start: Position { line, character },
-            end: Position { line, character: character + 1 },
+            end: Position {
+                line,
+                character: character + 1,
+            },
         },
     }
 }
@@ -62,19 +70,20 @@ fn regression_calls_new_to_register_builtin_servers() -> Result<()> {
         outgoing: vec![CallHierarchyCall {
             from: item_register_builtin.clone(),
             from_ranges: vec![Range {
-                start: Position { line: 79, character: 8 }, // call site within new()
-                end: Position { line: 79, character: 34 },
+                start: Position {
+                    line: 79,
+                    character: 8,
+                }, // call site within new()
+                end: Position {
+                    line: 79,
+                    character: 34,
+                },
             }],
         }],
     };
 
-    let (_symbols, edges) = adapter.convert_call_hierarchy_to_database(
-        &result,
-        &file,
-        "rust",
-        1,
-        &workspace_root,
-    )?;
+    let (_symbols, edges) =
+        adapter.convert_call_hierarchy_to_database(&result, &file, "rust", 1, &workspace_root)?;
 
     assert!(
         edges.iter().any(|e| {
@@ -106,19 +115,20 @@ fn regression_calls_register_builtin_servers_to_register() -> Result<()> {
         outgoing: vec![CallHierarchyCall {
             from: item_register.clone(),
             from_ranges: vec![Range {
-                start: Position { line: 91, character: 12 },
-                end: Position { line: 91, character: 20 },
+                start: Position {
+                    line: 91,
+                    character: 12,
+                },
+                end: Position {
+                    line: 91,
+                    character: 20,
+                },
             }],
         }],
     };
 
-    let (_symbols, edges) = adapter.convert_call_hierarchy_to_database(
-        &result,
-        &file,
-        "rust",
-        1,
-        &workspace_root,
-    )?;
+    let (_symbols, edges) =
+        adapter.convert_call_hierarchy_to_database(&result, &file, "rust", 1, &workspace_root)?;
 
     assert!(
         edges.iter().any(|e| {
@@ -132,4 +142,3 @@ fn regression_calls_register_builtin_servers_to_register() -> Result<()> {
 
     Ok(())
 }
-

@@ -299,6 +299,20 @@ pub enum LspSubcommands {
         #[clap(long = "direct", action = clap::ArgAction::SetTrue)]
         direct: bool,
     },
+    /// Force-enrich a single symbol via Call Hierarchy and persist results
+    EnrichSymbol {
+        /// Target in the form "file:line[:column]" (1-based)
+        #[clap(value_parser)]
+        target: String,
+
+        /// Optional workspace hint if the file is in a nested workspace
+        #[clap(long = "workspace-hint")]
+        workspace_hint: Option<String>,
+
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"]) ]
+        format: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone)]

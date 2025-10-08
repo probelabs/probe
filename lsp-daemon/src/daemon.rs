@@ -5363,24 +5363,83 @@ impl LspDaemon {
     }
 
     async fn handle_stop_indexing(&self, force: bool) -> Result<bool> {
+        use tokio::time::{timeout, Duration};
+
         let manager_opt = {
             let guard = self.indexing_manager.lock().await;
             guard.clone()
         };
         if let Some(manager) = manager_opt {
-            manager.stop_indexing().await?;
-            // Always clear the manager when stopping, regardless of force flag
-            // This allows starting a new indexing session
-            let mut guard = self.indexing_manager.lock().await;
-            if guard
-                .as_ref()
-                .map(|existing| Arc::ptr_eq(existing, &manager))
-                .unwrap_or(false)
-            {
-                *guard = None;
+            // If force is requested, or cooperative stop takes too long,
+            // perform shutdown in the background and return immediately.
+            if force {
+                let mgr = manager.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = mgr.stop_indexing().await {
+                        tracing::warn!("Background stop_indexing failed: {}", e);
+                    }
+                });
+
+                // Clear the manager slot right away to allow a fresh start later
+                let mut guard = self.indexing_manager.lock().await;
+                if guard
+                    .as_ref()
+                    .map(|existing| Arc::ptr_eq(existing, &manager))
+                    .unwrap_or(false)
+                {
+                    *guard = None;
+                }
+                info!("Stop indexing requested (force), shutting down in background");
+                return Ok(true);
             }
-            info!("Stopped indexing (force: {})", force);
-            Ok(true)
+
+            // Try a cooperative stop with a reasonable timeout
+            const COOPERATIVE_STOP_TIMEOUT_SECS: u64 = 10;
+            match timeout(
+                Duration::from_secs(COOPERATIVE_STOP_TIMEOUT_SECS),
+                manager.stop_indexing(),
+            )
+            .await
+            {
+                Ok(Ok(())) => {
+                    // Clear manager after a clean stop
+                    let mut guard = self.indexing_manager.lock().await;
+                    if guard
+                        .as_ref()
+                        .map(|existing| Arc::ptr_eq(existing, &manager))
+                        .unwrap_or(false)
+                    {
+                        *guard = None;
+                    }
+                    info!("Stopped indexing cooperatively");
+                    Ok(true)
+                }
+                Ok(Err(e)) => Err(e),
+                Err(_) => {
+                    // Timed out — keep stopping in background and free the slot
+                    let mgr = manager.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = mgr.stop_indexing().await {
+                            tracing::warn!("Background stop_indexing (post-timeout) failed: {}", e);
+                        }
+                    });
+
+                    let mut guard = self.indexing_manager.lock().await;
+                    if guard
+                        .as_ref()
+                        .map(|existing| Arc::ptr_eq(existing, &manager))
+                        .unwrap_or(false)
+                    {
+                        *guard = None;
+                    }
+
+                    tracing::warn!(
+                        "Cooperative stop timed out after {}s; continuing in background",
+                        COOPERATIVE_STOP_TIMEOUT_SECS
+                    );
+                    Ok(true)
+                }
+            }
         } else {
             Ok(false)
         }
