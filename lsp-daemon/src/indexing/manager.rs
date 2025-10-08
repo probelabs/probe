@@ -383,6 +383,10 @@ fn get_file_metadata(file_path: &Path) -> Result<(u64, u64, u64)> {
 }
 
 impl IndexingManager {
+    /// Expose the active workspace root (if any)
+    pub async fn get_workspace_root(&self) -> Option<std::path::PathBuf> {
+        self.workspace_root.read().await.clone()
+    }
     /// Get aggregated LSP indexing information in protocol format
 
     /// Snapshot counts from the in-memory empty-result cache

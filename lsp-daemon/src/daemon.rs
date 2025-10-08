@@ -5507,13 +5507,112 @@ impl LspDaemon {
 
             // Time-bounded DB/sync sections to avoid status timeouts under heavy load
             // Allow a bit more time for DB snapshot under load
-            let db_info = tokio::time::timeout(
-                std::time::Duration::from_millis(1000),
-                self.get_database_info(),
-            )
-            .await
-            .ok()
-            .and_then(|r| r.ok());
+            // Prefer DB info for the manager's workspace root; fall back to CWD on error
+            let db_info = {
+                if let Some(ws_root) = manager.get_workspace_root().await {
+                    let cache = self
+                        .workspace_cache_router
+                        .cache_for_workspace(&ws_root)
+                        .await
+                        .ok();
+                    cache.and_then(|c| {
+                        let backend = c.backend();
+                        match backend {
+                            crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
+                                let (
+                                    symbol_count,
+                                    edge_count,
+                                    file_count,
+                                    mut db_quiesced,
+                                    counts_locked,
+                                ) = sqlite_backend
+                                    .get_table_counts_try()
+                                    .now_or_never()
+                                    .and_then(|r| r.ok())
+                                    .and_then(|o| o)
+                                    .map(|(s, e, f)| (s, e, f, false, false))
+                                    .unwrap_or((0, 0, 0, false, true));
+                                let workspace_id = self
+                                    .workspace_cache_router
+                                    .workspace_id_for(&ws_root)
+                                    .unwrap_or_else(|_| "unknown".to_string());
+                                let reader_snapshot = futures::executor::block_on(
+                                    sqlite_backend.reader_status_snapshot(),
+                                );
+                                let write_held = sqlite_backend.is_reader_write_held();
+                                if !db_quiesced {
+                                    db_quiesced =
+                                        futures::executor::block_on(sqlite_backend.is_quiesced())
+                                            || write_held;
+                                }
+                                let writer_snapshot = futures::executor::block_on(
+                                    sqlite_backend.writer_status_snapshot(),
+                                );
+                                Some(crate::protocol::DatabaseInfo {
+                                    total_symbols: symbol_count,
+                                    total_edges: edge_count,
+                                    total_files: file_count,
+                                    workspace_id: Some(workspace_id),
+                                    counts_locked,
+                                    db_quiesced,
+                                    rw_gate_write_held: write_held,
+                                    reader_active: reader_snapshot.active as u64,
+                                    reader_last_label: reader_snapshot
+                                        .last_label
+                                        .unwrap_or_default(),
+                                    reader_last_ms: reader_snapshot.last_ms.unwrap_or(0) as u64,
+                                    writer_busy: writer_snapshot.busy,
+                                    writer_active_ms: writer_snapshot.active_ms.unwrap_or(0) as u64,
+                                    writer_last_ms: writer_snapshot
+                                        .recent
+                                        .first()
+                                        .map(|r| r.duration_ms as u64)
+                                        .unwrap_or(0),
+                                    writer_last_symbols: writer_snapshot
+                                        .recent
+                                        .first()
+                                        .map(|r| r.symbols as u64)
+                                        .unwrap_or(0),
+                                    writer_last_edges: writer_snapshot
+                                        .recent
+                                        .first()
+                                        .map(|r| r.edges as u64)
+                                        .unwrap_or(0),
+                                    writer_gate_owner_op: writer_snapshot
+                                        .gate_owner_op
+                                        .unwrap_or_default(),
+                                    writer_gate_owner_ms: writer_snapshot.gate_owner_ms.unwrap_or(0)
+                                        as u64,
+                                    writer_section_label: writer_snapshot
+                                        .section_label
+                                        .unwrap_or_default(),
+                                    writer_section_ms: writer_snapshot.section_ms.unwrap_or(0)
+                                        as u64,
+                                    mvcc_enabled: match backend {
+                                        crate::database_cache_adapter::BackendType::SQLite(sql) => {
+                                            sql.is_mvcc_enabled()
+                                        }
+                                    },
+                                    edge_audit: Some(crate::edge_audit::snapshot()),
+                                })
+                            }
+                        }
+                    })
+                } else {
+                    None
+                }
+            }
+            .or_else(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(1000),
+                        self.get_database_info(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                })
+            });
             let sync_info =
                 tokio::time::timeout(std::time::Duration::from_millis(1000), self.get_sync_info())
                     .await
