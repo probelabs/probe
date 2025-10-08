@@ -9,10 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info, warn};
 
-use crate::database::{
-    create_none_implementation_edges, create_none_reference_edges, DatabaseBackend, Edge,
-    EdgeRelation, SymbolState,
-};
+use crate::database::{DatabaseBackend, Edge, EdgeRelation, SymbolState};
 use crate::path_resolver::PathResolver;
 use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
 use crate::symbol::{
@@ -1545,17 +1542,7 @@ impl LspDatabaseAdapter {
             edges.push(edge);
         }
 
-        if edges.is_empty() {
-            debug!(
-                "No concrete references found for {} — storing sentinel none edge",
-                target_symbol_uid
-            );
-            let mut sentinel_edges = create_none_reference_edges(&target_symbol_uid);
-            for edge in &mut sentinel_edges {
-                edge.metadata = Some("lsp_references_empty".to_string());
-            }
-            edges.extend(sentinel_edges);
-        }
+        // No sentinels here; enrichment worker handles empty caching/persistence
 
         info!(
             "Converted {} reference locations to {} unique symbol edges && {} symbols",
@@ -1936,17 +1923,7 @@ impl LspDatabaseAdapter {
             edges.push(edge);
         }
 
-        if edges.is_empty() {
-            debug!(
-                "No concrete implementations found for {} — storing sentinel none edge",
-                target_symbol_uid
-            );
-            let mut sentinel_edges = create_none_implementation_edges(&target_symbol_uid);
-            for edge in &mut sentinel_edges {
-                edge.metadata = Some("lsp_implementations_empty".to_string());
-            }
-            edges.extend(sentinel_edges);
-        }
+        // No sentinels here; enrichment worker handles empty caching/persistence
 
         info!(
             "Converted {} implementation locations to {} edges",
