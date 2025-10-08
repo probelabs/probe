@@ -96,8 +96,17 @@ impl EmptyResultCache {
     pub async fn prune_expired(&self) {
         let mut guard = self.inner.write().await;
         let ttl = self.ttl;
-        guard
-            .map
-            .retain(|_, e| e.last_seen.elapsed() <= ttl);
+        guard.map.retain(|_, e| e.last_seen.elapsed() <= ttl);
+    }
+
+    /// Return true if we've met the repeat threshold (min_seen) for this uid+relation under the same mtime.
+    /// Unlike should_skip, this does not consider TTL; it answers whether the state has become "stable enough" to persist.
+    pub async fn is_stable(&self, uid: &str, relation: EmptyRelation, file_mtime_secs: u64) -> bool {
+        let guard = self.inner.read().await;
+        if let Some(e) = guard.map.get(&(uid.to_string(), relation)) {
+            return e.file_mtime_secs == file_mtime_secs && e.seen_count >= self.min_seen;
+        }
+        false
     }
 }
+

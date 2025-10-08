@@ -608,6 +608,8 @@ impl LspEnrichmentWorkerPool {
                 cache_adapter,
                 config,
                 stats,
+                uid_generator,
+                empty_cache,
             )
             .await
             {
@@ -661,6 +663,8 @@ impl LspEnrichmentWorkerPool {
         cache_adapter: &Arc<DatabaseCacheAdapter>,
         config: &EnrichmentWorkerConfig,
         stats: &Arc<EnrichmentWorkerStats>,
+        uid_generator: &Arc<SymbolUIDGenerator>,
+        empty_cache: &Arc<EmptyResultCache>,
     ) -> Result<()> {
         let workspace_root =
             workspace_utils::find_workspace_root_with_fallback(&queue_item.file_path)
@@ -785,6 +789,25 @@ impl LspEnrichmentWorkerPool {
                     stats
                         .edges_persisted
                         .fetch_add(edges.len() as u64, Ordering::Relaxed);
+                } else {
+                    if let Ok(uid) = Self::generate_symbol_uid(queue_item, uid_generator).await {
+                        let mtime = std::fs::metadata(&abs_file_path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        empty_cache.record_empty(&uid, EmptyRelation::CallHierarchy, mtime).await;
+                        if empty_cache.is_stable(&uid, EmptyRelation::CallHierarchy, mtime).await {
+                            let mut sentinels = create_none_call_hierarchy_edges(&uid);
+                            for e in sentinels.iter_mut() {
+                                e.language = language_str.to_string();
+                                e.metadata = Some("lsp_call_hierarchy_stable_empty".to_string());
+                            }
+                            sqlite_backend.store_edges(&sentinels).await
+                                .context("Failed to store CH stable-empty sentinels")?;
+                        }
+                    }
                 }
 
                 stats.call_hierarchy_success.fetch_add(1, Ordering::Relaxed);
@@ -912,6 +935,25 @@ impl LspEnrichmentWorkerPool {
                 stats
                     .reference_edges_persisted
                     .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
+            } else {
+                if let Ok(uid) = Self::generate_symbol_uid(queue_item, uid_generator).await {
+                    let mtime = std::fs::metadata(&queue_item.file_path)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    empty_cache.record_empty(&uid, EmptyRelation::References, mtime).await;
+                    if empty_cache.is_stable(&uid, EmptyRelation::References, mtime).await {
+                        let mut sentinels = create_none_reference_edges(&uid);
+                        for e in sentinels.iter_mut() {
+                            e.language = language_str.to_string();
+                            e.metadata = Some("lsp_references_stable_empty".to_string());
+                        }
+                        sqlite_backend.store_edges(&sentinels).await
+                            .context("Failed to store Refs stable-empty sentinels")?;
+                    }
+                }
             }
 
             Self::mark_operation_complete(
