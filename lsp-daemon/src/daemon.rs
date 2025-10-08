@@ -2969,26 +2969,66 @@ impl LspDaemon {
         &self,
         file_path: &Path,
         symbol_name: &str,
-        _line: Option<u32>,
-        _column: Option<u32>,
-        _methods: Option<Vec<String>>,
+        line: Option<u32>,
+        column: Option<u32>,
+        methods: Option<Vec<String>>,
         _all_positions: bool,
     ) -> Result<crate::protocol::SymbolCacheClearResult> {
         let start_time = std::time::Instant::now();
 
-        // Universal cache layer removed - no cache to clear
-        let (entries_cleared, positions_cleared, methods_cleared, size_freed) =
-            (0, Vec::new(), Vec::new(), 0);
+        // Resolve workspace and read content to compute consistent UID
+        let abs_file = safe_canonicalize(file_path);
+        let language = self.detector.detect(&abs_file)?;
+        let workspace_root = {
+            let mut resolver = self.workspace_resolver.lock().await;
+            resolver.resolve_workspace(&abs_file, None)?
+        };
+        let content = std::fs::read_to_string(&abs_file)
+            .with_context(|| format!("Failed to read file: {}", abs_file.display()))?;
+
+        // Determine position heuristically if not provided
+        let (l0, c0) = match (line, column) {
+            (Some(l), Some(c)) => (l, c),
+            _ => (0, 0),
+        };
+
+        // Compute consistent UID the same way enrichment does
+        let uid = self
+            .generate_consistent_symbol_uid(
+                &abs_file,
+                symbol_name,
+                l0,
+                c0,
+                language.as_str(),
+                &workspace_root,
+                &content,
+            )
+            .await
+            .unwrap_or_else(|_| format!("{}:{}:{}:{}", abs_file.display(), symbol_name, l0, c0));
+
+        // Delete sentinel edges (both directions) for this symbol
+        let workspace_cache = self
+            .workspace_cache_router
+            .cache_for_workspace(&workspace_root)
+            .await?;
+
+        let entries_cleared = match workspace_cache.backend() {
+            BackendType::SQLite(db) => {
+                let methods_slice = methods.as_ref().map(|v| v.as_slice());
+                db.delete_none_edges_for_symbol(&uid, methods_slice)
+                    .await
+                    .unwrap_or(0)
+            }
+        } as usize;
 
         let duration_ms = start_time.elapsed().as_millis() as u64;
-
         Ok(crate::protocol::SymbolCacheClearResult {
             symbol_name: symbol_name.to_string(),
-            file_path: file_path.to_path_buf(),
+            file_path: abs_file,
             entries_cleared,
-            positions_cleared,
-            methods_cleared,
-            cache_size_freed_bytes: size_freed,
+            positions_cleared: vec![(l0, c0)],
+            methods_cleared: methods.unwrap_or_default(),
+            cache_size_freed_bytes: 0,
             duration_ms,
         })
     }

@@ -6634,6 +6634,104 @@ impl DatabaseBackend for SQLiteBackend {
 }
 
 impl SQLiteBackend {
+    /// Delete sentinel "none" edges for a given symbol UID.
+    /// If `methods` is provided, restrict deletion to those relations
+    /// (e.g., ["CallHierarchy"], ["References"], ["Implementations"]).
+    pub async fn delete_none_edges_for_symbol(
+        &self,
+        symbol_uid: &str,
+        methods: Option<&[String]>,
+    ) -> Result<u64, DatabaseError> {
+        let relations: Option<Vec<&str>> = methods.map(|ms| {
+            ms.iter()
+                .map(|s| s.to_lowercase())
+                .filter_map(|m| match m.as_str() {
+                    // accepted aliases
+                    "callhierarchy" | "calls" | "call_hierarchy" => Some("calls"),
+                    "references" | "refs" => Some("references"),
+                    "implementations" | "impls" | "implementation" => Some("implementation"),
+                    _ => None,
+                })
+                .collect()
+        });
+
+        // Build predicate for relation filter
+        let (rel_pred, rel_params): (String, Vec<turso::Value>) = if let Some(rs) = relations {
+            if rs.is_empty() {
+                (String::new(), vec![])
+            } else {
+                let ph = std::iter::repeat("?")
+                    .take(rs.len())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                (
+                    format!(" AND LOWER(relation) IN ({})", ph),
+                    rs.into_iter()
+                        .map(|r| turso::Value::Text(r.to_string()))
+                        .collect(),
+                )
+            }
+        } else {
+            (String::new(), vec![])
+        };
+
+        let sql_count = format!(
+            "SELECT COUNT(*) FROM edge              WHERE ((source_symbol_uid = ? AND target_symbol_uid = 'none')                     OR (source_symbol_uid = 'none' AND target_symbol_uid = ?)){}",
+            rel_pred
+        );
+        let sql_delete = format!(
+            "DELETE FROM edge              WHERE ((source_symbol_uid = ? AND target_symbol_uid = 'none')                     OR (source_symbol_uid = 'none' AND target_symbol_uid = ?)){}",
+            rel_pred
+        );
+
+        let conn = {
+            let mut pool = self.pool.lock().await;
+            pool.get_connection().await
+        }?;
+
+        // Prepare parameters for both uid placeholders + optional relations
+        let mut params: Vec<turso::Value> = vec![
+            turso::Value::Text(symbol_uid.to_string()),
+            turso::Value::Text(symbol_uid.to_string()),
+        ];
+        params.extend(rel_params.clone());
+
+        // Count first (best-effort)
+        let mut rows = conn.query(&sql_count, params.clone()).await.map_err(|e| {
+            DatabaseError::OperationFailed {
+                message: format!("Failed to count none edges: {}", e),
+            }
+        })?;
+
+        let mut to_delete: u64 = 0;
+        if let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to read count: {}", e),
+            })?
+        {
+            to_delete = match row.get_value(0) {
+                Ok(turso::Value::Integer(i)) => i as u64,
+                Ok(turso::Value::Text(s)) => s.parse::<u64>().unwrap_or(0),
+                _ => 0,
+            };
+        }
+
+        // Delete
+        conn.execute(&sql_delete, params)
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("Failed to delete none edges: {}", e),
+            })?;
+
+        {
+            let mut pool = self.pool.lock().await;
+            pool.return_connection(conn);
+        }
+
+        Ok(to_delete)
+    }
     /// Convert a database row into a SymbolState, returning None for malformed rows
     fn symbol_state_from_row(row: &turso::Row) -> Option<SymbolState> {
         let symbol_uid = match row.get_value(0) {
