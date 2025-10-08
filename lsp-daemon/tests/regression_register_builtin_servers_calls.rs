@@ -78,7 +78,7 @@ fn regression_calls_new_to_register_builtin_servers() -> Result<()> {
 
     assert!(
         edges.iter().any(|e| {
-            e.relation.as_str() == "calls"
+            matches!(e.relation, lsp_daemon::database::EdgeRelation::Calls)
                 && e.source_symbol_uid.contains(":new:")
                 && e.target_symbol_uid.contains(":register_builtin_servers:")
         }),
@@ -122,7 +122,7 @@ fn regression_calls_register_builtin_servers_to_register() -> Result<()> {
 
     assert!(
         edges.iter().any(|e| {
-            e.relation.as_str() == "calls"
+            matches!(e.relation, lsp_daemon::database::EdgeRelation::Calls)
                 && e.source_symbol_uid.contains(":register_builtin_servers:")
                 && e.target_symbol_uid.contains(":register:")
         }),

@@ -14,7 +14,8 @@ use crate::database::{
     EdgeRelation, SymbolState,
 };
 use crate::path_resolver::PathResolver;
-use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
+use crate::protocol::{CallHierarchyItem, CallHierarchyResult, Position, Range};
+    use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::symbol::{
     generate_version_aware_uid, normalize_uid_with_hint, uid_generator::SymbolUIDGenerator,
     SymbolInfo, SymbolKind, SymbolLocation,
@@ -5247,7 +5248,8 @@ impl Calculator {
 /// Ensure the same UID is produced across AST, references and call-hierarchy paths.
 #[tokio::test]
 async fn test_uid_consistency_ast_refs_hierarchy() {
-    use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
+    use crate::protocol::{CallHierarchyItem, CallHierarchyResult, Position, Range};
+    use crate::lsp_database_adapter::LspDatabaseAdapter;
 
     let adapter = LspDatabaseAdapter::new();
 
