@@ -917,7 +917,7 @@ impl LspEnrichmentWorkerPool {
 
             // Scope references to workspace by default
             let refs_scope =
-                std::env::var("PROBE_LSP_REFS_SCOPE").unwrap_or_else(|_| "workspace".to_string());
+                std::env::var("PROBE_LSP_REFS_SCOPE").unwrap_or_else(|_| "all".to_string());
             if refs_scope.to_ascii_lowercase() != "all" {
                 let before = references_locations.len();
                 references_locations.retain(|loc| {
