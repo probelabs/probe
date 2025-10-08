@@ -8374,6 +8374,28 @@ impl SQLiteBackend {
         line: u32,
         column: u32,
     ) -> Result<(), DatabaseError> {
+        // Attempt AST backfill first (unless explicitly disabled)
+        let backfill_enabled = std::env::var("PROBE_LSP_STRICT_GRAPH_AST_BACKFILL")
+            .ok()
+            .map(|v| v != "0" && v.to_lowercase() != "false")
+            .unwrap_or(true);
+
+        if backfill_enabled {
+            if let Err(e) = self
+                .ast_backfill_symbol_within_tx(conn, symbol_uid, file_path)
+                .await
+            {
+                tracing::debug!(
+                    "strict_graph: AST backfill failed for '{}' ({}); falling back to placeholder",
+                    symbol_uid,
+                    e
+                );
+            } else {
+                return Ok(());
+            }
+        }
+
+        // Fallback: create minimal placeholder to preserve referential integrity
         let (_file_part, name, line_from_uid) = Self::parse_symbol_uid(symbol_uid);
         let name_str = name.as_deref().unwrap_or("unknown");
         let symbol_kind = Self::infer_symbol_kind_from_name_and_context(name_str, file_path, line);
@@ -8392,13 +8414,118 @@ impl SQLiteBackend {
             def_end_char: column + 10,
             is_definition: true,
             documentation: Some("Auto-created placeholder symbol".to_string()),
-            metadata: Some("auto_created".to_string()),
+            metadata: Some("auto_created_missing_ast".to_string()),
         };
         self.insert_symbol_direct_within_tx(conn, &placeholder_symbol)
             .await
     }
-}
+    /// Try to backfill a missing symbol by running the AST extractor on its file and
+    /// inserting a real SymbolState row that matches the requested UID.
+    async fn ast_backfill_symbol_within_tx(
+        &self,
+        conn: &turso::Connection,
+        symbol_uid: &str,
+        rel_file_path: &Path,
+    ) -> Result<(), DatabaseError> {
+        use crate::indexing::ast_extractor::AstSymbolExtractor;
+        use crate::language_detector::{Language, LanguageDetector};
 
+        // Skip external dependency UIDs
+        if let Some(rel) = rel_file_path.to_str() {
+            if rel.starts_with("dep/") || rel.starts_with("/dep/") {
+                return Err(DatabaseError::OperationFailed {
+                    message: "skip dep/ symbol".into(),
+                });
+            }
+        }
+
+        // Resolve absolute path and workspace root
+        let abs = std::env::current_dir()
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("cwd error: {}", e),
+            })?
+            .join(rel_file_path);
+        let abs = std::fs::canonicalize(&abs).unwrap_or(abs);
+        let _workspace_root = crate::workspace_utils::find_workspace_root_with_fallback(&abs)
+            .unwrap_or_else(|_| {
+                abs.parent()
+                    .unwrap_or(std::path::Path::new("."))
+                    .to_path_buf()
+            });
+
+        // Read file
+        let content =
+            std::fs::read_to_string(&abs).map_err(|e| DatabaseError::OperationFailed {
+                message: format!("ast_backfill: read failed for {}: {}", abs.display(), e),
+            })?;
+
+        // Detect language
+        let detector = LanguageDetector::new();
+        let lang = detector.detect(&abs).unwrap_or(Language::Unknown);
+        if matches!(lang, Language::Unknown) {
+            return Err(DatabaseError::OperationFailed {
+                message: "unknown language".into(),
+            });
+        }
+
+        // Run AST extractor
+        let mut extractor = AstSymbolExtractor::new();
+        let symbols = extractor
+            .extract_symbols_from_file(&abs, &content, lang)
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("ast_backfill: extract failed: {}", e),
+            })?;
+
+        // Parse UID parts
+        let (uid_file_part, uid_name, uid_line) = Self::parse_symbol_uid(symbol_uid);
+        let wanted_name = uid_name.unwrap_or_default();
+        let wanted_line = uid_line.unwrap_or(0);
+
+        // Find best match by name and start line (1-based)
+        let mut chosen = None;
+        for s in symbols {
+            if !wanted_name.is_empty() && s.name != wanted_name {
+                continue;
+            }
+            let s_line = s.location.start_line.saturating_add(1);
+            if wanted_line == 0 || wanted_line == s_line {
+                chosen = Some(s);
+                break;
+            }
+        }
+        let s = chosen.ok_or_else(|| DatabaseError::OperationFailed {
+            message: "ast_backfill: no matching symbol".into(),
+        })?;
+
+        // Build SymbolState directly, preserving the target UID and stored relative path
+        let rel_path_str = if let Some(fp) = uid_file_part {
+            fp
+        } else {
+            rel_file_path.to_string_lossy().to_string()
+        };
+        let symbol = SymbolState {
+            symbol_uid: symbol_uid.to_string(),
+            file_path: rel_path_str,
+            language: lang.as_str().to_string(),
+            name: s.name.clone(),
+            fqn: s.qualified_name.clone(),
+            kind: s.kind.to_string(),
+            signature: s.signature.clone(),
+            visibility: s.visibility.as_ref().map(|v| v.to_string()),
+            def_start_line: s.location.start_line,
+            def_start_char: s.location.start_char,
+            def_end_line: s.location.end_line,
+            def_end_char: s.location.end_char,
+            is_definition: true,
+            documentation: s.documentation.clone(),
+            metadata: Some("ast_backfill".to_string()),
+        };
+
+        self.insert_symbol_direct_within_tx(conn, &symbol).await?;
+        tracing::info!("strict_graph: ast-backfilled symbol '{}'", symbol_uid);
+        Ok(())
+    }
+}
 /// Database integrity report
 #[derive(Debug, Clone)]
 pub struct DatabaseIntegrityReport {
