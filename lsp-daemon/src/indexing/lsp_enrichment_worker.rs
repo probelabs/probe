@@ -338,7 +338,7 @@ impl LspEnrichmentWorkerPool {
                 debug!(
                     "Processing symbol: {} ({}:{}) using SingleServerManager",
                     queue_item.name,
-                    queue_item.file_path.display(),
+                    abs_file_path.display(),
                     queue_item.def_start_line
                 );
 
@@ -405,7 +405,7 @@ impl LspEnrichmentWorkerPool {
                                 warn!(
                                     "Failed to enrich symbol '{}' ({}:{}, kind: {}, lang: {:?}): {}",
                                     queue_item.name,
-                                    queue_item.file_path.display(),
+                                    abs_file_path.display(),
                                     queue_item.def_start_line,
                                     queue_item.kind,
                                     queue_item.language,
@@ -590,7 +590,7 @@ impl LspEnrichmentWorkerPool {
                         "Attempt {} failed for symbol '{}' ({}:{}, kind: {}, lang: {:?}): {}",
                         attempt + 1,
                         queue_item.name,
-                        queue_item.file_path.display(),
+                        abs_file_path.display(),
                         queue_item.def_start_line,
                         queue_item.kind,
                         queue_item.language,
@@ -638,6 +638,14 @@ impl LspEnrichmentWorkerPool {
             workspace_utils::find_workspace_root_with_fallback(&queue_item.file_path)
                 .context("Failed to resolve workspace root")?;
 
+        // Always resolve an absolute file path using the workspace root to avoid relying on
+        // daemon current_dir. Relative paths here are workspace-relative.
+        let abs_file_path = if queue_item.file_path.is_absolute() {
+            queue_item.file_path.clone()
+        } else {
+            workspace_root.join(&queue_item.file_path)
+        };
+
         debug!(
             "Processing symbol {} in workspace: {}",
             queue_item.name,
@@ -668,7 +676,7 @@ impl LspEnrichmentWorkerPool {
         let original_line = queue_item.def_start_line;
         let original_char = queue_item.def_start_char;
         let (adj_line, adj_char) = crate::position::resolve_symbol_position(
-            &queue_item.file_path,
+            &abs_file_path,
             original_line,
             original_char,
             language_str,
@@ -683,7 +691,7 @@ impl LspEnrichmentWorkerPool {
             "Using adjusted LSP position {}:{} for {}",
             adj_line,
             adj_char,
-            queue_item.file_path.display()
+            abs_file_path.display()
         );
 
         let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
@@ -697,7 +705,7 @@ impl LspEnrichmentWorkerPool {
             std::env::set_var("PROBE_LSP_ENRICHMENT", "1");
             let call_hierarchy_result = match timeout(
                 config.request_timeout,
-                server_manager.call_hierarchy(language, &queue_item.file_path, adj_line, adj_char),
+                server_manager.call_hierarchy(language, &abs_file_path, adj_line, adj_char),
             )
             .await
             {
@@ -706,7 +714,7 @@ impl LspEnrichmentWorkerPool {
                     debug!(
                         "Call hierarchy unavailable for '{}' ({}:{}:{}): {}",
                         queue_item.name,
-                        queue_item.file_path.display(),
+                        abs_file_path.display(),
                         queue_item.def_start_line,
                         queue_item.def_start_char,
                         e
@@ -717,7 +725,7 @@ impl LspEnrichmentWorkerPool {
                     debug!(
                         "Call hierarchy request timed out for '{}' at {}:{}:{}",
                         queue_item.name,
-                        queue_item.file_path.display(),
+                        abs_file_path.display(),
                         queue_item.def_start_line,
                         queue_item.def_start_char
                     );
@@ -732,7 +740,7 @@ impl LspEnrichmentWorkerPool {
                 let (symbols, edges) = database_adapter
                     .convert_call_hierarchy_to_database(
                         &call_hierarchy_result,
-                        &queue_item.file_path,
+                        &abs_file_path,
                         &language_str,
                         1,
                         &workspace_root,
@@ -896,7 +904,7 @@ impl LspEnrichmentWorkerPool {
                 {
                     debug!(
                         "Deriving Implements edge locally from impl header at {}:{}",
-                        queue_item.file_path.display(),
+                        abs_file_path.display(),
                         adj_line + 1
                     );
                     // Resolve UIDs at the trait and type positions
@@ -1017,7 +1025,7 @@ impl LspEnrichmentWorkerPool {
                         debug!(
                             "Implementations unavailable for '{}' ({}:{}:{}): {}",
                             queue_item.name,
-                            queue_item.file_path.display(),
+                            abs_file_path.display(),
                             queue_item.def_start_line,
                             queue_item.def_start_char,
                             e
@@ -1028,7 +1036,7 @@ impl LspEnrichmentWorkerPool {
                         debug!(
                             "Implementation request timed out for '{}' at {}:{}:{}",
                             queue_item.name,
-                            queue_item.file_path.display(),
+                            abs_file_path.display(),
                             queue_item.def_start_line,
                             queue_item.def_start_char,
                         );
