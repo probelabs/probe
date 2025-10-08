@@ -3284,8 +3284,16 @@ impl IndexingManager {
                                 if snap.symbols_processed > last_symbols_processed {
                                     last_symbols_processed = snap.symbols_processed;
                                     last_progress_instant = tokio::time::Instant::now();
-                                } else if last_progress_instant.elapsed() > Duration::from_secs(60)
-                                {
+                                } else if {
+                                    // Allow tuning via env; default 120s (was 60s)
+                                    let no_progress_secs =
+                                        std::env::var("PROBE_LSP_PHASE2_NO_PROGRESS_SECS")
+                                            .ok()
+                                            .and_then(|v| v.parse::<u64>().ok())
+                                            .unwrap_or(120);
+                                    last_progress_instant.elapsed()
+                                        > Duration::from_secs(no_progress_secs)
+                                } {
                                     warn!(
                                         "Phase 2 monitor: no enrichment progress for {:?} with {} items queued; restarting worker",
                                         last_progress_instant.elapsed(),
