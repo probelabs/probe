@@ -5331,6 +5331,7 @@ async fn test_uid_consistency_ast_refs_hierarchy() {
 }
 
 mod tests_line_norm {
+    use super::LspDatabaseAdapter;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
