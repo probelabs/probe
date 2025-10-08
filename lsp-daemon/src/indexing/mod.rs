@@ -18,6 +18,7 @@ pub mod file_detector;
 pub mod language_strategies;
 pub mod lsp_enrichment_queue;
 pub mod lsp_enrichment_worker;
+pub mod empty_result_cache;
 pub mod manager;
 pub mod pipelines;
 pub mod progress;

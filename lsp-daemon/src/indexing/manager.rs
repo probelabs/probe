@@ -23,6 +23,7 @@ use crate::lsp_cache::LspCache;
 use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::path_resolver::PathResolver;
 use crate::server_manager::SingleServerManager;
+use crate::indexing::empty_result_cache::EmptyResultCache;
 // Database imports removed - no longer needed for IndexingManager
 
 /// Dummy cache stats structure to replace universal cache stats
@@ -324,6 +325,8 @@ pub struct IndexingManager {
 
     /// Aggregated LSP indexing counters for observability
     lsp_indexing_counters: Arc<LspIndexingCounters>,
+    /// In-memory TTL cache for empty LSP results to avoid thrash
+    empty_cache: Arc<EmptyResultCache>,
 }
 
 /// Compute content hash for a file (used for change detection)
@@ -583,6 +586,7 @@ impl IndexingManager {
             phase2_monitor_handle: Arc::new(tokio::sync::Mutex::new(None)),
             workspace_root: Arc::new(RwLock::new(None)),
             lsp_indexing_counters: Arc::new(LspIndexingCounters::default()),
+            empty_cache: Arc::new(EmptyResultCache::from_env()),
         }
     }
 

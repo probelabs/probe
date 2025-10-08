@@ -20,6 +20,7 @@ use crate::database::{
 use crate::database_cache_adapter::{BackendType, DatabaseCacheAdapter};
 use crate::indexing::lsp_enrichment_queue::{EnrichmentOperation, LspEnrichmentQueue, QueueItem};
 use crate::language_detector::Language;
+use crate::indexing::empty_result_cache::{EmptyResultCache, EmptyRelation};
 use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::path_resolver::PathResolver;
 use crate::server_manager::SingleServerManager;
@@ -184,6 +185,8 @@ pub struct LspEnrichmentWorkerPool {
     enrichment_tracker: Arc<EnrichmentTracker>,
     /// Symbol UID generator for tracking
     uid_generator: Arc<SymbolUIDGenerator>,
+    /// In-memory soft cache for empty LSP results (TTL-based)
+    empty_cache: Arc<EmptyResultCache>,
 }
 
 impl LspEnrichmentWorkerPool {
@@ -203,6 +206,7 @@ impl LspEnrichmentWorkerPool {
             shutdown: Arc::new(AtomicBool::new(false)),
             enrichment_tracker: Arc::new(EnrichmentTracker::new()),
             uid_generator: Arc::new(SymbolUIDGenerator::new()),
+            empty_cache: Arc::new(EmptyResultCache::from_env()),
         }
     }
 
@@ -246,6 +250,7 @@ impl LspEnrichmentWorkerPool {
             self.path_resolver.clone(),
             self.enrichment_tracker.clone(),
             self.uid_generator.clone(),
+            self.empty_cache.clone(),
             queue,
             cache_adapter,
             workspace_root,
@@ -262,6 +267,7 @@ impl LspEnrichmentWorkerPool {
         path_resolver: Arc<PathResolver>,
         enrichment_tracker: Arc<EnrichmentTracker>,
         uid_generator: Arc<SymbolUIDGenerator>,
+        empty_cache: Arc<EmptyResultCache>,
         _queue: Arc<LspEnrichmentQueue>,
         cache_adapter: Arc<DatabaseCacheAdapter>,
         workspace_root: std::path::PathBuf,
@@ -323,6 +329,26 @@ impl LspEnrichmentWorkerPool {
                 if ops.is_empty() {
                     continue;
                 }
+                // Check soft empty cache to avoid thrashing
+                let file_mtime_secs = std::fs::metadata(&file_abs)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let uid = &plan.symbol.symbol_uid;
+                let mut filtered_ops = Vec::new();
+                for op in ops.into_iter() {
+                    let rel = match op {
+                        EnrichmentOperation::CallHierarchy => EmptyRelation::CallHierarchy,
+                        EnrichmentOperation::References => EmptyRelation::References,
+                        EnrichmentOperation::Implementations => EmptyRelation::Implementations,
+                    };
+                    let skip = empty_cache.should_skip(uid, rel, file_mtime_secs).await;
+                    if !skip { filtered_ops.push(op); }
+                }
+                let ops = filtered_ops;
+                if ops.is_empty() { continue; }
 
                 let queue_item = QueueItem::new(
                     plan.symbol.symbol_uid.clone(),
@@ -376,6 +402,7 @@ impl LspEnrichmentWorkerPool {
                         &stats,
                         &enrichment_tracker,
                         &uid_generator,
+                        &empty_cache,
                     )
                     .await
                     {
@@ -559,6 +586,7 @@ impl LspEnrichmentWorkerPool {
         stats: &Arc<EnrichmentWorkerStats>,
         enrichment_tracker: &Arc<EnrichmentTracker>,
         uid_generator: &Arc<SymbolUIDGenerator>,
+        empty_cache: &Arc<EmptyResultCache>,
     ) -> Result<()> {
         let mut last_error = None;
 
@@ -1223,11 +1251,6 @@ impl LspEnrichmentWorkerPool {
             edge.language = language.to_string();
             edge.metadata = Some(marker_metadata.to_string());
         }
-
-        sqlite_backend
-            .store_edges(&sentinel_edges)
-            .await
-            .context("Failed to persist enrichment completion sentinel edges")?;
 
         Ok(())
     }
