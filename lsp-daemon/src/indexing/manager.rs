@@ -3049,6 +3049,24 @@ impl IndexingManager {
                 continue;
             }
 
+            // Optional targeted tracing for debugging enrichment scheduling.
+            if let Ok(trace) = std::env::var("PROBE_LSP_TRACE_SYMBOL") {
+                if !trace.is_empty()
+                    && (plan.symbol.name.contains(&trace)
+                        || plan.symbol.file_path.contains(&trace)
+                        || plan.symbol.symbol_uid.contains(&trace))
+                {
+                    info!(
+                        "[TRACE] Enqueue enrichment: name='{}' uid='{}' file='{}' ops={:?}",
+                        plan.symbol.name,
+                        plan.symbol.symbol_uid,
+                        plan.symbol.file_path,
+                        operations
+                    );
+                }
+            }
+
+
             let queue_item = EnrichmentQueueItem::new(
                 plan.symbol.symbol_uid.clone(),
                 relative_path,
