@@ -141,4 +141,23 @@ impl EmptyResultCache {
         }
         (ch, rf, im)
     }
+
+    /// Return current seen_count for a uid+relation if present.
+    pub async fn seen_count(&self, uid: &str, relation: EmptyRelation) -> Option<u32> {
+        let guard = self.inner.read().await;
+        guard
+            .map
+            .get(&(uid.to_string(), relation))
+            .map(|e| e.seen_count)
+    }
+
+    /// Expose configured min_seen for logging/telemetry.
+    pub fn min_seen(&self) -> u32 {
+        self.min_seen
+    }
+
+    /// Expose configured TTL (in seconds) for logging/telemetry.
+    pub fn ttl_secs(&self) -> u64 {
+        self.ttl.as_secs()
+    }
 }

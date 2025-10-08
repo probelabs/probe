@@ -345,7 +345,13 @@ impl LspEnrichmentWorkerPool {
                         EnrichmentOperation::Implementations => EmptyRelation::Implementations,
                     };
                     let skip = empty_cache.should_skip(uid, rel, file_mtime_secs).await;
-                    if !skip {
+                    if skip {
+                        let seen = empty_cache.seen_count(uid, rel).await.unwrap_or(0);
+                        let min_seen = empty_cache.min_seen();
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[empty-cache] skip {:?} uid='{}' attempt={} min_seen={} ttl={}s",
+                              rel, uid, seen, min_seen, empty_cache.ttl_secs());
+                    } else {
                         filtered_ops.push(op);
                     }
                 }
@@ -804,10 +810,18 @@ impl LspEnrichmentWorkerPool {
                         empty_cache
                             .record_empty(&uid, EmptyRelation::CallHierarchy, mtime)
                             .await;
+                        let attempt = empty_cache
+                            .seen_count(&uid, EmptyRelation::CallHierarchy)
+                            .await
+                            .unwrap_or(1);
+                        let min_seen = empty_cache.min_seen();
                         if empty_cache
                             .is_stable(&uid, EmptyRelation::CallHierarchy, mtime)
                             .await
                         {
+                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                  "[empty-cache] CH empty: attempt {}/{} uid='{}' → persisting durable 'none'",
+                                  attempt, min_seen, uid);
                             let mut sentinels = create_none_call_hierarchy_edges(&uid);
                             for e in sentinels.iter_mut() {
                                 e.language = language_str.to_string();
@@ -817,6 +831,10 @@ impl LspEnrichmentWorkerPool {
                                 .store_edges(&sentinels)
                                 .await
                                 .context("Failed to store CH stable-empty sentinels")?;
+                        } else {
+                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                  "[empty-cache] CH empty: attempt {}/{} uid='{}' (memory-only, will retry)",
+                                  attempt, min_seen, uid);
                         }
                     }
                 }
@@ -957,10 +975,18 @@ impl LspEnrichmentWorkerPool {
                     empty_cache
                         .record_empty(&uid, EmptyRelation::References, mtime)
                         .await;
+                    let attempt = empty_cache
+                        .seen_count(&uid, EmptyRelation::References)
+                        .await
+                        .unwrap_or(1);
+                    let min_seen = empty_cache.min_seen();
                     if empty_cache
                         .is_stable(&uid, EmptyRelation::References, mtime)
                         .await
                     {
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[empty-cache] Refs empty: attempt {}/{} uid='{}' → persisting durable 'none'",
+                              attempt, min_seen, uid);
                         let mut sentinels = create_none_reference_edges(&uid);
                         for e in sentinels.iter_mut() {
                             e.language = language_str.to_string();
@@ -970,6 +996,10 @@ impl LspEnrichmentWorkerPool {
                             .store_edges(&sentinels)
                             .await
                             .context("Failed to store Refs stable-empty sentinels")?;
+                    } else {
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[empty-cache] Refs empty: attempt {}/{} uid='{}' (memory-only, will retry)",
+                              attempt, min_seen, uid);
                     }
                 }
             }
