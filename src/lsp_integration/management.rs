@@ -2945,6 +2945,16 @@ impl LspManager {
                     "Extracted".bold(),
                     progress.symbols_extracted
                 );
+                if let Some(ref ec) = status.empty_cache {
+                    println!(
+                        "  {}: CH:{} Refs:{} Impls:{}",
+                        "Empty Cache".bold(),
+                        ec.call_hierarchy,
+                        ec.references,
+                        ec.implementations
+                    );
+                }
+
                 println!("  {}: {}", "Memory".bold(), "N/A".to_string());
 
                 // (Queue section removed: obsolete top-level queue view)

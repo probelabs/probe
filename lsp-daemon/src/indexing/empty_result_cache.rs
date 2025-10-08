@@ -33,7 +33,9 @@ pub struct EmptyResultCache {
 impl EmptyResultCache {
     pub fn new(ttl: Duration, min_seen: u32) -> Self {
         Self {
-            inner: Arc::new(RwLock::new(EmptyResultCacheInner { map: HashMap::new() })),
+            inner: Arc::new(RwLock::new(EmptyResultCacheInner {
+                map: HashMap::new(),
+            })),
             ttl,
             min_seen,
         }
@@ -64,7 +66,12 @@ impl EmptyResultCache {
         });
         // Reset if file changed
         if e.file_mtime_secs != file_mtime_secs {
-            *e = Entry { first_seen: now, last_seen: now, seen_count: 1, file_mtime_secs };
+            *e = Entry {
+                first_seen: now,
+                last_seen: now,
+                seen_count: 1,
+                file_mtime_secs,
+            };
         } else {
             e.last_seen = now;
             e.seen_count = e.seen_count.saturating_add(1);
@@ -72,7 +79,12 @@ impl EmptyResultCache {
     }
 
     /// Return true if emptiness is stable and within TTL.
-    pub async fn should_skip(&self, uid: &str, relation: EmptyRelation, file_mtime_secs: u64) -> bool {
+    pub async fn should_skip(
+        &self,
+        uid: &str,
+        relation: EmptyRelation,
+        file_mtime_secs: u64,
+    ) -> bool {
         self.prune_expired().await;
         let guard = self.inner.read().await;
         if let Some(e) = guard.map.get(&(uid.to_string(), relation)) {
@@ -101,12 +113,32 @@ impl EmptyResultCache {
 
     /// Return true if we've met the repeat threshold (min_seen) for this uid+relation under the same mtime.
     /// Unlike should_skip, this does not consider TTL; it answers whether the state has become "stable enough" to persist.
-    pub async fn is_stable(&self, uid: &str, relation: EmptyRelation, file_mtime_secs: u64) -> bool {
+    pub async fn is_stable(
+        &self,
+        uid: &str,
+        relation: EmptyRelation,
+        file_mtime_secs: u64,
+    ) -> bool {
         let guard = self.inner.read().await;
         if let Some(e) = guard.map.get(&(uid.to_string(), relation)) {
             return e.file_mtime_secs == file_mtime_secs && e.seen_count >= self.min_seen;
         }
         false
     }
-}
+    /// Return counts of cached empty entries by relation. Snapshot only; races are fine.
 
+    pub async fn counts_by_relation(&self) -> (usize, usize, usize) {
+        let guard = self.inner.read().await;
+        let mut ch = 0usize;
+        let mut rf = 0usize;
+        let mut im = 0usize;
+        for ((_uid, rel), _e) in guard.map.iter() {
+            match rel {
+                EmptyRelation::CallHierarchy => ch += 1,
+                EmptyRelation::References => rf += 1,
+                EmptyRelation::Implementations => im += 1,
+            }
+        }
+        (ch, rf, im)
+    }
+}

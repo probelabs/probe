@@ -4291,7 +4291,7 @@ impl LspDaemon {
 
                     // Generate consistent symbol UID using actual line and column
                     let content = std::fs::read_to_string(request_file_path)?;
-                    let symbol_uid = match self
+                    let _symbol_uid = match self
                         .generate_consistent_symbol_uid(
                             request_file_path,
                             symbol_name,
@@ -4393,10 +4393,13 @@ impl LspDaemon {
                     let content = std::fs::read_to_string(request_file_path)?;
                     let symbol_name =
                         self.find_symbol_at_position(request_file_path, &content, line, column)?;
-                    info!("LSP returned empty references for '{}'; not caching empties", symbol_name);
+                    info!(
+                        "LSP returned empty references for '{}'; not caching empties",
+                        symbol_name
+                    );
 
                     // Generate consistent symbol UID
-                    let symbol_uid = match self
+                    let _symbol_uid = match self
                         .generate_consistent_symbol_uid(
                             request_file_path,
                             &symbol_name,
@@ -5517,7 +5520,7 @@ impl LspDaemon {
                     .ok()
                     .and_then(|r| r.ok());
 
-            let status_info = crate::protocol::IndexingStatusInfo {
+            let mut status_info = crate::protocol::IndexingStatusInfo {
                 manager_status: format!("{status:?}"),
                 progress: IndexingProgressInfo {
                     total_files: progress.total_files,
@@ -5560,8 +5563,12 @@ impl LspDaemon {
                 lsp_indexing: manager.get_lsp_indexing_info().await,
                 database: db_info,
                 sync: sync_info,
+                empty_cache: None,
             };
 
+            // Attach empty-cache snapshot (best-effort)
+            let ec = manager.get_empty_cache_info().await;
+            status_info.empty_cache = Some(ec);
             Ok(status_info)
         } else {
             // No indexing manager active
@@ -5609,6 +5616,7 @@ impl LspDaemon {
                 lsp_indexing: None,
                 database: db_info,
                 sync: sync_info,
+                empty_cache: None,
             };
 
             Ok(status_info)

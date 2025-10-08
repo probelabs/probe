@@ -9,6 +9,7 @@
 
 use crate::cache_types::DefinitionInfo;
 use crate::database::{DatabaseBackend, PendingEnrichmentCounts, SymbolEnrichmentPlan};
+use crate::indexing::empty_result_cache::EmptyResultCache;
 use crate::indexing::{
     lsp_enrichment_queue::{
         EnrichmentOperation, LspEnrichmentQueue, QueueItem as EnrichmentQueueItem,
@@ -23,7 +24,6 @@ use crate::lsp_cache::LspCache;
 use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::path_resolver::PathResolver;
 use crate::server_manager::SingleServerManager;
-use crate::indexing::empty_result_cache::EmptyResultCache;
 // Database imports removed - no longer needed for IndexingManager
 
 /// Dummy cache stats structure to replace universal cache stats
@@ -384,6 +384,17 @@ fn get_file_metadata(file_path: &Path) -> Result<(u64, u64, u64)> {
 
 impl IndexingManager {
     /// Get aggregated LSP indexing information in protocol format
+
+    /// Snapshot counts from the in-memory empty-result cache
+    pub async fn get_empty_cache_info(&self) -> crate::protocol::EmptyCacheInfo {
+        use crate::protocol::EmptyCacheInfo;
+        let (ch, rf, im) = self.empty_cache.counts_by_relation().await;
+        EmptyCacheInfo {
+            call_hierarchy: ch,
+            references: rf,
+            implementations: im,
+        }
+    }
     pub async fn get_lsp_indexing_info(&self) -> Option<crate::protocol::LspIndexingInfo> {
         let c = &self.lsp_indexing_counters;
         let info = crate::protocol::LspIndexingInfo {

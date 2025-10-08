@@ -18,9 +18,9 @@ use crate::database::{
     create_none_reference_edges, DatabaseBackend, Edge, SQLiteBackend,
 };
 use crate::database_cache_adapter::{BackendType, DatabaseCacheAdapter};
+use crate::indexing::empty_result_cache::{EmptyRelation, EmptyResultCache};
 use crate::indexing::lsp_enrichment_queue::{EnrichmentOperation, LspEnrichmentQueue, QueueItem};
 use crate::language_detector::Language;
-use crate::indexing::empty_result_cache::{EmptyResultCache, EmptyRelation};
 use crate::lsp_database_adapter::LspDatabaseAdapter;
 use crate::path_resolver::PathResolver;
 use crate::server_manager::SingleServerManager;
@@ -345,10 +345,14 @@ impl LspEnrichmentWorkerPool {
                         EnrichmentOperation::Implementations => EmptyRelation::Implementations,
                     };
                     let skip = empty_cache.should_skip(uid, rel, file_mtime_secs).await;
-                    if !skip { filtered_ops.push(op); }
+                    if !skip {
+                        filtered_ops.push(op);
+                    }
                 }
                 let ops = filtered_ops;
-                if ops.is_empty() { continue; }
+                if ops.is_empty() {
+                    continue;
+                }
 
                 let queue_item = QueueItem::new(
                     plan.symbol.symbol_uid.clone(),
@@ -797,14 +801,21 @@ impl LspEnrichmentWorkerPool {
                             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                             .map(|d| d.as_secs())
                             .unwrap_or(0);
-                        empty_cache.record_empty(&uid, EmptyRelation::CallHierarchy, mtime).await;
-                        if empty_cache.is_stable(&uid, EmptyRelation::CallHierarchy, mtime).await {
+                        empty_cache
+                            .record_empty(&uid, EmptyRelation::CallHierarchy, mtime)
+                            .await;
+                        if empty_cache
+                            .is_stable(&uid, EmptyRelation::CallHierarchy, mtime)
+                            .await
+                        {
                             let mut sentinels = create_none_call_hierarchy_edges(&uid);
                             for e in sentinels.iter_mut() {
                                 e.language = language_str.to_string();
                                 e.metadata = Some("lsp_call_hierarchy_stable_empty".to_string());
                             }
-                            sqlite_backend.store_edges(&sentinels).await
+                            sqlite_backend
+                                .store_edges(&sentinels)
+                                .await
                                 .context("Failed to store CH stable-empty sentinels")?;
                         }
                     }
@@ -943,14 +954,21 @@ impl LspEnrichmentWorkerPool {
                         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         .map(|d| d.as_secs())
                         .unwrap_or(0);
-                    empty_cache.record_empty(&uid, EmptyRelation::References, mtime).await;
-                    if empty_cache.is_stable(&uid, EmptyRelation::References, mtime).await {
+                    empty_cache
+                        .record_empty(&uid, EmptyRelation::References, mtime)
+                        .await;
+                    if empty_cache
+                        .is_stable(&uid, EmptyRelation::References, mtime)
+                        .await
+                    {
                         let mut sentinels = create_none_reference_edges(&uid);
                         for e in sentinels.iter_mut() {
                             e.language = language_str.to_string();
                             e.metadata = Some("lsp_references_stable_empty".to_string());
                         }
-                        sqlite_backend.store_edges(&sentinels).await
+                        sqlite_backend
+                            .store_edges(&sentinels)
+                            .await
                             .context("Failed to store Refs stable-empty sentinels")?;
                     }
                 }
@@ -1268,7 +1286,7 @@ impl LspEnrichmentWorkerPool {
     }
 
     async fn mark_operation_complete(
-        sqlite_backend: &Arc<SQLiteBackend>,
+        _sqlite_backend: &Arc<SQLiteBackend>,
         symbol_uid: &str,
         language: &str,
         operation: EnrichmentOperation,

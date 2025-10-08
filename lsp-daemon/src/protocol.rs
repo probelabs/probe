@@ -933,6 +933,9 @@ pub struct IndexingStatusInfo {
     /// Optional sync status, populated when the workspace backend is available
     #[serde(default)]
     pub sync: Option<SyncStatusInfo>,
+    /// Optional snapshot of the in-memory empty-result cache (counts by relation)
+    #[serde(default)]
+    pub empty_cache: Option<EmptyCacheInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1084,6 +1087,13 @@ pub struct LspEnrichmentQueueInfo {
     pub call_hierarchy_operations: usize,
 }
 
+/// Counts of in-memory empty-result cache entries by relation
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EmptyCacheInfo {
+    pub call_hierarchy: usize,
+    pub references: usize,
+    pub implementations: usize,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LspIndexingInfo {
     pub positions_adjusted: u64,
