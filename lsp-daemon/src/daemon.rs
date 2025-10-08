@@ -4287,7 +4287,7 @@ impl LspDaemon {
                     && result.outgoing.is_empty()
                 {
                     // LSP returned empty call hierarchy {incoming: [], outgoing: []} - create "none" edges
-                    info!("LSP returned empty call hierarchy for symbol '{}', creating 'none' edges to cache empty state", symbol_name);
+                    info!("LSP returned empty call hierarchy for '{}'; not caching empties (will retry later)", symbol_name);
 
                     // Generate consistent symbol UID using actual line and column
                     let content = std::fs::read_to_string(request_file_path)?;
@@ -4318,14 +4318,7 @@ impl LspDaemon {
                         }
                     };
 
-                    let none_edges = crate::database::create_none_call_hierarchy_edges(&symbol_uid);
-                    info!(
-                        "Created {} 'none' edges for symbol_uid '{}': {:?}",
-                        none_edges.len(),
-                        symbol_uid,
-                        none_edges
-                    );
-                    none_edges
+                    Vec::new()
                 } else {
                     info!(
                         "LSP returned {} real call hierarchy edges for symbol '{}'",
@@ -4336,22 +4329,19 @@ impl LspDaemon {
                 };
 
                 // Store symbols and edges (including "none" edges for empty results)
-                adapter
-                    .store_in_database(&**db, symbols, edges_to_store)
-                    .await
-                    .with_context(|| "Failed to store call hierarchy data in database")?;
-
-                let edge_count = if result.incoming.is_empty() && result.outgoing.is_empty() {
-                    2 // Two "none" edges for empty call hierarchy
+                if !edges_to_store.is_empty() || !symbols.is_empty() {
+                    adapter
+                        .store_in_database(&**db, symbols, edges_to_store)
+                        .await
+                        .with_context(|| "Failed to store call hierarchy data in database")?;
+                    info!(
+                        "Successfully stored call hierarchy data: {} symbols and {} edges",
+                        result.incoming.len() + result.outgoing.len() + 1,
+                        result.incoming.len() + result.outgoing.len()
+                    );
                 } else {
-                    result.incoming.len() + result.outgoing.len()
-                };
-
-                info!(
-                    "Successfully stored call hierarchy data: {} symbols and {} edges",
-                    result.incoming.len() + result.outgoing.len() + 1, // +1 for main symbol
-                    edge_count
-                );
+                    debug!("Nothing to store for call hierarchy (empty result, no caching)");
+                }
             }
         }
 
@@ -4403,7 +4393,7 @@ impl LspDaemon {
                     let content = std::fs::read_to_string(request_file_path)?;
                     let symbol_name =
                         self.find_symbol_at_position(request_file_path, &content, line, column)?;
-                    info!("LSP returned empty references for symbol '{}', creating 'none' edges to cache empty state", symbol_name);
+                    info!("LSP returned empty references for '{}'; not caching empties", symbol_name);
 
                     // Generate consistent symbol UID
                     let symbol_uid = match self
@@ -4433,23 +4423,21 @@ impl LspDaemon {
                         }
                     };
 
-                    crate::database::create_none_reference_edges(&symbol_uid)
+                    Vec::new()
                 } else {
                     info!("LSP returned {} real reference edges", edges.len());
                     std::mem::take(&mut edges)
                 };
 
-                adapter
-                    .store_in_database(&**db, std::mem::take(&mut symbols), edges_to_store)
-                    .await
-                    .with_context(|| "Failed to store references edges in database")?;
-
-                let edge_count = if locations.is_empty() {
-                    1
+                if !edges_to_store.is_empty() || !symbols.is_empty() {
+                    adapter
+                        .store_in_database(&**db, std::mem::take(&mut symbols), edges_to_store)
+                        .await
+                        .with_context(|| "Failed to store references edges in database")?;
+                    info!("Stored references data: {} edges", locations.len());
                 } else {
-                    locations.len()
-                };
-                info!("Successfully stored references data: {} edges", edge_count);
+                    debug!("Nothing to store for references (empty result, no caching)");
+                }
             }
         }
 
