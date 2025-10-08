@@ -63,6 +63,20 @@ impl LspServer {
         std::fs::canonicalize(&abs).unwrap_or(abs)
     }
 
+    /// Canonicalize a path relative to the server's project_root when available.
+    fn canonicalize_with_root(&self, p: &Path) -> PathBuf {
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else if let Some(root) = &self.project_root {
+            root.join(p)
+        } else {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(p)
+        };
+        std::fs::canonicalize(&abs).unwrap_or(abs)
+    }
+
     fn paths_equal(a: &Path, b: &Path) -> bool {
         let ca = Self::canonicalize_for_uri(a);
         let cb = Self::canonicalize_for_uri(b);
@@ -1285,7 +1299,7 @@ impl LspServer {
     }
 
     pub async fn open_document(&self, file_path: &Path, content: &str) -> Result<()> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri =
             Url::from_file_path(&canon).map_err(|_| anyhow!("Failed to convert file path"))?;
 
@@ -1313,7 +1327,7 @@ impl LspServer {
     }
 
     pub async fn close_document(&self, file_path: &Path) -> Result<()> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri =
             Url::from_file_path(&canon).map_err(|_| anyhow!("Failed to convert file path"))?;
 
@@ -1475,7 +1489,7 @@ impl LspServer {
 
     // Safely open a file, handling errors gracefully with atomic operation
     async fn open_file_safely(&self, file_path: &Path) -> Result<()> {
-        let canonical_path = Self::canonicalize_for_uri(file_path);
+        let canonical_path = self.canonicalize_with_root(file_path);
 
         // Use atomic check-and-set to prevent duplicate document opening
         {
@@ -1516,18 +1530,14 @@ impl LspServer {
 
     // Helper to check if a document is already opened
     async fn is_document_open(&self, file_path: &Path) -> bool {
-        let canonical_path = Self::canonicalize_for_uri(file_path);
+        let canonical_path = self.canonicalize_with_root(file_path);
         let docs = self.opened_documents.lock().await;
         docs.contains(&canonical_path)
     }
 
     // Simple document readiness for gopls - VS Code's approach
     async fn ensure_document_ready(&self, file_path: &Path) -> Result<()> {
-        let abs_path = if file_path.is_absolute() {
-            file_path.to_path_buf()
-        } else {
-            std::env::current_dir()?.join(file_path)
-        };
+        let abs_path = self.canonicalize_with_root(file_path);
 
         // Ensure the module root for this file is part of the workspace (critical for gopls).
         if self.is_gopls() {
@@ -1751,7 +1761,7 @@ impl LspServer {
 
     /// Get text document definition
     pub async fn definition(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri = Url::from_file_path(&canon)
             .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
 
@@ -1781,7 +1791,7 @@ impl LspServer {
 
     /// Get text document implementation
     pub async fn implementation(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri = Url::from_file_path(&canon)
             .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
 
@@ -1811,7 +1821,7 @@ impl LspServer {
 
     /// Get text document type definition
     pub async fn type_definition(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri = Url::from_file_path(&canon)
             .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
 
@@ -1855,7 +1865,7 @@ impl LspServer {
             return Err(anyhow!("References not supported by server"));
         }
 
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri = Url::from_file_path(&canon)
             .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
 
@@ -1888,7 +1898,7 @@ impl LspServer {
 
     /// Get hover information
     pub async fn hover(&self, file_path: &Path, line: u32, column: u32) -> Result<Value> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri = Url::from_file_path(&canon)
             .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
 
@@ -1918,7 +1928,7 @@ impl LspServer {
 
     /// Get document symbols
     pub async fn document_symbols(&self, file_path: &Path) -> Result<Value> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri = Url::from_file_path(&canon)
             .map_err(|_| anyhow!("Invalid file path: {:?}", file_path))?;
 
@@ -1949,7 +1959,7 @@ impl LspServer {
         line: u32,
         column: u32,
     ) -> Result<Value> {
-        let canon = Self::canonicalize_for_uri(file_path);
+        let canon = self.canonicalize_with_root(file_path);
         let uri =
             Url::from_file_path(&canon).map_err(|_| anyhow!("Failed to convert file path"))?;
 
