@@ -80,15 +80,22 @@ impl LspDatabaseAdapter {
                 );
             }
             if let Some(ref path) = edge.file_path {
-                if !fp.is_empty() && !path.is_empty() && fp != path && !fp.starts_with("dep/") {
-                    edge_audit::inc("EID002");
-                    log_warn!(
-                        "EID002",
-                        "uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}'",
-                        fp,
-                        path,
-                        edge.source_symbol_uid
-                    );
+                // Only check EID002 for definition-style edges where def-site and file-site
+                // are expected to match. For Refs/Implements/Calls, file_path is a usage site
+                // and may differ.
+                use crate::database::EdgeRelation as R;
+                let check_mismatch = matches!(edge.relation, R::Definition);
+                if check_mismatch {
+                    if !fp.is_empty() && !path.is_empty() && fp != path && !fp.starts_with("dep/") {
+                        edge_audit::inc("EID002");
+                        log_warn!(
+                            "EID002",
+                            "uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}'",
+                            fp,
+                            path,
+                            edge.source_symbol_uid
+                        );
+                    }
                 }
             }
             // Line zero in UID

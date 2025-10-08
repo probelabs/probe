@@ -2566,13 +2566,21 @@ impl SQLiteBackend {
                             warn!("[edge_audit] EID001 absolute path in source_uid fp='{}' uid='{}' origin={:?}", fp, e.source_symbol_uid, e.metadata);
                         }
                         if let Some(ref path) = e.file_path {
-                            if !fp.is_empty()
-                                && !path.is_empty()
-                                && fp != path
-                                && !fp.starts_with("dep/")
-                            {
-                                crate::edge_audit::inc("EID002");
-                                warn!("[edge_audit] EID002 uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}' origin={:?}", fp, path, e.source_symbol_uid, e.metadata);
+                            // EID002 applies only when file_path should equal the def-site
+                            // parsed from the UID (e.g., Definition edges). For References,
+                            // Implements, and Calls, file_path is the usage/call site and may
+                            // legitimately differ.
+                            use crate::database::EdgeRelation as R;
+                            let check_mismatch = matches!(e.relation, R::Definition);
+                            if check_mismatch {
+                                if !fp.is_empty()
+                                    && !path.is_empty()
+                                    && fp != path
+                                    && !fp.starts_with("dep/")
+                                {
+                                    crate::edge_audit::inc("EID002");
+                                    warn!("[edge_audit] EID002 uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}' origin={:?}", fp, path, e.source_symbol_uid, e.metadata);
+                                }
                             }
                         }
                     } else {
