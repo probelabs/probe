@@ -27,6 +27,7 @@ mod tests {
             timeout: 30,
             question: None,
             no_gitignore: false,
+            format: None,
         };
 
         let results = perform_probe(&options).unwrap();

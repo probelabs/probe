@@ -56,6 +56,7 @@ def hello_world():
         timeout: 30,
         question: None,
         no_gitignore: false,
+        format: None,
     };
     let results = perform_probe(&options).unwrap();
     assert!(!results.results.is_empty());
@@ -108,6 +109,7 @@ console.log("Hello from JS");
         timeout: 30,
         question: None,
         no_gitignore: false,
+        format: None,
     };
     let results = perform_probe(&options).unwrap();
     assert!(!results.results.is_empty());
@@ -178,6 +180,7 @@ fn main() {
             timeout: 30,
             question: None,
             no_gitignore: false,
+            format: None,
         };
         let results = perform_probe(&options).unwrap();
         assert!(

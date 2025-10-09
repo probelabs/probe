@@ -146,6 +146,7 @@ fn handle_search(params: SearchParams) -> Result<()> {
         timeout: params.timeout,
         question: params.question.as_deref(),
         no_gitignore: params.no_gitignore,
+        format: Some(&params.format),
     };
 
     let limited_results = perform_probe(&search_options)?;

@@ -57,6 +57,7 @@ pub const MAX_USERS: usize = 1000;
         timeout: 30,
         question: None,
         no_gitignore: true,
+        format: None,
     };
 
     let results = perform_probe(&options).expect("Search should succeed");
@@ -136,6 +137,7 @@ MAX_USERS = 1000
         timeout: 30,
         question: None,
         no_gitignore: true,
+        format: None,
     };
 
     let results = perform_probe(&options).expect("Search should succeed");

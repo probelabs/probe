@@ -247,6 +247,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         timeout,
         question,
         no_gitignore,
+        format: _, // Format parameter added for cache control
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
@@ -799,7 +800,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
 
         // Filter matched lines using the cache
-        match cache::filter_matched_lines_with_cache(&mut file_term_map, session_id, &raw_query) {
+        match cache::filter_matched_lines_with_cache(
+            &mut file_term_map,
+            session_id,
+            &raw_query,
+            options.format,
+        ) {
             Ok(skipped) => {
                 if debug_mode {
                     println!("DEBUG: Early caching skipped {skipped} matched lines");
@@ -1460,7 +1466,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
 
         // Filter results using the cache - but only to count skipped blocks, not to filter
-        match cache::filter_results_with_cache(&limited.results, session_id, &raw_query) {
+        match cache::filter_results_with_cache(
+            &limited.results,
+            session_id,
+            &raw_query,
+            options.format,
+        ) {
             Ok((_, cached_skipped)) => {
                 if debug_mode {
                     println!("DEBUG: Final caching found {cached_skipped} cached blocks");
@@ -1479,7 +1490,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
 
         // Update the cache with the limited results
-        if let Err(e) = cache::add_results_to_cache(&limited.results, session_id, &raw_query) {
+        if let Err(e) =
+            cache::add_results_to_cache(&limited.results, session_id, &raw_query, options.format)
+        {
             eprintln!("Error adding results to cache: {e}");
         }
 
@@ -1548,7 +1561,9 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 queries[0].clone()
             };
 
-            if let Err(e) = cache::add_results_to_cache(&merged, session_id, &raw_query) {
+            if let Err(e) =
+                cache::add_results_to_cache(&merged, session_id, &raw_query, options.format)
+            {
                 eprintln!("Error adding merged results to cache: {e}");
             }
 

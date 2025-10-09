@@ -451,6 +451,7 @@ fn third_function() {
             question: None,
             exact: false,
             no_gitignore: false,
+            format: None,
         };
 
         // Run the search

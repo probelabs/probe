@@ -312,6 +312,7 @@ func (i *IPWhiteListMiddleware) Process() {
         question: None,
         exact: false,
         no_gitignore: false,
+        format: None,
     };
 
     // Run the search
@@ -393,6 +394,7 @@ func Process() {
         question: None,
         exact: false,
         no_gitignore: false,
+        format: None,
     };
 
     // Run the search

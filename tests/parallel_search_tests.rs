@@ -88,6 +88,7 @@ fn test_parallel_file_search() {
         question: None,
         exact: false,
         no_gitignore: false,
+        format: None,
     };
 
     // Measure search time
@@ -224,6 +225,7 @@ fn function_{}() {{
         question: None,
         exact: false,
         no_gitignore: false,
+        format: None,
     };
 
     // Measure search time
@@ -329,6 +331,7 @@ fn function_with_blocks_{}() {{
         question: None,
         exact: false,
         no_gitignore: false,
+        format: None,
     };
 
     // Measure search time
