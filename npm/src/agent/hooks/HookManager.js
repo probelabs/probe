@@ -59,17 +59,25 @@ export class HookManager {
     const callbacks = this.hooks.get(hookName);
     if (!callbacks || callbacks.size === 0) return;
 
-    // Execute all callbacks in parallel
+    // Execute all callbacks in parallel using Promise.allSettled
+    // This ensures one failing hook doesn't break others
     const promises = Array.from(callbacks).map(callback => {
       try {
         return Promise.resolve(callback(data));
       } catch (error) {
-        console.error(`[HookManager] Error in hook ${hookName}:`, error);
-        return Promise.resolve(); // Don't let one error break all hooks
+        // Catch synchronous errors
+        return Promise.reject(error);
       }
     });
 
-    await Promise.all(promises);
+    const results = await Promise.allSettled(promises);
+
+    // Log any rejected promises
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`[HookManager] Error in hook "${hookName}" (callback ${index + 1}):`, result.reason);
+      }
+    });
   }
 
   /**
