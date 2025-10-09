@@ -319,22 +319,10 @@ pub fn filter_results_with_cache(
     results: &[SearchResult],
     session_id: &str,
     query: &str,
-    format: Option<&str>,
+    _format: Option<&str>,
 ) -> Result<(Vec<SearchResult>, usize)> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    // For outline and outline-xml formats, disable caching entirely
-    // These formats show actual code content, so we always want fresh results
-    if let Some(fmt) = format {
-        if fmt == "outline" || fmt == "outline-xml" {
-            if debug_mode {
-                println!("DEBUG: Caching disabled for {fmt} format");
-            }
-            return Ok((results.to_vec(), 0));
-        }
-    }
-
     let query_hash = hash_query(query);
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Check if this is a new session by looking for the cache file
     let cache_path = SessionCache::get_cache_path(session_id, &query_hash);
@@ -408,21 +396,10 @@ pub fn filter_matched_lines_with_cache(
     file_term_map: &mut HashMap<PathBuf, HashMap<usize, HashSet<usize>>>,
     session_id: &str,
     query: &str,
-    format: Option<&str>,
+    _format: Option<&str>,
 ) -> Result<usize> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    // For outline and outline-xml formats, disable caching entirely
-    if let Some(fmt) = format {
-        if fmt == "outline" || fmt == "outline-xml" {
-            if debug_mode {
-                println!("DEBUG: Early caching disabled for {fmt} format");
-            }
-            return Ok(0);
-        }
-    }
-
     let query_hash = hash_query(query);
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Check if this is a new session by looking for the cache file
     let cache_path = SessionCache::get_cache_path(session_id, &query_hash);
@@ -570,20 +547,9 @@ pub fn add_results_to_cache(
     results: &[SearchResult],
     session_id: &str,
     query: &str,
-    format: Option<&str>,
+    _format: Option<&str>,
 ) -> Result<()> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-    // For outline and outline-xml formats, skip adding to cache
-    if let Some(fmt) = format {
-        if fmt == "outline" || fmt == "outline-xml" {
-            if debug_mode {
-                println!("DEBUG: Skipping cache write for {fmt} format");
-            }
-            return Ok(());
-        }
-    }
-
     let query_hash = hash_query(query);
 
     // Load or create the cache
