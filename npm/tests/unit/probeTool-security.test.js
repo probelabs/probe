@@ -220,4 +220,64 @@ describe('ProbeTool Security', () => {
       expect(result).toContain('sub-file.txt');
     });
   });
+
+  describe('Dependency Path Bypass', () => {
+    test('should allow /dep/ prefix paths to bypass workspace restrictions', async () => {
+      // This should not throw a "Path traversal" error even though it's outside workspace
+      // It may throw other errors (e.g., directory not found), but not security errors
+      try {
+        await listFilesTool.execute({
+          directory: '/dep/go/fmt',
+          workingDirectory: testWorkspace
+        });
+      } catch (error) {
+        expect(error.message).not.toMatch(/Path traversal attempt detected/);
+      }
+    });
+
+    test('should allow go: prefix paths to bypass workspace restrictions', async () => {
+      try {
+        await listFilesTool.execute({
+          directory: 'go:fmt',
+          workingDirectory: testWorkspace
+        });
+      } catch (error) {
+        expect(error.message).not.toMatch(/Path traversal attempt detected/);
+      }
+    });
+
+    test('should allow js: prefix paths to bypass workspace restrictions', async () => {
+      try {
+        await listFilesTool.execute({
+          directory: 'js:express',
+          workingDirectory: testWorkspace
+        });
+      } catch (error) {
+        expect(error.message).not.toMatch(/Path traversal attempt detected/);
+      }
+    });
+
+    test('should allow rust: prefix paths to bypass workspace restrictions', async () => {
+      try {
+        await listFilesTool.execute({
+          directory: 'rust:serde',
+          workingDirectory: testWorkspace
+        });
+      } catch (error) {
+        expect(error.message).not.toMatch(/Path traversal attempt detected/);
+      }
+    });
+
+    test('should allow /dep/ prefix in searchFilesTool', async () => {
+      try {
+        await searchFilesTool.execute({
+          pattern: '*.go',
+          directory: '/dep/go/fmt',
+          workingDirectory: testWorkspace
+        });
+      } catch (error) {
+        expect(error.message).not.toMatch(/Path traversal attempt detected/);
+      }
+    });
+  });
 });
