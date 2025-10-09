@@ -36,6 +36,8 @@ import { bashTool } from './tools/bash.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
 import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
+import { StorageAdapter, InMemoryStorageAdapter } from './agent/storage/index.js';
+import { HookManager, HOOK_TYPES } from './agent/hooks/index.js';
 
 export {
 	search,
@@ -50,6 +52,12 @@ export {
 	DEFAULT_SYSTEM_MESSAGE,
 	// Export AI Agent (NEW!)
 	ProbeAgent,
+	// Export storage adapters
+	StorageAdapter,
+	InMemoryStorageAdapter,
+	// Export hooks
+	HookManager,
+	HOOK_TYPES,
 	// Export telemetry classes
 	SimpleTelemetry,
 	SimpleAppTracer,

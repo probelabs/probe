@@ -31,6 +31,10 @@ export interface ProbeAgentOptions {
   mcpConfig?: any;
   /** @deprecated Use mcpConfig instead */
   mcpServers?: any[];
+  /** Pluggable storage adapter for conversation history */
+  storageAdapter?: StorageAdapter;
+  /** Hook callbacks for event-driven integration */
+  hooks?: Record<string, (data: any) => void | Promise<void>>;
 }
 
 /**
@@ -97,6 +101,97 @@ export interface ChatMessage {
   content: string;
   /** Optional message metadata */
   metadata?: any;
+}
+
+/**
+ * Storage adapter base class for pluggable history storage
+ */
+export declare class StorageAdapter {
+  /**
+   * Load conversation history for a session
+   */
+  loadHistory(sessionId: string): Promise<ChatMessage[]>;
+
+  /**
+   * Save a message to storage
+   */
+  saveMessage(sessionId: string, message: ChatMessage): Promise<void>;
+
+  /**
+   * Clear history for a session
+   */
+  clearHistory(sessionId: string): Promise<void>;
+
+  /**
+   * Optional: Get session metadata
+   */
+  getSessionMetadata(sessionId: string): Promise<any | null>;
+
+  /**
+   * Optional: Update session activity timestamp
+   */
+  updateSessionActivity(sessionId: string): Promise<void>;
+}
+
+/**
+ * Default in-memory storage adapter
+ */
+export declare class InMemoryStorageAdapter extends StorageAdapter {
+  constructor();
+}
+
+/**
+ * Hook types for ProbeAgent event system
+ */
+export declare const HOOK_TYPES: {
+  readonly AGENT_INITIALIZED: 'agent:initialized';
+  readonly AGENT_CLEANUP: 'agent:cleanup';
+  readonly MESSAGE_USER: 'message:user';
+  readonly MESSAGE_ASSISTANT: 'message:assistant';
+  readonly MESSAGE_SYSTEM: 'message:system';
+  readonly TOOL_START: 'tool:start';
+  readonly TOOL_END: 'tool:end';
+  readonly TOOL_ERROR: 'tool:error';
+  readonly AI_STREAM_START: 'ai:stream:start';
+  readonly AI_STREAM_DELTA: 'ai:stream:delta';
+  readonly AI_STREAM_END: 'ai:stream:end';
+  readonly STORAGE_LOAD: 'storage:load';
+  readonly STORAGE_SAVE: 'storage:save';
+  readonly STORAGE_CLEAR: 'storage:clear';
+  readonly ITERATION_START: 'iteration:start';
+  readonly ITERATION_END: 'iteration:end';
+};
+
+/**
+ * Hook manager for event-driven integration
+ */
+export declare class HookManager {
+  constructor();
+
+  /**
+   * Register a hook callback
+   */
+  on(hookName: string, callback: (data: any) => void | Promise<void>): () => void;
+
+  /**
+   * Register a one-time hook callback
+   */
+  once(hookName: string, callback: (data: any) => void | Promise<void>): void;
+
+  /**
+   * Unregister a hook callback
+   */
+  off(hookName: string, callback: (data: any) => void | Promise<void>): void;
+
+  /**
+   * Emit a hook event
+   */
+  emit(hookName: string, data: any): Promise<void>;
+
+  /**
+   * Clear all hooks or hooks for a specific event
+   */
+  clear(hookName?: string): void;
 }
 
 /**
