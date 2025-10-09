@@ -8,6 +8,33 @@ use std::path::{Path, PathBuf};
 
 use probe_code::models::SearchResult;
 
+/// Determines whether caching should be skipped for a given format.
+///
+/// Currently, all formats use caching with query-scoped behavior (cache is
+/// scoped by both session ID and query hash). This function is provided for
+/// future extensibility if certain formats need to opt out of caching.
+///
+/// # Arguments
+/// * `format` - Optional format string (e.g., "outline", "json", "xml")
+///
+/// # Returns
+/// * `true` if caching should be skipped for this format
+/// * `false` if caching should be enabled (default behavior)
+#[allow(dead_code)]
+fn should_skip_caching(format: Option<&str>) -> bool {
+    // Currently, all formats use caching. This function exists for potential
+    // future use if we need to disable caching for specific formats.
+    //
+    // Example future usage:
+    // if let Some(fmt) = format {
+    //     matches!(fmt, "outline" | "outline-xml")
+    // } else {
+    //     false
+    // }
+    let _ = format; // Suppress unused parameter warning
+    false
+}
+
 /// Generate a deterministic hash for a query string
 /// This is used to create a unique identifier for each query
 /// Uses ahash with a fixed seed for consistent, fast cache keys across program runs
@@ -319,8 +346,13 @@ pub fn filter_results_with_cache(
     results: &[SearchResult],
     session_id: &str,
     query: &str,
-    _format: Option<&str>,
+    format: Option<&str>,
 ) -> Result<(Vec<SearchResult>, usize)> {
+    // Check if caching should be skipped for this format
+    if should_skip_caching(format) {
+        return Ok((results.to_vec(), 0));
+    }
+
     let query_hash = hash_query(query);
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -396,8 +428,13 @@ pub fn filter_matched_lines_with_cache(
     file_term_map: &mut HashMap<PathBuf, HashMap<usize, HashSet<usize>>>,
     session_id: &str,
     query: &str,
-    _format: Option<&str>,
+    format: Option<&str>,
 ) -> Result<usize> {
+    // Check if caching should be skipped for this format
+    if should_skip_caching(format) {
+        return Ok(0);
+    }
+
     let query_hash = hash_query(query);
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -547,8 +584,13 @@ pub fn add_results_to_cache(
     results: &[SearchResult],
     session_id: &str,
     query: &str,
-    _format: Option<&str>,
+    format: Option<&str>,
 ) -> Result<()> {
+    // Check if caching should be skipped for this format
+    if should_skip_caching(format) {
+        return Ok(());
+    }
+
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
     let query_hash = hash_query(query);
 
@@ -691,6 +733,17 @@ pub fn generate_session_id() -> Result<(&'static str, bool)> {
 mod tests {
     use super::*;
     use probe_code::models::SearchResult;
+
+    #[test]
+    fn test_should_skip_caching() {
+        // Currently, all formats should use caching (return false)
+        assert!(!should_skip_caching(None));
+        assert!(!should_skip_caching(Some("outline")));
+        assert!(!should_skip_caching(Some("outline-xml")));
+        assert!(!should_skip_caching(Some("json")));
+        assert!(!should_skip_caching(Some("xml")));
+        assert!(!should_skip_caching(Some("color")));
+    }
 
     #[test]
     fn test_path_normalization() {
