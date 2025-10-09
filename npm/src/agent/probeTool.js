@@ -224,19 +224,27 @@ export const listFilesTool = {
     // Security: Validate path to prevent traversal attacks
     const secureBaseDir = path.resolve(baseCwd);
 
+    // Check if this is a dependency path that should bypass workspace restrictions
+    const isDependencyPath = directory.startsWith('/dep/') ||
+                            directory.startsWith('go:') ||
+                            directory.startsWith('js:') ||
+                            directory.startsWith('rust:');
+
     // If directory is absolute, check if it's within the secure base directory
     // If it's relative, resolve it against the secure base directory
     let targetDir;
     if (path.isAbsolute(directory)) {
       targetDir = path.resolve(directory);
       // Check if the absolute path is within the secure base directory
-      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      // Allow dependency paths to bypass this restriction
+      if (!isDependencyPath && !targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
         throw new Error(`Path traversal attempt detected. Cannot access directory outside workspace: ${directory}`);
       }
     } else {
       targetDir = path.resolve(secureBaseDir, directory);
       // Double-check the resolved path is still within the secure base directory
-      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      // Allow dependency paths to bypass this restriction
+      if (!isDependencyPath && !targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
         throw new Error(`Path traversal attempt detected. Access denied: ${directory}`);
       }
     }
@@ -323,19 +331,27 @@ export const searchFilesTool = {
     const baseCwd = workingDirectory || process.cwd();
     const secureBaseDir = path.resolve(baseCwd);
 
+    // Check if this is a dependency path that should bypass workspace restrictions
+    const isDependencyPath = directory.startsWith('/dep/') ||
+                            directory.startsWith('go:') ||
+                            directory.startsWith('js:') ||
+                            directory.startsWith('rust:');
+
     // If directory is absolute, check if it's within the secure base directory
     // If it's relative, resolve it against the secure base directory
     let targetDir;
     if (path.isAbsolute(directory)) {
       targetDir = path.resolve(directory);
       // Check if the absolute path is within the secure base directory
-      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      // Allow dependency paths to bypass this restriction
+      if (!isDependencyPath && !targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
         throw new Error(`Path traversal attempt detected. Cannot access directory outside workspace: ${directory}`);
       }
     } else {
       targetDir = path.resolve(secureBaseDir, directory);
       // Double-check the resolved path is still within the secure base directory
-      if (!targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
+      // Allow dependency paths to bypass this restriction
+      if (!isDependencyPath && !targetDir.startsWith(secureBaseDir + path.sep) && targetDir !== secureBaseDir) {
         throw new Error(`Path traversal attempt detected. Access denied: ${directory}`);
       }
     }
