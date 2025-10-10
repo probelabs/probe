@@ -10,6 +10,8 @@ import { existsSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
 import { resolve, isAbsolute, dirname } from 'path';
 import { TokenCounter } from './tokenCounter.js';
+import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
+import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
 import { 
   createTools,
   searchToolDefinition,
@@ -80,6 +82,8 @@ export class ProbeAgent {
    * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
    * @param {Object} [options.mcpConfig] - MCP configuration object (overrides mcpConfigPath)
    * @param {Array} [options.mcpServers] - Deprecated, use mcpConfig instead
+   * @param {Object} [options.storageAdapter] - Custom storage adapter for history management
+   * @param {Object} [options.hooks] - Hook callbacks for events (e.g., {'tool:start': callback})
    */
   constructor(options = {}) {
     // Basic configuration
@@ -94,6 +98,19 @@ export class ProbeAgent {
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
+
+    // Storage adapter (defaults to in-memory)
+    this.storageAdapter = options.storageAdapter || new InMemoryStorageAdapter();
+
+    // Hook manager
+    this.hooks = new HookManager();
+
+    // Register hooks from options
+    if (options.hooks) {
+      for (const [hookName, callback] of Object.entries(options.hooks)) {
+        this.hooks.on(hookName, callback);
+      }
+    }
 
     // Bash configuration
     this.enableBash = !!options.enableBash;
@@ -152,9 +169,29 @@ export class ProbeAgent {
 
   /**
    * Initialize the agent asynchronously (must be called after constructor)
-   * This method initializes MCP and merges MCP tools into the tool list
+   * This method initializes MCP and merges MCP tools into the tool list, and loads history from storage
    */
   async initialize() {
+    // Load history from storage adapter
+    try {
+      const history = await this.storageAdapter.loadHistory(this.sessionId);
+      this.history = history;
+
+      if (this.debug && history.length > 0) {
+        console.log(`[DEBUG] Loaded ${history.length} messages from storage for session ${this.sessionId}`);
+      }
+
+      // Emit storage load hook
+      await this.hooks.emit(HOOK_TYPES.STORAGE_LOAD, {
+        sessionId: this.sessionId,
+        messages: history
+      });
+    } catch (error) {
+      console.error(`[ERROR] Failed to load history from storage:`, error);
+      // Continue with empty history if storage fails
+      this.history = [];
+    }
+
     // Initialize MCP if enabled and not already initialized
     if (this.enableMcp && !this._mcpInitialized) {
       this._mcpInitialized = true; // Prevent multiple initialization attempts
@@ -193,6 +230,12 @@ export class ProbeAgent {
         this.mcpBridge = null;
       }
     }
+
+    // Emit agent initialized hook
+    await this.hooks.emit(HOOK_TYPES.AGENT_INITIALIZED, {
+      sessionId: this.sessionId,
+      agent: this
+    });
   }
 
   /**
@@ -261,7 +304,8 @@ export class ProbeAgent {
     // Get API keys from environment variables
     const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
     const openaiApiKey = process.env.OPENAI_API_KEY;
-    const googleApiKey = process.env.GOOGLE_API_KEY;
+    // Support both GOOGLE_GENERATIVE_AI_API_KEY (official) and GOOGLE_API_KEY (legacy)
+    const googleApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY;
     const awsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
     const awsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
     const awsRegion = process.env.AWS_REGION;
@@ -320,7 +364,7 @@ export class ProbeAgent {
     } else if ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey) {
       this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
     } else {
-      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
+      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY (or GOOGLE_API_KEY), AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
     }
   }
 
@@ -1080,6 +1124,16 @@ When troubleshooting:
     }
 
     try {
+      // Track initial history length for storage
+      const oldHistoryLength = this.history.length;
+
+      // Emit user message hook
+      await this.hooks.emit(HOOK_TYPES.MESSAGE_USER, {
+        sessionId: this.sessionId,
+        message,
+        images
+      });
+
       // Generate system message
       const systemMessage = await this.getSystemMessage();
 
@@ -1196,9 +1250,13 @@ When troubleshooting:
               temperature: 0.3,
             });
 
-            // Collect the streamed response
+            // Collect the streamed response - stream all content for now
             for await (const delta of result.textStream) {
               assistantResponseContent += delta;
+              // For now, stream everything - we'll handle segmentation after tools execute
+              if (options.onStream) {
+                options.onStream(delta);
+              }
             }
 
             // Record token usage
@@ -1283,6 +1341,16 @@ When troubleshooting:
               const validation = attemptCompletionSchema.safeParse(params);
               if (validation.success) {
                 finalResult = validation.data.result;
+
+                // Stream the final result if callback is provided
+                if (options.onStream && finalResult) {
+                  const chunkSize = 50; // Characters per chunk for smoother streaming
+                  for (let i = 0; i < finalResult.length; i += chunkSize) {
+                    const chunk = finalResult.slice(i, Math.min(i + chunkSize, finalResult.length));
+                    options.onStream(chunk);
+                  }
+                }
+
                 if (this.debug) console.log(`[DEBUG] Task completed successfully with result: ${finalResult.substring(0, 100)}...`);
               } else {
                 console.error(`[ERROR] Invalid attempt_completion parameters:`, validation.error);
@@ -1365,12 +1433,13 @@ When troubleshooting:
                   console.error(`[DEBUG] ========================================\n`);
                 }
 
-                // Emit tool start event
+                // Emit tool start event with stream pause signal
                 this.events.emit('toolCall', {
                   timestamp: new Date().toISOString(),
                   name: toolName,
                   args: toolParams,
-                  status: 'started'
+                  status: 'started',
+                  pauseStream: true  // Signal to pause text streaming
                 });
                 
                 // Execute tool with tracing if available
@@ -1596,6 +1665,21 @@ IMPORTANT: When using <attempt_complete>, this must be the ONLY content in your 
 
       // Update token counter with final history
       this.tokenCounter.updateHistory(this.history);
+
+      // Save new messages to storage (save only the new ones added in this turn)
+      try {
+        const messagesToSave = currentMessages.slice(oldHistoryLength);
+        for (const message of messagesToSave) {
+          await this.storageAdapter.saveMessage(this.sessionId, message);
+          await this.hooks.emit(HOOK_TYPES.STORAGE_SAVE, {
+            sessionId: this.sessionId,
+            message
+          });
+        }
+      } catch (error) {
+        console.error(`[ERROR] Failed to save messages to storage:`, error);
+        // Continue even if storage fails
+      }
 
       // Schema handling - format response according to provided schema
       // Skip schema processing if result came from attempt_completion tool
@@ -2040,11 +2124,24 @@ Convert your previous response content into actual JSON data that follows this s
   /**
    * Clear conversation history and reset counters
    */
-  clearHistory() {
+  async clearHistory() {
+    // Clear in storage
+    try {
+      await this.storageAdapter.clearHistory(this.sessionId);
+    } catch (error) {
+      console.error(`[ERROR] Failed to clear history in storage:`, error);
+    }
+
+    // Clear in-memory
     this.history = [];
     this.tokenCounter.clear();
     clearToolExecutionData(this.sessionId);
-    
+
+    // Emit hook
+    await this.hooks.emit(HOOK_TYPES.STORAGE_CLEAR, {
+      sessionId: this.sessionId
+    });
+
     if (this.debug) {
       console.log(`[DEBUG] Cleared conversation history and reset counters for session ${this.sessionId}`);
     }
