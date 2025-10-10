@@ -36,6 +36,7 @@ fn test_merge_different_node_types() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+        lsp_info: None,
         parent_context: None,
         matched_lines: None,
     };
@@ -64,7 +65,8 @@ fn test_merge_different_node_types() {
     block_id: None,
     matched_keywords: None,
     tokenized_content: None,
-            parent_context: None,
+        lsp_info: None,
+        parent_context: None,
         matched_lines: None,
 };
 
@@ -93,7 +95,8 @@ fn test_merge_different_node_types() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        lsp_info: None,
+        parent_context: None,
         matched_lines: None,
     };
 
@@ -163,6 +166,7 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+        lsp_info: None,
         parent_context: None,
         matched_lines: None,
     };
@@ -193,7 +197,8 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        lsp_info: None,
+        parent_context: None,
         matched_lines: None,
     };
 
@@ -225,6 +230,7 @@ fn test_merge_with_gaps() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
+        lsp_info: None,
         parent_context: None,
         matched_lines: None,
     };
@@ -323,7 +329,8 @@ fn test_merge_overlapping_blocks() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        lsp_info: None,
+        parent_context: None,
         matched_lines: None,
     };
 
@@ -353,7 +360,8 @@ fn test_merge_overlapping_blocks() {
         block_id: None,
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        lsp_info: None,
+        parent_context: None,
         matched_lines: None,
     };
 
@@ -451,6 +459,7 @@ fn third_function() {
             question: None,
             exact: false,
             no_gitignore: false,
+            lsp: false,
         };
 
         // Run the search
@@ -529,7 +538,8 @@ fn test_merge_parent_child_blocks() {
         block_id: Some(0),
         matched_keywords: None,
         tokenized_content: None,
-            parent_context: None,
+        lsp_info: None,
+        parent_context: None,
         matched_lines: None,
     };
 
@@ -559,6 +569,7 @@ fn test_merge_parent_child_blocks() {
         block_id: Some(1),
         matched_keywords: None,
         tokenized_content: None,
+        lsp_info: None,
         parent_context: None,
         matched_lines: None,
     };

@@ -83,7 +83,7 @@ fn format_duration(duration: std::time::Duration) -> String {
 /// Create a QueryPlan from a raw query string. This fully parses the query into an AST,
 /// then extracts all terms (including excluded), and prepares a term-index map.
 pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_query::ParseError> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
     if debug_mode {
@@ -265,7 +265,7 @@ fn collect_all_terms(
     all_terms: &mut Vec<String>,
     excluded: &mut HashSet<String>,
 ) {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("DEBUG: Collecting terms from expression: {expr:?}");
@@ -339,7 +339,7 @@ fn collect_all_terms(
 /// This creates a single pattern that matches any of the terms using case-insensitive matching
 /// without word boundaries for more flexible matching
 pub fn build_combined_pattern(terms: &[String]) -> String {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
     if debug_mode {
@@ -391,7 +391,7 @@ pub fn build_combined_pattern(terms: &[String]) -> String {
 /// This creates a single combined pattern for all terms, regardless of whether they're
 /// required, optional, or negative.
 pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usize>)> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let start_time = Instant::now();
 
     if debug_mode {
@@ -418,18 +418,16 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
     if !terms.is_empty() {
         let combined_pattern = build_combined_pattern(&terms);
 
-        // Create a HashSet with indices of non-excluded terms
-        let all_indices: HashSet<usize> = terms
-            .iter()
-            .filter_map(|term| plan.term_indices.get(term).cloned())
-            .collect();
-
+        // IMPORTANT: Do not associate the combined pattern with all term indices.
+        // We cannot know which specific term matched from this pattern alone.
+        // Keep it for quick pre-filtering, but map it to an empty index set.
         if debug_mode {
-            println!("DEBUG: Created combined pattern for all terms: '{combined_pattern}'");
-            println!("DEBUG: Combined pattern includes indices: {all_indices:?}");
+            println!(
+                "DEBUG: Created combined pattern for all terms (no indices associated): '{combined_pattern}'"
+            );
         }
 
-        results.push((combined_pattern, all_indices));
+        results.push((combined_pattern, HashSet::new()));
 
         // Continue to generate individual patterns instead of returning early
     }
@@ -485,8 +483,8 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
                         results.push((pattern, HashSet::from([idx])));
 
-                        // Only tokenize if not exact
-                        if !*exact {
+                        // Only tokenize if not exact and not excluded
+                        if !*exact && !*excluded {
                             // Generate patterns for each token of the term to match AST tokenization
                             let tokens = crate::search::tokenization::tokenize_and_stem(keyword);
 
@@ -508,7 +506,13 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                                 results.push((pattern, HashSet::from([idx])));
                             }
                         } else if debug_mode {
-                            println!("DEBUG: Skipping tokenization for exact term '{keyword}'");
+                            if *excluded {
+                                println!(
+                                    "DEBUG: Skipping tokenization for excluded term '{keyword}' to avoid false positives"
+                                );
+                            } else {
+                                println!("DEBUG: Skipping tokenization for exact term '{keyword}'");
+                            }
                         }
                     }
                 }

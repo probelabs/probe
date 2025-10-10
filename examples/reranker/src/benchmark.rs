@@ -1,13 +1,13 @@
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::Parser;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use walkdir::WalkDir;
 
-use crate::reranker::BertReranker;
-use crate::bert_simulator::{BertSimulator, BertPerformanceStats};
+use crate::bert_simulator::{BertPerformanceStats, BertSimulator};
 use crate::parallel_reranker::ParallelBertReranker;
+use crate::reranker::BertReranker;
 
 #[derive(Parser, Clone)]
 #[command(name = "benchmark")]
@@ -90,9 +90,18 @@ impl BenchmarkResult {
         println!("\n=== RERANKER PERFORMANCE BENCHMARK ===");
         println!("Documents processed: {}", self.docs_processed);
         println!("Total time: {:.2}s", self.total_time.as_secs_f64());
-        println!("Model loading time: {:.2}s", self.model_loading_time.as_secs_f64());
-        println!("Actual reranking time: {:.2}s", self.actual_reranking_time.as_secs_f64());
-        println!("Average time per document: {:.2}ms", self.avg_time_per_doc.as_millis());
+        println!(
+            "Model loading time: {:.2}s",
+            self.model_loading_time.as_secs_f64()
+        );
+        println!(
+            "Actual reranking time: {:.2}s",
+            self.actual_reranking_time.as_secs_f64()
+        );
+        println!(
+            "Average time per document: {:.2}ms",
+            self.avg_time_per_doc.as_millis()
+        );
         println!("Throughput: {:.2} docs/second", self.docs_per_second);
         println!("=======================================");
     }
@@ -203,12 +212,14 @@ pub async fn run_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult> {
         (None, Some(simulator), None)
     } else if args.parallel || args.compare_modes {
         println!("Loading parallel BERT model...");
-        let parallel_reranker = ParallelBertReranker::new(&args.model, args.num_threads).await
+        let parallel_reranker = ParallelBertReranker::new(&args.model, args.num_threads)
+            .await
             .context("Failed to load parallel BERT model")?;
         (None, None, Some(parallel_reranker))
     } else {
         println!("Loading BERT model...");
-        let reranker = BertReranker::new(&args.model).await
+        let reranker = BertReranker::new(&args.model)
+            .await
             .context("Failed to load BERT model")?;
         (Some(reranker), None, None)
     };
@@ -234,30 +245,40 @@ pub async fn run_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult> {
                 .collect();
 
             if args.compare_modes {
-                println!("Running comparison: parallel vs sequential (iteration {}/{})", iteration, args.iterations);
+                println!(
+                    "Running comparison: parallel vs sequential (iteration {}/{})",
+                    iteration, args.iterations
+                );
 
                 // Run sequential first
                 let seq_start = Instant::now();
-                let _seq_results = parallel_reranker.rerank_sequential(&args.query, &docs)
+                let _seq_results = parallel_reranker
+                    .rerank_sequential(&args.query, &docs)
                     .context("Failed to rerank documents sequentially")?;
                 let seq_time = seq_start.elapsed();
 
                 // Run parallel
                 let par_start = Instant::now();
-                let _par_results = parallel_reranker.rerank_parallel(&args.query, &docs)
+                let _par_results = parallel_reranker
+                    .rerank_parallel(&args.query, &docs)
                     .context("Failed to rerank documents in parallel")?;
                 let par_time = par_start.elapsed();
 
-                println!("  Sequential: {:.2}s ({:.1} docs/sec)",
-                         seq_time.as_secs_f64(),
-                         total_docs as f64 / seq_time.as_secs_f64());
-                println!("  Parallel:   {:.2}s ({:.1} docs/sec) - {:.1}x speedup",
-                         par_time.as_secs_f64(),
-                         total_docs as f64 / par_time.as_secs_f64(),
-                         seq_time.as_secs_f64() / par_time.as_secs_f64());
+                println!(
+                    "  Sequential: {:.2}s ({:.1} docs/sec)",
+                    seq_time.as_secs_f64(),
+                    total_docs as f64 / seq_time.as_secs_f64()
+                );
+                println!(
+                    "  Parallel:   {:.2}s ({:.1} docs/sec) - {:.1}x speedup",
+                    par_time.as_secs_f64(),
+                    total_docs as f64 / par_time.as_secs_f64(),
+                    seq_time.as_secs_f64() / par_time.as_secs_f64()
+                );
             } else {
                 // Just run parallel
-                let _results = parallel_reranker.rerank_parallel(&args.query, &docs)
+                let _results = parallel_reranker
+                    .rerank_parallel(&args.query, &docs)
                     .context("Failed to rerank documents in parallel")?;
             }
         } else if let Some(ref reranker) = reranker {
@@ -270,7 +291,9 @@ pub async fn run_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult> {
                     .map(|d| d.content.as_str())
                     .collect();
 
-                let _results = reranker.rerank(&args.query, &batch_docs).await
+                let _results = reranker
+                    .rerank(&args.query, &batch_docs)
+                    .await
                     .context("Failed to rerank documents")?;
 
                 batch_start = batch_end;
@@ -299,13 +322,21 @@ pub async fn run_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResult> {
         let iteration_time = iteration_start.elapsed();
         iteration_times.push(iteration_time);
 
-        println!("Iteration {} completed in {:.2}s (reranking: {:.2}s)",
-                 iteration, iteration_time.as_secs_f64(), rerank_time.as_secs_f64());
+        println!(
+            "Iteration {} completed in {:.2}s (reranking: {:.2}s)",
+            iteration,
+            iteration_time.as_secs_f64(),
+            rerank_time.as_secs_f64()
+        );
     }
 
     // Calculate results
     let avg_iteration_time = Duration::from_nanos(
-        iteration_times.iter().map(|d| d.as_nanos() as u64).sum::<u64>() / args.iterations as u64
+        iteration_times
+            .iter()
+            .map(|d| d.as_nanos() as u64)
+            .sum::<u64>()
+            / args.iterations as u64,
     );
 
     let avg_reranking_time = total_reranking_time / args.iterations as u32;
@@ -367,8 +398,11 @@ pub fn print_document_stats(documents: &[Document]) {
     println!("Total documents: {}", documents.len());
     println!("Total size: {:.2} KB", total_bytes as f64 / 1024.0);
     println!("Average size: {:.2} KB", avg_bytes as f64 / 1024.0);
-    println!("Size range: {:.2} KB - {:.2} KB",
-             min_bytes as f64 / 1024.0, max_bytes as f64 / 1024.0);
+    println!(
+        "Size range: {:.2} KB - {:.2} KB",
+        min_bytes as f64 / 1024.0,
+        max_bytes as f64 / 1024.0
+    );
 
     // Show file type distribution
     let mut extensions = std::collections::HashMap::new();
@@ -392,9 +426,18 @@ pub async fn run_multi_model_comparison(args: BenchmarkArgs) -> Result<Benchmark
     println!("==============================");
 
     let models = vec![
-        ("cross-encoder/ms-marco-TinyBERT-L-2-v2", "TinyBERT-L2 (~4M params, fastest)"),
-        ("cross-encoder/ms-marco-MiniLM-L-2-v2", "MiniLM-L2 (~22M params, balanced)"),
-        ("cross-encoder/ms-marco-MiniLM-L-6-v2", "MiniLM-L6 (~85M params, most accurate)"),
+        (
+            "cross-encoder/ms-marco-TinyBERT-L-2-v2",
+            "TinyBERT-L2 (~4M params, fastest)",
+        ),
+        (
+            "cross-encoder/ms-marco-MiniLM-L-2-v2",
+            "MiniLM-L2 (~22M params, balanced)",
+        ),
+        (
+            "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "MiniLM-L6 (~85M params, most accurate)",
+        ),
     ];
 
     // Collect documents
@@ -403,7 +446,11 @@ pub async fn run_multi_model_comparison(args: BenchmarkArgs) -> Result<Benchmark
 
     print_document_stats(&documents);
 
-    println!("\nComparing {} models with {} documents...", models.len(), total_docs);
+    println!(
+        "\nComparing {} models with {} documents...",
+        models.len(),
+        total_docs
+    );
     println!("Query: '{}'", args.query);
     println!("Iterations: {}", args.iterations);
 
@@ -424,9 +471,18 @@ pub async fn run_multi_model_comparison(args: BenchmarkArgs) -> Result<Benchmark
 
         println!("\n📊 {} Results:", model_desc);
         println!("  Throughput: {:.2} docs/second", result.docs_per_second);
-        println!("  Avg time per doc: {:.0}ms", result.avg_time_per_doc.as_millis());
-        println!("  Model loading: {:.2}s", result.model_loading_time.as_secs_f64());
-        println!("  Total time: {:.2}s", result.actual_reranking_time.as_secs_f64());
+        println!(
+            "  Avg time per doc: {:.0}ms",
+            result.avg_time_per_doc.as_millis()
+        );
+        println!(
+            "  Model loading: {:.2}s",
+            result.model_loading_time.as_secs_f64()
+        );
+        println!(
+            "  Total time: {:.2}s",
+            result.actual_reranking_time.as_secs_f64()
+        );
 
         all_results.push((model_name, model_desc, result));
     }
@@ -434,25 +490,37 @@ pub async fn run_multi_model_comparison(args: BenchmarkArgs) -> Result<Benchmark
     // Print comparison summary
     println!("\n🏆 MULTI-MODEL PERFORMANCE COMPARISON");
     println!("=====================================");
-    println!("{:<25} {:<15} {:<15} {:<15}", "Model", "Throughput", "Per-Doc Time", "Loading Time");
+    println!(
+        "{:<25} {:<15} {:<15} {:<15}",
+        "Model", "Throughput", "Per-Doc Time", "Loading Time"
+    );
     println!("{}", "-".repeat(75));
 
     for (model_name, model_desc, result) in &all_results {
-        println!("{:<25} {:<15.2} {:<15.0} {:<15.2}",
-                 model_desc.split(' ').next().unwrap_or(model_name),
-                 result.docs_per_second,
-                 result.avg_time_per_doc.as_millis(),
-                 result.model_loading_time.as_secs_f64());
+        println!(
+            "{:<25} {:<15.2} {:<15.0} {:<15.2}",
+            model_desc.split(' ').next().unwrap_or(model_name),
+            result.docs_per_second,
+            result.avg_time_per_doc.as_millis(),
+            result.model_loading_time.as_secs_f64()
+        );
     }
 
     // Find fastest model
-    let fastest = all_results.iter()
-        .max_by(|a, b| a.2.docs_per_second.partial_cmp(&b.2.docs_per_second).unwrap())
+    let fastest = all_results
+        .iter()
+        .max_by(|a, b| {
+            a.2.docs_per_second
+                .partial_cmp(&b.2.docs_per_second)
+                .unwrap()
+        })
         .unwrap();
 
-    println!("\n🥇 WINNER: {} ({:.2} docs/sec)",
-             fastest.1.split(' ').next().unwrap(),
-             fastest.2.docs_per_second);
+    println!(
+        "\n🥇 WINNER: {} ({:.2} docs/sec)",
+        fastest.1.split(' ').next().unwrap(),
+        fastest.2.docs_per_second
+    );
 
     // Return the first result (just for consistency)
     Ok(all_results.into_iter().next().unwrap().2)
@@ -473,11 +541,13 @@ async fn run_single_model_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResu
         let simulator = BertSimulator::new();
         (None, Some(simulator), None)
     } else if args.parallel || args.compare_modes {
-        let parallel_reranker = ParallelBertReranker::new(&args.model, args.num_threads).await
+        let parallel_reranker = ParallelBertReranker::new(&args.model, args.num_threads)
+            .await
             .context("Failed to load parallel BERT model")?;
         (None, None, Some(parallel_reranker))
     } else {
-        let reranker = BertReranker::new(&args.model).await
+        let reranker = BertReranker::new(&args.model)
+            .await
             .context("Failed to load BERT model")?;
         (Some(reranker), None, None)
     };
@@ -497,7 +567,8 @@ async fn run_single_model_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResu
                 .iter()
                 .map(|d| d.content.as_str())
                 .collect();
-            let _results = parallel_reranker.rerank_parallel(&args.query, &docs)
+            let _results = parallel_reranker
+                .rerank_parallel(&args.query, &docs)
                 .context("Failed to rerank documents in parallel")?;
         } else if let Some(ref reranker) = reranker {
             let mut batch_start = 0;
@@ -507,7 +578,9 @@ async fn run_single_model_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResu
                     .iter()
                     .map(|d| d.content.as_str())
                     .collect();
-                let _results = reranker.rerank(&args.query, &batch_docs).await
+                let _results = reranker
+                    .rerank(&args.query, &batch_docs)
+                    .await
                     .context("Failed to rerank documents")?;
                 batch_start = batch_end;
             }
@@ -534,7 +607,11 @@ async fn run_single_model_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResu
 
     // Calculate results
     let avg_iteration_time = Duration::from_nanos(
-        iteration_times.iter().map(|d| d.as_nanos() as u64).sum::<u64>() / args.iterations as u64
+        iteration_times
+            .iter()
+            .map(|d| d.as_nanos() as u64)
+            .sum::<u64>()
+            / args.iterations as u64,
     );
 
     let avg_reranking_time = total_reranking_time / args.iterations as u32;
@@ -550,4 +627,3 @@ async fn run_single_model_benchmark(args: BenchmarkArgs) -> Result<BenchmarkResu
         actual_reranking_time: avg_reranking_time,
     })
 }
-

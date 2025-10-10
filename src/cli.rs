@@ -1,4 +1,5 @@
 use clap::{Parser as ClapParser, Subcommand};
+use probe_code::lsp_integration::LspSubcommands;
 use std::path::PathBuf;
 
 #[derive(ClapParser, Debug)]
@@ -91,6 +92,10 @@ pub struct Args {
     /// Natural language question for BERT reranking (requires --features bert-reranker)
     #[arg(long = "question")]
     pub question: Option<String>,
+
+    /// Enable LSP integration for enhanced symbol information
+    #[arg(long = "lsp")]
+    pub lsp: bool,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -212,6 +217,10 @@ pub enum Commands {
         /// Natural language question for BERT reranking (requires --features bert-reranker)
         #[arg(long = "question")]
         question: Option<String>,
+
+        /// Enable LSP integration for enhanced symbol information
+        #[arg(long = "lsp")]
+        lsp: bool,
     },
 
     /// Extract code blocks from files
@@ -277,6 +286,14 @@ pub enum Commands {
         /// User instructions for LLM models
         #[arg(long = "instructions")]
         instructions: Option<String>,
+
+        /// Enable LSP integration for call hierarchy and reference graphs
+        #[arg(long = "lsp")]
+        lsp: bool,
+
+        /// Include standard library references in LSP results (when using --lsp flag)
+        #[arg(long = "include-stdlib")]
+        include_stdlib: bool,
     },
 
     /// Search code using AST patterns for precise structural matching
@@ -371,14 +388,25 @@ pub enum Commands {
         fast: bool,
     },
 
-    /// Search for patterns in files (ripgrep-style output)
+    /// Manage LSP daemon and language servers
     ///
-    /// This command provides grep/ripgrep-compatible output format.
-    /// It searches for regex patterns in files and displays results in the classic
-    /// grep format: filename:line_number:matching_line
+    /// This command provides tools for managing the LSP daemon that powers
+    /// call hierarchy and reference graph features. Use it to check daemon status,
+    /// restart servers, or troubleshoot LSP integration issues.
+    Lsp {
+        #[command(subcommand)]
+        subcommand: LspSubcommands,
+    },
+
+    /// Manage probe configuration
     ///
-    /// Unlike the 'search' command which uses AST parsing and semantic ranking,
-    /// this command performs simple line-based pattern matching with fast output.
+    /// This command provides tools for managing probe's configuration settings.
+    /// Use it to view the current configuration, validate config files, or
+    /// see what environment variables and config file settings are in effect.
+    Config {
+        #[command(subcommand)]
+        subcommand: ConfigSubcommands,
+    },
     Grep {
         /// Pattern to search for (regex supported)
         #[arg(value_name = "PATTERN")]
@@ -439,5 +467,60 @@ pub enum Commands {
         /// Maximum number of matches to show
         #[arg(short = 'm', long = "max-count")]
         max_count: Option<usize>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigSubcommands {
+    /// Show the current effective configuration
+    Show {
+        /// Output format
+        #[arg(short = 'o', long = "format", default_value = "json", value_parser = ["json", "env"])]
+        format: String,
+    },
+
+    /// Validate the configuration file
+    Validate {
+        /// Path to config file to validate (defaults to ~/.config/probe/config.json)
+        #[arg(short = 'f', long = "file")]
+        file: Option<String>,
+    },
+
+    /// Set a configuration value
+    Set {
+        /// Configuration key in dot notation (e.g., "search.max_results", "lsp.enable_lsp")
+        key: String,
+
+        /// Value to set (will be parsed based on the key type)
+        value: String,
+
+        /// Configuration scope
+        #[arg(short = 's', long = "scope", default_value = "user", value_parser = ["user", "project", "local"])]
+        scope: String,
+
+        /// Force creation of config file if it doesn't exist
+        #[arg(short = 'f', long = "force")]
+        force: bool,
+    },
+
+    /// Get a specific configuration value
+    Get {
+        /// Configuration key in dot notation (e.g., "search.max_results", "lsp.enable_lsp")
+        key: String,
+
+        /// Show the source of the configuration value
+        #[arg(long = "show-source")]
+        show_source: bool,
+    },
+
+    /// Reset configuration to defaults
+    Reset {
+        /// Configuration scope to reset
+        #[arg(short = 's', long = "scope", default_value = "user", value_parser = ["user", "project", "local", "all"])]
+        scope: String,
+
+        /// Force reset without confirmation
+        #[arg(short = 'f', long = "force")]
+        force: bool,
     },
 }
