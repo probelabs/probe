@@ -21,7 +21,7 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 # GitHub repository information
-REPO_OWNER="buger"
+REPO_OWNER="probelabs"
 REPO_NAME="probe"
 BINARY_NAME="probe"
 INSTALL_DIR="/usr/local/bin"
