@@ -82,7 +82,7 @@ The package installs the actual probe binary, not a JavaScript wrapper, so you g
 ProbeAgent provides a high-level AI-powered interface for interacting with your codebase:
 
 ```javascript
-import { ProbeAgent } from '@buger/probe';
+import { ProbeAgent } from '@probelabs/probe';
 
 // Create an AI agent for your project
 const agent = new ProbeAgent({

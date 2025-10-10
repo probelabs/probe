@@ -25,7 +25,7 @@ Write-ColorOutput -Message "|                                               |" -
 Write-ColorOutput -Message "+-----------------------------------------------+" -Color 'Cyan'
 
 # GitHub repository information
-$RepoOwner = "buger"
+$RepoOwner = "probelabs"
 $RepoName = "probe"
 $BinaryName = "probe"
 $DefaultSystemDir = "$env:ProgramFiles\Probe"  # Default system-wide install directory
