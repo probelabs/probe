@@ -314,7 +314,7 @@ export class ProbeAgent {
 
     // Get custom API URLs if provided
     const llmBaseUrl = process.env.LLM_BASE_URL;
-    const anthropicApiUrl = process.env.ANTHROPIC_API_URL || llmBaseUrl;
+    const anthropicApiUrl = process.env.ANTHROPIC_API_URL || process.env.ANTHROPIC_BASE_URL || llmBaseUrl;
     const openaiApiUrl = process.env.OPENAI_API_URL || llmBaseUrl;
     const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;
     const awsBedrockBaseUrl = process.env.AWS_BEDROCK_BASE_URL || llmBaseUrl;
