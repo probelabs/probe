@@ -1152,11 +1152,28 @@ When troubleshooting:
       }
 
       // Initialize conversation with existing history + new user message
-      let currentMessages = [
-        { role: 'system', content: systemMessage },
-        ...this.history, // Include previous conversation history
-        userMessage
-      ];
+      // If history already contains a system message (from session cloning), reuse it for cache efficiency
+      // Otherwise add a fresh system message
+      const hasSystemMessage = this.history.length > 0 && this.history[0].role === 'system';
+      let currentMessages;
+
+      if (hasSystemMessage) {
+        // Reuse existing system message from history for cache efficiency
+        currentMessages = [
+          ...this.history,
+          userMessage
+        ];
+        if (this.debug) {
+          console.log('[DEBUG] Reusing existing system message from history for cache efficiency');
+        }
+      } else {
+        // Add fresh system message (first call or empty history)
+        currentMessages = [
+          { role: 'system', content: systemMessage },
+          ...this.history, // Include previous conversation history
+          userMessage
+        ];
+      }
 
       let currentIteration = 0;
       let completionAttempted = false;
@@ -2145,6 +2162,163 @@ Convert your previous response content into actual JSON data that follows this s
     if (this.debug) {
       console.log(`[DEBUG] Cleared conversation history and reset counters for session ${this.sessionId}`);
     }
+  }
+
+  /**
+   * Clone this agent's session to create a new agent with shared conversation history
+   * @param {Object} options - Clone options
+   * @param {string} [options.sessionId] - Session ID for the cloned agent (defaults to new UUID)
+   * @param {boolean} [options.stripInternalMessages=true] - Remove internal messages (schema reminders, mermaid fixes, etc.)
+   * @param {boolean} [options.keepSystemMessage=true] - Keep the system message in cloned history
+   * @param {boolean} [options.deepCopy=true] - Deep copy messages to prevent mutations
+   * @param {Object} [options.overrides] - Override any ProbeAgent constructor options
+   * @returns {ProbeAgent} New agent instance with cloned history
+   */
+  clone(options = {}) {
+    const {
+      sessionId = randomUUID(),
+      stripInternalMessages = true,
+      keepSystemMessage = true,
+      deepCopy = true,
+      overrides = {}
+    } = options;
+
+    // Clone the history
+    let clonedHistory = deepCopy
+      ? JSON.parse(JSON.stringify(this.history))
+      : [...this.history];
+
+    // Strip internal messages if requested
+    if (stripInternalMessages) {
+      clonedHistory = this._stripInternalMessages(clonedHistory, keepSystemMessage);
+    }
+
+    // Create new agent with same configuration
+    const clonedAgent = new ProbeAgent({
+      // Copy current agent's config
+      customPrompt: this.customPrompt,
+      promptType: this.promptType,
+      allowEdit: this.allowEdit,
+      path: this.allowedFolders[0], // Use first allowed folder as primary path
+      allowedFolders: [...this.allowedFolders],
+      provider: this.clientApiProvider,
+      model: this.modelName,
+      debug: this.debug,
+      outline: this.outline,
+      maxResponseTokens: this.maxResponseTokens,
+      maxIterations: this.maxIterations,
+      disableMermaidValidation: this.disableMermaidValidation,
+      enableMcp: !!this.mcpBridge,
+      mcpConfig: this.mcpConfig,
+      enableBash: this.enableBash,
+      bashConfig: this.bashConfig,
+      storageAdapter: this.storageAdapter,
+      // Override with any provided options
+      sessionId,
+      ...overrides
+    });
+
+    // Set the cloned history directly (before initialization to avoid overwriting)
+    clonedAgent.history = clonedHistory;
+
+    if (this.debug) {
+      console.log(`[DEBUG] Cloned session ${this.sessionId} -> ${sessionId}`);
+      console.log(`[DEBUG] Cloned ${clonedHistory.length} messages (stripInternal: ${stripInternalMessages})`);
+    }
+
+    return clonedAgent;
+  }
+
+  /**
+   * Internal method to strip internal/temporary messages from history
+   * Removes: schema reminders, mermaid fix prompts, tool use reminders, etc.
+   * Keeps: system message, user messages, assistant responses, tool results
+   * @private
+   */
+  _stripInternalMessages(history, keepSystemMessage = true) {
+    const filtered = [];
+
+    for (let i = 0; i < history.length; i++) {
+      const message = history[i];
+
+      // Handle system message
+      if (message.role === 'system') {
+        if (keepSystemMessage) {
+          filtered.push(message);
+        } else if (this.debug) {
+          console.log(`[DEBUG] Removing system message at index ${i}`);
+        }
+        continue;
+      }
+
+      // Check if this is an internal message that should be stripped
+      if (this._isInternalMessage(message, i, history)) {
+        if (this.debug) {
+          console.log(`[DEBUG] Stripping internal message at index ${i}: ${message.role}`);
+        }
+        continue;
+      }
+
+      // Keep this message
+      filtered.push(message);
+    }
+
+    return filtered;
+  }
+
+  /**
+   * Determine if a message is an internal/temporary message
+   * @private
+   */
+  _isInternalMessage(message, index, history) {
+    if (message.role !== 'user') {
+      return false; // Only user messages can be internal reminders
+    }
+
+    // Handle null/undefined content
+    if (!message.content) {
+      return false;
+    }
+
+    const content = typeof message.content === 'string'
+      ? message.content
+      : JSON.stringify(message.content);
+
+    // Schema reminder messages
+    if (content.includes('IMPORTANT: A schema was provided') ||
+        content.includes('You MUST respond with data that matches this schema') ||
+        content.includes('Your response must conform to this schema:')) {
+      return true;
+    }
+
+    // Tool use reminder messages
+    if (content.includes('Please use one of the available tools') &&
+        content.includes('or use attempt_completion') &&
+        content.includes('Remember: Use proper XML format')) {
+      return true;
+    }
+
+    // Mermaid fix prompts
+    if (content.includes('The mermaid diagram in your response has syntax errors') ||
+        content.includes('Please fix the mermaid syntax errors') ||
+        content.includes('Here is the corrected version:')) {
+      return true;
+    }
+
+    // JSON correction prompts
+    if (content.includes('Your response does not match the expected JSON schema') ||
+        content.includes('Please provide a valid JSON response') ||
+        content.includes('Schema validation error:')) {
+      return true;
+    }
+
+    // Empty attempt_complete reminders
+    if (content.includes('When using <attempt_complete>') &&
+        content.includes('this must be the ONLY content in your response')) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
