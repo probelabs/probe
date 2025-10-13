@@ -112,6 +112,22 @@ export interface AnswerOptions {
 }
 
 /**
+ * Clone options for creating a new agent with shared history
+ */
+export interface CloneOptions {
+  /** Session ID for the cloned agent (defaults to new UUID) */
+  sessionId?: string;
+  /** Remove internal messages (schema reminders, mermaid fixes, etc.) */
+  stripInternalMessages?: boolean;
+  /** Keep the system message in cloned history */
+  keepSystemMessage?: boolean;
+  /** Deep copy messages to prevent mutations */
+  deepCopy?: boolean;
+  /** Override any ProbeAgent constructor options */
+  overrides?: Partial<ProbeAgentOptions>;
+}
+
+/**
  * ProbeAgent class - AI-powered code exploration and interaction
  */
 export declare class ProbeAgent {
@@ -183,6 +199,13 @@ export declare class ProbeAgent {
    * @param messages - Array of chat messages
    */
   setHistory(messages: ChatMessage[]): void;
+
+  /**
+   * Clone this agent's session to create a new agent with shared conversation history
+   * @param options - Clone options
+   * @returns New agent instance with cloned history
+   */
+  clone(options?: CloneOptions): ProbeAgent;
 }
 
 /**
