@@ -302,7 +302,8 @@ export class ProbeAgent {
     }
 
     // Get API keys from environment variables
-    const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    // Support both ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN (used by Z.AI)
+    const anthropicApiKey = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN;
     const openaiApiKey = process.env.OPENAI_API_KEY;
     // Support both GOOGLE_GENERATIVE_AI_API_KEY (official) and GOOGLE_API_KEY (legacy)
     const googleApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.GOOGLE_API_KEY;
@@ -364,7 +365,7 @@ export class ProbeAgent {
     } else if ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey) {
       this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
     } else {
-      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY (or GOOGLE_API_KEY), AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
+      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN), OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY (or GOOGLE_API_KEY), AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
     }
   }
 
