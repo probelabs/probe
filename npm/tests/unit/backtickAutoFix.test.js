@@ -14,18 +14,18 @@ describe('Mermaid Auto-Fix - Backticks', () => {
 
 
 
-    test('should not modify already quoted backticks', async () => {
+    test('should remove backticks from quoted labels', async () => {
       const response = `\`\`\`mermaid
 flowchart TD
     A["Already quoted \`backticks\`"] --> B{"Also quoted \`here\`"}
 \`\`\``;
 
       const result = await validateAndFixMermaidResponse(response, mockOptions);
-      
-      // Even if already quoted, it might go through validation but should remain the same
-      // The key is that the output should have proper quotes
-      expect(result.fixedResponse).toContain('A["Already quoted `backticks`"]');
-      expect(result.fixedResponse).toContain('B{"Also quoted `here`"}');
+
+      // @probelabs/maid v0.0.15+ treats backticks inside quoted labels as errors (FL-LABEL-BACKTICK)
+      // and removes them during auto-fix. This is the expected behavior.
+      expect(result.fixedResponse).toContain('A["Already quoted backticks"]');
+      expect(result.fixedResponse).toContain('B{"Also quoted here"}');
     });
 
   });
