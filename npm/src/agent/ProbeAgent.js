@@ -1152,11 +1152,28 @@ When troubleshooting:
       }
 
       // Initialize conversation with existing history + new user message
-      let currentMessages = [
-        { role: 'system', content: systemMessage },
-        ...this.history, // Include previous conversation history
-        userMessage
-      ];
+      // If history already contains a system message (from session cloning), reuse it for cache efficiency
+      // Otherwise add a fresh system message
+      const hasSystemMessage = this.history.length > 0 && this.history[0].role === 'system';
+      let currentMessages;
+
+      if (hasSystemMessage) {
+        // Reuse existing system message from history for cache efficiency
+        currentMessages = [
+          ...this.history,
+          userMessage
+        ];
+        if (this.debug) {
+          console.log('[DEBUG] Reusing existing system message from history for cache efficiency');
+        }
+      } else {
+        // Add fresh system message (first call or empty history)
+        currentMessages = [
+          { role: 'system', content: systemMessage },
+          ...this.history, // Include previous conversation history
+          userMessage
+        ];
+      }
 
       let currentIteration = 0;
       let completionAttempted = false;
