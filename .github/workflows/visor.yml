@@ -27,4 +27,10 @@ jobs:
           installation-id: ${{ secrets.APP_INSTALLATION_ID }}
           debug: 'true'
         env:
-          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          # AI Provider API Keys (configure one of these in your repository secrets)
+          # GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.GLM_API_KEY }}
+          ANTHROPIC_BASE_URL: 'https://api.z.ai/api/anthropic'
+          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Optional: Specify the AI model to use
+          MODEL_NAME: 'glm-4.6'
