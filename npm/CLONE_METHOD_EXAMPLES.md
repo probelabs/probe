@@ -1,6 +1,40 @@
-# ProbeAgent Clone Method Examples
+# ProbeAgent Session Cloning Guide
 
 The `clone()` method provides a native, intelligent way to clone ProbeAgent sessions with automatic filtering of internal messages.
+
+## Migration from Manual Cloning
+
+If you were previously cloning sessions manually, here's how to migrate:
+
+### Before (Manual Approach)
+```javascript
+// Create new agent
+const clonedAgent = new ProbeAgent({
+  sessionId: 'clone-id',
+  path: './src'
+});
+
+await clonedAgent.initialize();
+
+// Manually copy history (includes internal messages!)
+clonedAgent.history = [...baseAgent.history];
+
+// Use the clone
+await clonedAgent.answer('Continue working...');
+```
+
+### After (Native Method)
+```javascript
+// One line - automatically filters internal messages!
+const clonedAgent = baseAgent.clone({
+  sessionId: 'clone-id'  // Optional, auto-generates if not provided
+});
+
+await clonedAgent.initialize();
+
+// Use the clone with clean history
+await clonedAgent.answer('Continue working...');
+```
 
 ## Why Use the Clone Method?
 
@@ -546,21 +580,6 @@ const options: CloneOptions = {
 };
 
 const clonedAgent: ProbeAgent = baseAgent.clone(options);
-```
-
-## Migration from Manual Cloning
-
-### Before (Manual)
-```javascript
-const clonedAgent = new ProbeAgent({ sessionId: 'clone', path: './src' });
-await clonedAgent.initialize();
-clonedAgent.history = [...baseAgent.history]; // Includes internal messages!
-```
-
-### After (Native)
-```javascript
-const clonedAgent = baseAgent.clone(); // Automatically filters internal messages
-await clonedAgent.initialize();
 ```
 
 ## Summary
