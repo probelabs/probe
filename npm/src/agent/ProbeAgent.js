@@ -2264,28 +2264,17 @@ Convert your previous response content into actual JSON data that follows this s
       return this._stripNonSchemaInternalMessages(history, keepSystemMessage);
     }
 
-    // Truncate at the first schema message
-    const filtered = [];
+    // Truncate at the first schema message, then also filter non-schema internal messages
+    // from the remaining history before the schema
+    const truncated = history.slice(0, firstSchemaMessageIndex);
 
-    for (let i = 0; i < firstSchemaMessageIndex; i++) {
-      const message = history[i];
-
-      // Handle system message
-      if (message.role === 'system') {
-        if (keepSystemMessage) {
-          filtered.push(message);
-        } else if (this.debug) {
-          console.log(`[DEBUG] Removing system message at index ${i}`);
-        }
-        continue;
-      }
-
-      filtered.push(message);
-    }
+    // Now filter non-schema internal messages from the truncated history
+    const filtered = this._stripNonSchemaInternalMessages(truncated, keepSystemMessage);
 
     if (this.debug) {
       const removedCount = history.length - filtered.length;
-      console.log(`[DEBUG] Truncated ${removedCount} messages starting from first schema message`);
+      console.log(`[DEBUG] Truncated at schema message (index ${firstSchemaMessageIndex}) and filtered non-schema internal messages`);
+      console.log(`[DEBUG] Removed ${removedCount} messages total (${history.length} → ${filtered.length})`);
     }
 
     return filtered;
