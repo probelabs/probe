@@ -560,5 +560,160 @@ export interface ProbeAgentEvents {
   removeAllListeners(event?: 'toolCall'): this;
 }
 
+/**
+ * Simple telemetry configuration (no OpenTelemetry dependencies)
+ */
+export interface SimpleTelemetryOptions {
+  /** Enable console logging */
+  enableConsole?: boolean;
+  /** Enable file logging */
+  enableFile?: boolean;
+  /** File path for logs */
+  filePath?: string;
+}
+
+/**
+ * Simple telemetry class for basic tracing without OpenTelemetry
+ */
+export declare class SimpleTelemetry {
+  constructor(options?: SimpleTelemetryOptions);
+  log(message: string, data?: any): void;
+  flush(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
+/**
+ * Simple application tracer for basic operations
+ */
+export declare class SimpleAppTracer {
+  constructor(telemetry?: SimpleTelemetry, sessionId?: string);
+  isEnabled(): boolean;
+  log(operation: string, data?: any): void;
+  flush(): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
+/**
+ * Initialize simple telemetry from options
+ */
+export declare function initializeSimpleTelemetryFromOptions(options: any): SimpleTelemetry;
+
+/**
+ * Full OpenTelemetry configuration options
+ */
+export interface TelemetryConfigOptions {
+  /** Service name for tracing */
+  serviceName?: string;
+  /** Service version */
+  serviceVersion?: string;
+  /** Enable file export */
+  enableFile?: boolean;
+  /** Enable remote OTLP export */
+  enableRemote?: boolean;
+  /** Enable console export */
+  enableConsole?: boolean;
+  /** File path for trace export */
+  filePath?: string;
+  /** Remote OTLP endpoint URL */
+  remoteEndpoint?: string;
+}
+
+/**
+ * Full OpenTelemetry configuration class
+ */
+export declare class TelemetryConfig {
+  constructor(options?: TelemetryConfigOptions);
+
+  /** Initialize the OpenTelemetry SDK */
+  initialize(): void;
+
+  /** Get the tracer instance */
+  getTracer(): any;
+
+  /** Create a span with attributes */
+  createSpan(name: string, attributes?: Record<string, any>): any;
+
+  /** Wrap a function with automatic span creation */
+  wrapFunction(name: string, fn: Function, attributes?: Record<string, any>): Function;
+
+  /** Force flush all pending spans */
+  forceFlush(): Promise<void>;
+
+  /** Shutdown telemetry */
+  shutdown(): Promise<void>;
+}
+
+/**
+ * Application-specific tracing layer for AI operations
+ */
+export declare class AppTracer {
+  constructor(telemetryConfig?: TelemetryConfig, sessionId?: string);
+
+  /** Check if tracing is enabled */
+  isEnabled(): boolean;
+
+  /** Create a root span for the agent session */
+  createSessionSpan(attributes?: Record<string, any>): any;
+
+  /** Create a span for AI model requests */
+  createAISpan(modelName: string, provider: string, attributes?: Record<string, any>): any;
+
+  /** Create a span for tool calls */
+  createToolSpan(toolName: string, attributes?: Record<string, any>): any;
+
+  /** Create a span for code search operations */
+  createSearchSpan(query: string, attributes?: Record<string, any>): any;
+
+  /** Create a span for code extraction operations */
+  createExtractSpan(files: string | string[], attributes?: Record<string, any>): any;
+
+  /** Create a span for agent iterations */
+  createIterationSpan(iteration: number, attributes?: Record<string, any>): any;
+
+  /** Create a span for delegation operations */
+  createDelegationSpan(task: string, attributes?: Record<string, any>): any;
+
+  /** Create a span for JSON validation operations */
+  createJsonValidationSpan(responseLength: number, attributes?: Record<string, any>): any;
+
+  /** Create a span for Mermaid validation operations */
+  createMermaidValidationSpan(diagramCount: number, attributes?: Record<string, any>): any;
+
+  /** Create a span for schema processing operations */
+  createSchemaProcessingSpan(schemaType: string, attributes?: Record<string, any>): any;
+
+  /** Record delegation events */
+  recordDelegationEvent(eventType: string, data?: Record<string, any>): void;
+
+  /** Record JSON validation events */
+  recordJsonValidationEvent(eventType: string, data?: Record<string, any>): void;
+
+  /** Record Mermaid validation events */
+  recordMermaidValidationEvent(eventType: string, data?: Record<string, any>): void;
+
+  /** Add an event to the current span */
+  addEvent(name: string, attributes?: Record<string, any>): void;
+
+  /** Set attributes on the current span */
+  setAttributes(attributes: Record<string, any>): void;
+
+  /** Wrap a function with automatic span creation */
+  wrapFunction(spanName: string, fn: Function, attributes?: Record<string, any>): Function;
+
+  /** Execute a function within a span context */
+  withSpan(spanName: string, fn: Function, attributes?: Record<string, any>): Promise<any>;
+
+  /** Force flush all pending spans */
+  flush(): Promise<void>;
+
+  /** Shutdown tracing */
+  shutdown(): Promise<void>;
+}
+
+/**
+ * Initialize full OpenTelemetry telemetry from options
+ */
+export declare function initializeTelemetryFromOptions(options: any): TelemetryConfig;
+
 // Default export for ES modules
 export { ProbeAgent as default };

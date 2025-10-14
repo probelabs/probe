@@ -64,7 +64,7 @@ await esbuild.build({
   external: [
     '@ai-sdk/anthropic',
     '@ai-sdk/openai',
-    '@ai-sdk/google', 
+    '@ai-sdk/google',
     '@modelcontextprotocol/sdk',
     '@opentelemetry/*',
     'ai',
@@ -78,6 +78,44 @@ await esbuild.build({
     'child_process',
     'stream',
     'util',
+    'os'
+  ],
+  define: {
+    'import.meta.url': '"file:///"'
+  }
+});
+
+// Build simpleTelemetry module
+await esbuild.build({
+  entryPoints: [join(npmDir, 'src/agent/simpleTelemetry.js')],
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  outfile: join(cjsDir, 'agent/simpleTelemetry.cjs'),
+  external: [
+    '@opentelemetry/*',
+    'crypto',
+    'fs',
+    'path',
+    'os'
+  ],
+  define: {
+    'import.meta.url': '"file:///"'
+  }
+});
+
+// Build telemetry module (full OpenTelemetry)
+await esbuild.build({
+  entryPoints: [join(npmDir, 'src/agent/telemetry.js')],
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  outfile: join(cjsDir, 'agent/telemetry.cjs'),
+  external: [
+    '@opentelemetry/*',
+    'crypto',
+    'fs',
+    'path',
     'os'
   ],
   define: {
@@ -99,3 +137,5 @@ console.log('✅ CommonJS build completed');
 console.log(`   📁 Built to: ${cjsDir}`);
 console.log('   📦 Main: cjs/index.cjs');
 console.log('   🤖 Agent: cjs/agent/ProbeAgent.cjs');
+console.log('   📊 Simple Telemetry: cjs/agent/simpleTelemetry.cjs');
+console.log('   📈 Full Telemetry: cjs/agent/telemetry.cjs');
