@@ -78,6 +78,7 @@ export class ProbeAgent {
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
    * @param {number} [options.maxIterations] - Maximum tool iterations (overrides MAX_TOOL_ITERATIONS env var)
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
+   * @param {boolean} [options.disableJsonValidation=false] - Disable automatic JSON validation and fixing (prevents infinite recursion in JsonFixingAgent)
    * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
    * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
    * @param {Object} [options.mcpConfig] - MCP configuration object (overrides mcpConfigPath)
@@ -98,6 +99,7 @@ export class ProbeAgent {
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
+    this.disableJsonValidation = !!options.disableJsonValidation;
 
     // Storage adapter (defaults to in-memory)
     this.storageAdapter = options.storageAdapter || new InMemoryStorageAdapter();
@@ -1808,7 +1810,14 @@ Convert your previous response content into actual JSON data that follows this s
               console.log(`[DEBUG] JSON validation: Starting validation process for schema response`);
               console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
             }
-            
+
+            // Clean the response first to extract JSON from markdown/code blocks
+            finalResult = cleanSchemaResponse(finalResult);
+
+            if (this.debug) {
+              console.log(`[DEBUG] JSON validation: After cleaning, length: ${finalResult.length} chars`);
+            }
+
             // Record JSON validation start in telemetry
             if (this.tracer) {
               this.tracer.recordJsonValidationEvent('started', {
@@ -1816,94 +1825,88 @@ Convert your previous response content into actual JSON data that follows this s
                 'json_validation.schema_type': 'JSON'
               });
             }
-            
+
             let validation = validateJsonResponse(finalResult, { debug: this.debug });
             let retryCount = 0;
             const maxRetries = 3;
-            
+
             // First check if the response is valid JSON but is actually a schema definition
             if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
               if (this.debug) {
-                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, correcting...`);
+                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, needs correction...`);
               }
-              
-              // Use specialized correction prompt for schema definition confusion
-              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
-                finalResult,
-                options.schema,
-                0
-              );
-              
-              finalResult = await this.answer(schemaDefinitionPrompt, [], { 
-                ...options, 
-                _schemaFormatted: true 
-              });
-              finalResult = cleanSchemaResponse(finalResult);
-              validation = validateJsonResponse(finalResult);
-              retryCount = 1; // Start at 1 since we already did one correction
+              // Mark as invalid so it goes through the fixing process
+              validation = {
+                isValid: false,
+                error: 'Response is a JSON schema definition instead of actual data',
+                enhancedError: 'Response is a JSON schema definition instead of actual data. Please return data that conforms to the schema, not the schema itself.'
+              };
             }
-            
-            while (!validation.isValid && retryCount < maxRetries) {
+
+            // Use separate JsonFixingAgent for JSON corrections (isolates session like Mermaid fixing)
+            if (!validation.isValid) {
               if (this.debug) {
-                console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
-                console.log(`[DEBUG] JSON validation: Invalid response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
+                console.log(`[DEBUG] JSON validation: Starting separate JsonFixingAgent session...`);
               }
-              
-              // Check if the invalid response is actually a schema definition
-              let correctionPrompt;
-              try {
-                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
-                  if (this.debug) {
-                    console.log(`[DEBUG] JSON validation: Response is still a schema definition, using specialized correction`);
-                  }
-                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
-                    finalResult,
+
+              const { JsonFixingAgent } = await import('./schemaUtils.js');
+              const jsonFixer = new JsonFixingAgent({
+                path: this.allowedFolders[0],
+                provider: this.clientApiProvider,
+                model: this.model,
+                debug: this.debug,
+                tracer: this.tracer
+              });
+
+              let currentResult = finalResult;
+              let currentValidation = validation;
+
+              while (!currentValidation.isValid && retryCount < maxRetries) {
+                if (this.debug) {
+                  console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, currentValidation.error);
+                  console.log(`[DEBUG] JSON validation: Invalid response sample: ${currentResult.substring(0, 300)}${currentResult.length > 300 ? '...' : ''}`);
+                }
+
+                try {
+                  // Use specialized JsonFixingAgent to fix the JSON in a separate session
+                  currentResult = await jsonFixer.fixJson(
+                    currentResult,
                     options.schema,
-                    retryCount
+                    currentValidation,
+                    retryCount + 1
                   );
-                } else {
-                  correctionPrompt = createJsonCorrectionPrompt(
-                    finalResult, 
-                    options.schema, 
-                    validation.error,
-                    retryCount
-                  );
-                }
-              } catch (error) {
-                // If we can't parse to check if it's a schema definition, use regular correction
-                correctionPrompt = createJsonCorrectionPrompt(
-                  finalResult, 
-                  options.schema, 
-                  validation.error,
-                  retryCount
-                );
-              }
-              
-              finalResult = await this.answer(correctionPrompt, [], { 
-                ...options, 
-                _schemaFormatted: true 
-              });
-              finalResult = cleanSchemaResponse(finalResult);
-              
-              // Validate the corrected response
-              validation = validateJsonResponse(finalResult, { debug: this.debug });
-              retryCount++;
-              
-              if (this.debug) {
-                if (!validation.isValid && retryCount < maxRetries) {
-                  console.log(`[DEBUG] JSON validation: Still invalid after correction ${retryCount}, retrying...`);
-                  console.log(`[DEBUG] JSON validation: Corrected response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
-                } else if (validation.isValid) {
-                  console.log(`[DEBUG] JSON validation: Successfully corrected after ${retryCount} attempts`);
+
+                  // Validate the corrected response
+                  currentValidation = validateJsonResponse(currentResult, { debug: this.debug });
+                  retryCount++;
+
+                  if (this.debug) {
+                    if (!currentValidation.isValid && retryCount < maxRetries) {
+                      console.log(`[DEBUG] JSON validation: Still invalid after correction ${retryCount}, retrying...`);
+                      console.log(`[DEBUG] JSON validation: Corrected response sample: ${currentResult.substring(0, 300)}${currentResult.length > 300 ? '...' : ''}`);
+                    } else if (currentValidation.isValid) {
+                      console.log(`[DEBUG] JSON validation: Successfully corrected after ${retryCount} attempts with JsonFixingAgent`);
+                    }
+                  }
+                } catch (error) {
+                  if (this.debug) {
+                    console.error(`[DEBUG] JSON validation: JsonFixingAgent error on attempt ${retryCount + 1}:`, error.message);
+                  }
+                  // If JsonFixingAgent fails, break out of loop
+                  break;
                 }
               }
-            }
-            
-            if (!validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON validation: Still invalid after ${maxRetries} correction attempts:`, validation.error);
-              console.log(`[DEBUG] JSON validation: Final invalid response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
-            } else if (validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON validation: Final validation successful`);
+
+              // Update finalResult with the fixed version
+              finalResult = currentResult;
+              validation = currentValidation;
+
+              if (!validation.isValid && this.debug) {
+                console.log(`[DEBUG] JSON validation: Still invalid after ${maxRetries} correction attempts with JsonFixingAgent:`, validation.error);
+                console.log(`[DEBUG] JSON validation: Final invalid response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+              } else if (validation.isValid && this.debug) {
+                console.log(`[DEBUG] JSON validation: Final validation successful`);
+              }
             }
             
             // Record JSON validation completion in telemetry
@@ -2209,6 +2212,7 @@ Convert your previous response content into actual JSON data that follows this s
       maxResponseTokens: this.maxResponseTokens,
       maxIterations: this.maxIterations,
       disableMermaidValidation: this.disableMermaidValidation,
+      disableJsonValidation: this.disableJsonValidation,
       enableMcp: !!this.mcpBridge,
       mcpConfig: this.mcpConfig,
       enableBash: this.enableBash,
