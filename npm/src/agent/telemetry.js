@@ -1,6 +1,6 @@
 import nodeSDKPkg from '@opentelemetry/sdk-node';
 import resourcesPkg from '@opentelemetry/resources';
-import semanticConventionsPkg from '@opentelemetry/semantic-conventions';
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { trace, context, SpanStatusCode } from '@opentelemetry/api';
 import otlpPkg from '@opentelemetry/exporter-trace-otlp-http';
 import spanPkg from '@opentelemetry/sdk-trace-base';
@@ -10,8 +10,7 @@ import { dirname } from 'path';
 import { FileSpanExporter } from './fileSpanExporter.js';
 
 const { NodeSDK } = nodeSDKPkg;
-const { resourceFromAttributes } = resourcesPkg;
-const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } = semanticConventionsPkg;
+const { Resource } = resourcesPkg;
 const { OTLPTraceExporter } = otlpPkg;
 const { BatchSpanProcessor, ConsoleSpanExporter } = spanPkg;
 
@@ -40,7 +39,7 @@ export class TelemetryConfig {
       return;
     }
 
-    const resource = resourceFromAttributes({
+    const resource = new Resource({
       [ATTR_SERVICE_NAME]: this.serviceName,
       [ATTR_SERVICE_VERSION]: this.serviceVersion,
     });

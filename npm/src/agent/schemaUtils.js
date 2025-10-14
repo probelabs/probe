@@ -765,6 +765,9 @@ Ensure all Mermaid diagrams are properly formatted within \`\`\`mermaid code blo
   return prompt;
 }
 
+// Counter to ensure unique session IDs even when created in the same millisecond
+let sessionIdCounter = 0;
+
 /**
  * Specialized JSON fixing agent
  * Uses a separate ProbeAgent instance optimized for JSON syntax correction
@@ -774,7 +777,7 @@ export class JsonFixingAgent {
     // Import ProbeAgent dynamically to avoid circular dependencies
     this.ProbeAgent = null;
     this.options = {
-      sessionId: options.sessionId || `json-fixer-${Date.now()}`,
+      sessionId: options.sessionId || `json-fixer-${Date.now()}-${sessionIdCounter++}`,
       path: options.path || process.cwd(),
       provider: options.provider,
       model: options.model,
@@ -1001,7 +1004,7 @@ export class MermaidFixingAgent {
     // Import ProbeAgent dynamically to avoid circular dependencies
     this.ProbeAgent = null;
     this.options = {
-      sessionId: options.sessionId || `mermaid-fixer-${Date.now()}`,
+      sessionId: options.sessionId || `mermaid-fixer-${Date.now()}-${sessionIdCounter++}`,
       path: options.path || process.cwd(),
       provider: options.provider,
       model: options.model,
