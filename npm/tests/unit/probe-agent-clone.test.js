@@ -317,10 +317,12 @@ describe('ProbeAgent.clone()', () => {
         stripInternalMessages: true
       });
 
-      // Should have 7 messages (removed 2 internal)
-      expect(cloned.history).toHaveLength(7);
+      // Truncates at schema (index 7), keeps 0-6
+      // Then filters tool reminder at index 3
+      // Result: 6 messages (1 system + 2 user + 3 assistant)
+      expect(cloned.history).toHaveLength(6);
       expect(cloned.history.filter(m => m.role === 'user')).toHaveLength(2);
-      expect(cloned.history.filter(m => m.role === 'assistant')).toHaveLength(4);
+      expect(cloned.history.filter(m => m.role === 'assistant')).toHaveLength(3);
     });
 
     test('should handle empty history', () => {

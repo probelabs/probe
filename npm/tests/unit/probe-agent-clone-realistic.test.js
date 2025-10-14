@@ -171,15 +171,15 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
 
     // New truncation behavior: Find FIRST schema message (index 11) and truncate from there
     // Messages before index 11:
-    // 0: system, 1: user, 2: assistant, 3: user (tool reminder - non-schema), 4: assistant,
-    // 5: user (tool result), 6: assistant, 7: user (mermaid fix - non-schema), 8: assistant,
+    // 0: system, 1: user, 2: assistant, 3: user (tool reminder - REMOVED), 4: assistant,
+    // 5: user (tool result), 6: assistant, 7: user (mermaid fix - REMOVED), 8: assistant,
     // 9: user, 10: assistant
     // 11: FIRST SCHEMA MESSAGE → truncate from here
-    // After truncation and removing non-schema internal messages:
-    // System + 5 real user messages + 5 assistant responses = 11 total
-    expect(clonedAgent.history).toHaveLength(11);
+    // After truncation and removing non-schema internal messages (tool reminder at 3, mermaid at 7):
+    // System + 2 real user messages + 1 tool result + 5 assistant responses = 9 total
+    expect(clonedAgent.history).toHaveLength(9);
     expect(clonedSystemMessages).toBe(1);
-    expect(clonedUserMessages).toBe(5); // Real user questions + tool result
+    expect(clonedUserMessages).toBe(3); // 2 real questions + 1 tool result
     expect(clonedAssistantMessages).toBe(5); // Assistant responses before schema
 
     // Verify system message is preserved
@@ -268,8 +268,10 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
 
     const clonedAgent = baseAgent.clone();
 
-    // Should have 5 messages (removed 1 internal)
-    expect(clonedAgent.history).toHaveLength(5);
+    // Truncates at schema message (index 3)
+    // Keeps: 0 (system), 1 (user with image), 2 (assistant)
+    // Removes: 3 (schema), 4 (user), 5 (assistant)
+    expect(clonedAgent.history).toHaveLength(3);
 
     // Verify complex content structures are preserved
     const userWithImage = clonedAgent.history.find(m =>
@@ -279,7 +281,7 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
     expect(userWithImage.content).toHaveLength(2);
     expect(userWithImage.content[1].type).toBe('image');
 
-    // Verify internal message was removed
+    // Verify internal message was removed (via truncation)
     const schemaReminder = clonedAgent.history.find(m =>
       typeof m.content === 'string' && m.content.includes('IMPORTANT: A schema was provided')
     );
@@ -378,10 +380,12 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
 
     const clonedAgent = baseAgent.clone();
 
-    // Should remove the schema reminder but keep edge cases
-    expect(clonedAgent.history).toHaveLength(6);
+    // Truncates at schema message (index 3)
+    // Keeps: 0 (system), 1 (user), 2 (assistant with null)
+    // Removes: 3 (schema), 4 (assistant), 5 (user), 6 (assistant)
+    expect(clonedAgent.history).toHaveLength(3);
 
-    // Verify schema reminder was removed
+    // Verify schema reminder was removed (via truncation)
     const schemaReminder = clonedAgent.history.find(m =>
       m.content && m.content.includes('IMPORTANT: A schema was provided')
     );
@@ -440,9 +444,11 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
 
     // All clones should have clean history
     [securityClone, performanceClone, styleClone].forEach(clone => {
-      // Original has 11 messages (1 system, 5 user [3 real + 2 internal], 5 assistant)
-      // Cloned should have 9 (1 system, 3 user, 5 assistant) - removed 2 internal
-      expect(clone.history).toHaveLength(9);
+      // Original: 11 messages (0-10)
+      // Truncates at schema (index 9), keeps 0-8
+      // Then filters tool reminder at index 3
+      // Result: 8 messages (1 system + 2 user + 5 assistant)
+      expect(clone.history).toHaveLength(8);
 
       // Should not contain internal messages
       const content = clone.history.map(m => m.content).join('\n');
