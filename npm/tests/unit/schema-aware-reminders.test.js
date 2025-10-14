@@ -27,15 +27,14 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
-IMPORTANT: A schema was provided. You MUST respond with data that matches this schema.
-Use attempt_completion with your response directly inside the tags:
+IMPORTANT: A schema was provided for the final output format.
 
+You MUST use attempt_completion to provide your answer:
 <attempt_completion>
-{"key": "value", "field": "your actual data here matching the schema"}
+[Your complete answer here - provide in natural language, it will be automatically formatted to match the schema]
 </attempt_completion>
 
-Your response must conform to this schema:
-${options.schema}`;
+Your response will be automatically formatted to JSON. You can provide your answer in natural language or as JSON - either will work.`;
         } else {
           // Standard reminder without schema
           reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
@@ -63,17 +62,16 @@ Or for quick completion if your previous response was already correct:
       const reminder = mockAgent.buildReminderMessage(options);
 
       expect(reminder).toContain('A schema was provided');
-      expect(reminder).toContain('You MUST respond with data that matches this schema');
+      expect(reminder).toContain('You MUST use attempt_completion');
       expect(reminder).toContain('attempt_completion');
-      expect(reminder).toContain('{"key": "value", "field": "your actual data here matching the schema"}');
-      expect(reminder).toContain('Your response must conform to this schema:');
-      expect(reminder).toContain(options.schema);
+      expect(reminder).toContain('provide in natural language');
+      expect(reminder).toContain('automatically formatted to JSON');
 
       // Should NOT contain the shorthand attempt_complete
       expect(reminder).not.toContain('<attempt_complete>');
     });
 
-    test('should include full schema in reminder without truncation', () => {
+    test('should include schema instructions in reminder', () => {
       const longSchema = `{
         "type": "object",
         "properties": {
@@ -99,10 +97,9 @@ Or for quick completion if your previous response was already correct:
       const options = { schema: longSchema };
       const reminder = mockAgent.buildReminderMessage(options);
 
-      // Should include the complete schema, not truncated
-      expect(reminder).toContain(longSchema);
-      expect(reminder).toContain('"recommendations"');
-      expect(reminder).toContain('"priority"');
+      // Should include schema-related instructions
+      expect(reminder).toContain('A schema was provided');
+      expect(reminder).toContain('automatically formatted');
     });
 
     test('should work with non-JSON schemas too', () => {
@@ -114,9 +111,8 @@ Or for quick completion if your previous response was already correct:
       const reminder = mockAgent.buildReminderMessage(options);
 
       expect(reminder).toContain('A schema was provided');
-      expect(reminder).toContain('You MUST respond with data that matches this schema');
-      expect(reminder).toContain(mermaidSchema);
-      expect(reminder).toContain('graph TD');
+      expect(reminder).toContain('You MUST use attempt_completion');
+      expect(reminder).toContain('automatically formatted');
     });
 
     test('should provide clear example of attempt_completion format', () => {
@@ -127,8 +123,9 @@ Or for quick completion if your previous response was already correct:
       const reminder = mockAgent.buildReminderMessage(options);
 
       expect(reminder).toContain('<attempt_completion>');
-      expect(reminder).toContain('{"key": "value", "field": "your actual data here matching the schema"}');
+      expect(reminder).toContain('provide in natural language');
       expect(reminder).toContain('</attempt_completion>');
+      expect(reminder).toContain('automatically formatted');
 
       // Should show the direct content format, not <result> wrapper
       expect(reminder).not.toContain('<result>');
@@ -192,8 +189,8 @@ Or for quick completion if your previous response was already correct:
       const reminder = mockAgent.buildReminderMessage(options);
 
       expect(reminder).toContain('A schema was provided');
-      expect(reminder).toContain(options.schema);
-      expect(reminder).toContain('<>&\\"\\n\\t');
+      expect(reminder).toContain('You MUST use attempt_completion');
+      expect(reminder).toContain('automatically formatted');
     });
 
     test('should be consistent with tool formatting instructions', () => {
@@ -233,15 +230,14 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
-IMPORTANT: A schema was provided. You MUST respond with data that matches this schema.
-Use attempt_completion with your response directly inside the tags:
+IMPORTANT: A schema was provided for the final output format.
 
+You MUST use attempt_completion to provide your answer:
 <attempt_completion>
-{"key": "value", "field": "your actual data here matching the schema"}
+[Your complete answer here - provide in natural language, it will be automatically formatted to match the schema]
 </attempt_completion>
 
-Your response must conform to this schema:
-${options.schema}`;
+Your response will be automatically formatted to JSON. You can provide your answer in natural language or as JSON - either will work.`;
         } else {
           // Standard reminder without schema
           reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
@@ -269,17 +265,14 @@ Or for quick completion if your previous response was already correct:
     const reminder = integrationMockAgent.buildReminderMessage(options);
 
     // The reminder should clearly state what's expected
-    expect(reminder).toContain('You MUST respond with data that matches this schema');
-    expect(reminder).toContain('Use attempt_completion with your response directly inside the tags');
+    expect(reminder).toContain('A schema was provided');
+    expect(reminder).toContain('You MUST use attempt_completion');
 
     // Should show the exact format expected
     expect(reminder).toContain('<attempt_completion>');
-    expect(reminder).toContain('{"key": "value"');
+    expect(reminder).toContain('provide in natural language');
     expect(reminder).toContain('</attempt_completion>');
-
-    // Should include the schema for reference
-    expect(reminder).toContain('"analysis": "string"');
-    expect(reminder).toContain('"score": "number"');
+    expect(reminder).toContain('automatically formatted');
   });
 
   test('should maintain backward compatibility for non-schema usage', () => {
