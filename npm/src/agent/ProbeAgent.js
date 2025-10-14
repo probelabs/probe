@@ -2329,9 +2329,18 @@ Convert your previous response content into actual JSON data that follows this s
       return false;
     }
 
-    const content = typeof message.content === 'string'
-      ? message.content
-      : JSON.stringify(message.content);
+    let content;
+    try {
+      content = typeof message.content === 'string'
+        ? message.content
+        : JSON.stringify(message.content);
+    } catch (error) {
+      // If content cannot be stringified (e.g., circular reference), skip this message
+      if (this.debug) {
+        console.log(`[DEBUG] Could not stringify message content in _isSchemaMessage: ${error.message}`);
+      }
+      return false;
+    }
 
     // Schema reminder messages
     if (content.includes('IMPORTANT: A schema was provided') ||
@@ -2358,9 +2367,18 @@ Convert your previous response content into actual JSON data that follows this s
       return false;
     }
 
-    const content = typeof message.content === 'string'
-      ? message.content
-      : JSON.stringify(message.content);
+    let content;
+    try {
+      content = typeof message.content === 'string'
+        ? message.content
+        : JSON.stringify(message.content);
+    } catch (error) {
+      // If content cannot be stringified (e.g., circular reference), skip this message
+      if (this.debug) {
+        console.log(`[DEBUG] Could not stringify message content in _isNonSchemaInternalMessage: ${error.message}`);
+      }
+      return false;
+    }
 
     // Tool use reminder messages
     if (content.includes('Please use one of the available tools') &&
