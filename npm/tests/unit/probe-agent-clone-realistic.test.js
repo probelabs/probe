@@ -204,11 +204,12 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
     expect(allContent).not.toContain('Your response does not match the expected JSON schema');
     expect(allContent).not.toContain('When using <attempt_complete>, this must be the ONLY content');
 
-    // Verify assistant responses are kept
+    // Verify assistant responses before schema are kept
     expect(allContent).toContain('I\'ll analyze the authentication system');
     expect(allContent).toContain('corrected diagram');
-    expect(allContent).toContain('vulnerabilities');
-    expect(allContent).toContain('authorization permissions');
+    // These are AFTER the schema message, so should NOT be in clone:
+    expect(allContent).not.toContain('vulnerabilities'); // After schema at index 12
+    expect(allContent).not.toContain('authorization permissions'); // After schema at index 16
 
     console.log(`\n✅ Successfully removed ${baseAgent.history.length - clonedAgent.history.length} internal messages`);
     console.log('✅ All meaningful conversation content preserved');
@@ -316,20 +317,23 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
 
     const clonedAgent = baseAgent.clone();
 
-    // Should remove all 3 schema reminders
-    // Original: 9 messages (1 system, 4 user [1 real + 3 internal], 4 assistant)
-    // Cloned: 6 messages (1 system, 1 user, 4 assistant) - removed 3 internal
+    // Truncates at first schema message (index 3)
+    // Original: 9 messages (0-8)
+    // Keeps: 0 (system), 1 (user), 2 (assistant)
+    // Removes: 3 (schema), 4 (assistant), 5 (schema), 6 (assistant), 7 (schema), 8 (assistant)
     expect(baseAgent.history).toHaveLength(9);
-    expect(clonedAgent.history).toHaveLength(6);
+    expect(clonedAgent.history).toHaveLength(3);
 
     expect(clonedAgent.history.filter(m => m.role === 'system')).toHaveLength(1);
     expect(clonedAgent.history.filter(m => m.role === 'user')).toHaveLength(1); // Only the real user question
-    expect(clonedAgent.history.filter(m => m.role === 'assistant')).toHaveLength(4); // All 4 attempts
+    expect(clonedAgent.history.filter(m => m.role === 'assistant')).toHaveLength(1); // Only first attempt before schema
 
     // Verify no schema reminders remain
     const allContent = clonedAgent.history.map(m => m.content).join('\n');
     expect(allContent).not.toContain('IMPORTANT: A schema was provided');
     expect(allContent).not.toContain('does not match the expected JSON schema');
+    expect(allContent).not.toContain('{"incomplete": true}'); // After schema
+    expect(allContent).not.toContain('{"status": "complete"'); // After schema
 
     // Verify the real user message is kept
     const userMessages = clonedAgent.history.filter(m => m.role === 'user');
