@@ -106,28 +106,28 @@ export function cleanSchemaResponse(response) {
     }
   }
 
-  // Fallback: Find JSON boundaries anywhere in the text
-  const firstBracket = Math.min(
-    trimmed.indexOf('{') >= 0 ? trimmed.indexOf('{') : Infinity,
-    trimmed.indexOf('[') >= 0 ? trimmed.indexOf('[') : Infinity
-  );
+  // Fallback: Check if response is JSON after removing code block markers and whitespace
+  // First, remove common code block markers from top and bottom
+  let cleaned = trimmed;
 
-  const lastBracket = Math.max(
-    trimmed.lastIndexOf('}'),
-    trimmed.lastIndexOf(']')
-  );
+  // Remove opening code block markers (```json, ```, etc.)
+  cleaned = cleaned.replace(/^```(?:json)?\s*\n?/i, '');
 
-  // Only extract if we found valid JSON boundaries
-  if (firstBracket < Infinity && lastBracket >= 0 && firstBracket < lastBracket) {
-    // Check if the response likely starts with JSON (directly or after minimal content)
-    const beforeFirstBracket = trimmed.substring(0, firstBracket).trim();
+  // Remove closing code block markers
+  cleaned = cleaned.replace(/\n?```\s*$/, '');
 
-    // If there's minimal content before the first bracket, extract the JSON
-    if (beforeFirstBracket === '' ||
-        beforeFirstBracket.match(/^```\w*$/) ||
-        beforeFirstBracket.split('\n').length <= 2) {
-      return trimmed.substring(firstBracket, lastBracket + 1);
-    }
+  // Trim whitespace and newlines
+  cleaned = cleaned.trim();
+
+  // Now check if first and last characters are valid JSON boundaries
+  const firstChar = cleaned[0];
+  const lastChar = cleaned[cleaned.length - 1];
+
+  const isJsonObject = firstChar === '{' && lastChar === '}';
+  const isJsonArray = firstChar === '[' && lastChar === ']';
+
+  if (isJsonObject || isJsonArray) {
+    return cleaned;
   }
 
   return response; // Return original if no extractable JSON found
