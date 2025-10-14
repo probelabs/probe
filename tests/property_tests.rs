@@ -37,7 +37,7 @@ proptest! {
 
     // Test that create_query_plan and create_structured_patterns work together
     #[test]
-    #[ignore] // Temporarily disabled due to changes in regex escaping
+    // Test query preprocessing pipeline with regex escaping
     fn test_query_preprocessing_pipeline(query in "\\PC{1,50}") {
         // This should never panic
         let plan = match create_query_plan(&query, false) {

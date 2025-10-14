@@ -88,7 +88,7 @@ pub fn format_duration(duration: Duration) -> String {
 
 /// Helper function to print timing information in debug mode
 pub fn print_timings(timings: &SearchTimings) {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     if !debug_mode {
         return;
     }
@@ -247,12 +247,13 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         timeout,
         question,
         no_gitignore,
+        lsp: _, // We access it via options.lsp directly
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
 
     let include_filenames = !exclude_filenames;
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Handle session ID generation if session is provided but empty
     // For test runs, force session to None to disable caching
@@ -669,8 +670,44 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: all_files after filename matches: {all_files:?}");
     }
 
-    // Early filtering step - filter both all_files and file_term_map using full AST evaluation (including excluded terms?).
-    // Actually we pass 'true' to 'evaluate(..., true)', so that ignores excluded terms, contrary to the debug comment.
+    // Apply excluded-term filtering at the file level (document-level NOT semantics)
+    // Remove any file that contains any excluded term anywhere in its content
+    if !plan.excluded_terms.is_empty() {
+        let excluded_indices: HashSet<usize> = plan
+            .excluded_terms
+            .iter()
+            .filter_map(|t| plan.term_indices.get(t).copied())
+            .collect();
+
+        if debug_mode {
+            println!("DEBUG: Applying file-level exclusion for indices: {excluded_indices:?}");
+        }
+
+        all_files.retain(|pathbuf| {
+            if let Some(term_map) = file_term_map.get(pathbuf) {
+                let has_excluded = excluded_indices
+                    .iter()
+                    .any(|idx| term_map.contains_key(idx));
+                if has_excluded {
+                    if debug_mode {
+                        println!("DEBUG: Excluding file due to excluded terms: {pathbuf:?}");
+                    }
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        });
+
+        // Also drop excluded files from file_term_map to keep structures in sync
+        file_term_map.retain(|pathbuf, _| all_files.contains(pathbuf));
+    }
+
+    // Early filtering step — keep files that are plausible matches without being overly strict.
+    // Important: ignore negatives here and do NOT require all stem tokens of a term to be present.
+    // This prevents false negatives for terms like "Repository" that stem to ["repository", "repositori"].
     let early_filter_start = Instant::now();
     if debug_mode {
         println!("DEBUG: Starting early AST filtering...");
@@ -686,8 +723,21 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             // Extract unique terms found in the file
             let matched_terms: HashSet<usize> = term_map.keys().copied().collect();
 
-            // Evaluate the file against the AST, but we pass 'true' for ignore_negatives
-            if plan.ast.evaluate(&matched_terms, &plan.term_indices, true) {
+            // Loose evaluation for early filtering:
+            // - If there are required terms anywhere, ensure all required are present
+            // - Otherwise, keep any file that has at least one matched (non-negative) term
+            let keep = if plan.has_required_anywhere {
+                if debug_mode {
+                    println!("DEBUG: Evaluating required terms for early filtering");
+                }
+                plan.required_terms_indices
+                    .iter()
+                    .all(|idx| matched_terms.contains(idx))
+            } else {
+                !matched_terms.is_empty()
+            };
+
+            if keep {
                 filtered_file_term_map.insert(pathbuf.clone(), term_map.clone());
                 filtered_all_files.insert(pathbuf.clone());
             } else if debug_mode {
@@ -760,6 +810,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: None,
+                lsp_info: None,
                 parent_context: None,
             });
         }
@@ -1008,6 +1059,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                     preprocessed_queries: None,
                     no_merge: *no_merge,
                     query_plan: &plan,
+                    lsp: options.lsp,
                 };
 
                 if debug_mode {
@@ -1515,7 +1567,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         println!("DEBUG: Starting block merging...");
     }
 
-    let final_results = if !limited.results.is_empty() && !*no_merge {
+    let mut final_results = if !limited.results.is_empty() && !*no_merge {
         use probe_code::search::block_merging::merge_ranked_blocks;
         let merged = merge_ranked_blocks(limited.results.clone(), *merge_threshold);
 
@@ -1585,6 +1637,39 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         }
     }
 
+    // Add LSP enrichment if enabled
+    if options.lsp && !final_results.results.is_empty() {
+        if debug_mode {
+            println!(
+                "DEBUG: Starting LSP enrichment for {} results",
+                final_results.results.len()
+            );
+        }
+
+        // Enrich results with LSP information
+        if let Err(e) = crate::search::lsp_enrichment::enrich_results_with_lsp(
+            &mut final_results.results,
+            debug_mode,
+        ) {
+            if debug_mode {
+                println!("DEBUG: LSP enrichment failed: {e}");
+            }
+            // Continue even if LSP enrichment fails
+        } else if debug_mode {
+            // Debug: check how many results have LSP info after enrichment
+            let enriched_count = final_results
+                .results
+                .iter()
+                .filter(|r| r.lsp_info.is_some())
+                .count();
+            println!(
+                "DEBUG: After enrichment, {}/{} results have LSP info",
+                enriched_count,
+                final_results.results.len()
+            );
+        }
+    }
+
     // Set total search time
     timings.total_search_time = Some(total_start.elapsed());
 
@@ -1593,6 +1678,19 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
     // Stop the timeout thread
     timeout_handle.store(true, std::sync::atomic::Ordering::SeqCst);
+
+    if debug_mode && options.lsp {
+        let enriched_count = final_results
+            .results
+            .iter()
+            .filter(|r| r.lsp_info.is_some())
+            .count();
+        println!(
+            "DEBUG: Returning {} results, {} with LSP info",
+            final_results.results.len(),
+            enriched_count
+        );
+    }
 
     Ok(final_results)
 }
@@ -1619,7 +1717,7 @@ pub fn search_with_structured_patterns(
     let root_path = if let Some(path_str) = root_path_str.to_str() {
         match resolve_path(path_str) {
             Ok(resolved_path) => {
-                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                     println!(
                         "DEBUG: Resolved path '{}' to '{}'",
                         path_str,
@@ -1629,7 +1727,7 @@ pub fn search_with_structured_patterns(
                 resolved_path
             }
             Err(err) => {
-                if std::env::var("DEBUG").unwrap_or_default() == "1" {
+                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
                     println!("DEBUG: Failed to resolve path '{path_str}': {err}");
                 }
                 // Fall back to the original path
@@ -1642,7 +1740,7 @@ pub fn search_with_structured_patterns(
     };
     use crate::search::ripgrep_searcher::RipgrepSearcher;
 
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
     let search_start = Instant::now();
 
     // Step 1: Create pattern matching infrastructure (SIMD, RipgrepSearcher, or RegexSet)
@@ -1851,19 +1949,29 @@ fn search_file_with_simd(
     pattern_to_terms: &[HashSet<usize>],
 ) -> Result<HashMap<usize, HashSet<usize>>> {
     let mut term_map = HashMap::new();
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Define a reasonable maximum file size (e.g., 1MB)
     const MAX_FILE_SIZE: u64 = 1024 * 1024;
 
-    // Check file metadata and resolve symlinks before reading
-    let resolved_path = match std::fs::canonicalize(file_path) {
-        Ok(path) => path,
-        Err(e) => {
-            if debug_mode {
-                println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
-            }
-            return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
+    // Skip symlinks and junctions entirely to avoid stack overflow
+    use crate::path_safety;
+
+    if path_safety::is_symlink_or_junction(file_path) {
+        if debug_mode {
+            println!("DEBUG: Skipping symlink/junction: {file_path:?}");
+        }
+        return Err(anyhow::anyhow!("Skipping symlink/junction"));
+    }
+
+    // Use the path as-is in CI to avoid any resolution issues
+    let resolved_path = if path_safety::is_ci_environment() {
+        file_path.to_path_buf()
+    } else {
+        // Only canonicalize if not in CI and not a symlink
+        match std::fs::canonicalize(file_path) {
+            Ok(path) => path,
+            Err(_) => file_path.to_path_buf(), // Fall back to original path
         }
     };
 

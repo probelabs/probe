@@ -63,6 +63,8 @@ pub struct ExtractOptions {
     pub instructions: Option<String>,
     /// Whether to ignore .gitignore files
     pub no_gitignore: bool,
+    /// Whether to enable LSP integration for enhanced extraction
+    pub lsp: bool,
 }
 
 /// Handle the extract command
@@ -522,6 +524,99 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         )
         .collect();
 
+    // Check LSP readiness if LSP is enabled
+    if options.lsp && !file_params.is_empty() {
+        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+        if debug_mode {
+            eprintln!("[DEBUG] LSP enabled, checking server readiness...");
+        }
+
+        // Create readiness config for extract operations
+        let readiness_config = crate::lsp_integration::readiness::ReadinessConfig {
+            max_wait_secs: 30, // Wait up to 30 seconds for extract operations
+            poll_interval_ms: 500,
+            show_progress: !options.format.eq("json") && !options.format.eq("xml"), // Show progress unless JSON/XML format
+            auto_start_daemon: true,
+        };
+
+        // Check readiness for the first file to determine language server needs
+        let first_file_path = &file_params[0].path;
+
+        if debug_mode {
+            eprintln!("[DEBUG] Checking LSP readiness for: {:?}", first_file_path);
+        }
+
+        // Handle runtime creation - check if we're already in a runtime
+        let readiness_result = if tokio::runtime::Handle::try_current().is_ok() {
+            // We're already in a runtime, spawn a task
+            if debug_mode {
+                eprintln!("[DEBUG] Already in runtime, spawning LSP readiness check task...");
+            }
+
+            // For simplicity, just skip the readiness check if we're already in a runtime
+            // This avoids the "runtime from within runtime" error
+            if debug_mode {
+                eprintln!("[DEBUG] Skipping LSP readiness check to avoid runtime conflicts");
+            }
+            Ok(crate::lsp_integration::readiness::ReadinessCheckResult {
+                is_ready: true, // Assume ready for now
+                server_type: None,
+                expected_timeout_secs: None,
+                elapsed_secs: 0,
+                status_message: "Skipped due to runtime context".to_string(),
+            })
+        } else {
+            // Not in a runtime, create one
+            match tokio::runtime::Runtime::new() {
+                Ok(runtime) => runtime.block_on(
+                    crate::lsp_integration::readiness::check_lsp_readiness_for_file(
+                        first_file_path,
+                        readiness_config,
+                    ),
+                ),
+                Err(e) => {
+                    if debug_mode {
+                        eprintln!(
+                            "[DEBUG] Failed to create tokio runtime for LSP check: {}",
+                            e
+                        );
+                    }
+                    Err(anyhow::anyhow!(
+                        "Could not initialize async runtime for LSP check: {}",
+                        e
+                    ))
+                }
+            }
+        };
+
+        match readiness_result {
+            Ok(result) => {
+                if debug_mode {
+                    eprintln!(
+                        "[DEBUG] LSP readiness check result: ready={}, server_type={:?}",
+                        result.is_ready, result.server_type
+                    );
+                }
+                if !result.is_ready {
+                    eprintln!(
+                        "⚠ LSP server not ready ({}), proceeding without LSP enhancement",
+                        result.status_message
+                    );
+                }
+            }
+            Err(e) => {
+                if debug_mode {
+                    eprintln!("[DEBUG] LSP readiness check failed: {}", e);
+                }
+                eprintln!(
+                    "⚠ LSP readiness check failed: {}, proceeding without LSP enhancement",
+                    e
+                );
+            }
+        }
+    }
+
     // Process files in parallel
     file_params.par_iter().for_each(|params| {
         if params.debug_mode {
@@ -572,7 +667,8 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.allow_tests,
             params.context_lines,
             params.specific_lines.as_ref(),
-            false, // symbols functionality removed
+            false,       // symbols functionality removed
+            options.lsp, // Pass LSP flag
         ) {
             Ok(result) => {
                 if params.debug_mode {

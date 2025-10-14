@@ -3,13 +3,537 @@
 //! This module provides functions for processing files and extracting code blocks
 //! based on file paths and optional line numbers.
 use anyhow::{Context, Result};
-use probe_code::extract::symbol_finder::find_symbol_in_file;
 use probe_code::language::factory::get_language_impl;
 use probe_code::language::parser::parse_file_for_code_blocks;
+use probe_code::lsp_integration::client::LspClient;
+use probe_code::lsp_integration::types::LspConfig;
 use probe_code::models::SearchResult;
+use probe_code::search::{perform_probe, SearchOptions};
+use serde_json::json;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+
+/// Extract symbol name from a line of code based on language-specific patterns
+fn extract_symbol_name_from_line(line: &str, extension: &str) -> Option<String> {
+    let line = line.trim();
+
+    match extension {
+        "php" => {
+            // PHP function/method patterns: "public function calculate(" or "function calculate("
+            if let Some(func_start) = line.find("function ") {
+                let func_part = &line[func_start + 9..]; // Skip "function "
+                if let Some(paren_pos) = func_part.find('(') {
+                    let name = func_part[..paren_pos].trim();
+                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+            // PHP class patterns: "class Calculator"
+            if let Some(class_start) = line.find("class ") {
+                let class_part = &line[class_start + 6..]; // Skip "class "
+                if let Some(space_or_brace) =
+                    class_part.find(|c: char| c.is_whitespace() || c == '{')
+                {
+                    let name = class_part[..space_or_brace].trim();
+                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        "rs" => {
+            // Rust function patterns: "fn function_name(" or "pub fn function_name("
+            if let Some(fn_start) = line.find("fn ") {
+                let fn_part = &line[fn_start + 3..]; // Skip "fn "
+                if let Some(paren_pos) = fn_part.find('(') {
+                    let name = fn_part[..paren_pos].trim();
+                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+            // Rust struct patterns: "struct StructName"
+            if let Some(struct_start) = line.find("struct ") {
+                let struct_part = &line[struct_start + 7..]; // Skip "struct "
+                if let Some(space_or_brace) =
+                    struct_part.find(|c: char| c.is_whitespace() || c == '{' || c == '<')
+                {
+                    let name = struct_part[..space_or_brace].trim();
+                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        "py" => {
+            // Python function patterns: "def function_name("
+            if let Some(def_start) = line.find("def ") {
+                let def_part = &line[def_start + 4..]; // Skip "def "
+                if let Some(paren_pos) = def_part.find('(') {
+                    let name = def_part[..paren_pos].trim();
+                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+            // Python class patterns: "class ClassName:"
+            if let Some(class_start) = line.find("class ") {
+                let class_part = &line[class_start + 6..]; // Skip "class "
+                if let Some(colon_or_paren) =
+                    class_part.find(|c: char| c == ':' || c == '(' || c.is_whitespace())
+                {
+                    let name = class_part[..colon_or_paren].trim();
+                    if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        "js" | "ts" => {
+            // JavaScript/TypeScript function patterns: "function functionName(" or "functionName("
+            if let Some(func_start) = line.find("function ") {
+                let func_part = &line[func_start + 9..]; // Skip "function "
+                if let Some(paren_pos) = func_part.find('(') {
+                    let name = func_part[..paren_pos].trim();
+                    if !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                    {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+            // Class patterns: "class ClassName"
+            if let Some(class_start) = line.find("class ") {
+                let class_part = &line[class_start + 6..]; // Skip "class "
+                if let Some(space_or_brace) =
+                    class_part.find(|c: char| c.is_whitespace() || c == '{')
+                {
+                    let name = class_part[..space_or_brace].trim();
+                    if !name.is_empty()
+                        && name
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '$')
+                    {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+        _ => {
+            // Generic pattern: try to find common function/class patterns
+            for pattern in &["function ", "fn ", "def ", "class "] {
+                if let Some(start) = line.find(pattern) {
+                    let part = &line[start + pattern.len()..];
+                    if let Some(end) =
+                        part.find(|c: char| c == '(' || c == '{' || c == ':' || c.is_whitespace())
+                    {
+                        let name = part[..end].trim();
+                        if !name.is_empty() && name.len() <= 50 {
+                            return Some(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Search for references to a symbol using probe's search functionality
+async fn search_for_symbol_references(
+    symbol_name: &str,
+    project_root: &Path,
+    extension: &str,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    if debug_mode {
+        eprintln!(
+            "[DEBUG] Searching for references to symbol '{}' in path: {:?}",
+            symbol_name, project_root
+        );
+        eprintln!("[DEBUG] Using extension: '{}'", extension);
+    }
+
+    // Create search options - use patterns specific to the language
+    // Use simpler patterns that work with probe's search engine
+    let queries = match extension {
+        "php" => vec![format!("{symbol_name}(")], // Simplified for PHP - just look for function calls
+        "rs" => vec![format!("{}(", symbol_name), format!("::{}", symbol_name)],
+        "py" => vec![format!("{symbol_name}("), format!("def {symbol_name}(")],
+        "js" | "ts" => vec![
+            format!("{symbol_name}("),
+            format!("function {symbol_name}("),
+        ],
+        _ => vec![format!("{}(", symbol_name)],
+    };
+
+    if debug_mode {
+        eprintln!("[DEBUG] Search queries: {:?}", queries);
+    }
+
+    let custom_ignores: Vec<String> = vec![];
+    let search_options = SearchOptions {
+        path: project_root,
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        exclude_filenames: false,
+        reranker: "",
+        frequency_search: false,
+        exact: false,
+        language: None,
+        max_results: Some(20), // Limit to avoid overwhelming output
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: true,
+        no_merge: false,
+        merge_threshold: None,
+        dry_run: false,
+        session: None,
+        timeout: 10, // 10 second timeout for search
+        question: None,
+        no_gitignore: false,
+        lsp: false, // We don't want LSP for the search itself
+    };
+
+    match perform_probe(&search_options) {
+        Ok(search_results) => {
+            if debug_mode {
+                eprintln!(
+                    "[DEBUG] Search returned {} total results",
+                    search_results.results.len()
+                );
+                for (i, result) in search_results.results.iter().enumerate() {
+                    eprintln!(
+                        "[DEBUG] Result {}: {} (line {})",
+                        i, result.file, result.lines.0
+                    );
+                }
+            }
+
+            let mut references = Vec::new();
+
+            // Convert search results to reference format
+            for result in search_results.results.iter() {
+                // Skip the file where we're extracting from to avoid self-references
+                references.push(json!({
+                    "file_path": result.file,
+                    "line": result.lines.0,
+                    "context": result.code.lines().next().unwrap_or("").trim()
+                }));
+            }
+
+            if debug_mode {
+                eprintln!(
+                    "[DEBUG] Found {} search-based references for '{}'",
+                    references.len(),
+                    symbol_name
+                );
+            }
+
+            Some(json!({
+                "references": references,
+                "source": "search_fallback"
+            }))
+        }
+        Err(e) => {
+            if debug_mode {
+                eprintln!("[DEBUG] Search for symbol '{}' failed: {}", symbol_name, e);
+            }
+            None
+        }
+    }
+}
+
+/// Merge LSP info with search-based references
+fn merge_lsp_and_search_info(
+    lsp_info: Option<serde_json::Value>,
+    search_info: Option<serde_json::Value>,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    match (lsp_info, search_info) {
+        (Some(mut lsp), Some(search)) => {
+            // LSP has data, but add search results as additional section
+            if let Some(search_refs) = search.get("references") {
+                lsp["search_references"] = search_refs.clone();
+            }
+            if debug_mode {
+                eprintln!("[DEBUG] Merged LSP info with search-based references");
+            }
+            Some(lsp)
+        }
+        (Some(lsp), None) => {
+            // Only LSP info available
+            if debug_mode {
+                eprintln!("[DEBUG] Using LSP info only");
+            }
+            Some(lsp)
+        }
+        (None, Some(search)) => {
+            // Only search info available - this is our fallback case
+            if debug_mode {
+                eprintln!("[DEBUG] Using search-based references as fallback");
+            }
+            Some(search)
+        }
+        (None, None) => {
+            // No info available
+            if debug_mode {
+                eprintln!("[DEBUG] No LSP or search references found");
+            }
+            None
+        }
+    }
+}
+
+/// Get LSP information for a symbol at a specific position (async)
+async fn get_lsp_info_for_extract_async(
+    file_path: &Path,
+    line: u32,
+    column: u32,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    if debug_mode {
+        eprintln!(
+            "[DEBUG] Getting LSP info for position {}:{} in {:?}",
+            line, column, file_path
+        );
+    }
+
+    // Create LSP client
+    let mut client = match LspClient::new(LspConfig::default()).await {
+        Ok(client) => client,
+        Err(e) => {
+            if debug_mode {
+                eprintln!("[DEBUG] Failed to create LSP client: {}", e);
+            }
+            return None;
+        }
+    };
+
+    // Get symbol info from LSP
+    match client.get_symbol_info(file_path, "", line, column).await {
+        Ok(Some(symbol_info)) => {
+            if debug_mode {
+                eprintln!(
+                    "[DEBUG] Got LSP symbol info: incoming_calls={}, outgoing_calls={}",
+                    symbol_info
+                        .call_hierarchy
+                        .as_ref()
+                        .map_or(0, |ch| ch.incoming_calls.len()),
+                    symbol_info
+                        .call_hierarchy
+                        .as_ref()
+                        .map_or(0, |ch| ch.outgoing_calls.len())
+                );
+            }
+
+            // Convert to JSON format expected by search output
+            let result = json!({
+                "call_hierarchy": symbol_info.call_hierarchy,
+                "references": symbol_info.references,
+                "type_info": symbol_info.type_info
+            });
+
+            if debug_mode {
+                eprintln!("[DEBUG] LSP result JSON: {}", result);
+            }
+
+            Some(result)
+        }
+        Ok(None) => {
+            if debug_mode {
+                eprintln!("[DEBUG] No LSP symbol info available for position");
+            }
+            None
+        }
+        Err(e) => {
+            if debug_mode {
+                eprintln!("[DEBUG] LSP query failed: {}", e);
+            }
+            None
+        }
+    }
+}
+
+/// Get LSP information for a symbol at a specific position with search fallback (blocking wrapper)
+fn get_lsp_info_for_extract(
+    file_path: &Path,
+    line: u32,
+    column: u32,
+    debug_mode: bool,
+    lsp_enabled: bool,
+) -> Option<serde_json::Value> {
+    if !lsp_enabled {
+        return None;
+    }
+
+    // Handle runtime context properly
+    let lsp_result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        // Already in a runtime: use block_in_place
+        tokio::task::block_in_place(|| {
+            handle.block_on(get_lsp_info_for_extract_with_fallback_async(
+                file_path, line, column, debug_mode,
+            ))
+        })
+    } else {
+        // No runtime: create one
+        match tokio::runtime::Runtime::new() {
+            Ok(rt) => rt.block_on(get_lsp_info_for_extract_with_fallback_async(
+                file_path, line, column, debug_mode,
+            )),
+            Err(e) => {
+                if debug_mode {
+                    eprintln!("[DEBUG] Failed to create tokio runtime for LSP: {}", e);
+                }
+                None
+            }
+        }
+    };
+
+    lsp_result
+}
+
+/// Get LSP information with search fallback (async)
+async fn get_lsp_info_for_extract_with_fallback_async(
+    file_path: &Path,
+    line: u32,
+    column: u32,
+    debug_mode: bool,
+) -> Option<serde_json::Value> {
+    // First try to get LSP information
+    let lsp_info = get_lsp_info_for_extract_async(file_path, line, column, debug_mode).await;
+
+    // Check if LSP returned empty results (no references or call hierarchy)
+    let lsp_has_useful_info = if let Some(ref lsp) = lsp_info {
+        let has_incoming_calls = lsp
+            .get("call_hierarchy")
+            .and_then(|ch| ch.get("incoming_calls"))
+            .and_then(|ic| ic.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false);
+
+        let has_outgoing_calls = lsp
+            .get("call_hierarchy")
+            .and_then(|ch| ch.get("outgoing_calls"))
+            .and_then(|oc| oc.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false);
+
+        let has_references = lsp
+            .get("references")
+            .and_then(|refs| refs.as_array())
+            .map(|arr| !arr.is_empty())
+            .unwrap_or(false);
+
+        has_incoming_calls || has_outgoing_calls || has_references
+    } else {
+        false
+    };
+
+    // If LSP has no useful info, try search fallback
+    let search_info = if !lsp_has_useful_info {
+        if debug_mode {
+            eprintln!("[DEBUG] LSP returned empty results, trying search fallback");
+        }
+
+        // Read the file to extract symbol name from the line
+        if let Ok(content) = std::fs::read_to_string(file_path) {
+            let lines: Vec<&str> = content.lines().collect();
+            if line > 0 && (line as usize) <= lines.len() {
+                let target_line = lines[line as usize - 1]; // Convert to 0-indexed
+                let extension = file_path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .unwrap_or("");
+
+                if let Some(symbol_name) = extract_symbol_name_from_line(target_line, extension) {
+                    if debug_mode {
+                        eprintln!(
+                            "[DEBUG] Extracted symbol name '{}' from line: {}",
+                            symbol_name,
+                            target_line.trim()
+                        );
+                    }
+
+                    // Determine project root (go up directories until we find a git repo or other indicators)
+                    let absolute_file_path = std::fs::canonicalize(file_path)
+                        .unwrap_or_else(|_| file_path.to_path_buf());
+                    let project_root =
+                        find_project_root(&absolute_file_path).unwrap_or_else(|| {
+                            std::env::current_dir().unwrap_or_else(|_| {
+                                absolute_file_path
+                                    .parent()
+                                    .unwrap_or(&absolute_file_path)
+                                    .to_path_buf()
+                            })
+                        });
+
+                    search_for_symbol_references(&symbol_name, &project_root, extension, debug_mode)
+                        .await
+                } else {
+                    if debug_mode {
+                        eprintln!(
+                            "[DEBUG] Could not extract symbol name from line: {}",
+                            target_line.trim()
+                        );
+                    }
+                    None
+                }
+            } else {
+                if debug_mode {
+                    eprintln!("[DEBUG] Line {} is out of bounds for file", line);
+                }
+                None
+            }
+        } else {
+            if debug_mode {
+                eprintln!("[DEBUG] Could not read file for symbol extraction");
+            }
+            None
+        }
+    } else {
+        None
+    };
+
+    // Merge LSP and search results
+    merge_lsp_and_search_info(lsp_info, search_info, debug_mode)
+}
+
+/// Find the project root by looking for common indicators
+fn find_project_root(file_path: &Path) -> Option<std::path::PathBuf> {
+    let mut current = file_path.parent()?;
+
+    loop {
+        // Check for common project indicators
+        for indicator in &[
+            ".git",
+            "Cargo.toml",
+            "package.json",
+            "composer.json",
+            "pyproject.toml",
+            "go.mod",
+        ] {
+            if current.join(indicator).exists() {
+                return Some(current.to_path_buf());
+            }
+        }
+
+        // Move up one directory
+        if let Some(parent) = current.parent() {
+            current = parent;
+        } else {
+            break;
+        }
+    }
+
+    None
+}
 
 /// Process a single file and extract code blocks
 ///
@@ -32,6 +556,7 @@ pub fn process_file_for_extraction(
     context_lines: usize,
     specific_lines: Option<&HashSet<usize>>,
     symbols: bool,
+    lsp: bool,
 ) -> Result<SearchResult> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
@@ -70,8 +595,37 @@ pub fn process_file_for_extraction(
         if debug_mode {
             eprintln!("[DEBUG] Looking for symbol: {symbol_name}");
         }
-        // Find the symbol in the file
-        return find_symbol_in_file(path, symbol_name, &content, allow_tests, context_lines);
+
+        // Import the function that returns position information
+        use probe_code::extract::symbol_finder::find_symbol_in_file_with_position;
+
+        // Find the symbol in the file and get its position
+        let (mut result, position) = find_symbol_in_file_with_position(
+            path,
+            symbol_name,
+            &content,
+            allow_tests,
+            context_lines,
+        )?;
+
+        // If LSP is enabled and we have a position, get LSP information
+        if lsp {
+            if let Some((line, column)) = position {
+                if debug_mode {
+                    eprintln!(
+                        "[DEBUG] Symbol found at position {}:{}, getting LSP info",
+                        line, column
+                    );
+                }
+                result.lsp_info = get_lsp_info_for_extract(path, line, column, debug_mode, lsp);
+            } else if debug_mode {
+                eprintln!(
+                    "[DEBUG] No position information available for symbol, skipping LSP info"
+                );
+            }
+        }
+
+        return Ok(result);
     }
 
     // If we have a line range (start_line, end_line), gather AST blocks overlapping that range.
@@ -196,6 +750,13 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: get_lsp_info_for_extract(
+                        path,
+                        merged_start as u32,
+                        16, // column position of function name (approximate)
+                        debug_mode,
+                        lsp,
+                    ),
                     parent_context: None,
                 })
             }
@@ -245,6 +806,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 })
             }
@@ -351,6 +913,13 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: get_lsp_info_for_extract(
+                        path,
+                        merged_start as u32,
+                        16, // column position of function name (approximate)
+                        debug_mode,
+                        lsp,
+                    ),
                     parent_context: None,
                 })
             }
@@ -412,6 +981,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 })
             }
@@ -467,6 +1037,7 @@ pub fn process_file_for_extraction(
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
+                lsp_info: None,
                 parent_context: None,
             });
         }
@@ -573,6 +1144,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 })
             }
@@ -636,6 +1208,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 })
             }
@@ -685,6 +1258,7 @@ pub fn process_file_for_extraction(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
+            lsp_info: None,
             parent_context: None,
         })
     }
@@ -951,6 +1525,7 @@ pub fn extract_all_symbols_from_file(path: &Path, allow_tests: bool) -> Result<V
                             matched_keywords: None,
                             matched_lines: None,
                             tokenized_content: None,
+                            lsp_info: None,
                             parent_context: None,
                         };
 

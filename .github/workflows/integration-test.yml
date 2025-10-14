@@ -63,8 +63,8 @@ jobs:
           ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
           ${{ runner.os }}-cargo-
 
-    - name: Build Rust binary
-      run: cargo build --release
+    - name: Build Rust binary (debug mode for CI speed)
+      run: cargo build
 
     - name: Prepare npm package with local binary
       shell: bash
@@ -73,10 +73,11 @@ jobs:
         mkdir -p npm/bin
         
         # Copy the built binary to npm package bin directory with correct naming
+        # On Unix, we need to preserve the Node.js wrapper script (probe) and put the binary as probe-binary
         if [[ "${{ runner.os }}" == "Windows" ]]; then
-          cp target/release/probe.exe npm/bin/probe.exe
+          cp target/debug/probe.exe npm/bin/probe.exe
         else
-          cp target/release/probe npm/bin/probe-binary
+          cp target/debug/probe npm/bin/probe-binary
           chmod +x npm/bin/probe-binary
         fi
         
@@ -409,8 +410,8 @@ jobs:
           ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-
           ${{ runner.os }}-cargo-
 
-    - name: Build Rust binary
-      run: cargo build --release
+    - name: Build Rust binary (debug mode for CI speed)
+      run: cargo build
 
     - name: Build npm package
       run: |

@@ -29,6 +29,7 @@ const SEARCH_FLAG_MAP = {
 	session: '--session',
 	timeout: '--timeout',
 	language: '--language',
+	lsp: '--lsp',
 	format: '--format'
 };
 
@@ -53,6 +54,7 @@ const SEARCH_FLAG_MAP = {
  * @param {string} [options.session] - Session ID for caching results
  * @param {number} [options.timeout] - Timeout in seconds (default: 30)
  * @param {string} [options.language] - Limit search to files of a specific programming language
+ * @param {boolean} [options.lsp] - Use LSP (Language Server Protocol) for enhanced symbol information
  * @param {string} [options.format] - Output format ('json', 'outline-xml', etc.)
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists

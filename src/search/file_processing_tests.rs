@@ -99,6 +99,7 @@ mod tests {
             preprocessed_queries: None,
             query_plan: &query_plan,
             no_merge: false,
+            lsp: false,
         };
 
         let (results, _) =
@@ -150,6 +151,7 @@ mod tests {
             preprocessed_queries: None,
             query_plan: &query_plan,
             no_merge: false,
+            lsp: false,
         };
 
         // Capture the results to check them
@@ -200,6 +202,7 @@ mod tests {
             preprocessed_queries: None,
             query_plan: &query_plan,
             no_merge: false,
+            lsp: false,
         };
 
         let (results, _) =
@@ -277,6 +280,7 @@ function test3() {
             preprocessed_queries: None, // No preprocessed queries
             query_plan: &query_plan,
             no_merge: false,
+            lsp: false,
         };
 
         let (results, _) =
@@ -376,6 +380,7 @@ function processResults(results) {
             preprocessed_queries: Some(&preprocessed_queries),
             query_plan: &query_plan,
             no_merge: false,
+            lsp: false,
         };
 
         let (results, _) =
@@ -440,6 +445,7 @@ fn test_long_lines_are_ignored() {
         preprocessed_queries: None,
         query_plan: &query_plan,
         no_merge: false,
+        lsp: false,
     };
 
     let (results, _) =

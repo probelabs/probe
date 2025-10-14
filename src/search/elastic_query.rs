@@ -158,7 +158,7 @@ impl Expr {
             return false;
         }
 
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         // CRITICAL FIX: Check required terms FIRST before any other evaluation
         // In Lucene semantics, if ANY required term is missing, the entire query fails
@@ -212,32 +212,19 @@ impl Expr {
                     // Required => must all be present
                     all_present
                 } else {
-                    // Optional => if there's at least one required term anywhere in the entire query,
-                    // then we do NOT fail if this optional is absent. Otherwise, we do need to match.
+                    // Optional term
                     if has_required_anywhere {
+                        // When there are required terms elsewhere, optional terms do not gate inclusion
                         true
                     } else {
-                        // When there are no required terms, we still need to enforce that all keywords
-                        // within a single Term are present (AND logic within a Term).
-                        // This ensures that for a term like "JWTMiddleware" which gets tokenized to
-                        // ["jwt", "middleware"], both parts must be present.
-
-                        // Check if any keywords are present
-                        let any_present = keywords.iter().any(|kw| {
+                        // No required terms: treat multiple keywords within a Term as alternatives
+                        // This avoids false negatives for stemming variants (e.g., repository/repositori).
+                        keywords.iter().any(|kw| {
                             term_indices
                                 .get(kw)
                                 .map(|idx| matched_terms.contains(idx))
                                 .unwrap_or(false)
-                        });
-
-                        // If no keywords are present, the term doesn't match
-                        if !any_present {
-                            return false;
-                        }
-
-                        // If at least one keyword is present, require all keywords to be present
-                        // This maintains the AND relationship between keywords in a single Term
-                        all_present
+                        })
                     }
                 }
             }
@@ -373,7 +360,7 @@ impl Expr {
             return false;
         }
 
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         // If ignoring negatives, let's ensure that all required terms are present up front.
         // (We skip enforcing them again for each subtree.)
@@ -520,7 +507,7 @@ impl std::error::Error for ParseError {}
 fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
     let mut chars = input.chars().peekable();
     let mut tokens = Vec::new();
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     while let Some(&ch) = chars.peek() {
         match ch {
@@ -659,7 +646,7 @@ impl Parser {
     }
 
     fn parse_or_expr(&mut self) -> Result<Expr, ParseError> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
         if debug_mode {
             println!("DEBUG: parse_or_expr => pos={pos}", pos = self.pos);
         }
@@ -678,7 +665,7 @@ impl Parser {
     }
 
     fn parse_and_expr(&mut self) -> Result<Expr, ParseError> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
         if debug_mode {
             println!("DEBUG: parse_and_expr => pos={pos}", pos = self.pos);
         }
@@ -740,7 +727,7 @@ impl Parser {
     fn parse_prefixed_term(&mut self) -> Result<Expr, ParseError> {
         let mut required = false;
         let mut excluded = false;
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         match self.peek() {
             Some(Token::Plus) => {
@@ -802,7 +789,7 @@ impl Parser {
     }
 
     fn parse_primary(&mut self) -> Result<Expr, ParseError> {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+        let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
         match self.peek() {
             // Quoted => exact
@@ -883,7 +870,7 @@ impl Parser {
 
 /// Parse the query string into an AST
 pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         println!("DEBUG: parse_query('{input}', exact={exact})");

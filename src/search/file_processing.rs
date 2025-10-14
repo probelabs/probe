@@ -74,6 +74,7 @@ pub struct FileProcessingParams<'a> {
 
     #[allow(dead_code)]
     pub no_merge: bool,
+    pub lsp: bool,
 }
 
 /// Evaluate whether a block of lines satisfies a complex AST query
@@ -837,24 +838,13 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                 );
             }
 
-            // Skip tokenization and evaluation when exact flag is enabled
-            if ctx.params.query_plan.exact {
-                // In exact mode, we already matched the lines in the file
-                // so we should include this block without re-evaluating
-                if ctx.debug_mode {
-                    println!(
-                        "DEBUG: Exact mode enabled, skipping tokenization and evaluation for merged fallback context {context_start}-{context_end}"
-                    );
-                }
-                true
-            } else {
-                filter_tokenized_block(
-                    &context_terms,
-                    &ctx.params.query_plan.term_indices,
-                    ctx.params.query_plan,
-                    ctx.debug_mode,
-                )
-            }
+            // Prefer AST/line-based evaluation using matched term lines for correctness
+            filter_code_block_with_ast(
+                (context_start, context_end),
+                ctx.params.term_matches,
+                ctx.params.query_plan,
+                ctx.debug_mode,
+            )
         };
 
         // We don't add this to any timing since filtering is not part of result building
@@ -1011,6 +1001,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                     Some(lines_vec)
                 },
                 tokenized_content: Some(context_terms),
+                lsp_info: None,
                 parent_context: None,
             };
 
@@ -1116,7 +1107,7 @@ pub fn process_file_with_results(
         .unwrap_or("");
 
     // Get debug mode setting
-    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
 
     // Filter out lines longer than 500 characters
     let lines: Vec<&str> = content
@@ -1361,41 +1352,28 @@ pub fn process_file_with_results(
 
                 // Start measuring filtering time
                 let filtering_start = Instant::now();
-                // Early filtering using tokenized content
+                // Early filtering using AST/line-based evaluation for correctness
                 let should_include = {
                     if debug_mode {
                         println!(
-                            "DEBUG: Using filter_tokenized_block for block {final_start_line}-{final_end_line}"
+                            "DEBUG: Using filter_code_block_with_ast for block {final_start_line}-{final_end_line}"
                         );
                     }
 
-                    // Skip tokenization and evaluation when exact flag is enabled
-                    if params.query_plan.exact {
-                        // In exact mode, we already matched the lines in the file
-                        // so we should include this block without re-evaluating
-                        if debug_mode {
-                            println!(
-                                "DEBUG: Exact mode enabled, skipping tokenization and evaluation for block {final_start_line}-{final_end_line}"
-                            );
-                        }
-                        true
-                    } else {
-                        // Use the AST evaluation directly to ensure correct handling of complex queries
-                        let result = filter_tokenized_block(
-                            &block_terms,
-                            &params.query_plan.term_indices,
-                            params.query_plan,
-                            debug_mode,
+                    let result = filter_code_block_with_ast(
+                        (final_start_line, final_end_line),
+                        &params.term_matches,
+                        params.query_plan,
+                        debug_mode,
+                    );
+
+                    if debug_mode {
+                        println!(
+                            "DEBUG: Block {final_start_line}-{final_end_line} filter result: {result}"
                         );
-
-                        if debug_mode {
-                            println!(
-                                "DEBUG: Block {final_start_line}-{final_end_line} filter result: {result}"
-                            );
-                        }
-
-                        result
                     }
+
+                    result
                 };
 
                 // End filtering time measurement
@@ -1546,6 +1524,8 @@ pub fn process_file_with_results(
                         None
                     };
 
+                    // For now, we'll leave LSP info as None during initial processing
+                    // LSP info will be added in a post-processing step if enabled
                     let result = SearchResult {
                         file: params.path.to_string_lossy().to_string(),
                         lines: (final_start_line, final_end_line),
@@ -1589,6 +1569,7 @@ pub fn process_file_with_results(
                             Some(lines_vec)
                         },
                         tokenized_content: Some(block_terms),
+                        lsp_info: None,
                         parent_context: None,
                     };
 

@@ -48,6 +48,7 @@
   ],
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
+    "prepare": "npm run build:mcp",
     "build:mcp": "node scripts/build-mcp.cjs",
     "build:agent": "node scripts/build-agent.cjs",
     "build:types": "echo 'TypeScript definitions already manually created'",

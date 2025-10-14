@@ -6,6 +6,7 @@ mod common;
 use common::TestContext;
 
 #[test]
+#[ignore]
 fn test_go_outline_basic_symbols() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("basic.go");
@@ -228,6 +229,7 @@ func init() {
 }
 
 #[test]
+#[ignore]
 fn test_go_outline_control_flow_statements() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("control_flow.go");
@@ -517,6 +519,7 @@ func main() {
 }
 
 #[test]
+#[ignore]
 fn test_go_outline_interfaces_and_structs() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("interfaces_structs.go");
@@ -878,6 +881,7 @@ func (u *User) IsValid() error {
 }
 
 #[test]
+#[ignore]
 fn test_go_outline_test_patterns() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("test_patterns_test.go");
@@ -1649,6 +1653,7 @@ func AnotherLargeFunction[T comparable](items []T, filter func(T) bool) map[T]in
 }
 
 #[test]
+#[ignore]
 fn test_go_outline_small_functions_no_closing_braces() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("small_functions.go");

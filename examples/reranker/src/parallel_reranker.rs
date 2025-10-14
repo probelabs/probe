@@ -1,14 +1,14 @@
-use anyhow::{Result, Context};
-use candle_core::{Device, Tensor, IndexOp};
-use candle_nn::{VarBuilder, Module, Linear, linear};
+use anyhow::{Context, Result};
+use candle_core::{Device, IndexOp, Tensor};
+use candle_nn::{linear, Linear, Module, VarBuilder};
 use candle_transformers::models::bert::{BertModel, Config, DTYPE};
 use hf_hub::{api::tokio::Api, Repo, RepoType};
-use tokenizers::Tokenizer;
-use serde_json;
-use rayon::prelude::*;
 use parking_lot::Mutex;
+use rayon::prelude::*;
+use serde_json;
 use std::sync::Arc;
 use std::thread;
+use tokenizers::Tokenizer;
 
 /// Thread-safe wrapper for BERT components
 pub struct BertInferenceEngine {
@@ -37,7 +37,10 @@ impl ParallelBertReranker {
             cores
         });
 
-        println!("Creating parallel BERT reranker with {} threads", num_threads);
+        println!(
+            "Creating parallel BERT reranker with {} threads",
+            num_threads
+        );
 
         // Load model configuration and weights once
         let (config, tokenizer_data, vb_data) = Self::load_model_data(model_name).await?;
@@ -56,7 +59,10 @@ impl ParallelBertReranker {
             .build_global()
             .context("Failed to configure thread pool")?;
 
-        println!("Parallel BERT reranker initialized with {} engines", num_threads);
+        println!(
+            "Parallel BERT reranker initialized with {} engines",
+            num_threads
+        );
 
         Ok(Self {
             engines,
@@ -112,8 +118,12 @@ impl ParallelBertReranker {
         // Load model weights data
         let weights_data = std::fs::read(&weights_path)?;
 
-        println!("Model data loaded - config: {} bytes, tokenizer: {} bytes, weights: {} bytes",
-                 config_content.len(), tokenizer_data.len(), weights_data.len());
+        println!(
+            "Model data loaded - config: {} bytes, tokenizer: {} bytes, weights: {} bytes",
+            config_content.len(),
+            tokenizer_data.len(),
+            weights_data.len()
+        );
 
         Ok((config, tokenizer_data, weights_data))
     }
@@ -121,7 +131,7 @@ impl ParallelBertReranker {
     fn create_inference_engine(
         config: &Config,
         tokenizer_data: &[u8],
-        weights_data: &[u8]
+        weights_data: &[u8],
     ) -> Result<BertInferenceEngine> {
         let device = Device::Cpu;
         let dtype = DTYPE;
@@ -155,8 +165,11 @@ impl ParallelBertReranker {
     }
 
     pub fn rerank_parallel(&self, query: &str, documents: &[&str]) -> Result<Vec<(usize, f32)>> {
-        println!("Processing {} documents in parallel across {} threads",
-                 documents.len(), self.num_threads);
+        println!(
+            "Processing {} documents in parallel across {} threads",
+            documents.len(),
+            self.num_threads
+        );
 
         // Create chunks for parallel processing
         let chunk_size = (documents.len() + self.num_threads - 1) / self.num_threads;
@@ -181,8 +194,12 @@ impl ParallelBertReranker {
                 let engine_idx = chunk_idx % self.engines.len();
                 let engine = &engines[engine_idx];
 
-                println!("Thread {} processing chunk {} with {} documents",
-                         chunk_idx, chunk_idx, chunk.len());
+                println!(
+                    "Thread {} processing chunk {} with {} documents",
+                    chunk_idx,
+                    chunk_idx,
+                    chunk.len()
+                );
 
                 let mut chunk_results = Vec::new();
 
@@ -202,15 +219,15 @@ impl ParallelBertReranker {
             .collect();
 
         // Flatten results and sort
-        let mut all_scores: Vec<(usize, f32)> = results?
-            .into_iter()
-            .flatten()
-            .collect();
+        let mut all_scores: Vec<(usize, f32)> = results?.into_iter().flatten().collect();
 
         // Sort by score descending
         all_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        println!("Parallel processing complete, {} results sorted", all_scores.len());
+        println!(
+            "Parallel processing complete, {} results sorted",
+            all_scores.len()
+        );
 
         Ok(all_scores)
     }
@@ -237,10 +254,13 @@ impl ParallelBertReranker {
     fn score_pair_with_engine(
         engine: &BertInferenceEngine,
         query: &str,
-        document: &str
+        document: &str,
     ) -> Result<f32> {
         // Truncate document if too long (safe Unicode truncation)
-        let max_doc_length = engine.max_length.saturating_sub(query.len() / 4).saturating_sub(10);
+        let max_doc_length = engine
+            .max_length
+            .saturating_sub(query.len() / 4)
+            .saturating_sub(10);
         let doc_truncated = if document.len() > max_doc_length {
             // Find a safe Unicode boundary
             let mut boundary = max_doc_length;
@@ -256,7 +276,8 @@ impl ParallelBertReranker {
         let input_text = format!("{} [SEP] {}", query, doc_truncated);
 
         // Tokenize
-        let mut encoding = engine.tokenizer
+        let mut encoding = engine
+            .tokenizer
             .encode(input_text, true)
             .map_err(|e| anyhow::anyhow!("Tokenization failed: {}", e))?;
 
@@ -270,11 +291,10 @@ impl ParallelBertReranker {
         encoding.pad(engine.max_length, 0, 0, "[PAD]", PaddingDirection::Right);
 
         // Convert to tensors
-        let input_ids = Tensor::new(encoding.get_ids().to_vec(), &engine.device)?
-            .unsqueeze(0)?;
+        let input_ids = Tensor::new(encoding.get_ids().to_vec(), &engine.device)?.unsqueeze(0)?;
 
-        let attention_mask = Tensor::new(encoding.get_attention_mask().to_vec(), &engine.device)?
-            .unsqueeze(0)?;
+        let attention_mask =
+            Tensor::new(encoding.get_attention_mask().to_vec(), &engine.device)?.unsqueeze(0)?;
 
         let token_type_ids = if encoding.get_type_ids().len() > 0 {
             Some(Tensor::new(encoding.get_type_ids().to_vec(), &engine.device)?.unsqueeze(0)?)
@@ -283,7 +303,8 @@ impl ParallelBertReranker {
             let mut type_ids = vec![0u32; encoding.len()];
             let mut in_document = false;
             for (i, token_id) in encoding.get_ids().iter().enumerate() {
-                if *token_id == 102 { // [SEP] token
+                if *token_id == 102 {
+                    // [SEP] token
                     in_document = true;
                 } else if in_document {
                     type_ids[i] = 1;
@@ -293,11 +314,10 @@ impl ParallelBertReranker {
         };
 
         // Forward pass through BERT
-        let bert_outputs = engine.bert.forward(
-            &input_ids,
-            &attention_mask,
-            token_type_ids.as_ref(),
-        )?;
+        let bert_outputs =
+            engine
+                .bert
+                .forward(&input_ids, &attention_mask, token_type_ids.as_ref())?;
 
         // Get [CLS] token representation
         let cls_output = bert_outputs.i((.., 0, ..))?;

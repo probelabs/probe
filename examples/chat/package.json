@@ -47,6 +47,8 @@
     "inquirer": "^9.2.12",
     "ora": "^7.0.1",
     "tiktoken": "^1.0.20",
+    "typescript": "^5.9.2",
+    "typescript-language-server": "^5.0.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
