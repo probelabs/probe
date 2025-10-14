@@ -1928,7 +1928,7 @@ Convert your previous response content into actual JSON data that follows this s
         }
       } else if (reachedMaxIterations && options.schema && this.debug) {
         console.log('[DEBUG] Skipping schema formatting due to max iterations reached without completion');
-      } else if (completionAttempted && options.schema) {
+      } else if (completionAttempted && options.schema && !options._schemaFormatted) {
         // For attempt_completion results with schema, still clean markdown if needed
         try {
           finalResult = cleanSchemaResponse(finalResult);
@@ -2083,7 +2083,7 @@ Convert your previous response content into actual JSON data that follows this s
       }
 
       // Final mermaid validation for all responses (regardless of schema or attempt_completion)
-      if (!this.disableMermaidValidation) {
+      if (!this.disableMermaidValidation && !options._schemaFormatted) {
         try {
           if (this.debug) {
             console.log(`[DEBUG] Mermaid validation: Performing final mermaid validation on result...`);
@@ -2119,9 +2119,11 @@ Convert your previous response content into actual JSON data that follows this s
       }
 
       // Remove thinking tags from final result before returning to user
-      finalResult = removeThinkingTags(finalResult);
-      if (this.debug) {
-        console.log(`[DEBUG] Removed thinking tags from final result`);
+      if (!options._schemaFormatted) {
+        finalResult = removeThinkingTags(finalResult);
+        if (this.debug) {
+          console.log(`[DEBUG] Removed thinking tags from final result`);
+        }
       }
 
       return finalResult;
