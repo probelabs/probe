@@ -2232,11 +2232,71 @@ Convert your previous response content into actual JSON data that follows this s
 
   /**
    * Internal method to strip internal/temporary messages from history
-   * Removes: schema reminders, mermaid fix prompts, tool use reminders, etc.
-   * Keeps: system message, user messages, assistant responses, tool results
+   * Strategy: Find the FIRST schema-related message and truncate everything from that point onwards.
+   * This ensures that all schema formatting iterations (IMPORTANT, CRITICAL, corrections, etc.) are removed.
+   * Keeps: system message, user messages, assistant responses, tool results up to the first schema message
    * @private
    */
   _stripInternalMessages(history, keepSystemMessage = true) {
+    // Find the first schema-related message index
+    let firstSchemaMessageIndex = -1;
+
+    for (let i = 0; i < history.length; i++) {
+      const message = history[i];
+
+      // Skip system messages
+      if (message.role === 'system') {
+        continue;
+      }
+
+      // Check if this is a schema-related message
+      if (this._isSchemaMessage(message)) {
+        firstSchemaMessageIndex = i;
+        if (this.debug) {
+          console.log(`[DEBUG] Found first schema message at index ${i}, truncating from here`);
+        }
+        break;
+      }
+    }
+
+    // If no schema message found, try to find other internal messages and remove them individually
+    if (firstSchemaMessageIndex === -1) {
+      return this._stripNonSchemaInternalMessages(history, keepSystemMessage);
+    }
+
+    // Truncate at the first schema message
+    const filtered = [];
+
+    for (let i = 0; i < firstSchemaMessageIndex; i++) {
+      const message = history[i];
+
+      // Handle system message
+      if (message.role === 'system') {
+        if (keepSystemMessage) {
+          filtered.push(message);
+        } else if (this.debug) {
+          console.log(`[DEBUG] Removing system message at index ${i}`);
+        }
+        continue;
+      }
+
+      filtered.push(message);
+    }
+
+    if (this.debug) {
+      const removedCount = history.length - filtered.length;
+      console.log(`[DEBUG] Truncated ${removedCount} messages starting from first schema message`);
+    }
+
+    return filtered;
+  }
+
+  /**
+   * Strip non-schema internal messages (mermaid fixes, tool reminders, etc.) individually
+   * Used when no schema messages are present in history
+   * @private
+   */
+  _stripNonSchemaInternalMessages(history, keepSystemMessage = true) {
     const filtered = [];
 
     for (let i = 0; i < history.length; i++) {
@@ -2252,10 +2312,10 @@ Convert your previous response content into actual JSON data that follows this s
         continue;
       }
 
-      // Check if this is an internal message that should be stripped
-      if (this._isInternalMessage(message, i, history)) {
+      // Check if this is a non-schema internal message (mermaid, tool reminders)
+      if (this._isNonSchemaInternalMessage(message)) {
         if (this.debug) {
-          console.log(`[DEBUG] Stripping internal message at index ${i}: ${message.role}`);
+          console.log(`[DEBUG] Stripping non-schema internal message at index ${i}: ${message.role}`);
         }
         continue;
       }
@@ -2268,15 +2328,14 @@ Convert your previous response content into actual JSON data that follows this s
   }
 
   /**
-   * Determine if a message is an internal/temporary message
+   * Check if a message is schema-related (IMPORTANT, CRITICAL, etc.)
    * @private
    */
-  _isInternalMessage(message, index, history) {
+  _isSchemaMessage(message) {
     if (message.role !== 'user') {
-      return false; // Only user messages can be internal reminders
+      return false;
     }
 
-    // Handle null/undefined content
     if (!message.content) {
       return false;
     }
@@ -2288,9 +2347,31 @@ Convert your previous response content into actual JSON data that follows this s
     // Schema reminder messages
     if (content.includes('IMPORTANT: A schema was provided') ||
         content.includes('You MUST respond with data that matches this schema') ||
-        content.includes('Your response must conform to this schema:')) {
+        content.includes('Your response must conform to this schema:') ||
+        content.includes('CRITICAL: You MUST respond with ONLY valid JSON DATA') ||
+        content.includes('Schema to follow (this is just the structure')) {
       return true;
     }
+
+    return false;
+  }
+
+  /**
+   * Check if a message is a non-schema internal message (mermaid, tool reminders, JSON corrections)
+   * @private
+   */
+  _isNonSchemaInternalMessage(message) {
+    if (message.role !== 'user') {
+      return false;
+    }
+
+    if (!message.content) {
+      return false;
+    }
+
+    const content = typeof message.content === 'string'
+      ? message.content
+      : JSON.stringify(message.content);
 
     // Tool use reminder messages
     if (content.includes('Please use one of the available tools') &&
@@ -2321,6 +2402,7 @@ Convert your previous response content into actual JSON data that follows this s
 
     return false;
   }
+
 
   /**
    * Clean up resources (including MCP connections)

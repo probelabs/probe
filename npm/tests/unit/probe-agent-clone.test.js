@@ -73,7 +73,7 @@ describe('ProbeAgent.clone()', () => {
   });
 
   describe('Internal Message Filtering', () => {
-    test('should strip schema reminder messages', () => {
+    test('should truncate at first schema reminder message', () => {
       baseAgent.history = [
         { role: 'system', content: 'System' },
         { role: 'user', content: 'List functions' },
@@ -89,9 +89,15 @@ describe('ProbeAgent.clone()', () => {
         stripInternalMessages: true
       });
 
-      // Should remove the schema reminder (index 3)
-      expect(cloned.history).toHaveLength(4);
-      expect(cloned.history.some(m => m.content.includes('IMPORTANT: A schema was provided'))).toBe(false);
+      // Should truncate at the schema reminder (index 3), removing everything from there
+      expect(cloned.history).toHaveLength(3); // system + 2 messages before schema
+      expect(cloned.history.some(m => m.content && m.content.includes('IMPORTANT: A schema was provided'))).toBe(false);
+      expect(cloned.history.some(m => m.content && m.content.includes('{"functions":'))).toBe(false); // Assistant response after schema also removed
+
+      // Verify what remains
+      expect(cloned.history[0].role).toBe('system');
+      expect(cloned.history[1].content).toBe('List functions');
+      expect(cloned.history[2].content).toBe('Here are the functions...');
     });
 
     test('should strip tool use reminder messages', () => {
@@ -157,6 +163,29 @@ describe('ProbeAgent.clone()', () => {
       expect(cloned.history.some(m => m.content.includes('does not match the expected JSON schema'))).toBe(false);
     });
 
+    test('should truncate at CRITICAL schema formatting prompt', () => {
+      baseAgent.history = [
+        { role: 'system', content: 'System' },
+        { role: 'user', content: 'Generate report' },
+        { role: 'assistant', content: 'Here is my report' },
+        {
+          role: 'user',
+          content: 'CRITICAL: You MUST respond with ONLY valid JSON DATA that conforms to this schema structure. DO NOT return the schema definition itself.\n\nSchema to follow (this is just the structure - provide ACTUAL DATA):\n{"type": "object", "properties": {...}}'
+        },
+        { role: 'assistant', content: '{"report": "data"}' }
+      ];
+
+      const cloned = baseAgent.clone({
+        stripInternalMessages: true
+      });
+
+      // Should truncate at CRITICAL message (index 3), removing it and everything after
+      expect(cloned.history).toHaveLength(3); // system + 2 messages before CRITICAL
+      expect(cloned.history.some(m => m.content && m.content.includes('CRITICAL: You MUST respond with ONLY valid JSON DATA'))).toBe(false);
+      expect(cloned.history.some(m => m.content && m.content.includes('Schema to follow (this is just the structure'))).toBe(false);
+      expect(cloned.history.some(m => m.content && m.content.includes('{"report": "data"}'))).toBe(false); // Assistant response after CRITICAL also removed
+    });
+
     test('should keep all messages when stripInternalMessages is false', () => {
       baseAgent.history = [
         { role: 'system', content: 'System' },
@@ -174,21 +203,24 @@ describe('ProbeAgent.clone()', () => {
       expect(cloned.history.some(m => m.content.includes('IMPORTANT: A schema was provided'))).toBe(true);
     });
 
-    test('should only strip user role messages', () => {
+    test('should only detect schema messages from user role', () => {
       baseAgent.history = [
-        { role: 'system', content: 'IMPORTANT: A schema was provided' }, // Not stripped (system)
-        { role: 'user', content: 'IMPORTANT: A schema was provided' }, // Stripped (user)
-        { role: 'assistant', content: 'IMPORTANT: A schema was provided' } // Not stripped (assistant)
+        { role: 'system', content: 'IMPORTANT: A schema was provided' }, // Not detected (system)
+        { role: 'assistant', content: 'IMPORTANT: A schema was provided' }, // Not detected (assistant)
+        { role: 'user', content: 'Regular question' },
+        { role: 'user', content: 'IMPORTANT: A schema was provided' } // Detected - truncate from here
       ];
 
       const cloned = baseAgent.clone({
         stripInternalMessages: true
       });
 
-      // Should only strip the user message
-      expect(cloned.history).toHaveLength(2);
+      // Should truncate at the user schema message (index 3)
+      expect(cloned.history).toHaveLength(3); // system + assistant + user question
       expect(cloned.history[0].role).toBe('system');
+      expect(cloned.history[0].content).toContain('IMPORTANT'); // System message kept even with similar text
       expect(cloned.history[1].role).toBe('assistant');
+      expect(cloned.history[2].content).toBe('Regular question');
     });
   });
 

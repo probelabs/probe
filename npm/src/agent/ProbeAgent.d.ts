@@ -117,7 +117,7 @@ export interface AnswerOptions {
 export interface CloneOptions {
   /** Session ID for the cloned agent (defaults to new UUID) */
   sessionId?: string;
-  /** Remove internal messages (schema reminders, mermaid fixes, etc.) */
+  /** Remove internal messages (schema reminders, schema formatting prompts, mermaid fixes, etc.) */
   stripInternalMessages?: boolean;
   /** Keep the system message in cloned history */
   keepSystemMessage?: boolean;
