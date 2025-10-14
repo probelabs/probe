@@ -10,7 +10,7 @@ describe('JsonFixingAgent', () => {
     test('should create JsonFixingAgent with default options', () => {
       const agent = new JsonFixingAgent();
 
-      expect(agent.options.sessionId).toMatch(/^json-fixer-\d+$/);
+      expect(agent.options.sessionId).toMatch(/^json-fixer-\d+-\d+$/);
       expect(agent.options.allowEdit).toBe(false);
       expect(agent.ProbeAgent).toBeNull();
       expect(agent.agent).toBeUndefined();
