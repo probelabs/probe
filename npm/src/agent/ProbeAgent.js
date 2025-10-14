@@ -1613,7 +1613,8 @@ When troubleshooting:
           // Build appropriate reminder message based on whether schema is provided
           let reminderContent;
           if (options.schema) {  // Apply for ANY schema, not just JSON schemas
-            // When schema is provided, give specific instructions
+            // When schema is provided, AI should either use tools OR provide natural response
+            // Schema formatting will happen automatically afterward
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
 Remember: Use proper XML format with BOTH opening and closing tags:
@@ -1622,15 +1623,16 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
-IMPORTANT: A schema was provided. You MUST respond with data that matches this schema.
-Use attempt_completion with your response directly inside the tags:
+IMPORTANT: A schema was provided for the final output format. You have two options:
 
+Option 1 - Use attempt_completion with your complete answer:
 <attempt_completion>
-[Your response content matching the provided schema format]
+[Your complete answer here - will be automatically formatted to match the schema]
 </attempt_completion>
 
-Your response must conform to this schema:
-${options.schema}`;
+Option 2 - Provide a natural response without any tool, and it will be automatically formatted.
+
+Do NOT try to format your response as JSON yourself - this will be done automatically.`;
           } else {
             // Standard reminder without schema
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
