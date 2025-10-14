@@ -138,14 +138,16 @@ describe('Enhanced JSON Validation Error Messages', () => {
       expect(result.isValid).toBe(true);
     });
 
-    test('should extract JSON from text with explanation', () => {
+    test('should not extract JSON when text precedes it', () => {
       const responseWithText = 'Here is your data:\n{"key": "value"}';
       const cleaned = cleanSchemaResponse(responseWithText);
 
-      expect(cleaned).toBe('{"key": "value"}');
+      // Should return original since text precedes the JSON
+      expect(cleaned).toBe(responseWithText);
 
+      // Original text is not valid JSON
       const result = validateJsonResponse(cleaned, { debug: false });
-      expect(result.isValid).toBe(true);
+      expect(result.isValid).toBe(false);
     });
 
     test('should handle JSON in generic code blocks', () => {

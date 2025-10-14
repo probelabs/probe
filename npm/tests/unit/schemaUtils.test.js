@@ -77,10 +77,11 @@ describe('Schema Utilities', () => {
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
 
-    test('should extract JSON from text with multiple lines before JSON', () => {
+    test('should not extract JSON from text with surrounding content', () => {
       const input = 'This is some text with {"json": "inside"}';
-      // With enhanced logic, this should now extract the JSON since it's only 2 lines of content before
-      expect(cleanSchemaResponse(input)).toBe('{"json": "inside"}');
+      // Should return original since JSON has text before/after it
+      // This prevents false positives like extracting {{ pr.title }} from markdown
+      expect(cleanSchemaResponse(input)).toBe(input);
     });
 
     test('should return original for text with too much content before JSON', () => {
@@ -170,16 +171,17 @@ describe('Schema Utilities', () => {
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
 
-    test('should handle fallback to boundary detection when code block extraction fails', () => {
+    test('should not extract JSON when embedded in surrounding text', () => {
       const input = 'Here is some JSON: {"test": "value"} that should be extracted';
-      // Should fall back to boundary detection with improved logic
-      expect(cleanSchemaResponse(input)).toBe('{"test": "value"}');
+      // Should return original since JSON has text before and after it
+      // This prevents extracting fragments like {{ pr.title }} from content
+      expect(cleanSchemaResponse(input)).toBe(input);
     });
 
-    test('should handle text with minimal content before JSON', () => {
+    test('should not extract JSON when text precedes it', () => {
       const input = 'Result:\n{"test": "value"}';
-      const expected = '{"test": "value"}';
-      expect(cleanSchemaResponse(input)).toBe(expected);
+      // Should return original since there's text before the JSON
+      expect(cleanSchemaResponse(input)).toBe(input);
     });
 
     test('should extract JSON from code block after correction prompt (mermaid-style fix)', () => {

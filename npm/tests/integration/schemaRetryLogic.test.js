@@ -76,8 +76,8 @@ describe('Schema Validation Retry Logic Integration Tests', () => {
       },
       {
         input: 'Response:\n{"data": "value"}',
-        expected: '{"data": "value"}',
-        description: 'should extract from minimal text prefix'
+        expected: 'Response:\n{"data": "value"}', // Returns original - text precedes JSON
+        description: 'should not extract when text precedes JSON'
       },
       {
         input: '```\n[{"item": 1}, {"item": 2}]\n```',
