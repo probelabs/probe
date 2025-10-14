@@ -142,29 +142,87 @@ export function cleanSchemaResponse(response) {
  */
 export function validateJsonResponse(response, options = {}) {
   const { debug = false } = options;
-  
+
   if (debug) {
     console.log(`[DEBUG] JSON validation: Starting validation for response (${response.length} chars)`);
     const preview = createMessagePreview(response);
     console.log(`[DEBUG] JSON validation: Preview: ${preview}`);
   }
-  
+
   try {
     const parseStart = Date.now();
     const parsed = JSON.parse(response);
     const parseTime = Date.now() - parseStart;
-    
+
     if (debug) {
       console.log(`[DEBUG] JSON validation: Successfully parsed in ${parseTime}ms`);
       console.log(`[DEBUG] JSON validation: Object type: ${typeof parsed}, keys: ${Object.keys(parsed || {}).length}`);
     }
-    
+
     return { isValid: true, parsed };
   } catch (error) {
+    // Extract error position from error message if available
+    // Old format: "Unexpected token < in JSON at position 0"
+    // New format: "Unexpected token '<', \"...\" is not valid JSON"
+    const positionMatch = error.message.match(/position (\d+)/);
+    let errorPosition = positionMatch ? parseInt(positionMatch[1], 10) : null;
+
+    // If position not found in old format, try to extract from new format
+    if (errorPosition === null) {
+      // Try to find the problematic token in the new error format
+      const tokenMatch = error.message.match(/Unexpected token '(.)', /);
+      if (tokenMatch && tokenMatch[1]) {
+        const problematicToken = tokenMatch[1];
+        // Find first occurrence of this token in the response
+        errorPosition = response.indexOf(problematicToken);
+      }
+    }
+
+    // Create enhanced error message with context snippet
+    let enhancedError = error.message;
+    let errorContext = null;
+
+    if (errorPosition !== null && errorPosition >= 0 && response && response.length > 0) {
+      // Calculate context window (50 chars before and after)
+      const contextRadius = 50;
+      const startPos = Math.max(0, errorPosition - contextRadius);
+      const endPos = Math.min(response.length, errorPosition + contextRadius);
+
+      // Extract context snippet
+      const beforeError = response.substring(startPos, errorPosition);
+      const atError = response[errorPosition] || '';
+      const afterError = response.substring(errorPosition + 1, endPos);
+
+      // Build error context with visual pointer
+      const snippet = beforeError + atError + afterError;
+      const pointerOffset = beforeError.length;
+      const pointer = ' '.repeat(pointerOffset) + '^';
+
+      errorContext = {
+        position: errorPosition,
+        snippet: snippet,
+        pointer: pointer,
+        beforeError: beforeError,
+        atError: atError,
+        afterError: afterError
+      };
+
+      // Create human-readable error context for display
+      enhancedError = `${error.message}
+
+Error location (position ${errorPosition}):
+${snippet}
+${pointer} here`;
+    }
+
     if (debug) {
       console.log(`[DEBUG] JSON validation: Parse failed with error: ${error.message}`);
-      console.log(`[DEBUG] JSON validation: Error at position: ${error.message.match(/position (\d+)/) ? error.message.match(/position (\d+)/)[1] : 'unknown'}`);
-      
+      console.log(`[DEBUG] JSON validation: Error at position: ${errorPosition !== null ? errorPosition : 'unknown'}`);
+
+      if (errorContext) {
+        console.log(`[DEBUG] JSON validation: Error context:\n${errorContext.snippet}\n${errorContext.pointer}`);
+      }
+
       // Try to identify common JSON issues
       if (error.message.includes('Unexpected token')) {
         console.log(`[DEBUG] JSON validation: Likely syntax error - unexpected character`);
@@ -174,8 +232,13 @@ export function validateJsonResponse(response, options = {}) {
         console.log(`[DEBUG] JSON validation: Likely unquoted property names`);
       }
     }
-    
-    return { isValid: false, error: error.message };
+
+    return {
+      isValid: false,
+      error: error.message,
+      enhancedError: enhancedError,
+      errorContext: errorContext
+    };
   }
 }
 
@@ -357,11 +420,25 @@ export function isJsonSchemaDefinition(jsonString, options = {}) {
  * Create a correction prompt for invalid JSON
  * @param {string} invalidResponse - The invalid JSON response
  * @param {string} schema - The original schema
- * @param {string} error - The JSON parsing error
+ * @param {string|Object} errorOrValidation - The JSON parsing error string or validation result object
  * @param {number} [retryCount=0] - The current retry attempt (0-based)
  * @returns {string} - Correction prompt for the AI
  */
-export function createJsonCorrectionPrompt(invalidResponse, schema, error, retryCount = 0) {
+export function createJsonCorrectionPrompt(invalidResponse, schema, errorOrValidation, retryCount = 0) {
+  // Extract error information from validation result or string
+  let errorMessage;
+  let enhancedError;
+
+  if (typeof errorOrValidation === 'object' && errorOrValidation !== null) {
+    // It's a validation result object
+    errorMessage = errorOrValidation.error;
+    enhancedError = errorOrValidation.enhancedError || errorMessage;
+  } else {
+    // It's a plain error string (backwards compatibility)
+    errorMessage = errorOrValidation;
+    enhancedError = errorMessage;
+  }
+
   // Create increasingly stronger prompts based on retry attempt
   const strengthLevels = [
     {
@@ -388,7 +465,7 @@ export function createJsonCorrectionPrompt(invalidResponse, schema, error, retry
 
 ${invalidResponse.substring(0, 500)}${invalidResponse.length > 500 ? '...' : ''}
 
-Error: ${error}
+Error: ${enhancedError}
 
 ${currentLevel.instruction}
 
@@ -686,6 +763,178 @@ ${schema}
 Ensure all Mermaid diagrams are properly formatted within \`\`\`mermaid code blocks and follow correct Mermaid syntax.`;
 
   return prompt;
+}
+
+/**
+ * Specialized JSON fixing agent
+ * Uses a separate ProbeAgent instance optimized for JSON syntax correction
+ */
+export class JsonFixingAgent {
+  constructor(options = {}) {
+    // Import ProbeAgent dynamically to avoid circular dependencies
+    this.ProbeAgent = null;
+    this.options = {
+      sessionId: options.sessionId || `json-fixer-${Date.now()}`,
+      path: options.path || process.cwd(),
+      provider: options.provider,
+      model: options.model,
+      debug: options.debug,
+      tracer: options.tracer,
+      // Set to false since we're only fixing JSON syntax, not implementing code
+      allowEdit: false
+    };
+  }
+
+  /**
+   * Get the specialized prompt for JSON fixing
+   */
+  getJsonFixingPrompt() {
+    return `You are a world-class JSON syntax correction specialist. Your expertise lies in analyzing and fixing JSON syntax errors while preserving the original data structure and intent.
+
+CORE RESPONSIBILITIES:
+- Analyze JSON for syntax errors and structural issues
+- Fix syntax errors while maintaining the original data's semantic meaning
+- Ensure JSON follows proper RFC 8259 specification
+- Handle all JSON structures: objects, arrays, primitives, nested structures
+
+JSON SYNTAX RULES:
+1. **Property names**: Must be enclosed in double quotes
+2. **String values**: Must use double quotes (not single quotes)
+3. **Numbers**: Can be integers or decimals, no quotes needed
+4. **Booleans**: true or false (lowercase, no quotes)
+5. **Null**: null (lowercase, no quotes)
+6. **Arrays**: Comma-separated values in square brackets [...]
+7. **Objects**: Comma-separated key-value pairs in curly braces {...}
+8. **No trailing commas**: Last item in array/object must not have a trailing comma
+9. **Escape sequences**: Special characters must be escaped (\\n, \\t, \\", \\\\, etc.)
+
+COMMON ERRORS TO FIX:
+1. **Unquoted property names**: {name: "value"} → {"name": "value"}
+2. **Single quotes**: {'key': 'value'} → {"key": "value"}
+3. **Trailing commas**: {"a": 1,} → {"a": 1}
+4. **Unquoted strings**: {key: value} → {"key": "value"}
+5. **Missing commas**: {"a": 1 "b": 2} → {"a": 1, "b": 2}
+6. **Extra commas**: {"a": 1,, "b": 2} → {"a": 1, "b": 2}
+7. **Unclosed brackets/braces**: {"key": "value" → {"key": "value"}
+8. **Invalid escape sequences**: Fix or remove
+9. **Comments**: Remove // or /* */ comments (not allowed in JSON)
+10. **Undefined values**: Replace undefined with null
+
+FIXING METHODOLOGY:
+1. **Identify the error location** from the error message
+2. **Analyze the context** around the error
+3. **Apply the appropriate fix** based on JSON syntax rules
+4. **Preserve data intent** - never change the meaning of the data
+5. **Validate the result** - ensure it's parseable JSON
+
+CRITICAL RULES:
+- ALWAYS output only the corrected JSON
+- NEVER add explanations, comments, or additional text
+- NEVER wrap in markdown code blocks (no \`\`\`json)
+- PRESERVE the original data structure and values
+- FIX only syntax errors, don't modify the data itself
+- ENSURE the output is valid, parseable JSON
+
+When presented with broken JSON, analyze it thoroughly and provide the corrected version that maintains the original intent while fixing all syntax issues.`;
+  }
+
+  /**
+   * Initialize the ProbeAgent if not already done
+   */
+  async initializeAgent() {
+    if (!this.ProbeAgent) {
+      // Dynamic import to avoid circular dependency
+      const { ProbeAgent } = await import('./ProbeAgent.js');
+      this.ProbeAgent = ProbeAgent;
+    }
+
+    if (!this.agent) {
+      this.agent = new this.ProbeAgent({
+        sessionId: this.options.sessionId,
+        customPrompt: this.getJsonFixingPrompt(),
+        path: this.options.path,
+        provider: this.options.provider,
+        model: this.options.model,
+        debug: this.options.debug,
+        tracer: this.options.tracer,
+        allowEdit: this.options.allowEdit,
+        maxIterations: 5,  // Allow multiple iterations for JSON fixing
+        disableJsonValidation: true  // CRITICAL: Disable JSON validation in nested agent to prevent infinite recursion
+      });
+    }
+
+    return this.agent;
+  }
+
+  /**
+   * Fix invalid JSON using the specialized agent
+   * @param {string} invalidJson - The broken JSON string
+   * @param {string} schema - The original schema for context
+   * @param {Object} validationResult - Validation result with error details
+   * @param {number} attemptNumber - Current attempt number (for logging)
+   * @returns {Promise<string>} - The corrected JSON
+   */
+  async fixJson(invalidJson, schema, validationResult, attemptNumber = 1) {
+    await this.initializeAgent();
+
+    // Build error context from validation result
+    let errorContext = validationResult.error;
+    if (validationResult.enhancedError) {
+      errorContext = validationResult.enhancedError;
+    }
+
+    const prompt = `Fix the following invalid JSON.
+
+Error: ${errorContext}
+
+Invalid JSON:
+${invalidJson}
+
+Expected schema structure:
+${schema}
+
+Provide only the corrected JSON without any markdown formatting or explanations.`;
+
+    try {
+      if (this.options.debug) {
+        console.log(`[DEBUG] JSON fixing: Attempt ${attemptNumber} to fix JSON with separate agent`);
+      }
+
+      // Call the specialized JSON fixing agent
+      const result = await this.agent.answer(prompt, []);
+
+      // Clean the result (in case AI added markdown despite instructions)
+      const cleaned = cleanSchemaResponse(result);
+
+      if (this.options.debug) {
+        console.log(`[DEBUG] JSON fixing: Agent returned ${cleaned.length} chars`);
+      }
+
+      return cleaned;
+    } catch (error) {
+      if (this.options.debug) {
+        console.error(`[DEBUG] JSON fixing failed: ${error.message}`);
+      }
+      throw new Error(`Failed to fix JSON: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get token usage information from the specialized agent
+   * @returns {Object} - Token usage statistics
+   */
+  getTokenUsage() {
+    return this.agent ? this.agent.getTokenUsage() : null;
+  }
+
+  /**
+   * Cancel any ongoing operations
+   */
+  cancel() {
+    if (this.agent) {
+      this.agent.cancel();
+    }
+  }
 }
 
 /**

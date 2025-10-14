@@ -78,6 +78,7 @@ export class ProbeAgent {
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
    * @param {number} [options.maxIterations] - Maximum tool iterations (overrides MAX_TOOL_ITERATIONS env var)
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
+   * @param {boolean} [options.disableJsonValidation=false] - Disable automatic JSON validation and fixing (prevents infinite recursion in JsonFixingAgent)
    * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
    * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
    * @param {Object} [options.mcpConfig] - MCP configuration object (overrides mcpConfigPath)
@@ -98,6 +99,7 @@ export class ProbeAgent {
     this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
+    this.disableJsonValidation = !!options.disableJsonValidation;
 
     // Storage adapter (defaults to in-memory)
     this.storageAdapter = options.storageAdapter || new InMemoryStorageAdapter();
@@ -1611,7 +1613,8 @@ When troubleshooting:
           // Build appropriate reminder message based on whether schema is provided
           let reminderContent;
           if (options.schema) {  // Apply for ANY schema, not just JSON schemas
-            // When schema is provided, give specific instructions
+            // When schema is provided, AI should either use tools OR provide natural response
+            // Schema formatting will happen automatically afterward
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
 Remember: Use proper XML format with BOTH opening and closing tags:
@@ -1620,15 +1623,16 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
-IMPORTANT: A schema was provided. You MUST respond with data that matches this schema.
-Use attempt_completion with your response directly inside the tags:
+IMPORTANT: A schema was provided for the final output format. You have two options:
 
+Option 1 - Use attempt_completion with your complete answer:
 <attempt_completion>
-[Your response content matching the provided schema format]
+[Your complete answer here - will be automatically formatted to match the schema]
 </attempt_completion>
 
-Your response must conform to this schema:
-${options.schema}`;
+Option 2 - Provide a natural response without any tool, and it will be automatically formatted.
+
+Do NOT try to format your response as JSON yourself - this will be done automatically.`;
           } else {
             // Standard reminder without schema
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
@@ -1808,7 +1812,14 @@ Convert your previous response content into actual JSON data that follows this s
               console.log(`[DEBUG] JSON validation: Starting validation process for schema response`);
               console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
             }
-            
+
+            // Clean the response first to extract JSON from markdown/code blocks
+            finalResult = cleanSchemaResponse(finalResult);
+
+            if (this.debug) {
+              console.log(`[DEBUG] JSON validation: After cleaning, length: ${finalResult.length} chars`);
+            }
+
             // Record JSON validation start in telemetry
             if (this.tracer) {
               this.tracer.recordJsonValidationEvent('started', {
@@ -1816,94 +1827,88 @@ Convert your previous response content into actual JSON data that follows this s
                 'json_validation.schema_type': 'JSON'
               });
             }
-            
+
             let validation = validateJsonResponse(finalResult, { debug: this.debug });
             let retryCount = 0;
             const maxRetries = 3;
-            
+
             // First check if the response is valid JSON but is actually a schema definition
             if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
               if (this.debug) {
-                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, correcting...`);
+                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, needs correction...`);
               }
-              
-              // Use specialized correction prompt for schema definition confusion
-              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
-                finalResult,
-                options.schema,
-                0
-              );
-              
-              finalResult = await this.answer(schemaDefinitionPrompt, [], { 
-                ...options, 
-                _schemaFormatted: true 
-              });
-              finalResult = cleanSchemaResponse(finalResult);
-              validation = validateJsonResponse(finalResult);
-              retryCount = 1; // Start at 1 since we already did one correction
+              // Mark as invalid so it goes through the fixing process
+              validation = {
+                isValid: false,
+                error: 'Response is a JSON schema definition instead of actual data',
+                enhancedError: 'Response is a JSON schema definition instead of actual data. Please return data that conforms to the schema, not the schema itself.'
+              };
             }
-            
-            while (!validation.isValid && retryCount < maxRetries) {
+
+            // Use separate JsonFixingAgent for JSON corrections (isolates session like Mermaid fixing)
+            if (!validation.isValid) {
               if (this.debug) {
-                console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
-                console.log(`[DEBUG] JSON validation: Invalid response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
+                console.log(`[DEBUG] JSON validation: Starting separate JsonFixingAgent session...`);
               }
-              
-              // Check if the invalid response is actually a schema definition
-              let correctionPrompt;
-              try {
-                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
-                  if (this.debug) {
-                    console.log(`[DEBUG] JSON validation: Response is still a schema definition, using specialized correction`);
-                  }
-                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
-                    finalResult,
+
+              const { JsonFixingAgent } = await import('./schemaUtils.js');
+              const jsonFixer = new JsonFixingAgent({
+                path: this.allowedFolders[0],
+                provider: this.clientApiProvider,
+                model: this.model,
+                debug: this.debug,
+                tracer: this.tracer
+              });
+
+              let currentResult = finalResult;
+              let currentValidation = validation;
+
+              while (!currentValidation.isValid && retryCount < maxRetries) {
+                if (this.debug) {
+                  console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, currentValidation.error);
+                  console.log(`[DEBUG] JSON validation: Invalid response sample: ${currentResult.substring(0, 300)}${currentResult.length > 300 ? '...' : ''}`);
+                }
+
+                try {
+                  // Use specialized JsonFixingAgent to fix the JSON in a separate session
+                  currentResult = await jsonFixer.fixJson(
+                    currentResult,
                     options.schema,
-                    retryCount
+                    currentValidation,
+                    retryCount + 1
                   );
-                } else {
-                  correctionPrompt = createJsonCorrectionPrompt(
-                    finalResult, 
-                    options.schema, 
-                    validation.error,
-                    retryCount
-                  );
-                }
-              } catch (error) {
-                // If we can't parse to check if it's a schema definition, use regular correction
-                correctionPrompt = createJsonCorrectionPrompt(
-                  finalResult, 
-                  options.schema, 
-                  validation.error,
-                  retryCount
-                );
-              }
-              
-              finalResult = await this.answer(correctionPrompt, [], { 
-                ...options, 
-                _schemaFormatted: true 
-              });
-              finalResult = cleanSchemaResponse(finalResult);
-              
-              // Validate the corrected response
-              validation = validateJsonResponse(finalResult, { debug: this.debug });
-              retryCount++;
-              
-              if (this.debug) {
-                if (!validation.isValid && retryCount < maxRetries) {
-                  console.log(`[DEBUG] JSON validation: Still invalid after correction ${retryCount}, retrying...`);
-                  console.log(`[DEBUG] JSON validation: Corrected response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
-                } else if (validation.isValid) {
-                  console.log(`[DEBUG] JSON validation: Successfully corrected after ${retryCount} attempts`);
+
+                  // Validate the corrected response
+                  currentValidation = validateJsonResponse(currentResult, { debug: this.debug });
+                  retryCount++;
+
+                  if (this.debug) {
+                    if (!currentValidation.isValid && retryCount < maxRetries) {
+                      console.log(`[DEBUG] JSON validation: Still invalid after correction ${retryCount}, retrying...`);
+                      console.log(`[DEBUG] JSON validation: Corrected response sample: ${currentResult.substring(0, 300)}${currentResult.length > 300 ? '...' : ''}`);
+                    } else if (currentValidation.isValid) {
+                      console.log(`[DEBUG] JSON validation: Successfully corrected after ${retryCount} attempts with JsonFixingAgent`);
+                    }
+                  }
+                } catch (error) {
+                  if (this.debug) {
+                    console.error(`[DEBUG] JSON validation: JsonFixingAgent error on attempt ${retryCount + 1}:`, error.message);
+                  }
+                  // If JsonFixingAgent fails, break out of loop
+                  break;
                 }
               }
-            }
-            
-            if (!validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON validation: Still invalid after ${maxRetries} correction attempts:`, validation.error);
-              console.log(`[DEBUG] JSON validation: Final invalid response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
-            } else if (validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON validation: Final validation successful`);
+
+              // Update finalResult with the fixed version
+              finalResult = currentResult;
+              validation = currentValidation;
+
+              if (!validation.isValid && this.debug) {
+                console.log(`[DEBUG] JSON validation: Still invalid after ${maxRetries} correction attempts with JsonFixingAgent:`, validation.error);
+                console.log(`[DEBUG] JSON validation: Final invalid response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+              } else if (validation.isValid && this.debug) {
+                console.log(`[DEBUG] JSON validation: Final validation successful`);
+              }
             }
             
             // Record JSON validation completion in telemetry
@@ -2209,6 +2214,7 @@ Convert your previous response content into actual JSON data that follows this s
       maxResponseTokens: this.maxResponseTokens,
       maxIterations: this.maxIterations,
       disableMermaidValidation: this.disableMermaidValidation,
+      disableJsonValidation: this.disableJsonValidation,
       enableMcp: !!this.mcpBridge,
       mcpConfig: this.mcpConfig,
       enableBash: this.enableBash,
@@ -2232,11 +2238,60 @@ Convert your previous response content into actual JSON data that follows this s
 
   /**
    * Internal method to strip internal/temporary messages from history
-   * Removes: schema reminders, mermaid fix prompts, tool use reminders, etc.
-   * Keeps: system message, user messages, assistant responses, tool results
+   * Strategy: Find the FIRST schema-related message and truncate everything from that point onwards.
+   * This ensures that all schema formatting iterations (IMPORTANT, CRITICAL, corrections, etc.) are removed.
+   * Keeps: system message, user messages, assistant responses, tool results up to the first schema message
    * @private
    */
   _stripInternalMessages(history, keepSystemMessage = true) {
+    // Find the first schema-related message index
+    let firstSchemaMessageIndex = -1;
+
+    for (let i = 0; i < history.length; i++) {
+      const message = history[i];
+
+      // Skip system messages
+      if (message.role === 'system') {
+        continue;
+      }
+
+      // Check if this is a schema-related message
+      if (this._isSchemaMessage(message)) {
+        firstSchemaMessageIndex = i;
+        if (this.debug) {
+          console.log(`[DEBUG] Found first schema message at index ${i}, truncating from here`);
+        }
+        break;
+      }
+    }
+
+    // If no schema message found, try to find other internal messages and remove them individually
+    if (firstSchemaMessageIndex === -1) {
+      return this._stripNonSchemaInternalMessages(history, keepSystemMessage);
+    }
+
+    // Truncate at the first schema message, then also filter non-schema internal messages
+    // from the remaining history before the schema
+    const truncated = history.slice(0, firstSchemaMessageIndex);
+
+    // Now filter non-schema internal messages from the truncated history
+    const filtered = this._stripNonSchemaInternalMessages(truncated, keepSystemMessage);
+
+    if (this.debug) {
+      const removedCount = history.length - filtered.length;
+      console.log(`[DEBUG] Truncated at schema message (index ${firstSchemaMessageIndex}) and filtered non-schema internal messages`);
+      console.log(`[DEBUG] Removed ${removedCount} messages total (${history.length} → ${filtered.length})`);
+    }
+
+    return filtered;
+  }
+
+  /**
+   * Strip non-schema internal messages (mermaid fixes, tool reminders, etc.) individually
+   * Used when no schema messages are present in history
+   * @private
+   */
+  _stripNonSchemaInternalMessages(history, keepSystemMessage = true) {
     const filtered = [];
 
     for (let i = 0; i < history.length; i++) {
@@ -2252,10 +2307,10 @@ Convert your previous response content into actual JSON data that follows this s
         continue;
       }
 
-      // Check if this is an internal message that should be stripped
-      if (this._isInternalMessage(message, i, history)) {
+      // Check if this is a non-schema internal message (mermaid, tool reminders)
+      if (this._isNonSchemaInternalMessage(message)) {
         if (this.debug) {
-          console.log(`[DEBUG] Stripping internal message at index ${i}: ${message.role}`);
+          console.log(`[DEBUG] Stripping non-schema internal message at index ${i}: ${message.role}`);
         }
         continue;
       }
@@ -2268,28 +2323,67 @@ Convert your previous response content into actual JSON data that follows this s
   }
 
   /**
-   * Determine if a message is an internal/temporary message
+   * Check if a message is schema-related (IMPORTANT, CRITICAL, etc.)
    * @private
    */
-  _isInternalMessage(message, index, history) {
+  _isSchemaMessage(message) {
     if (message.role !== 'user') {
-      return false; // Only user messages can be internal reminders
+      return false;
     }
 
-    // Handle null/undefined content
     if (!message.content) {
       return false;
     }
 
-    const content = typeof message.content === 'string'
-      ? message.content
-      : JSON.stringify(message.content);
+    let content;
+    try {
+      content = typeof message.content === 'string'
+        ? message.content
+        : JSON.stringify(message.content);
+    } catch (error) {
+      // If content cannot be stringified (e.g., circular reference), skip this message
+      if (this.debug) {
+        console.log(`[DEBUG] Could not stringify message content in _isSchemaMessage: ${error.message}`);
+      }
+      return false;
+    }
 
     // Schema reminder messages
     if (content.includes('IMPORTANT: A schema was provided') ||
         content.includes('You MUST respond with data that matches this schema') ||
-        content.includes('Your response must conform to this schema:')) {
+        content.includes('Your response must conform to this schema:') ||
+        content.includes('CRITICAL: You MUST respond with ONLY valid JSON DATA') ||
+        content.includes('Schema to follow (this is just the structure')) {
       return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if a message is a non-schema internal message (mermaid, tool reminders, JSON corrections)
+   * @private
+   */
+  _isNonSchemaInternalMessage(message) {
+    if (message.role !== 'user') {
+      return false;
+    }
+
+    if (!message.content) {
+      return false;
+    }
+
+    let content;
+    try {
+      content = typeof message.content === 'string'
+        ? message.content
+        : JSON.stringify(message.content);
+    } catch (error) {
+      // If content cannot be stringified (e.g., circular reference), skip this message
+      if (this.debug) {
+        console.log(`[DEBUG] Could not stringify message content in _isNonSchemaInternalMessage: ${error.message}`);
+      }
+      return false;
     }
 
     // Tool use reminder messages
@@ -2321,6 +2415,7 @@ Convert your previous response content into actual JSON data that follows this s
 
     return false;
   }
+
 
   /**
    * Clean up resources (including MCP connections)
