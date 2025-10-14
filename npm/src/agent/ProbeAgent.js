@@ -1613,8 +1613,7 @@ When troubleshooting:
           // Build appropriate reminder message based on whether schema is provided
           let reminderContent;
           if (options.schema) {  // Apply for ANY schema, not just JSON schemas
-            // When schema is provided, AI should either use tools OR provide natural response
-            // Schema formatting will happen automatically afterward
+            // When schema is provided, AI must use attempt_completion to trigger schema formatting
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
 Remember: Use proper XML format with BOTH opening and closing tags:
@@ -1623,16 +1622,14 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
-IMPORTANT: A schema was provided for the final output format. You have two options:
+IMPORTANT: A schema was provided for the final output format.
 
-Option 1 - Use attempt_completion with your complete answer:
+You MUST use attempt_completion to provide your answer:
 <attempt_completion>
-[Your complete answer here - will be automatically formatted to match the schema]
+[Your complete answer here - provide in natural language, it will be automatically formatted to match the schema]
 </attempt_completion>
 
-Option 2 - Provide a natural response without any tool, and it will be automatically formatted.
-
-Do NOT try to format your response as JSON yourself - this will be done automatically.`;
+Your response will be automatically formatted to JSON. You can provide your answer in natural language or as JSON - either will work.`;
           } else {
             // Standard reminder without schema
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
@@ -1928,8 +1925,9 @@ Convert your previous response content into actual JSON data that follows this s
         }
       } else if (reachedMaxIterations && options.schema && this.debug) {
         console.log('[DEBUG] Skipping schema formatting due to max iterations reached without completion');
-      } else if (completionAttempted && options.schema && !options._schemaFormatted) {
+      } else if (completionAttempted && options.schema && !options._schemaFormatted && !options._skipValidation) {
         // For attempt_completion results with schema, still clean markdown if needed
+        // Skip this validation if we're in a recursive correction call (_skipValidation flag)
         try {
           finalResult = cleanSchemaResponse(finalResult);
           
@@ -1995,9 +1993,10 @@ Convert your previous response content into actual JSON data that follows this s
                 0
               );
               
-              finalResult = await this.answer(schemaDefinitionPrompt, [], { 
-                ...options, 
-                _schemaFormatted: true 
+              finalResult = await this.answer(schemaDefinitionPrompt, [], {
+                ...options,
+                _schemaFormatted: true,
+                _skipValidation: true  // Skip validation in recursive correction calls to prevent loops
               });
               finalResult = cleanSchemaResponse(finalResult);
               validation = validateJsonResponse(finalResult);
@@ -2040,9 +2039,10 @@ Convert your previous response content into actual JSON data that follows this s
                 );
               }
               
-              finalResult = await this.answer(correctionPrompt, [], { 
-                ...options, 
-                _schemaFormatted: true 
+              finalResult = await this.answer(correctionPrompt, [], {
+                ...options,
+                _schemaFormatted: true,
+                _skipValidation: true  // Skip validation in recursive correction calls to prevent loops
               });
               finalResult = cleanSchemaResponse(finalResult);
               
