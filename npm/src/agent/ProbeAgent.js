@@ -1270,6 +1270,9 @@ When troubleshooting:
               temperature: 0.3,
             });
 
+            // Get the promise reference BEFORE consuming stream (doesn't lock it)
+            const usagePromise = result.usage;
+
             // Collect the streamed response - stream all content for now
             for await (const delta of result.textStream) {
               assistantResponseContent += delta;
@@ -1279,8 +1282,8 @@ When troubleshooting:
               }
             }
 
-            // Record token usage
-            const usage = await result.usage;
+            // Record token usage - await the promise AFTER stream is consumed
+            const usage = await usagePromise;
             if (usage) {
               this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
             }
