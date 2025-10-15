@@ -1,18 +1,13 @@
-import nodeSDKPkg from '@opentelemetry/sdk-node';
-import resourcesPkg from '@opentelemetry/resources';
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { trace, context, SpanStatusCode } from '@opentelemetry/api';
-import otlpPkg from '@opentelemetry/exporter-trace-otlp-http';
-import spanPkg from '@opentelemetry/sdk-trace-base';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { BatchSpanProcessor, ConsoleSpanExporter } from '@opentelemetry/sdk-trace-base';
 
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { FileSpanExporter } from './fileSpanExporter.js';
-
-const { NodeSDK } = nodeSDKPkg;
-const { Resource } = resourcesPkg;
-const { OTLPTraceExporter } = otlpPkg;
-const { BatchSpanProcessor, ConsoleSpanExporter } = spanPkg;
 
 /**
  * Custom OpenTelemetry configuration for probe-agent
@@ -39,7 +34,7 @@ export class TelemetryConfig {
       return;
     }
 
-    const resource = new Resource({
+    const resource = resourceFromAttributes({
       [ATTR_SERVICE_NAME]: this.serviceName,
       [ATTR_SERVICE_VERSION]: this.serviceVersion,
     });

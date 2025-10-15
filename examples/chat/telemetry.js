@@ -1,18 +1,12 @@
-import nodeSDKPkg from '@opentelemetry/sdk-node';
-import resourcesPkg from '@opentelemetry/resources';
-import semanticConventionsPkg from '@opentelemetry/semantic-conventions';
+import { NodeSDK } from '@opentelemetry/sdk-node';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } from '@opentelemetry/semantic-conventions';
 import { trace, context } from '@opentelemetry/api';
-import otlpPkg from '@opentelemetry/exporter-trace-otlp-http';
-import spanPkg from '@opentelemetry/sdk-trace-base';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { BatchSpanProcessor, ConsoleSpanExporter } from '@opentelemetry/sdk-trace-base';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import { FileSpanExporter } from './fileSpanExporter.js';
-
-const { NodeSDK } = nodeSDKPkg;
-const { resourceFromAttributes } = resourcesPkg;
-const { ATTR_SERVICE_NAME, ATTR_SERVICE_VERSION } = semanticConventionsPkg;
-const { OTLPTraceExporter } = otlpPkg;
-const { BatchSpanProcessor, ConsoleSpanExporter } = spanPkg;
 
 /**
  * Custom OpenTelemetry configuration for probe-chat
