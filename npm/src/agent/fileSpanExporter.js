@@ -1,7 +1,5 @@
 import { createWriteStream } from 'fs';
-import corePkg from '@opentelemetry/core';
-
-const { ExportResultCode } = corePkg;
+import { ExportResultCode } from '@opentelemetry/core';
 
 /**
  * File exporter for OpenTelemetry spans
