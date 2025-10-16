@@ -115,7 +115,7 @@ export async function extract(options) {
  */
 function extractWithStdin(binaryPath, cliArgs, content, options) {
 	return new Promise((resolve, reject) => {
-		const process = spawn(binaryPath, ['extract', ...cliArgs], {
+		const childProcess = spawn(binaryPath, ['extract', ...cliArgs], {
 			stdio: ['pipe', 'pipe', 'pipe']
 		});
 
@@ -123,17 +123,17 @@ function extractWithStdin(binaryPath, cliArgs, content, options) {
 		let stderr = '';
 
 		// Collect stdout
-		process.stdout.on('data', (data) => {
+		childProcess.stdout.on('data', (data) => {
 			stdout += data.toString();
 		});
 
 		// Collect stderr
-		process.stderr.on('data', (data) => {
+		childProcess.stderr.on('data', (data) => {
 			stderr += data.toString();
 		});
 
 		// Handle process exit
-		process.on('close', (code) => {
+		childProcess.on('close', (code) => {
 			if (stderr && process.env.DEBUG === '1') {
 				console.error(`stderr: ${stderr}`);
 			}
@@ -152,17 +152,17 @@ function extractWithStdin(binaryPath, cliArgs, content, options) {
 		});
 
 		// Handle errors
-		process.on('error', (error) => {
+		childProcess.on('error', (error) => {
 			reject(new Error(`Failed to spawn extract process: ${error.message}`));
 		});
 
 		// Write content to stdin and close
 		if (typeof content === 'string') {
-			process.stdin.write(content);
+			childProcess.stdin.write(content);
 		} else {
-			process.stdin.write(content);
+			childProcess.stdin.write(content);
 		}
-		process.stdin.end();
+		childProcess.stdin.end();
 	});
 }
 
