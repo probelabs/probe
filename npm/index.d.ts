@@ -356,7 +356,7 @@ export interface ExtractParams {
   /** Number of context lines */
   contextLines?: number;
   /** Output format */
-  format?: 'markdown' | 'plain' | 'json';
+  format?: 'markdown' | 'plain' | 'json' | 'xml' | 'color' | 'outline-xml' | 'outline-diff';
   /** Session ID */
   sessionId?: string;
 }

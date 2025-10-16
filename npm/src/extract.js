@@ -28,7 +28,7 @@ const EXTRACT_FLAG_MAP = {
  * @param {string} [options.inputFile] - Path to a file containing unstructured text to extract file paths from
  * @param {boolean} [options.allowTests] - Include test files
  * @param {number} [options.contextLines] - Number of context lines to include
- * @param {string} [options.format] - Output format ('markdown', 'plain', 'json')
+ * @param {string} [options.format] - Output format ('markdown', 'plain', 'json', 'xml', 'color', 'outline-xml', 'outline-diff')
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
