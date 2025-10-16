@@ -40,7 +40,10 @@ enum RenderOp<'a> {
     Context(&'a DiffLine),
     Add(&'a DiffLine),
     Remove(&'a DiffLine),
-    Replace { old: &'a DiffLine, new: &'a DiffLine },
+    Replace {
+        old: &'a DiffLine,
+        new: &'a DiffLine,
+    },
     Gap,
 }
 
@@ -130,7 +133,10 @@ pub fn format_outline_diff(results: &[SearchResult], raw_diff: Option<&str>) -> 
     let mut results_by_file: HashMap<PathBuf, Vec<&SearchResult>> = HashMap::new();
     for result in &result_refs {
         let path = PathBuf::from(&result.file);
-        results_by_file.entry(path.clone()).or_default().push(result);
+        results_by_file
+            .entry(path.clone())
+            .or_default()
+            .push(result);
     }
 
     // Sort files alphabetically for consistent output
@@ -141,7 +147,13 @@ pub fn format_outline_diff(results: &[SearchResult], raw_diff: Option<&str>) -> 
     for file_path in sorted_files {
         let file_results = &results_by_file[file_path];
         let diff_lines = diff_lines_by_file.get(file_path);
-        format_file_outline_diff(&mut output, file_path, file_results, &file_cache, diff_lines)?;
+        format_file_outline_diff(
+            &mut output,
+            file_path,
+            file_results,
+            &file_cache,
+            diff_lines,
+        )?;
     }
 
     Ok(output)
@@ -169,12 +181,7 @@ fn format_file_outline_diff(
     // Get source lines from cache
     let source = match file_cache.get(file_path) {
         Some(content) => content,
-        None => {
-            return Err(anyhow::anyhow!(
-                "File not found in cache: {:?}",
-                file_path
-            ))
-        }
+        None => return Err(anyhow::anyhow!("File not found in cache: {:?}", file_path)),
     };
     let source_lines: Vec<&str> = source.lines().collect();
 
@@ -201,9 +208,18 @@ fn format_file_outline_diff(
 
         // Debug output
         if std::env::var("DEBUG").unwrap_or_default() == "1" {
-            eprintln!("[DEBUG outline-diff] matched_lines (relative): {:?}", result.matched_lines);
-            eprintln!("[DEBUG outline-diff] matched_lines (absolute): {:?}", matched_lines_absolute);
-            eprintln!("[DEBUG outline-diff] outline collected {} lines", lines_with_types.len());
+            eprintln!(
+                "[DEBUG outline-diff] matched_lines (relative): {:?}",
+                result.matched_lines
+            );
+            eprintln!(
+                "[DEBUG outline-diff] matched_lines (absolute): {:?}",
+                matched_lines_absolute
+            );
+            eprintln!(
+                "[DEBUG outline-diff] outline collected {} lines",
+                lines_with_types.len()
+            );
         }
 
         // Write hunk header with semantic context (first line of code)
@@ -238,21 +254,27 @@ fn format_file_outline_diff(
     Ok(())
 }
 
-/// Render a single DiffLine with simplified gutter format
-/// Always shows just one line number - the relevant one
+/// Render a single DiffLine with prefix after the line number
+/// Format: "123+ code" or "123- code" or "123  code"
 /// hide_numbers: if true, skip line numbers (for replacements)
 /// width: column width for line numbers
-fn render_line(dl: &DiffLine, prefix: char, hide_numbers: bool, width: usize, output: &mut String) -> Result<()> {
+fn render_line(
+    dl: &DiffLine,
+    prefix: char,
+    hide_numbers: bool,
+    width: usize,
+    output: &mut String,
+) -> Result<()> {
     if hide_numbers {
-        // No line numbers for replacements - use spaces matching the width
-        let padding = " ".repeat(width);
-        writeln!(output, "{} {} {}", padding, prefix, dl.text)?;
+        // No line numbers - use spaces matching the width
+        let padding = " ".repeat(width + 1);
+        writeln!(output, "{} {}", padding, dl.text)?;
     } else {
         match (dl.old_no, dl.new_no) {
             (Some(num), Some(_)) | (Some(num), None) | (None, Some(num)) => {
-                // Show whichever number is available (prefer new for context)
+                // Show line number with prefix after: "123+" or "123-" or "123 "
                 let display_num = dl.new_no.or(dl.old_no).unwrap_or(num);
-                writeln!(output, "{:>width$} {} {}", display_num, prefix, dl.text)?;
+                writeln!(output, "{:>width$}{} {}", display_num, prefix, dl.text)?;
             }
             (None, None) => {
                 // Gap or other
@@ -303,7 +325,13 @@ fn render_outline_lines_as_diff(
         let max_new = dlines.iter().filter_map(|dl| dl.new_no).max().unwrap_or(0);
         max_old.max(max_new).to_string().len()
     } else {
-        lines.iter().map(|&(line_num, _)| line_num).max().unwrap_or(0).to_string().len()
+        lines
+            .iter()
+            .map(|&(line_num, _)| line_num)
+            .max()
+            .unwrap_or(0)
+            .to_string()
+            .len()
     };
 
     // Build a map from new line numbers to RenderOps for quick lookup
@@ -348,7 +376,8 @@ fn render_outline_lines_as_diff(
         while removed_index < removed_ops.len() {
             let (removed_old_no, removed_op) = removed_ops[removed_index];
             // Show removed lines that come before the current line
-            if removed_old_no <= last_displayed_line || (line_num > 0 && removed_old_no >= line_num) {
+            if removed_old_no <= last_displayed_line || (line_num > 0 && removed_old_no >= line_num)
+            {
                 removed_index += 1;
                 if removed_old_no <= last_displayed_line {
                     continue; // Already shown or too early
@@ -486,13 +515,13 @@ fn parse_diff(diff_text: &str) -> Result<HashMap<PathBuf, Vec<DiffLine>>> {
                         text: hunk_line[1..].to_string(),
                     });
                     old_line += 1;
-                } else if hunk_line.starts_with(' ') {
+                } else if let Some(stripped) = hunk_line.strip_prefix(' ') {
                     // Context line
                     current_diff_lines.push(DiffLine {
                         kind: DiffKind::Context,
                         old_no: Some(old_line),
                         new_no: Some(new_line),
-                        text: hunk_line[1..].to_string(),
+                        text: stripped.to_string(),
                     });
                     old_line += 1;
                     new_line += 1;
