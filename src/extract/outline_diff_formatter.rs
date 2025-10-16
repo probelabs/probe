@@ -6,7 +6,7 @@
 //! 3. Outputting in unified diff format with expanded semantic context
 //! 4. Adding +/- prefixes to show additions and deletions
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use probe_code::models::SearchResult;
 use probe_code::search::search_output::{
     collect_outline_lines, create_file_content_cache, OutlineLineType,
@@ -446,8 +446,10 @@ fn parse_diff(diff_text: &str) -> Result<HashMap<PathBuf, Vec<DiffLine>>> {
     let mut result: HashMap<PathBuf, Vec<DiffLine>> = HashMap::new();
     let lines: Vec<&str> = diff_text.lines().collect();
 
-    let diff_header_regex = Regex::new(r"^diff --git a/(.*) b/(.*)$").unwrap();
-    let hunk_header_regex = Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@").unwrap();
+    let diff_header_regex =
+        Regex::new(r"^diff --git a/(.*) b/(.*)$").context("Failed to compile diff header regex")?;
+    let hunk_header_regex = Regex::new(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+        .context("Failed to compile hunk header regex")?;
 
     let mut current_file: Option<PathBuf> = None;
     let mut current_diff_lines: Vec<DiffLine> = Vec::new();
@@ -465,7 +467,10 @@ fn parse_diff(diff_text: &str) -> Result<HashMap<PathBuf, Vec<DiffLine>>> {
             }
 
             // Use the 'b' path (new file) as current file
-            let file_path = cap.get(2).unwrap().as_str();
+            let file_path = cap
+                .get(2)
+                .context("Missing file path in diff header")?
+                .as_str();
             current_file = Some(PathBuf::from(file_path));
             i += 1;
             continue;
@@ -473,8 +478,14 @@ fn parse_diff(diff_text: &str) -> Result<HashMap<PathBuf, Vec<DiffLine>>> {
 
         // Check for hunk header
         if let Some(cap) = hunk_header_regex.captures(line) {
-            let old_start: usize = cap.get(1).unwrap().as_str().parse().unwrap_or(1);
-            let new_start: usize = cap.get(3).unwrap().as_str().parse().unwrap_or(1);
+            let old_start: usize = cap
+                .get(1)
+                .and_then(|m| m.as_str().parse().ok())
+                .context("Invalid hunk header old start line")?;
+            let new_start: usize = cap
+                .get(3)
+                .and_then(|m| m.as_str().parse().ok())
+                .context("Invalid hunk header new start line")?;
 
             let mut old_line = old_start;
             let mut new_line = new_start;
