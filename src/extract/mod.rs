@@ -6,6 +6,7 @@
 
 mod file_paths;
 mod formatter;
+mod outline_diff_formatter;
 mod processor;
 mod prompts;
 pub mod symbol_finder;
@@ -156,6 +157,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             if debug_mode {
                 eprintln!("[DEBUG] Parsing clipboard content as git diff format");
             }
+
+            // Store the diff buffer for outline-diff format (needs raw diff text)
+            if options.format == "outline-diff" && original_input.is_none() {
+                original_input = Some(buffer.clone());
+            }
+
             file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
         } else {
             // Parse as regular text
@@ -234,6 +241,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             if debug_mode {
                 eprintln!("[DEBUG] Parsing file content as git diff format");
             }
+
+            // Store the diff buffer for outline-diff format (needs raw diff text)
+            if options.format == "outline-diff" && original_input.is_none() {
+                original_input = Some(buffer.clone());
+            }
+
             file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
         } else {
             // Parse as regular text
@@ -306,6 +319,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 if debug_mode {
                     eprintln!("[DEBUG] Parsing stdin content as git diff format");
                 }
+
+                // Store the diff buffer for outline-diff format (needs raw diff text)
+                if options.format == "outline-diff" && original_input.is_none() {
+                    original_input = Some(buffer.clone());
+                }
+
                 file_paths = extract_file_paths_from_git_diff(&buffer, options.allow_tests);
             } else {
                 // Parse as regular text

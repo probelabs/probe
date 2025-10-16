@@ -9,7 +9,7 @@ use probe_code::search::query::QueryPlan;
 use probe_code::search::search_tokens::sum_tokens_with_deduplication;
 
 /// Create a cache of file contents for outline formatters to avoid redundant I/O
-fn create_file_content_cache(results: &[&SearchResult]) -> HashMap<PathBuf, Arc<String>> {
+pub fn create_file_content_cache(results: &[&SearchResult]) -> HashMap<PathBuf, Arc<String>> {
     let mut cache = HashMap::new();
 
     // Collect unique file paths
@@ -940,7 +940,7 @@ fn file_extension(path: &std::path::Path) -> &str {
     path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
 }
 
-fn collect_parent_context_for_line(
+pub fn collect_parent_context_for_line(
     file_path: &str,
     line_num: usize,
     source: &str,
@@ -1302,7 +1302,7 @@ fn collect_parent_context_for_line(
 
 /// Line type for outline display
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum OutlineLineType {
+pub enum OutlineLineType {
     ParentContext,     // Should be dimmed
     FunctionSignature, // Not dimmed
     NestedContext,     // Should be dimmed
@@ -1312,7 +1312,7 @@ enum OutlineLineType {
 
 /// Collect all lines to display for outline format with their types
 /// Returns (lines_with_types, closing_brace_contexts) where closing_brace_contexts maps line numbers to ParentContext
-fn collect_outline_lines(
+pub fn collect_outline_lines(
     result: &SearchResult,
     file_path: &str,
     file_cache: &HashMap<PathBuf, Arc<String>>,
@@ -1659,7 +1659,7 @@ fn collect_outline_lines(
 
 #[allow(clippy::too_many_arguments)]
 /// Render lines with proper gaps and ellipsis
-fn render_outline_lines(
+pub fn render_outline_lines(
     lines: &[(usize, OutlineLineType)],
     file_path: &str,
     displayed_lines: &mut std::collections::HashSet<usize>,
@@ -1920,7 +1920,7 @@ fn is_contextual_parent(node: &Node, language_impl: &dyn LanguageImpl, _source: 
 }
 
 /// Centralized function to print a line with deduplication
-fn print_line_once(
+pub fn print_line_once(
     line_num: usize,
     content: &str,
     displayed_lines: &mut std::collections::HashSet<usize>,
@@ -1960,7 +1960,7 @@ fn get_comment_prefix(extension: &str) -> &'static str {
 }
 
 /// Format a closing comment for the specific file type
-fn format_closing_comment(line_content: &str, extension: &str, context_text: &str) -> String {
+pub fn format_closing_comment(line_content: &str, extension: &str, context_text: &str) -> String {
     match extension {
         "md" | "markdown" => {
             // For markdown, use HTML-style comments with proper closing
@@ -2231,7 +2231,7 @@ fn extract_markdown_blockquote(line: &str) -> String {
 
 /// Centralized function to print ellipsis with deduplication
 /// Tracks ranges where ellipsis have been printed to prevent duplicates
-fn print_ellipsis_once(
+pub fn print_ellipsis_once(
     start_line: usize,
     end_line: usize,
     displayed_ellipsis_ranges: &mut Vec<(usize, usize)>,

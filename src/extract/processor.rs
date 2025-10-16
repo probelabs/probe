@@ -164,6 +164,23 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
+                // Convert specific lines to Vec for matched_lines, adjusting to be relative to the merged range
+                let matched_lines_vec = if let Some(lines_set) = specific_lines {
+                    let mut relative_lines: Vec<usize> = lines_set
+                        .iter()
+                        .filter(|&&line| line >= merged_start && line <= merged_end)
+                        .map(|&line| line - merged_start + 1)
+                        .collect();
+                    relative_lines.sort();
+                    if !relative_lines.is_empty() {
+                        Some(relative_lines)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
@@ -194,7 +211,7 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
-                    matched_lines: None,
+                    matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
                 })
@@ -608,6 +625,19 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&range_content, &filename);
 
+                // Convert specific lines to Vec for matched_lines, adjusting to be relative to the extracted range
+                let matched_lines_vec = if !lines_set.is_empty() {
+                    let mut relative_lines: Vec<usize> = lines_set
+                        .iter()
+                        .filter(|&&line| line >= start && line <= end)
+                        .map(|&line| line - start + 1)
+                        .collect();
+                    relative_lines.sort();
+                    Some(relative_lines)
+                } else {
+                    None
+                };
+
                 Ok(SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start, end),
@@ -634,7 +664,7 @@ pub fn process_file_for_extraction(
                     parent_file_id: None,
                     block_id: None,
                     matched_keywords: None,
-                    matched_lines: None,
+                    matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
                 })

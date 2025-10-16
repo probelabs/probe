@@ -350,13 +350,21 @@ export interface QueryParams {
  */
 export interface ExtractParams {
   /** Files and line numbers or symbols to extract */
-  files: string[];
+  files?: string[];
+  /** Path to a file containing unstructured text to extract file paths from */
+  inputFile?: string;
+  /** Content to pipe to stdin (e.g., git diff output). Alternative to inputFile or files. */
+  content?: string | Buffer;
   /** Path to search in */
   path?: string;
   /** Number of context lines */
   contextLines?: number;
   /** Output format */
-  format?: 'markdown' | 'plain' | 'json';
+  format?: 'markdown' | 'plain' | 'json' | 'xml' | 'color' | 'outline-xml' | 'outline-diff';
+  /** Include test files */
+  allowTests?: boolean;
+  /** Return results as parsed JSON instead of string */
+  json?: boolean;
   /** Session ID */
   sessionId?: string;
 }

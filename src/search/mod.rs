@@ -11,7 +11,7 @@ pub mod filters; // New module for search filters (file:, ext:, type:, etc.)
 pub mod ripgrep_searcher;
 mod search_limiter;
 mod search_options;
-mod search_output;
+pub mod search_output;
 pub mod search_runner;
 pub mod search_tokens;
 pub mod simd_pattern_matching;
