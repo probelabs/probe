@@ -10,6 +10,8 @@ use serde::Serialize;
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 
+use super::outline_diff_formatter;
+
 /// A single internal function that handles both dry-run and non-dry-run formatting.
 ///
 /// # Arguments
@@ -31,6 +33,11 @@ fn format_extraction_internal(
     symbols: bool,
 ) -> Result<String> {
     let mut output = String::new();
+
+    // Handle outline-diff format separately
+    if format == "outline-diff" {
+        return outline_diff_formatter::format_outline_diff(results, original_input);
+    }
 
     match format {
         // ---------------------------------------

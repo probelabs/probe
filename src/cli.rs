@@ -240,7 +240,8 @@ pub enum Commands {
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
-        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color", "outline-xml"])]
+        /// Use 'outline-diff' for semantically enhanced git diff output
+        #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color", "outline-xml", "outline-diff"])]
         format: String,
 
         /// Read input from clipboard instead of files
