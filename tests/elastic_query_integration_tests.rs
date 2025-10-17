@@ -681,6 +681,7 @@ fn test_filter_code_block_with_ast() {
     let ast = Expr::And(
         Box::new(Expr::Term {
             keywords: vec!["keywordAlpha".to_string()],
+            lowercase_keywords: vec!["keywordalpha".to_string()],
             field: None,
             required: false,
             excluded: false,
@@ -688,6 +689,7 @@ fn test_filter_code_block_with_ast() {
         }),
         Box::new(Expr::Term {
             keywords: vec!["keywordBeta".to_string()],
+            lowercase_keywords: vec!["keywordbeta".to_string()],
             field: None,
             required: false,
             excluded: true,
@@ -769,6 +771,7 @@ fn test_filter_tokenized_block() {
     let ast = Expr::And(
         Box::new(Expr::Term {
             keywords: vec!["keywordAlpha".to_string()],
+            lowercase_keywords: vec!["keywordalpha".to_string()],
             field: None,
             required: false,
             excluded: false,
@@ -776,6 +779,7 @@ fn test_filter_tokenized_block() {
         }),
         Box::new(Expr::Term {
             keywords: vec!["keywordBeta".to_string()],
+            lowercase_keywords: vec!["keywordbeta".to_string()],
             field: None,
             required: false,
             excluded: true,
@@ -857,6 +861,7 @@ fn test_filter_tokenized_block() {
     let ast_or = Expr::Or(
         Box::new(Expr::Term {
             keywords: vec!["keywordAlpha".to_string()],
+            lowercase_keywords: vec!["keywordalpha".to_string()],
             field: None,
             required: false,
             excluded: false,
@@ -864,6 +869,7 @@ fn test_filter_tokenized_block() {
         }),
         Box::new(Expr::Term {
             keywords: vec!["keywordGamma".to_string()],
+            lowercase_keywords: vec!["keywordgamma".to_string()],
             field: None,
             required: false,
             excluded: false,
@@ -873,8 +879,8 @@ fn test_filter_tokenized_block() {
 
     // Create a term indices map
     let mut term_indices_or = HashMap::new();
-    term_indices_or.insert("keywordAlpha".to_string(), 0);
-    term_indices_or.insert("keywordGamma".to_string(), 2);
+    term_indices_or.insert("keywordalpha".to_string(), 0);
+    term_indices_or.insert("keywordgamma".to_string(), 2);
 
     // Create a QueryPlan
     let has_required_anywhere = ast_or.has_required_term();
@@ -896,8 +902,8 @@ fn test_filter_tokenized_block() {
         is_universal_query: false,
     };
 
-    // Test with only keywordGamma
-    let tokenized_content = vec!["keywordGamma".to_string()];
+    // Test with only keywordGamma (lowercased since tokenization lowercases)
+    let tokenized_content = vec!["keywordgamma".to_string()];
 
     // The block should match because it has keywordGamma (part of OR expression)
     assert!(
@@ -905,8 +911,8 @@ fn test_filter_tokenized_block() {
         "Block should match because it has keywordGamma (part of OR expression)"
     );
 
-    // Test with both keywordAlpha and keywordGamma
-    let tokenized_content = vec!["keywordAlpha".to_string(), "keywordGamma".to_string()];
+    // Test with both keywordAlpha and keywordGamma (lowercased since tokenization lowercases)
+    let tokenized_content = vec!["keywordalpha".to_string(), "keywordgamma".to_string()];
 
     // The block should match because it has both keywords in OR expression
     assert!(

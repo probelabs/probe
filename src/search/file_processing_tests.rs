@@ -27,8 +27,10 @@ pub fn create_test_query_plan(terms: &[&str]) -> QueryPlan {
     }
 
     // Create a simple Term expression for testing
+    let keywords: Vec<String> = terms.iter().map(|&s| s.to_string()).collect();
     let ast = elastic_query::Expr::Term {
-        keywords: terms.iter().map(|&s| s.to_string()).collect(),
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,

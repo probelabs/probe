@@ -5,7 +5,7 @@ use probe_code::search::tokenization::tokenize_and_stem;
 /// to the terms unless they are marked as exact.
 fn process_ast_terms(expr: Expr) -> Expr {
     match expr {
-        Expr::Term { keywords, field, required, excluded, exact } => {
+        Expr::Term { keywords, field, required, excluded, exact, .. } => {
             // If exact or excluded => skip tokenization
             let processed_keywords = if exact || excluded {
                 keywords
@@ -20,7 +20,8 @@ fn process_ast_terms(expr: Expr) -> Expr {
             };
 
             Expr::Term {
-                keywords: processed_keywords,
+                keywords: processed_keywords.clone(),
+                lowercase_keywords: processed_keywords.iter().map(|k| k.to_lowercase()).collect(),
                 field,
                 required,
                 excluded,
@@ -74,8 +75,10 @@ fn test_tokenize_and_stem() {
 #[test]
 fn test_process_ast_terms() {
     // Test processing a simple term
+    let keywords = vec!["running".to_string()];
     let expr = Expr::Term {
-        keywords: vec!["running".to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -84,7 +87,7 @@ fn test_process_ast_terms() {
 
     let processed = process_ast_terms(expr);
 
-    if let Expr::Term { keywords, field, required, excluded, exact } = processed {
+    if let Expr::Term { keywords, field, required, excluded, exact, .. } = processed {
         assert_eq!(keywords, vec!["run"]);
         assert_eq!(field, None);
         assert!(!required);
@@ -95,8 +98,10 @@ fn test_process_ast_terms() {
     }
 
     // Test processing a term with camel case
+    let keywords = vec!["enableIpWhiteListing".to_string()];
     let expr = Expr::Term {
-        keywords: vec!["enableIpWhiteListing".to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: true,
         excluded: false,
@@ -105,7 +110,7 @@ fn test_process_ast_terms() {
 
     let processed = process_ast_terms(expr);
 
-    if let Expr::Term { keywords, field, required, excluded, exact } = processed {
+    if let Expr::Term { keywords, field, required, excluded, exact, .. } = processed {
         assert!(keywords.contains(&"enabl".to_string()));
         assert!(keywords.contains(&"ip".to_string()));
         assert!(keywords.contains(&"white".to_string()));
@@ -119,16 +124,20 @@ fn test_process_ast_terms() {
     }
 
     // Test processing a compound expression
+    let keywords1 = vec!["running".to_string()];
+    let keywords2 = vec!["whitelist".to_string()];
     let expr = Expr::And(
         Box::new(Expr::Term {
-            keywords: vec!["running".to_string()],
+            keywords: keywords1.clone(),
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,
             exact: false,
         }),
         Box::new(Expr::Term {
-            keywords: vec!["whitelist".to_string()],
+            keywords: keywords2.clone(),
+            lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,
@@ -319,8 +328,10 @@ fn test_parse_quoted_strings() {
 #[test]
 fn test_process_ast_terms_with_exact_flag() {
     // Test processing an exact term
+    let keywords = vec!["running".to_string()];
     let expr = Expr::Term {
-        keywords: vec!["running".to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -329,7 +340,7 @@ fn test_process_ast_terms_with_exact_flag() {
 
     let processed = process_ast_terms(expr);
 
-    if let Expr::Term { keywords, field, required, excluded, exact } = processed {
+    if let Expr::Term { keywords, field, required, excluded, exact, .. } = processed {
         // Keywords should not be stemmed for exact terms
         assert_eq!(keywords, vec!["running"]);
         assert_eq!(field, None);
@@ -341,16 +352,20 @@ fn test_process_ast_terms_with_exact_flag() {
     }
 
     // Test processing a compound expression with an exact term
+    let keywords1 = vec!["running".to_string()];
+    let keywords2 = vec!["whitelist".to_string()];
     let expr = Expr::And(
         Box::new(Expr::Term {
-            keywords: vec!["running".to_string()],
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords1,
             field: None,
             required: false,
             excluded: false,
             exact: false,
         }),
         Box::new(Expr::Term {
-            keywords: vec!["whitelist".to_string()],
+            lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords2,
             field: None,
             required: false,
             excluded: false,
@@ -391,8 +406,10 @@ fn test_evaluate_exact_terms_tokenization() {
     term_indices.insert("list".to_string(), 4);
 
     // Test exact term
+    let keywords = vec!["running".to_string()];
     let expr = Expr::Term {
-        keywords: vec!["running".to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -408,8 +425,10 @@ fn test_evaluate_exact_terms_tokenization() {
     assert!(!expr.evaluate(&matched_terms, &term_indices, false));
 
     // Test non-exact term
+    let keywords = vec!["run".to_string()];
     let expr = Expr::Term {
-        keywords: vec!["run".to_string()], // Use the stemmed form directly
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -435,16 +454,20 @@ fn test_evaluate_exact_terms_tokenization() {
 
     // Test compound expression with exact term - simplified approach
     // Create a new expression with the stemmed form directly
+    let keywords1 = vec!["run".to_string()];
+    let keywords2 = vec!["whitelist".to_string()];
     let expr = Expr::And(
         Box::new(Expr::Term {
-            keywords: vec!["run".to_string()], // Use stemmed form directly
+            keywords: keywords1.clone(),
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,
             exact: false,
         }),
         Box::new(Expr::Term {
-            keywords: vec!["whitelist".to_string()],
+            keywords: keywords2.clone(),
+            lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,

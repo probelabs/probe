@@ -888,13 +888,7 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
         if debug_mode {
             println!("DEBUG: Exact search enabled, treating query as a single term");
         }
-        return Ok(make_term(
-            vec![input.to_string()],
-            None,
-            false,
-            false,
-            true,
-        ));
+        return Ok(make_term(vec![input.to_string()], None, false, false, true));
     }
 
     // Tokenize

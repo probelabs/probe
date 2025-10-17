@@ -9,8 +9,10 @@ use std::sync::{Arc, Mutex};
 #[test]
 fn test_multi_keyword_pattern_generation() {
     // Create a simple AST with a multi-keyword term
+    let keywords = vec!["white".to_string(), "list".to_string()];
     let ast = Expr::Term {
-        keywords: vec!["white".to_string(), "list".to_string()],
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
+        keywords,
         field: None,
         required: false,
         excluded: false,
@@ -80,8 +82,10 @@ fn test_multi_keyword_pattern_generation() {
 #[test]
 fn test_excluded_term_pattern_generation() {
     // Create an AST with an excluded term
+    let keywords = vec!["excluded".to_string()];
     let ast = Expr::Term {
-        keywords: vec!["excluded".to_string()],
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
+        keywords,
         field: None,
         required: false,
         excluded: true,
@@ -129,16 +133,20 @@ fn test_excluded_term_pattern_generation() {
 #[test]
 fn test_and_expression_pattern_generation() {
     // Create an AST with an AND expression
+    let keywords1 = vec!["term1".to_string()];
+    let keywords2 = vec!["term2".to_string()];
     let ast = Expr::And(
         Box::new(Expr::Term {
-            keywords: vec!["term1".to_string()],
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords1,
             field: None,
             required: false,
             excluded: false,
             exact: false,
         }),
         Box::new(Expr::Term {
-            keywords: vec!["term2".to_string()],
+            lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords2,
             field: None,
             required: false,
             excluded: false,
@@ -200,16 +208,20 @@ fn test_and_expression_pattern_generation() {
 #[test]
 fn test_or_expression_pattern_generation() {
     // Create an AST with an OR expression
+    let keywords1 = vec!["term1".to_string()];
+    let keywords2 = vec!["term2".to_string()];
     let ast = Expr::Or(
         Box::new(Expr::Term {
-            keywords: vec!["term1".to_string()],
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords1,
             field: None,
             required: false,
             excluded: false,
             exact: false,
         }),
         Box::new(Expr::Term {
-            keywords: vec!["term2".to_string()],
+            lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords2,
             field: None,
             required: false,
             excluded: false,
@@ -281,9 +293,13 @@ fn test_or_expression_pattern_generation() {
 #[test]
 fn test_complex_expression_pattern_generation() {
     // Create a complex AST with multi-keyword terms and logical operators
+    let keywords1 = vec!["white".to_string(), "list".to_string()];
+    let keywords2 = vec!["fire".to_string(), "wall".to_string()];
+    let keywords3 = vec!["network".to_string()];
     let ast = Expr::And(
         Box::new(Expr::Term {
-            keywords: vec!["white".to_string(), "list".to_string()],
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords1,
             field: None,
             required: false,
             excluded: false,
@@ -291,14 +307,16 @@ fn test_complex_expression_pattern_generation() {
         }),
         Box::new(Expr::Or(
             Box::new(Expr::Term {
-                keywords: vec!["fire".to_string(), "wall".to_string()],
+                lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
+                keywords: keywords2,
                 field: None,
                 required: false,
                 excluded: false,
                 exact: false,
             }),
             Box::new(Expr::Term {
-                keywords: vec!["network".to_string()],
+                lowercase_keywords: keywords3.iter().map(|k| k.to_lowercase()).collect(),
+                keywords: keywords3,
                 field: None,
                 required: false,
                 excluded: false,
@@ -384,16 +402,20 @@ fn test_complex_expression_pattern_generation() {
 #[test]
 fn test_pattern_deduplication() {
     // Create an AST with duplicate terms
+    let keywords1 = vec!["term".to_string()];
+    let keywords2 = vec!["term".to_string()];
     let ast = Expr::Or(
         Box::new(Expr::Term {
-            keywords: vec!["term".to_string()],
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords1,
             field: None,
             required: false,
             excluded: false,
             exact: false,
         }),
         Box::new(Expr::Term {
-            keywords: vec!["term".to_string()],
+            lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
+            keywords: keywords2,
             field: None,
             required: false,
             excluded: false,
