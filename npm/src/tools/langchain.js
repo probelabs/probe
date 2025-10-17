@@ -6,7 +6,7 @@
 import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
-import { searchSchema, querySchema, extractSchema, searchDescription, queryDescription, extractDescription } from './common.js';
+import { searchSchema, querySchema, extractSchema, searchDescription, queryDescription, extractDescription, parseTargets } from './common.js';
 
 // LangChain tool for searching code
 export function createSearchTool() {
@@ -69,7 +69,8 @@ export function createExtractTool() {
 		schema: extractSchema,
 		func: async ({ targets, line, end_line, allow_tests, context_lines, format }) => {
 			try {
-				const files = [targets];
+				// Split targets on whitespace to support multiple targets in one call
+				const files = parseTargets(targets);
 
 				const results = await extract({
 					files,

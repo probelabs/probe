@@ -8,7 +8,7 @@ import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
-import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription } from './common.js';
+import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets } from './common.js';
 
 /**
  * Search tool generator
@@ -191,7 +191,7 @@ export const extractTool = (options = {}) => {
 				} else if (targets) {
 					// Parse targets to handle line numbers and symbol names
 					// Split on whitespace to support multiple targets in one call
-					const files = targets.split(/\s+/).filter(f => f.length > 0);
+					const files = parseTargets(targets);
 
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;
