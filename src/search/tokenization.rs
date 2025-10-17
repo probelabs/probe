@@ -842,7 +842,15 @@ static DYNAMIC_SPECIAL_TERMS: Lazy<RwLock<HashSet<String>>> =
 
 /// Add a term to the dynamic special terms list
 pub fn add_special_term(term: &str) {
-    let mut special_terms = DYNAMIC_SPECIAL_TERMS.write().unwrap();
+    // Handle poisoned lock gracefully - if lock is poisoned, clear it and continue
+    let mut special_terms = match DYNAMIC_SPECIAL_TERMS.write() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            // Lock was poisoned, but we can still recover the data
+            eprintln!("WARNING: DYNAMIC_SPECIAL_TERMS lock was poisoned, recovering");
+            poisoned.into_inner()
+        }
+    };
     special_terms.insert(term.to_lowercase());
 
     // Debug output
@@ -1180,7 +1188,18 @@ pub fn is_special_case(word: &str) -> bool {
     }
 
     // Check if the word is in the dynamic special terms list
-    let special_terms = DYNAMIC_SPECIAL_TERMS.read().unwrap();
+    // Handle poisoned lock gracefully - if lock is poisoned, treat as empty set
+    let special_terms = match DYNAMIC_SPECIAL_TERMS.read() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            // Lock was poisoned, but we can still read the data
+            if debug_mode {
+                eprintln!("WARNING: DYNAMIC_SPECIAL_TERMS read lock was poisoned, recovering");
+            }
+            poisoned.into_inner()
+        }
+    };
+
     if special_terms.contains(&lowercase) {
         // Debug output
         if debug_mode {
