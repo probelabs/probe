@@ -848,15 +848,11 @@ pub fn add_special_term(term: &str) {
     // Use blocking write lock for consistency - try_write can cause inconsistent results
     let mut special_terms = match DYNAMIC_SPECIAL_TERMS.write() {
         Ok(guard) => guard,
-        Err(poisoned) => {
+        Err(_poisoned) => {
             // Lock was poisoned - this indicates data corruption
-            eprintln!(
-                "CRITICAL: DYNAMIC_SPECIAL_TERMS lock was poisoned - data corruption detected"
-            );
-            // Recover the data but clear it to prevent propagating corrupted state
-            let mut guard = poisoned.into_inner();
-            guard.clear();
-            guard
+            // Don't recover - abort to prevent propagating corrupted state
+            eprintln!("CRITICAL: DYNAMIC_SPECIAL_TERMS lock was poisoned - aborting operation");
+            return;
         }
     };
 
