@@ -482,7 +482,7 @@ export declare function extract(
   path?: string,
   options?: {
     contextLines?: number;
-    format?: 'markdown' | 'plain' | 'json';
+    format?: 'markdown' | 'plain' | 'json' | 'xml' | 'color' | 'outline-xml' | 'outline-diff';
   }
 ): Promise<any>;
 
