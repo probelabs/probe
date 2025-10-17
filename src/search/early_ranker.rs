@@ -64,9 +64,14 @@ pub fn calculate_early_score(
     }
 
     // Coverage boost - files matching more query terms are likely more relevant
+    // Using exponential boost to strongly favor files matching more unique terms
     let matched_terms = file_info.content_matches.len() + file_info.filename_matched_terms.len();
-    let coverage = matched_terms as f64 / query_terms.len() as f64;
-    score *= 1.0 + (coverage * 0.5);
+    let coverage = if query_terms.is_empty() {
+        0.0
+    } else {
+        matched_terms as f64 / query_terms.len() as f64
+    };
+    score *= 1.0 + coverage.powf(1.5) * 2.0; // Max 3x boost for 100% coverage
 
     score
 }
