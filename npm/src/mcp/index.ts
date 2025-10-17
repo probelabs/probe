@@ -175,7 +175,7 @@ class ProbeServer {
               },
               query: {
                 type: 'string',
-                description: 'ElasticSearch query syntax. MUST use explicit AND/OR operators and parentheses for grouping: (term1 AND term2) OR term3. For exact matches, ALWAYS wrap terms in quotes: "functionName".',
+                description: 'ElasticSearch query syntax. MUST use explicit AND/OR operators and parentheses for grouping. For exact matches, ALWAYS wrap terms in quotes. Examples: "functionName" (exact match), (error AND handler), ("getUserId" AND NOT deprecated)',
               },
               exact: {
                 type: 'boolean',
