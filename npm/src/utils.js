@@ -27,21 +27,23 @@ let probeBinaryPath = '';
 export async function getBinaryPath(options = {}) {
 	const { forceDownload = false, version } = options;
 
-	// Return cached path if available and not forcing download
-	if (probeBinaryPath && !forceDownload && fs.existsSync(probeBinaryPath)) {
-		return probeBinaryPath;
-	}
-
-	// Check environment variable
+	// Check environment variable first (user override)
 	if (process.env.PROBE_PATH && fs.existsSync(process.env.PROBE_PATH) && !forceDownload) {
 		probeBinaryPath = process.env.PROBE_PATH;
 		return probeBinaryPath;
 	}
 
+	// If specific version is requested, download it (don't use cached/postinstall binary)
+	if (version && !forceDownload) {
+		console.log(`Specific version ${version} requested. Downloading...`);
+		probeBinaryPath = await downloadProbeBinary(version);
+		return probeBinaryPath;
+	}
+
 	// Get dynamic bin directory (handles CI, npx, Docker scenarios)
 	const binDir = await getPackageBinDir();
-	
-	// Check bin directory
+
+	// Check postinstall binary in package directory (most up-to-date with npm package version)
 	const isWindows = process.platform === 'win32';
 	const binaryName = isWindows ? 'probe.exe' : 'probe-binary';
 	const binaryPath = path.join(binDir, binaryName);
