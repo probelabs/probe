@@ -465,7 +465,6 @@ struct SearchConfig {
         "Should show guidance message about using session ID"
     );
 
-
     // Should only report 1 result in the summary
     assert!(
         stdout.contains("Found 1 search results"),

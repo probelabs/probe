@@ -364,7 +364,6 @@ fn handle_search(params: SearchParams) -> Result<()> {
         }
     }
 
-
     Ok(())
 }
 
