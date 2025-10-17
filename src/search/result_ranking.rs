@@ -187,6 +187,17 @@ pub fn rank_search_results(
             let mut result_clone = result.clone();
             result_clone.rank = Some(rank_index + 1); // 1-based rank
 
+            // Calculate coverage boost based on unique terms matched in the block
+            let block_unique = result_clone.block_unique_terms.unwrap_or(0) as f64;
+            let query_term_count = queries.len() as f64;
+            let coverage = if query_term_count > 0.0 {
+                (block_unique / query_term_count).min(1.0)
+            } else {
+                0.0
+            };
+            // Exponential coverage boost to strongly favor blocks matching more unique terms
+            let coverage_boost = 1.0 + coverage.powf(1.5) * 2.0; // Max 3x boost for 100% coverage
+
             // EXPERIMENT: Apply node type boosting for better relevance
             let node_type_boost = match result_clone.node_type.as_str() {
                 // Function/method implementations are most relevant (2.0x boost)
@@ -275,7 +286,7 @@ pub fn rank_search_results(
                 _ => 1.0,
             };
 
-            let boosted_score = bm25_score * node_type_boost;
+            let boosted_score = bm25_score * coverage_boost * node_type_boost;
             result_clone.score = Some(boosted_score);
             result_clone.bm25_score = Some(*bm25_score); // Keep original BM25 score
             updated_results.push(result_clone);
@@ -533,6 +544,17 @@ fn fallback_to_bm25_ranking(
             let mut result_clone = result.clone();
             result_clone.rank = Some(rank_index + 1); // 1-based rank
 
+            // Calculate coverage boost based on unique terms matched in the block
+            let block_unique = result_clone.block_unique_terms.unwrap_or(0) as f64;
+            let query_term_count = queries.len() as f64;
+            let coverage = if query_term_count > 0.0 {
+                (block_unique / query_term_count).min(1.0)
+            } else {
+                0.0
+            };
+            // Exponential coverage boost to strongly favor blocks matching more unique terms
+            let coverage_boost = 1.0 + coverage.powf(1.5) * 2.0; // Max 3x boost for 100% coverage
+
             // Apply node type boosting (same logic as in the main function)
             let node_type_boost = match result_clone.node_type.as_str() {
                 "function_item"
@@ -592,7 +614,7 @@ fn fallback_to_bm25_ranking(
                 _ => 1.0,
             };
 
-            let boosted_score = bm25_score * node_type_boost;
+            let boosted_score = bm25_score * coverage_boost * node_type_boost;
             result_clone.score = Some(boosted_score);
             result_clone.bm25_score = Some(*bm25_score);
             updated_results.push(result_clone);
