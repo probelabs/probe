@@ -5,8 +5,10 @@ use std::collections::{HashMap, HashSet};
 fn create_term(keyword: &str) -> Expr {
     // For testing purposes, we'll bypass the tokenization and stemming
     // by directly creating a term with the exact keyword
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -17,8 +19,10 @@ fn create_term(keyword: &str) -> Expr {
 fn create_required_term(keyword: &str) -> Expr {
     // For testing purposes, we'll bypass the tokenization and stemming
     // by directly creating a term with the exact keyword
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: true,
         excluded: false,
@@ -29,8 +33,10 @@ fn create_required_term(keyword: &str) -> Expr {
 fn create_excluded_term(keyword: &str) -> Expr {
     // For testing purposes, we'll bypass the tokenization and stemming
     // by directly creating a term with the exact keyword
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: true,
@@ -41,8 +47,10 @@ fn create_excluded_term(keyword: &str) -> Expr {
 fn create_exact_term(keyword: &str) -> Expr {
     // For testing purposes, we'll bypass the tokenization and stemming
     // by directly creating a term with the exact keyword
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -383,8 +391,10 @@ fn test_evaluate_exact_terms() {
     assert!(!expr.evaluate(&matched_terms, &term_indices, false));
 
     // Test non-exact term - use the stemmed form directly
+    let keywords = vec!["run".to_string()];
     let expr = Expr::Term {
-        keywords: vec!["run".to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -410,9 +420,11 @@ fn test_evaluate_exact_terms() {
 
     // Test compound expression with exact term - simplified approach
     // Create a new expression with the stemmed form directly
+    let keywords = vec!["run".to_string()];
     let expr = Expr::And(
         Box::new(Expr::Term {
-            keywords: vec!["run".to_string()], // Use stemmed form directly
+            keywords: keywords.clone(),
+            lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,

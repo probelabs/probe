@@ -118,6 +118,11 @@ pub fn simd_split_camel_case(s: &str) -> Vec<String> {
 /// SIMD-accelerated camelCase splitting with explicit configuration
 /// This is the thread-safe version that doesn't use environment variable manipulation
 pub fn simd_split_camel_case_with_config(s: &str, config: SimdConfig) -> Vec<String> {
+    // Check if this is a special case word that should never be split (e.g., exact search terms)
+    if crate::search::tokenization::is_special_case(s) {
+        return vec![s.to_lowercase()];
+    }
+
     // Use scalar fallback for short strings or non-ASCII
     if s.len() < SIMD_THRESHOLD || !s.is_ascii() {
         return scalar_split_camel_case(s);
@@ -268,6 +273,11 @@ pub fn scalar_split_camel_case(s: &str) -> Vec<String> {
     // This is the original implementation from tokenization.rs
     if s.is_empty() {
         return vec![];
+    }
+
+    // Check if this is a special case word that should never be split (e.g., exact search terms)
+    if crate::search::tokenization::is_special_case(s) {
+        return vec![s.to_lowercase()];
     }
 
     let mut result = Vec::new();

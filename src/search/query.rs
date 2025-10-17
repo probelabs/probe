@@ -273,26 +273,27 @@ fn collect_all_terms(
 
     match expr {
         elastic_query::Expr::Term {
-            keywords,
+            lowercase_keywords,
             field: _,
             excluded: is_excluded,
-            exact: _,
             ..
         } => {
-            // Add all keywords to all_terms
-            all_terms.extend(keywords.clone());
+            // Use pre-computed lowercase_keywords instead of re-converting
+            all_terms.extend(lowercase_keywords.iter().cloned());
 
             if debug_mode {
-                println!("DEBUG: Collected keywords '{keywords:?}', excluded={is_excluded}");
+                println!(
+                    "DEBUG: Collected keywords '{lowercase_keywords:?}', excluded={is_excluded}"
+                );
             }
 
             if *is_excluded {
-                for keyword in keywords {
+                for keyword in lowercase_keywords {
                     if debug_mode {
                         println!("DEBUG: Adding '{keyword}' to excluded terms set");
                     }
 
-                    // Add the keyword to excluded terms
+                    // Use pre-computed lowercase keywords
                     excluded.insert(keyword.clone());
                 }
             }
@@ -304,12 +305,12 @@ fn collect_all_terms(
 
             // Check if the right side is an excluded term
             if let elastic_query::Expr::Term {
-                keywords,
+                lowercase_keywords,
                 excluded: true,
                 ..
             } = &**right
             {
-                for keyword in keywords {
+                for keyword in lowercase_keywords {
                     if debug_mode {
                         println!("DEBUG: Adding excluded term '{keyword}' from AND expression");
                     }
@@ -819,8 +820,10 @@ pub fn create_query_plan_from_ast(
 pub fn create_universal_query_plan() -> QueryPlan {
     // Create a simple term that will match anything in the content
     // Use common characters that will appear in almost any file
+    let keywords = vec![".".to_string()]; // Match any single character - will match almost everything
     let universal_ast = elastic_query::Expr::Term {
-        keywords: vec![".".to_string()], // Match any single character - will match almost everything
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
+        keywords,
         field: None,
         required: false,
         excluded: false,

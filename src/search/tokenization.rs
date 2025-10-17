@@ -4,7 +4,7 @@ use probe_code::ranking::get_stemmer;
 use probe_code::search::simd_tokenization::SimdConfig;
 use probe_code::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 /// VOCABULARY CACHE OPTIMIZATION FOR FILTERING:
 /// Enhanced vocabulary cache system specifically optimized for filtering operations.
@@ -836,12 +836,35 @@ pub fn is_filtering_vocabulary_term(term: &str) -> bool {
 
 // Dynamic set of special terms that should not be tokenized
 // This includes terms from queries with exact=true or excluded=true flags
-static DYNAMIC_SPECIAL_TERMS: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+// Using RwLock instead of Mutex for better concurrent read performance and deadlock prevention
+static DYNAMIC_SPECIAL_TERMS: Lazy<RwLock<HashSet<String>>> =
+    Lazy::new(|| RwLock::new(HashSet::new()));
+
+/// Maximum number of special terms to prevent unbounded memory growth
+const MAX_SPECIAL_TERMS: usize = 10_000;
 
 /// Add a term to the dynamic special terms list
 pub fn add_special_term(term: &str) {
-    let mut special_terms = DYNAMIC_SPECIAL_TERMS.lock().unwrap();
+    // Use blocking write lock for consistency - try_write can cause inconsistent results
+    let mut special_terms = match DYNAMIC_SPECIAL_TERMS.write() {
+        Ok(guard) => guard,
+        Err(_poisoned) => {
+            // Lock was poisoned - this indicates data corruption
+            // Don't recover - abort to prevent propagating corrupted state
+            eprintln!("CRITICAL: DYNAMIC_SPECIAL_TERMS lock was poisoned - aborting operation");
+            return;
+        }
+    };
+
+    // Limit the size to prevent unbounded memory growth
+    if special_terms.len() >= MAX_SPECIAL_TERMS {
+        eprintln!(
+            "WARNING: DYNAMIC_SPECIAL_TERMS reached maximum capacity ({}), ignoring new term",
+            MAX_SPECIAL_TERMS
+        );
+        return;
+    }
+
     special_terms.insert(term.to_lowercase());
 
     // Debug output
@@ -1168,19 +1191,43 @@ pub fn is_special_case(word: &str) -> bool {
     // Convert to lowercase for case-insensitive comparison
     let lowercase = word.to_lowercase();
 
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
     // Check if the word is in the static special case list
     if SPECIAL_CASE_WORDS.contains(&lowercase) {
+        if debug_mode {
+            println!("DEBUG: Found static special case: {lowercase}");
+        }
         return true;
     }
 
     // Check if the word is in the dynamic special terms list
-    let special_terms = DYNAMIC_SPECIAL_TERMS.lock().unwrap();
+    // Use blocking read lock for consistency
+    let special_terms = match DYNAMIC_SPECIAL_TERMS.read() {
+        Ok(guard) => guard,
+        Err(_poisoned) => {
+            // Lock was poisoned - fail safely
+            eprintln!(
+                "CRITICAL: DYNAMIC_SPECIAL_TERMS read lock was poisoned - data corruption detected"
+            );
+            // Treat as not special rather than using potentially corrupted data
+            return false;
+        }
+    };
+
     if special_terms.contains(&lowercase) {
         // Debug output
-        if std::env::var("DEBUG").unwrap_or_default() == "1" {
+        if debug_mode {
             println!("DEBUG: Found dynamic special term: {lowercase}");
         }
         return true;
+    }
+
+    if debug_mode && (lowercase == "github" || lowercase == "issue") {
+        println!(
+            "DEBUG: is_special_case(\"{word}\") = false, special_terms has {} items",
+            special_terms.len()
+        );
     }
 
     false
@@ -2736,6 +2783,15 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
                 // Skip if this is a negated term
                 if negated_terms.contains(&compound_part) {
+                    continue;
+                }
+
+                // For special case terms (e.g., exact search terms), preserve the original form WITHOUT stemming
+                if is_special_case(&compound_part) {
+                    if processed_tokens.insert(compound_part.clone()) {
+                        result.push(compound_part.clone());
+                    }
+                    // Skip stemming for special case terms
                     continue;
                 }
 

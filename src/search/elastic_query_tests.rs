@@ -85,8 +85,10 @@ fn assert_parse_fails(input: &str) {
 
 // Helper functions to create common expressions
 fn term(keyword: &str) -> Expr {
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -95,8 +97,10 @@ fn term(keyword: &str) -> Expr {
 }
 
 fn required_term(keyword: &str) -> Expr {
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: true,
         excluded: false,
@@ -105,8 +109,10 @@ fn required_term(keyword: &str) -> Expr {
 }
 
 fn excluded_term(keyword: &str) -> Expr {
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: true,
@@ -116,8 +122,10 @@ fn excluded_term(keyword: &str) -> Expr {
 
 #[allow(dead_code)]
 fn exact_term(keyword: &str) -> Expr {
+    let keywords = vec![keyword.to_string()];
     Expr::Term {
-        keywords: vec![keyword.to_string()],
+        keywords: keywords.clone(),
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
         field: None,
         required: false,
         excluded: false,
@@ -559,10 +567,12 @@ fn test_invalid_queries() {
 #[test]
 fn test_quoted_strings() {
     // Basic quoted string
+    let keywords1 = vec!["find_config_file".to_string()];
     assert_parse_eq(
         "\"find_config_file\"",
         Expr::Term {
-            keywords: vec!["find_config_file".to_string()],
+            keywords: keywords1.clone(),
+            lowercase_keywords: keywords1.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,
@@ -571,10 +581,12 @@ fn test_quoted_strings() {
     );
 
     // Quoted string with underscores and special characters
+    let keywords2 = vec!["discover_config".to_string()];
     assert_parse_eq(
         "\"discover_config\"",
         Expr::Term {
-            keywords: vec!["discover_config".to_string()],
+            keywords: keywords2.clone(),
+            lowercase_keywords: keywords2.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,
@@ -583,18 +595,22 @@ fn test_quoted_strings() {
     );
 
     // Multiple quoted strings with OR
+    let keywords3 = vec!["find_config_file".to_string()];
+    let keywords4 = vec!["discover_config".to_string()];
     assert_parse_eq(
         "\"find_config_file\" OR \"discover_config\"",
         Expr::Or(
             Box::new(Expr::Term {
-                keywords: vec!["find_config_file".to_string()],
+                keywords: keywords3.clone(),
+                lowercase_keywords: keywords3.iter().map(|k| k.to_lowercase()).collect(),
                 field: None,
                 required: false,
                 excluded: false,
                 exact: true,
             }),
             Box::new(Expr::Term {
-                keywords: vec!["discover_config".to_string()],
+                keywords: keywords4.clone(),
+                lowercase_keywords: keywords4.iter().map(|k| k.to_lowercase()).collect(),
                 field: None,
                 required: false,
                 excluded: false,
@@ -604,19 +620,24 @@ fn test_quoted_strings() {
     );
 
     // User's specific query pattern - complex OR with multiple quoted terms
+    let keywords5 = vec!["find_config_file".to_string()];
+    let keywords6 = vec!["discover_config".to_string()];
+    let keywords7 = vec!["load_config_files".to_string()];
     assert_parse_eq(
         "\"find_config_file\" OR \"discover_config\" OR \"load_config_files\"",
         Expr::Or(
             Box::new(Expr::Or(
                 Box::new(Expr::Term {
-                    keywords: vec!["find_config_file".to_string()],
+                    keywords: keywords5.clone(),
+                    lowercase_keywords: keywords5.iter().map(|k| k.to_lowercase()).collect(),
                     field: None,
                     required: false,
                     excluded: false,
                     exact: true,
                 }),
                 Box::new(Expr::Term {
-                    keywords: vec!["discover_config".to_string()],
+                    keywords: keywords6.clone(),
+                    lowercase_keywords: keywords6.iter().map(|k| k.to_lowercase()).collect(),
                     field: None,
                     required: false,
                     excluded: false,
@@ -624,7 +645,8 @@ fn test_quoted_strings() {
                 })
             )),
             Box::new(Expr::Term {
-                keywords: vec!["load_config_files".to_string()],
+                keywords: keywords7.clone(),
+                lowercase_keywords: keywords7.iter().map(|k| k.to_lowercase()).collect(),
                 field: None,
                 required: false,
                 excluded: false,
@@ -634,10 +656,12 @@ fn test_quoted_strings() {
     );
 
     // Required quoted string
+    let keywords8 = vec!["required_function".to_string()];
     assert_parse_eq(
         "+\"required_function\"",
         Expr::Term {
-            keywords: vec!["required_function".to_string()],
+            keywords: keywords8.clone(),
+            lowercase_keywords: keywords8.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: true,
             excluded: false,
@@ -646,10 +670,12 @@ fn test_quoted_strings() {
     );
 
     // Excluded quoted string
+    let keywords9 = vec!["excluded_function".to_string()];
     assert_parse_eq(
         "-\"excluded_function\"",
         Expr::Term {
-            keywords: vec!["excluded_function".to_string()],
+            keywords: keywords9.clone(),
+            lowercase_keywords: keywords9.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: true,
@@ -658,10 +684,12 @@ fn test_quoted_strings() {
     );
 
     // Field-specific quoted string
+    let keywords10 = vec!["exact_value".to_string()];
     assert_parse_eq(
         "field:\"exact_value\"",
         Expr::Term {
-            keywords: vec!["exact_value".to_string()],
+            keywords: keywords10.clone(),
+            lowercase_keywords: keywords10.iter().map(|k| k.to_lowercase()).collect(),
             field: Some("field".to_string()),
             required: false,
             excluded: false,
@@ -670,10 +698,12 @@ fn test_quoted_strings() {
     );
 
     // Quoted string with escaped quotes
+    let keywords11 = vec!["function_with_\"quotes\"".to_string()];
     assert_parse_eq(
         "\"function_with_\\\"quotes\\\"\"",
         Expr::Term {
-            keywords: vec!["function_with_\"quotes\"".to_string()],
+            keywords: keywords11.clone(),
+            lowercase_keywords: keywords11.iter().map(|k| k.to_lowercase()).collect(),
             field: None,
             required: false,
             excluded: false,
@@ -682,18 +712,22 @@ fn test_quoted_strings() {
     );
 
     // Mixed quoted and unquoted terms
+    let keywords12 = vec!["regular".to_string(), "term".to_string()];
+    let keywords13 = vec!["exact_term".to_string()];
     assert_parse_eq(
         "regular_term AND \"exact_term\"",
         Expr::And(
             Box::new(Expr::Term {
-                keywords: vec!["regular".to_string(), "term".to_string()], // "regular_term" gets tokenized
+                keywords: keywords12.clone(),
+                lowercase_keywords: keywords12.iter().map(|k| k.to_lowercase()).collect(),
                 field: None,
                 required: false,
                 excluded: false,
                 exact: false,
             }),
             Box::new(Expr::Term {
-                keywords: vec!["exact_term".to_string()],
+                keywords: keywords13.clone(),
+                lowercase_keywords: keywords13.iter().map(|k| k.to_lowercase()).collect(),
                 field: None,
                 required: false,
                 excluded: false,

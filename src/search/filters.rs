@@ -234,6 +234,7 @@ fn simplify_ast(
             required: _,
             excluded: _,
             exact: _,
+            ..
         } if is_filter_field(&field_name) => {
             // This is a filter term - extract it and return None to remove from AST
             filters.add_filter(&field_name, keywords);
@@ -280,6 +281,7 @@ fn simplify_ast_with_autodetect(
             required,
             excluded,
             exact,
+            ..
         } => {
             if is_filter_field(&field_name) {
                 // This is a filter term - extract it and return None to remove from AST
@@ -288,6 +290,7 @@ fn simplify_ast_with_autodetect(
             } else {
                 // Not a recognized filter field - keep it
                 Some(Expr::Term {
+                    lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
                     field: Some(field_name),
                     keywords,
                     required,
@@ -302,6 +305,7 @@ fn simplify_ast_with_autodetect(
             required,
             excluded,
             exact,
+            ..
         } => {
             // Check if all keywords look like filenames
             let all_filename_like =
@@ -314,6 +318,7 @@ fn simplify_ast_with_autodetect(
             } else {
                 // Regular search term - keep it
                 Some(Expr::Term {
+                    lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
                     field: None,
                     keywords,
                     required,
