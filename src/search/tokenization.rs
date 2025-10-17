@@ -1168,8 +1168,13 @@ pub fn is_special_case(word: &str) -> bool {
     // Convert to lowercase for case-insensitive comparison
     let lowercase = word.to_lowercase();
 
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
     // Check if the word is in the static special case list
     if SPECIAL_CASE_WORDS.contains(&lowercase) {
+        if debug_mode {
+            println!("DEBUG: Found static special case: {lowercase}");
+        }
         return true;
     }
 
@@ -1177,10 +1182,17 @@ pub fn is_special_case(word: &str) -> bool {
     let special_terms = DYNAMIC_SPECIAL_TERMS.lock().unwrap();
     if special_terms.contains(&lowercase) {
         // Debug output
-        if std::env::var("DEBUG").unwrap_or_default() == "1" {
+        if debug_mode {
             println!("DEBUG: Found dynamic special term: {lowercase}");
         }
         return true;
+    }
+
+    if debug_mode && (lowercase == "github" || lowercase == "issue") {
+        println!(
+            "DEBUG: is_special_case(\"{word}\") = false, special_terms has {} items",
+            special_terms.len()
+        );
     }
 
     false
@@ -2736,6 +2748,15 @@ pub fn tokenize(text: &str) -> Vec<String> {
 
                 // Skip if this is a negated term
                 if negated_terms.contains(&compound_part) {
+                    continue;
+                }
+
+                // For special case terms (e.g., exact search terms), preserve the original form WITHOUT stemming
+                if is_special_case(&compound_part) {
+                    if processed_tokens.insert(compound_part.clone()) {
+                        result.push(compound_part.clone());
+                    }
+                    // Skip stemming for special case terms
                     continue;
                 }
 

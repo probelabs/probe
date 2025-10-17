@@ -120,7 +120,7 @@ impl Expr {
                     // All keywords in this required term must be present
                     keywords.iter().all(|kw| {
                         term_indices
-                            .get(kw)
+                            .get(&kw.to_lowercase())
                             .map(|idx| matched_terms.contains(idx))
                             .unwrap_or(false)
                     })
@@ -187,7 +187,7 @@ impl Expr {
                 // Are all keywords present?
                 let all_present = keywords.iter().all(|kw| {
                     term_indices
-                        .get(kw)
+                        .get(&kw.to_lowercase())
                         .map(|idx| matched_terms.contains(idx))
                         .unwrap_or(false)
                 });
@@ -409,7 +409,7 @@ impl Expr {
                 println!("DEBUG: Required terms (ignoring negatives): {required_terms:?}");
             }
             for term in &required_terms {
-                if let Some(&idx) = term_indices.get(term) {
+                if let Some(&idx) = term_indices.get(&term.to_lowercase()) {
                     if !matched_terms.contains(&idx) {
                         if debug_mode {
                             println!("DEBUG: Missing required term '{term}' (idx={idx})");

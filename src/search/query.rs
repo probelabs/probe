@@ -279,8 +279,8 @@ fn collect_all_terms(
             exact: _,
             ..
         } => {
-            // Add all keywords to all_terms
-            all_terms.extend(keywords.clone());
+            // Add all keywords to all_terms (lowercased for case-insensitive matching)
+            all_terms.extend(keywords.iter().map(|k| k.to_lowercase()));
 
             if debug_mode {
                 println!("DEBUG: Collected keywords '{keywords:?}', excluded={is_excluded}");
@@ -292,8 +292,8 @@ fn collect_all_terms(
                         println!("DEBUG: Adding '{keyword}' to excluded terms set");
                     }
 
-                    // Add the keyword to excluded terms
-                    excluded.insert(keyword.clone());
+                    // Add the keyword to excluded terms (lowercased for case-insensitive matching)
+                    excluded.insert(keyword.to_lowercase());
                 }
             }
         }
@@ -313,7 +313,7 @@ fn collect_all_terms(
                     if debug_mode {
                         println!("DEBUG: Adding excluded term '{keyword}' from AND expression");
                     }
-                    excluded.insert(keyword.clone());
+                    excluded.insert(keyword.to_lowercase());
                 }
             }
 

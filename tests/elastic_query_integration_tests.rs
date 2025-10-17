@@ -695,10 +695,10 @@ fn test_filter_code_block_with_ast() {
         }),
     );
 
-    // Create a term indices map
+    // Create a term indices map (keys should be lowercased for case-insensitive matching)
     let mut term_indices = HashMap::new();
-    term_indices.insert("keywordAlpha".to_string(), 0);
-    term_indices.insert("keywordBeta".to_string(), 1);
+    term_indices.insert("keywordalpha".to_string(), 0);
+    term_indices.insert("keywordbeta".to_string(), 1);
 
     // Create a QueryPlan
     let has_required_anywhere = ast.has_required_term();
@@ -711,7 +711,7 @@ fn test_filter_code_block_with_ast() {
         term_indices,
         excluded_terms: {
             let mut set = HashSet::new();
-            set.insert("keywordBeta".to_string());
+            set.insert("keywordbeta".to_string());
             set
         },
         exact: false,
@@ -783,10 +783,10 @@ fn test_filter_tokenized_block() {
         }),
     );
 
-    // Create a term indices map
+    // Create a term indices map (keys should be lowercased for case-insensitive matching)
     let mut term_indices = HashMap::new();
-    term_indices.insert("keywordAlpha".to_string(), 0);
-    term_indices.insert("keywordBeta".to_string(), 1);
+    term_indices.insert("keywordalpha".to_string(), 0);
+    term_indices.insert("keywordbeta".to_string(), 1);
 
     // Create a QueryPlan
     let has_required_anywhere = ast.has_required_term();
@@ -799,7 +799,7 @@ fn test_filter_tokenized_block() {
         term_indices: term_indices.clone(),
         excluded_terms: {
             let mut set = HashSet::new();
-            set.insert("keywordBeta".to_string());
+            set.insert("keywordbeta".to_string());
             set
         },
         exact: false,
@@ -815,8 +815,8 @@ fn test_filter_tokenized_block() {
     // Import the function from probe crate
     use probe_code::search::file_processing::filter_tokenized_block;
 
-    // Test case 1: Tokenized content with only keywordAlpha
-    let tokenized_content = vec!["keywordAlpha".to_string()];
+    // Test case 1: Tokenized content with only keywordAlpha (lowercased since tokenization lowercases)
+    let tokenized_content = vec!["keywordalpha".to_string()];
     let debug_mode = false;
 
     // The block should match because it has keywordAlpha but not keywordBeta
@@ -825,8 +825,8 @@ fn test_filter_tokenized_block() {
         "Block should match because it has keywordAlpha but not keywordBeta"
     );
 
-    // Test case 2: Tokenized content with both keywordAlpha and keywordBeta
-    let tokenized_content = vec!["keywordAlpha".to_string(), "keywordBeta".to_string()];
+    // Test case 2: Tokenized content with both keywordAlpha and keywordBeta (lowercased)
+    let tokenized_content = vec!["keywordalpha".to_string(), "keywordbeta".to_string()];
 
     // The block should not match because it has keywordBeta (which is excluded)
     assert!(
