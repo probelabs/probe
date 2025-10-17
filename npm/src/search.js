@@ -20,6 +20,7 @@ const SEARCH_FLAG_MAP = {
 	reranker: '--reranker',
 	frequencySearch: '--frequency',
 	exact: '--exact',
+	strictElasticSyntax: '--strict-elastic-syntax',
 	maxResults: '--max-results',
 	maxBytes: '--max-bytes',
 	maxTokens: '--max-tokens',
@@ -44,6 +45,7 @@ const SEARCH_FLAG_MAP = {
  * @param {string} [options.reranker] - Reranking method ('hybrid', 'hybrid2', 'bm25', 'tfidf')
  * @param {boolean} [options.frequencySearch] - Use frequency-based search
  * @param {boolean} [options.exact] - Perform exact search without tokenization (case-insensitive)
+ * @param {boolean} [options.strictElasticSyntax] - Enforce strict ElasticSearch query syntax (require explicit AND/OR operators and quotes)
  * @param {number} [options.maxResults] - Maximum number of results
  * @param {number} [options.maxBytes] - Maximum bytes to return
  * @param {number} [options.maxTokens] - Maximum tokens to return

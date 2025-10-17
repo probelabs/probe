@@ -329,6 +329,7 @@ class ProbeServer {
         session: "new",            // Fresh session each time
         maxResults: 20,            // Reasonable limit for context window
         maxTokens: 8000,           // Fits in most AI context windows
+        strictElasticSyntax: true, // Enforce strict ES syntax in MCP mode
       };
 
       // Only override defaults if user explicitly set them
