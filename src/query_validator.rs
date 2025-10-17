@@ -131,6 +131,11 @@ fn has_special_chars(term: &str) -> bool {
     }
 
     // Check for camelCase or PascalCase (has both upper and lower case letters)
+    // Exclude single characters and require actual mixed case
+    if term.len() <= 1 {
+        return false;
+    }
+
     let has_upper = term.chars().any(|c| c.is_uppercase());
     let has_lower = term.chars().any(|c| c.is_lowercase());
 
@@ -187,5 +192,35 @@ mod tests {
         // Invalid complex queries
         assert!(validate_strict_elastic_syntax("get_user_id AND test").is_err()); // unquoted snake_case
         assert!(validate_strict_elastic_syntax("error warning").is_err()); // no operator
+    }
+
+    #[test]
+    fn test_single_character_terms() {
+        // Single uppercase letters should be allowed (not treated as camelCase)
+        assert!(validate_strict_elastic_syntax("A").is_ok());
+        assert!(validate_strict_elastic_syntax("I").is_ok());
+        assert!(validate_strict_elastic_syntax("X").is_ok());
+
+        // Single lowercase letters should be allowed
+        assert!(validate_strict_elastic_syntax("a").is_ok());
+        assert!(validate_strict_elastic_syntax("i").is_ok());
+
+        // Single character with underscore still requires quotes
+        assert!(validate_strict_elastic_syntax("_").is_err());
+    }
+
+    #[test]
+    fn test_edge_cases() {
+        // Empty string
+        assert!(validate_strict_elastic_syntax("").is_err());
+
+        // Just whitespace
+        assert!(validate_strict_elastic_syntax("   ").is_err());
+
+        // Parentheses only
+        assert!(validate_strict_elastic_syntax("()").is_ok());
+
+        // Mix of valid single chars and operators
+        assert!(validate_strict_elastic_syntax("(A OR B)").is_ok());
     }
 }
