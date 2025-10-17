@@ -302,7 +302,7 @@ function handleError(err) {
     expect(typeof result).toBe('string');
   });
 
-  test('MCP default behavior enables strict syntax', () => {
+  test('MCP default behavior disables strict syntax', () => {
     // This is a static test, always runs
     const mcpOptions = {
       path: '/some/path',
@@ -311,9 +311,9 @@ function handleError(err) {
       session: "new",
       maxResults: 20,
       maxTokens: 8000,
-      strictElasticSyntax: true, // This is the MCP default
+      strictElasticSyntax: false, // This is the MCP default (relaxed syntax)
     };
 
-    expect(mcpOptions.strictElasticSyntax).toBe(true);
+    expect(mcpOptions.strictElasticSyntax).toBe(false);
   });
 });

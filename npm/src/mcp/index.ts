@@ -113,6 +113,7 @@ interface SearchCodeArgs {
   path: string;
   query: string | string[];
   exact?: boolean;
+  strictElasticSyntax?: boolean;
 }
 
 interface ExtractCodeArgs {
@@ -175,11 +176,16 @@ class ProbeServer {
               },
               query: {
                 type: 'string',
-                description: 'ElasticSearch query syntax. MUST use explicit AND/OR operators and parentheses for grouping. For exact matches, ALWAYS wrap terms in quotes. Examples: "functionName" (exact match), (error AND handler), ("getUserId" AND NOT deprecated)',
+                description: 'ElasticSearch query syntax. Use explicit AND/OR operators and parentheses for grouping. For exact matches, wrap terms in quotes. Examples: "functionName" (exact match), (error AND handler), ("getUserId" AND NOT deprecated)',
               },
               exact: {
                 type: 'boolean',
                 description: 'Use when searching for exact function/class/variable names',
+                default: false
+              },
+              strictElasticSyntax: {
+                type: 'boolean',
+                description: 'Enforce strict ElasticSearch query syntax (require explicit AND/OR operators and quotes for exact matches)',
                 default: false
               }
             },
@@ -329,11 +335,12 @@ class ProbeServer {
         session: "new",            // Fresh session each time
         maxResults: 20,            // Reasonable limit for context window
         maxTokens: 8000,           // Fits in most AI context windows
-        strictElasticSyntax: true, // Enforce strict ES syntax in MCP mode
+        strictElasticSyntax: false, // Relaxed syntax by default in MCP mode
       };
 
       // Only override defaults if user explicitly set them
       if (args.exact !== undefined) options.exact = args.exact;
+      if (args.strictElasticSyntax !== undefined) options.strictElasticSyntax = args.strictElasticSyntax;
 
       // Handle format based on server default
       if (this.defaultFormat === 'outline' || this.defaultFormat === 'outline-xml') {
