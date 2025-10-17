@@ -19,12 +19,14 @@ fn compute_evaluation_key(matched_terms: &HashSet<usize>) -> u64 {
 pub enum Expr {
     /// A search term, which can represent multiple keywords.
     /// `keywords` => a list of keywords (possibly tokenized/split)
+    /// `lowercase_keywords` => pre-computed lowercase versions for case-insensitive matching (computed once at parse time)
     /// `field` => optional field specifier (e.g. `Some("title")` for `title:foo`)
     /// `required` => a leading `+`
     /// `excluded` => a leading `-`
     /// `exact` => if originally quoted, meaning "no tokenization/splitting"
     Term {
         keywords: Vec<String>,
+        lowercase_keywords: Vec<String>,
         field: Option<String>,
         required: bool,
         excluded: bool,
@@ -111,16 +113,13 @@ impl Expr {
     ) -> bool {
         match self {
             Expr::Term {
-                keywords,
+                lowercase_keywords,
                 required,
                 excluded,
                 ..
             } => {
                 if *required && !*excluded {
-                    // Pre-compute lowercase keywords once to avoid repeated allocations
-                    let lowercase_keywords: Vec<String> =
-                        keywords.iter().map(|kw| kw.to_lowercase()).collect();
-                    // All keywords in this required term must be present
+                    // Use pre-computed lowercase keywords (computed once at parse time)
                     lowercase_keywords.iter().all(|kw| {
                         term_indices
                             .get(kw)
@@ -179,6 +178,7 @@ impl Expr {
         match self {
             Expr::Term {
                 keywords,
+                lowercase_keywords,
                 required,
                 excluded,
                 ..
@@ -188,10 +188,7 @@ impl Expr {
                     return *excluded;
                 }
 
-                // Pre-compute lowercase keywords once to avoid repeated allocations in hot path
-                let lowercase_keywords: Vec<String> =
-                    keywords.iter().map(|kw| kw.to_lowercase()).collect();
-
+                // Use pre-computed lowercase keywords (computed once at parse time)
                 // Are all keywords present?
                 let all_present = lowercase_keywords.iter().all(|kw| {
                     term_indices
@@ -465,6 +462,7 @@ impl std::fmt::Display for Expr {
                 required,
                 excluded,
                 exact,
+                ..
             } => {
                 let prefix = if *required {
                     "+"
@@ -528,6 +526,24 @@ impl std::fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+/// Helper function to create a Term with pre-computed lowercase keywords
+fn make_term(
+    keywords: Vec<String>,
+    field: Option<String>,
+    required: bool,
+    excluded: bool,
+    exact: bool,
+) -> Expr {
+    Expr::Term {
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
+        keywords,
+        field,
+        required,
+        excluded,
+        exact,
+    }
+}
 
 /// Tokenize input string into a vector of tokens
 fn tokenize(input: &str) -> Result<Vec<Token>, ParseError> {
@@ -775,6 +791,7 @@ impl Parser {
             required: _,
             excluded: _,
             exact,
+            ..
         } = primary_expr
         {
             // If exact or excluded => skip further tokenization
@@ -801,13 +818,7 @@ impl Parser {
                 println!("DEBUG: parse_prefixed_term => required={required}, excluded={excluded}, final_keywords={final_keywords:?}");
             }
 
-            Ok(Expr::Term {
-                keywords: final_keywords,
-                field,
-                required,
-                excluded,
-                exact,
-            })
+            Ok(make_term(final_keywords, field, required, excluded, exact))
         } else {
             // If it's a sub-expression in parentheses or something else, just return it
             Ok(primary_expr)
@@ -825,13 +836,7 @@ impl Parser {
                 if debug_mode {
                     println!("DEBUG: QuotedString => {val}");
                 }
-                Ok(Expr::Term {
-                    keywords: vec![val],
-                    field: None,
-                    required: false,
-                    excluded: false,
-                    exact: true,
-                })
+                Ok(make_term(vec![val], None, false, false, true))
             }
             // Possibly field:term
             Some(Token::Ident(_)) => {
@@ -849,43 +854,19 @@ impl Parser {
                         Some(Token::Ident(ident2)) => {
                             let val2 = ident2.clone();
                             self.next();
-                            Ok(Expr::Term {
-                                keywords: vec![val2],
-                                field: Some(first),
-                                required: false,
-                                excluded: false,
-                                exact: false,
-                            })
+                            Ok(make_term(vec![val2], Some(first), false, false, false))
                         }
                         Some(Token::QuotedString(qs)) => {
                             let qval = qs.clone();
                             self.next();
-                            Ok(Expr::Term {
-                                keywords: vec![qval],
-                                field: Some(first),
-                                required: false,
-                                excluded: false,
-                                exact: true,
-                            })
+                            Ok(make_term(vec![qval], Some(first), false, false, true))
                         }
                         // If nothing or other token => empty term
-                        _ => Ok(Expr::Term {
-                            keywords: vec![],
-                            field: Some(first),
-                            required: false,
-                            excluded: false,
-                            exact: false,
-                        }),
+                        _ => Ok(make_term(vec![], Some(first), false, false, false)),
                     }
                 } else {
                     // Just a plain ident
-                    Ok(Expr::Term {
-                        keywords: vec![first],
-                        field: None,
-                        required: false,
-                        excluded: false,
-                        exact: false,
-                    })
+                    Ok(make_term(vec![first], None, false, false, false))
                 }
             }
             Some(t) => Err(ParseError::UnexpectedToken(t.clone())),
@@ -907,13 +888,13 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
         if debug_mode {
             println!("DEBUG: Exact search enabled, treating query as a single term");
         }
-        return Ok(Expr::Term {
-            keywords: vec![input.to_string()],
-            field: None,
-            required: false,
-            excluded: false,
-            exact: true,
-        });
+        return Ok(make_term(
+            vec![input.to_string()],
+            None,
+            false,
+            false,
+            true,
+        ));
     }
 
     // Tokenize
@@ -937,13 +918,7 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
                 .split_whitespace()
                 .map(|s| s.to_lowercase())
                 .collect::<Vec<String>>();
-            return Ok(Expr::Term {
-                keywords,
-                field: None,
-                required: false,
-                excluded: false,
-                exact: false,
-            });
+            return Ok(make_term(keywords, None, false, false, false));
         }
     };
 
@@ -966,13 +941,7 @@ pub fn parse_query(input: &str, exact: bool) -> Result<Expr, ParseError> {
                 "No valid identifiers found".to_string(),
             ));
         }
-        return Ok(Expr::Term {
-            keywords: idents,
-            field: None,
-            required: false,
-            excluded: false,
-            exact: false,
-        });
+        return Ok(make_term(idents, None, false, false, false));
     }
 
     // Otherwise success

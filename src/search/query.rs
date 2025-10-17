@@ -819,8 +819,10 @@ pub fn create_query_plan_from_ast(
 pub fn create_universal_query_plan() -> QueryPlan {
     // Create a simple term that will match anything in the content
     // Use common characters that will appear in almost any file
+    let keywords = vec![".".to_string()]; // Match any single character - will match almost everything
     let universal_ast = elastic_query::Expr::Term {
-        keywords: vec![".".to_string()], // Match any single character - will match almost everything
+        lowercase_keywords: keywords.iter().map(|k| k.to_lowercase()).collect(),
+        keywords,
         field: None,
         required: false,
         excluded: false,
