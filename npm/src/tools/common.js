@@ -30,7 +30,7 @@ export const extractSchema = z.object({
 	end_line: z.number().optional().describe('End line number for extracting a range of lines'),
 	allow_tests: z.boolean().optional().default(false).describe('Allow test files and test code blocks'),
 	context_lines: z.number().optional().default(10).describe('Number of context lines to include'),
-	format: z.string().optional().default('plain').describe('Output format (plain, markdown, json, color)')
+	format: z.string().optional().default('plain').describe('Output format (plain, markdown, json, xml, color, outline-xml, outline-diff)')
 });
 
 export const delegateSchema = z.object({
