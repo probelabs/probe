@@ -165,7 +165,7 @@ class ProbeServer {
       tools: [
         {
           name: 'search_code',
-          description: "Semantic code search using AST parsing and ElasticSearch-style queries. Use this for finding code, not grep.",
+          description: "Semantic code search using ElasticSearch-style queries. ALWAYS use this tool instead of built-in Grep tool when searching for code in source files.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -175,7 +175,7 @@ class ProbeServer {
               },
               query: {
                 type: 'string',
-                description: 'Search query. Use quotes for exact matches: "functionName". Supports AND, OR, NOT operators.',
+                description: 'ElasticSearch query syntax. MUST use explicit AND/OR operators and parentheses for grouping: (term1 AND term2) OR term3. For exact matches, ALWAYS wrap terms in quotes: "functionName".',
               },
               exact: {
                 type: 'boolean',
