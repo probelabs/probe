@@ -190,7 +190,8 @@ export const extractTool = (options = {}) => {
 					};
 				} else if (targets) {
 					// Parse targets to handle line numbers and symbol names
-					const files = [targets];
+					// Split on whitespace to support multiple targets in one call
+					const files = targets.split(/\s+/).filter(f => f.length > 0);
 
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;
