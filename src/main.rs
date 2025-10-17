@@ -7,6 +7,7 @@ use std::time::Instant;
 
 mod cli;
 mod grep;
+mod query_validator;
 
 use cli::{Args, Commands};
 use probe_code::{
@@ -23,6 +24,7 @@ struct SearchParams {
     reranker: String,
     frequency_search: bool,
     exact: bool,
+    strict_elastic_syntax: bool,
     language: Option<String>,
     max_results: Option<usize>,
     max_bytes: Option<usize>,
@@ -55,7 +57,12 @@ struct BenchmarkParams {
 }
 
 fn handle_search(params: SearchParams) -> Result<()> {
-    // Print version at the start for text-based formats (only if verbose)
+    // Validate query syntax if strict mode is enabled
+    if params.strict_elastic_syntax {
+        query_validator::validate_strict_elastic_syntax(&params.pattern)?;
+    }
+
+    // Print version at the start for text-based formats
     if params.verbose && params.format != "json" && params.format != "xml" {
         println!("Probe version: {}", probe_code::version::get_version());
     }
@@ -471,7 +478,8 @@ async fn main() -> Result<()> {
                 reranker: args.reranker,
                 frequency_search: args.frequency_search,
                 exact: args.exact,
-                language: None, // Default to None for the no-subcommand case
+                strict_elastic_syntax: false, // Default to false for the no-subcommand case
+                language: None,               // Default to None for the no-subcommand case
                 max_results: args.max_results,
                 max_bytes: args.max_bytes,
                 max_tokens: args.max_tokens,
@@ -497,6 +505,7 @@ async fn main() -> Result<()> {
             reranker,
             frequency_search,
             exact,
+            strict_elastic_syntax,
             language,
             max_results,
             max_bytes,
@@ -520,6 +529,7 @@ async fn main() -> Result<()> {
             reranker,
             frequency_search,
             exact,
+            strict_elastic_syntax,
             language,
             max_results,
             max_bytes,

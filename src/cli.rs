@@ -150,6 +150,10 @@ pub enum Commands {
         #[arg(short = 'e', long = "exact")]
         exact: bool,
 
+        /// Enforce strict ElasticSearch query syntax (require explicit AND/OR operators and quotes for exact matches)
+        #[arg(long = "strict-elastic-syntax")]
+        strict_elastic_syntax: bool,
+
         /// Programming language to limit search to specific file extensions
         #[arg(short = 'l', long = "language", value_parser = [
             "rust", "rs",

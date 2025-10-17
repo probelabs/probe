@@ -3,11 +3,11 @@
  * @module search
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getBinaryPath, buildCliArgs, escapeString } from './utils.js';
+import { getBinaryPath, buildCliArgs } from './utils.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 /**
  * Flag mapping for search options
@@ -20,6 +20,7 @@ const SEARCH_FLAG_MAP = {
 	reranker: '--reranker',
 	frequencySearch: '--frequency',
 	exact: '--exact',
+	strictElasticSyntax: '--strict-elastic-syntax',
 	maxResults: '--max-results',
 	maxBytes: '--max-bytes',
 	maxTokens: '--max-tokens',
@@ -44,6 +45,7 @@ const SEARCH_FLAG_MAP = {
  * @param {string} [options.reranker] - Reranking method ('hybrid', 'hybrid2', 'bm25', 'tfidf')
  * @param {boolean} [options.frequencySearch] - Use frequency-based search
  * @param {boolean} [options.exact] - Perform exact search without tokenization (case-insensitive)
+ * @param {boolean} [options.strictElasticSyntax] - Enforce strict ElasticSearch query syntax (require explicit AND/OR operators and quotes)
  * @param {number} [options.maxResults] - Maximum number of results
  * @param {number} [options.maxBytes] - Maximum bytes to return
  * @param {number} [options.maxTokens] - Maximum tokens to return
@@ -135,36 +137,25 @@ export async function search(options) {
 		if (options.session) logMessage += ` session=${options.session}`;
 		console.error(logMessage);
 	}
-	// Create positional arguments array separate from flags
-	const positionalArgs = [];
+	// Build argument array for secure execution (no shell injection)
+	const args = ['search', ...cliArgs];
 
+	// Add positional arguments (query and path)
 	if (queries.length > 0) {
-		// Escape the query to handle special characters
-		positionalArgs.push(escapeString(queries[0]));
+		args.push(queries[0]);
+	}
+	args.push(options.path);
+
+	// Debug logs
+	if (process.env.DEBUG === '1') {
+		console.error(`Executing: ${binaryPath} ${args.join(' ')}`);
 	}
 
-	// Escape the path to handle spaces and special characters
-	positionalArgs.push(escapeString(options.path));
-	// Don't add the path to cliArgs, it should only be a positional argument
-
-	// Execute command with flags first, then positional arguments
-	const command = `${binaryPath} search ${cliArgs.join(' ')} ${positionalArgs.join(' ')}`;
-
-	// Debug logs to see the actual command with quotes and the path
-	// console.error(`Executing command: ${command}`);
-	// console.error(`Path being used: "${options.path}"`);
-	// console.error(`Escaped path: ${escapeString(options.path)}`);
-	// console.error(`Command flags: ${cliArgs.join(' ')}`);
-	// console.error(`Positional arguments: ${positionalArgs.join(' ')}`);
-
 	try {
-		// Log before executing
-		// console.error(`About to execute command: ${command}`);
-
-		// Execute the command with options to preserve quotes and apply timeout
-		const { stdout, stderr } = await execAsync(command, {
-			shell: true,
-			timeout: options.timeout * 1000 // Convert seconds to milliseconds
+		// Execute with execFile (no shell, prevents command injection)
+		const { stdout, stderr } = await execFileAsync(binaryPath, args, {
+			timeout: options.timeout * 1000, // Convert seconds to milliseconds
+			maxBuffer: 50 * 1024 * 1024 // 50MB buffer for large outputs
 		});
 
 		// Log after executing
@@ -235,13 +226,13 @@ export async function search(options) {
 	} catch (error) {
 		// Check if the error is a timeout
 		if (error.code === 'ETIMEDOUT' || error.killed) {
-			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds.\nCommand: ${command}`;
+			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds.\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}`;
 			console.error(timeoutMessage);
 			throw new Error(timeoutMessage);
 		}
 
 		// Enhance error message with command details
-		const errorMessage = `Error executing search command: ${error.message}\nCommand: ${command}`;
+		const errorMessage = `Error executing search command: ${error.message}\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}`;
 		throw new Error(errorMessage);
 	}
 }
