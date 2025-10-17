@@ -484,6 +484,30 @@ export function createMessagePreview(message, charsPerSide = 200) {
 	// Message is longer - show start and end with ... in between
 	const start = message.substring(0, charsPerSide);
 	const end = message.substring(message.length - charsPerSide);
-	
+
 	return `${start}...${end}`;
+}
+
+/**
+ * Parse targets string into array of file specifications
+ * Handles space-separated targets for extract tool
+ *
+ * @param {string} targets - Space-separated file targets (e.g., "file1.rs:10-20 file2.rs#symbol")
+ * @returns {string[]} Array of individual file specifications
+ *
+ * @example
+ * parseTargets("file1.rs:10-20 file2.rs:30-40")
+ * // Returns: ["file1.rs:10-20", "file2.rs:30-40"]
+ *
+ * @example
+ * parseTargets("session.rs#AuthService.login auth.rs:2-100 config.rs#DatabaseConfig")
+ * // Returns: ["session.rs#AuthService.login", "auth.rs:2-100", "config.rs#DatabaseConfig"]
+ */
+export function parseTargets(targets) {
+	if (!targets || typeof targets !== 'string') {
+		return [];
+	}
+
+	// Split on any whitespace (spaces, tabs, newlines) and filter out empty strings
+	return targets.split(/\s+/).filter(f => f.length > 0);
 }
