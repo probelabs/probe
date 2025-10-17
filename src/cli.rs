@@ -92,6 +92,10 @@ pub struct Args {
     #[arg(long = "question")]
     pub question: Option<String>,
 
+    /// Enable verbose output (show probe version, pattern, path, options, and timing)
+    #[arg(short = 'v', long = "verbose")]
+    pub verbose: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -216,6 +220,10 @@ pub enum Commands {
         /// Natural language question for BERT reranking (requires --features bert-reranker)
         #[arg(long = "question")]
         question: Option<String>,
+
+        /// Enable verbose output (show probe version, pattern, path, options, and timing)
+        #[arg(short = 'v', long = "verbose")]
+        verbose: bool,
     },
 
     /// Extract code blocks from files

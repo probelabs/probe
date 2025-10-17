@@ -38,6 +38,7 @@ struct SearchParams {
     timeout: u64,
     question: Option<String>,
     no_gitignore: bool,
+    verbose: bool,
 }
 
 struct BenchmarkParams {
@@ -62,14 +63,14 @@ fn handle_search(params: SearchParams) -> Result<()> {
     }
 
     // Print version at the start for text-based formats
-    if params.format != "json" && params.format != "xml" {
+    if params.verbose && params.format != "json" && params.format != "xml" {
         println!("Probe version: {}", probe_code::version::get_version());
     }
 
     let use_frequency = params.frequency_search;
 
-    // Don't print these headers for JSON/XML formats
-    if params.format != "json" && params.format != "xml" {
+    // Don't print these headers for JSON/XML formats (only if verbose)
+    if params.verbose && params.format != "json" && params.format != "xml" {
         println!("{} {}", "Pattern:".bold().green(), params.pattern);
         println!(
             "{} {}",
@@ -119,7 +120,11 @@ fn handle_search(params: SearchParams) -> Result<()> {
         advanced_options.push(format!("Timeout: {} seconds", params.timeout));
     }
 
-    if !advanced_options.is_empty() && params.format != "json" && params.format != "xml" {
+    if params.verbose
+        && !advanced_options.is_empty()
+        && params.format != "json"
+        && params.format != "xml"
+    {
         println!(
             "{} {}",
             "Options:".bold().green(),
@@ -183,11 +188,13 @@ fn handle_search(params: SearchParams) -> Result<()> {
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
-            println!("Search completed in {duration:.2?}");
+            if params.verbose {
+                println!("Search completed in {duration:.2?}");
+            }
         }
     } else {
-        // For non-JSON/XML formats, print search time
-        if params.format != "json" && params.format != "xml" {
+        // For non-JSON/XML formats, print search time (only if verbose)
+        if params.verbose && params.format != "json" && params.format != "xml" {
             println!("Search completed in {duration:.2?}");
             println!();
         }
@@ -486,6 +493,7 @@ async fn main() -> Result<()> {
                 question: args.question,
                 no_gitignore: args.no_gitignore
                     || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+                verbose: args.verbose,
             })?
         }
         Some(Commands::Search {
@@ -511,6 +519,7 @@ async fn main() -> Result<()> {
             timeout,
             question,
             no_gitignore,
+            verbose,
         }) => handle_search(SearchParams {
             pattern,
             paths,
@@ -535,6 +544,7 @@ async fn main() -> Result<()> {
             question,
             no_gitignore: no_gitignore
                 || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            verbose,
         })?,
         Some(Commands::Extract {
             files,
