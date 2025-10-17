@@ -29,6 +29,230 @@ const __dirname = path.dirname(__filename);
 // Note: LOCAL_DIR and VERSION_INFO_PATH are now resolved dynamically
 // using getPackageBinDir() to handle different installation environments
 
+// Download lock management - prevents concurrent downloads
+//
+// Two-tier locking system:
+// 1. In-memory locks: Prevent duplicate downloads within the same Node.js process
+// 2. File-based locks: Coordinate downloads across separate processes
+//
+// How it works with multiple processes:
+//   Process A: Creates lock file → Downloads binary → Removes lock file
+//   Process B: Sees lock file → Polls every 1s → Binary appears → Uses binary
+//   Process C: Sees lock file → Polls every 1s → Binary appears → Uses binary
+//
+// The polling loop checks every second for:
+//   - Is the binary now available? (download completed)
+//   - Has the lock expired? (>5 minutes old, process crashed)
+//
+const downloadLocks = new Map(); // Map of version -> { promise, timestamp } (in-memory, per-process)
+const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes timeout for stuck downloads
+const LOCK_POLL_INTERVAL_MS = 1000; // Poll every 1 second when waiting for file lock
+const MAX_LOCK_WAIT_MS = 5 * 60 * 1000; // Maximum 5 minutes to wait for file lock
+
+/**
+ * Acquires a file-based lock that works across processes
+ * @param {string} lockPath - Path to the lock file
+ * @param {string} version - Version being locked
+ * @returns {Promise<boolean|null>} True if lock was acquired, false if locked by another process, null if locking unavailable (permissions/errors)
+ */
+async function acquireFileLock(lockPath, version) {
+	const lockData = {
+		version,
+		pid: process.pid,
+		timestamp: Date.now()
+	};
+
+	try {
+		// Try to create lock file atomically (fails if already exists)
+		await fs.writeFile(lockPath, JSON.stringify(lockData), { flag: 'wx' });
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Acquired file lock: ${lockPath}`);
+		}
+		return true;
+	} catch (error) {
+		if (error.code === 'EEXIST') {
+			// Lock file exists - check if it's stale
+			try {
+				const existingLock = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
+				const lockAge = Date.now() - existingLock.timestamp;
+
+				if (lockAge > LOCK_TIMEOUT_MS) {
+					// Lock is stale, remove it
+					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+						console.log(`Removing stale lock file (age: ${Math.round(lockAge / 1000)}s, pid: ${existingLock.pid})`);
+					}
+					await fs.remove(lockPath);
+					return false; // Caller should retry
+				}
+
+				// Lock is fresh, another process is downloading
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`Download in progress by process ${existingLock.pid}, waiting...`);
+				}
+				return false;
+			} catch (readError) {
+				// Can't read lock file, might be corrupted - remove it
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`Lock file corrupted, removing: ${readError.message}`);
+				}
+				try {
+					await fs.remove(lockPath);
+				} catch {}
+				return false;
+			}
+		}
+
+		// Handle permission errors and other filesystem errors
+		if (error.code === 'EACCES' || error.code === 'EPERM' || error.code === 'EROFS') {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Cannot create lock file (${error.code}): ${lockPath}`);
+				console.log(`File-based locking unavailable, will proceed without cross-process coordination`);
+			}
+			return null; // Lock unavailable, caller should proceed without it
+		}
+
+		// For other errors, log and return null (proceed without lock)
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Unexpected error creating lock file: ${error.message}`);
+			console.log(`Proceeding without file-based lock`);
+		}
+		return null;
+	}
+}
+
+/**
+ * Releases a file-based lock
+ * @param {string} lockPath - Path to the lock file
+ */
+async function releaseFileLock(lockPath) {
+	try {
+		await fs.remove(lockPath);
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Released file lock: ${lockPath}`);
+		}
+	} catch (error) {
+		// Ignore errors when releasing lock
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Warning: Could not release lock file: ${error.message}`);
+		}
+	}
+}
+
+/**
+ * Waits for a file-based lock to be released and the download to complete
+ * Uses a polling loop that checks every second for:
+ * 1. Binary is now available (download completed)
+ * 2. Lock has expired (>5 minutes old)
+ *
+ * @param {string} lockPath - Path to the lock file
+ * @param {string} binaryPath - Expected path to the downloaded binary
+ * @returns {Promise<boolean>} True if binary appeared, false if timed out
+ */
+async function waitForFileLock(lockPath, binaryPath) {
+	const startTime = Date.now();
+
+	// Poll in a loop until binary appears, lock expires, or we timeout
+	while (Date.now() - startTime < MAX_LOCK_WAIT_MS) {
+		// Check #1: Is the binary now available?
+		if (await fs.pathExists(binaryPath)) {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Binary now available at ${binaryPath}, download completed by another process`);
+			}
+			return true;
+		}
+
+		// Check #2: Is the lock file gone? (download finished or failed)
+		const lockExists = await fs.pathExists(lockPath);
+		if (!lockExists) {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Lock file removed but binary not found - download may have failed`);
+			}
+			return false;
+		}
+
+		// Check #3: Is the lock stale (expired)?
+		try {
+			const lockData = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
+			const lockAge = Date.now() - lockData.timestamp;
+			if (lockAge > LOCK_TIMEOUT_MS) {
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`Lock expired (age: ${Math.round(lockAge / 1000)}s), will retry download`);
+				}
+				return false;
+			}
+		} catch {
+			// Ignore errors reading lock file - will retry on next poll
+		}
+
+		// Wait 1 second before checking again
+		await new Promise(resolve => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
+	}
+
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Timeout waiting for file lock`);
+	}
+	return false;
+}
+
+/**
+ * Acquires a download lock for a specific version (in-memory for same process)
+ * If another download is in progress in the same process, waits for it to complete
+ * Includes timeout mechanism to prevent permanent locks from failed downloads
+ * @param {string} version - Version being downloaded
+ * @param {Function} downloadFn - Function to execute if lock is acquired
+ * @returns {Promise<string>} Path to the binary
+ */
+async function withDownloadLock(version, downloadFn) {
+	const lockKey = version || 'latest';
+
+	// First, check in-memory lock (same process)
+	if (downloadLocks.has(lockKey)) {
+		const lock = downloadLocks.get(lockKey);
+		const lockAge = Date.now() - lock.timestamp;
+
+		// If lock is too old, it's likely stuck - remove it and start fresh
+		if (lockAge > LOCK_TIMEOUT_MS) {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`In-memory lock for version ${lockKey} expired (age: ${Math.round(lockAge / 1000)}s), removing stale lock`);
+			}
+			downloadLocks.delete(lockKey);
+		} else {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Download already in progress in this process for version ${lockKey}, waiting...`);
+			}
+			try {
+				return await lock.promise;
+			} catch (error) {
+				// If the locked download failed, we'll try again below
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`In-memory locked download failed, will retry: ${error.message}`);
+				}
+			}
+		}
+	}
+
+	// Create new download promise with timeout protection
+	const downloadPromise = Promise.race([
+		downloadFn(),
+		new Promise((_, reject) =>
+			setTimeout(() => reject(new Error(`Download timeout after ${LOCK_TIMEOUT_MS / 1000}s`)), LOCK_TIMEOUT_MS)
+		)
+	]);
+
+	downloadLocks.set(lockKey, {
+		promise: downloadPromise,
+		timestamp: Date.now()
+	});
+
+	try {
+		const result = await downloadPromise;
+		return result;
+	} finally {
+		// Clean up lock after download completes (success or failure)
+		downloadLocks.delete(lockKey);
+	}
+}
+
 /**
  * Detects the current OS and architecture
  * @returns {Object} Object containing OS and architecture information
@@ -644,7 +868,86 @@ async function getPackageVersion() {
 }
 
 /**
- * Downloads the probe binary
+ * Internal function that performs the actual download
+ * @param {string} version - Version to download
+ * @returns {Promise<string>} Path to the downloaded binary
+ */
+async function doDownload(version) {
+	// Get writable directory for binary storage (handles CI, npx, Docker scenarios)
+	const localDir = await getPackageBinDir();
+
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Downloading probe binary (version: ${version || 'latest'})...`);
+		console.log(`Using binary directory: ${localDir}`);
+	}
+
+	const isWindows = os.platform() === 'win32';
+	// Use the correct binary name: probe.exe for Windows, probe-binary for Unix
+	const binaryName = isWindows ? `${BINARY_NAME}.exe` : `${BINARY_NAME}-binary`;
+	const binaryPath = path.join(localDir, binaryName);
+
+	// Get OS and architecture information
+	const { os: osInfo, arch: archInfo } = detectOsArch();
+
+	// Determine which version to download
+	let versionToUse = version;
+	let bestAsset;
+	let tagVersion;
+
+	if (!versionToUse || versionToUse === '0.0.0') {
+		// No specific version - use GitHub API to get the latest release
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log('No specific version requested, will use the latest release');
+		}
+		const { tag, assets } = await getLatestRelease(undefined);
+		tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
+		bestAsset = findBestAsset(assets, osInfo, archInfo);
+
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Found release version: ${tagVersion}`);
+		}
+	} else {
+		// Specific version requested - construct download URL directly
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Direct download for version: ${versionToUse}`);
+		}
+		tagVersion = versionToUse;
+		bestAsset = constructAssetInfo(versionToUse, osInfo, archInfo);
+	}
+	const { assetPath, checksumPath } = await downloadAsset(bestAsset, localDir);
+
+	// Verify checksum if available
+	const checksumValid = await verifyChecksum(assetPath, checksumPath);
+	if (!checksumValid) {
+		throw new Error('Checksum verification failed');
+	}
+
+	// Extract the binary
+	const extractedBinaryPath = await extractBinary(assetPath, localDir);
+
+	// Save the version information
+	await saveVersionInfo(tagVersion, localDir);
+
+	// Clean up the downloaded archive
+	try {
+		await fs.remove(assetPath);
+		if (checksumPath) {
+			await fs.remove(checksumPath);
+		}
+	} catch (err) {
+		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log(`Warning: Could not clean up temporary files: ${err}`);
+		}
+	}
+
+	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+		console.log(`Binary successfully installed at ${extractedBinaryPath} (version: ${tagVersion})`);
+	}
+	return extractedBinaryPath;
+}
+
+/**
+ * Downloads the probe binary with download locking to prevent concurrent downloads
  * @param {string} [version] - Specific version to download
  * @returns {Promise<string>} Path to the downloaded binary
  */
@@ -658,13 +961,7 @@ export async function downloadProbeBinary(version) {
 			version = await getPackageVersion();
 		}
 
-		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-			console.log(`Downloading probe binary (version: ${version || 'latest'})...`);
-			console.log(`Using binary directory: ${localDir}`);
-		}
-
 		const isWindows = os.platform() === 'win32';
-		// Use the correct binary name: probe.exe for Windows, probe-binary for Unix
 		const binaryName = isWindows ? `${BINARY_NAME}.exe` : `${BINARY_NAME}-binary`;
 		const binaryPath = path.join(localDir, binaryName);
 
@@ -685,64 +982,55 @@ export async function downloadProbeBinary(version) {
 			}
 		}
 
-		// Get OS and architecture information
-		const { os: osInfo, arch: archInfo } = detectOsArch();
+		// File-based lock for cross-process coordination
+		const lockPath = path.join(localDir, `.probe-download-${version}.lock`);
 
-		// Determine which version to download
-		let versionToUse = version;
-		let bestAsset;
-		let tagVersion;
+		// Try to acquire file lock with retries
+		const maxRetries = 3;
+		for (let retry = 0; retry < maxRetries; retry++) {
+			const lockAcquired = await acquireFileLock(lockPath, version);
 
-		if (!versionToUse || versionToUse === '0.0.0') {
-			// No specific version - use GitHub API to get the latest release
-			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log('No specific version requested, will use the latest release');
+			if (lockAcquired === true) {
+				// We got the lock - do the download
+				try {
+					const result = await withDownloadLock(version, () => doDownload(version));
+					return result;
+				} finally {
+					// Always release file lock
+					await releaseFileLock(lockPath);
+				}
 			}
-			const { tag, assets } = await getLatestRelease(undefined);
-			tagVersion = tag.startsWith('v') ? tag.substring(1) : tag;
-			bestAsset = findBestAsset(assets, osInfo, archInfo);
-			
-			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log(`Found release version: ${tagVersion}`);
+
+			if (lockAcquired === null) {
+				// File locking unavailable (permissions/errors) - proceed without it
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`File-based locking unavailable, downloading without cross-process coordination`);
+				}
+				return await withDownloadLock(version, () => doDownload(version));
 			}
-		} else {
-			// Specific version requested - construct download URL directly
-			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log(`Direct download for version: ${versionToUse}`);
+
+			// lockAcquired === false: Lock not acquired - another process is downloading
+			// Wait for the download to complete
+			const downloadCompleted = await waitForFileLock(lockPath, binaryPath);
+
+			if (downloadCompleted) {
+				// Binary is now available
+				return binaryPath;
 			}
-			tagVersion = versionToUse;
-			bestAsset = constructAssetInfo(versionToUse, osInfo, archInfo);
-		}
-		const { assetPath, checksumPath } = await downloadAsset(bestAsset, localDir);
 
-		// Verify checksum if available
-		const checksumValid = await verifyChecksum(assetPath, checksumPath);
-		if (!checksumValid) {
-			throw new Error('Checksum verification failed');
-		}
-
-		// Extract the binary
-		const extractedBinaryPath = await extractBinary(assetPath, localDir);
-
-		// Save the version information
-		await saveVersionInfo(tagVersion, localDir);
-
-		// Clean up the downloaded archive
-		try {
-			await fs.remove(assetPath);
-			if (checksumPath) {
-				await fs.remove(checksumPath);
-			}
-		} catch (err) {
-			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log(`Warning: Could not clean up temporary files: ${err}`);
+			// Download failed or lock became stale - retry
+			if (retry < maxRetries - 1) {
+				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+					console.log(`Retrying download (attempt ${retry + 2}/${maxRetries})...`);
+				}
 			}
 		}
 
+		// All retries exhausted - try one last download without lock
 		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-			console.log(`Binary successfully installed at ${extractedBinaryPath} (version: ${tagVersion})`);
+			console.log(`All lock attempts exhausted, attempting direct download`);
 		}
-		return extractedBinaryPath;
+		return await withDownloadLock(version, () => doDownload(version));
 	} catch (error) {
 		console.error('Error downloading probe binary:', error);
 		throw error;
