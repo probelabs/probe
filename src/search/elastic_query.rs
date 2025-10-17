@@ -340,22 +340,41 @@ impl Expr {
         // Compute cache key from matched terms
         let cache_key = compute_evaluation_key(matched_terms);
 
-        // Check cache
-        if let Ok(mut cache) = plan.evaluation_cache.lock() {
-            if let Some(&cached_result) = cache.peek(&cache_key) {
-                return cached_result;
+        // Check cache with proper poisoned lock recovery
+        match plan.evaluation_cache.lock() {
+            Ok(mut cache) => {
+                if let Some(&cached_result) = cache.peek(&cache_key) {
+                    return cached_result;
+                }
+
+                // Perform full evaluation
+                let result = self.evaluate(matched_terms, &plan.term_indices, false);
+
+                // Cache the result
+                cache.put(cache_key, result);
+
+                result
             }
+            Err(poisoned) => {
+                // Lock was poisoned - recover the cache and continue
+                eprintln!(
+                    "CRITICAL: evaluation_cache lock was poisoned - data corruption detected"
+                );
+                let mut cache = poisoned.into_inner();
 
-            // Perform full evaluation
-            let result = self.evaluate(matched_terms, &plan.term_indices, false);
+                // Check cache even if poisoned
+                if let Some(&cached_result) = cache.peek(&cache_key) {
+                    return cached_result;
+                }
 
-            // Cache the result
-            cache.put(cache_key, result);
+                // Perform full evaluation
+                let result = self.evaluate(matched_terms, &plan.term_indices, false);
 
-            result
-        } else {
-            // If we can't lock the cache, just evaluate without caching
-            self.evaluate(matched_terms, &plan.term_indices, false)
+                // Try to cache the result despite poisoning
+                cache.put(cache_key, result);
+
+                result
+            }
         }
     }
 

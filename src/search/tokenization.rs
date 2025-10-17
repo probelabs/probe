@@ -845,20 +845,18 @@ const MAX_SPECIAL_TERMS: usize = 10_000;
 
 /// Add a term to the dynamic special terms list
 pub fn add_special_term(term: &str) {
-    // Use try_write with immediate fallback to avoid blocking
-    let mut special_terms = match DYNAMIC_SPECIAL_TERMS.try_write() {
+    // Use blocking write lock for consistency - try_write can cause inconsistent results
+    let mut special_terms = match DYNAMIC_SPECIAL_TERMS.write() {
         Ok(guard) => guard,
-        Err(std::sync::TryLockError::WouldBlock) => {
-            // Lock is contended, skip adding to avoid blocking
-            if std::env::var("DEBUG").unwrap_or_default() == "1" {
-                eprintln!("WARNING: Unable to acquire DYNAMIC_SPECIAL_TERMS lock (contended), skipping term addition");
-            }
-            return;
-        }
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-            // Lock was poisoned, but we can still recover the data
-            eprintln!("WARNING: DYNAMIC_SPECIAL_TERMS lock was poisoned, recovering");
-            poisoned.into_inner()
+        Err(poisoned) => {
+            // Lock was poisoned - this indicates data corruption
+            eprintln!(
+                "CRITICAL: DYNAMIC_SPECIAL_TERMS lock was poisoned - data corruption detected"
+            );
+            // Recover the data but clear it to prevent propagating corrupted state
+            let mut guard = poisoned.into_inner();
+            guard.clear();
+            guard
         }
     };
 
@@ -1208,22 +1206,16 @@ pub fn is_special_case(word: &str) -> bool {
     }
 
     // Check if the word is in the dynamic special terms list
-    // Use try_read with immediate fallback to avoid blocking on reads
-    let special_terms = match DYNAMIC_SPECIAL_TERMS.try_read() {
+    // Use blocking read lock for consistency
+    let special_terms = match DYNAMIC_SPECIAL_TERMS.read() {
         Ok(guard) => guard,
-        Err(std::sync::TryLockError::WouldBlock) => {
-            // Lock is contended, treat as not special to avoid blocking reads
-            if debug_mode {
-                eprintln!("WARNING: Unable to acquire DYNAMIC_SPECIAL_TERMS read lock (contended), treating as not special");
-            }
+        Err(_poisoned) => {
+            // Lock was poisoned - fail safely
+            eprintln!(
+                "CRITICAL: DYNAMIC_SPECIAL_TERMS read lock was poisoned - data corruption detected"
+            );
+            // Treat as not special rather than using potentially corrupted data
             return false;
-        }
-        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
-            // Lock was poisoned, but we can still read the data
-            if debug_mode {
-                eprintln!("WARNING: DYNAMIC_SPECIAL_TERMS read lock was poisoned, recovering");
-            }
-            poisoned.into_inner()
         }
     };
 
