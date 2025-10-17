@@ -4,7 +4,7 @@ use probe_code::ranking::get_stemmer;
 use probe_code::search::simd_tokenization::SimdConfig;
 use probe_code::search::term_exceptions::{is_exception_term, EXCEPTION_TERMS};
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Mutex, RwLock};
 
 /// VOCABULARY CACHE OPTIMIZATION FOR FILTERING:
 /// Enhanced vocabulary cache system specifically optimized for filtering operations.
@@ -836,12 +836,13 @@ pub fn is_filtering_vocabulary_term(term: &str) -> bool {
 
 // Dynamic set of special terms that should not be tokenized
 // This includes terms from queries with exact=true or excluded=true flags
-static DYNAMIC_SPECIAL_TERMS: Lazy<Mutex<HashSet<String>>> =
-    Lazy::new(|| Mutex::new(HashSet::new()));
+// Using RwLock instead of Mutex for better concurrent read performance and deadlock prevention
+static DYNAMIC_SPECIAL_TERMS: Lazy<RwLock<HashSet<String>>> =
+    Lazy::new(|| RwLock::new(HashSet::new()));
 
 /// Add a term to the dynamic special terms list
 pub fn add_special_term(term: &str) {
-    let mut special_terms = DYNAMIC_SPECIAL_TERMS.lock().unwrap();
+    let mut special_terms = DYNAMIC_SPECIAL_TERMS.write().unwrap();
     special_terms.insert(term.to_lowercase());
 
     // Debug output
@@ -1179,7 +1180,7 @@ pub fn is_special_case(word: &str) -> bool {
     }
 
     // Check if the word is in the dynamic special terms list
-    let special_terms = DYNAMIC_SPECIAL_TERMS.lock().unwrap();
+    let special_terms = DYNAMIC_SPECIAL_TERMS.read().unwrap();
     if special_terms.contains(&lowercase) {
         // Debug output
         if debug_mode {

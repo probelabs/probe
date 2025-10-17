@@ -200,7 +200,7 @@ impl Expr {
                         // Excluded => none should be present
                         !keywords.iter().any(|kw| {
                             term_indices
-                                .get(kw)
+                                .get(&kw.to_lowercase())
                                 .map(|idx| matched_terms.contains(idx))
                                 .unwrap_or(false)
                         })
@@ -225,7 +225,7 @@ impl Expr {
                         // Check if any keywords are present
                         let any_present = keywords.iter().any(|kw| {
                             term_indices
-                                .get(kw)
+                                .get(&kw.to_lowercase())
                                 .map(|idx| matched_terms.contains(idx))
                                 .unwrap_or(false)
                         });
