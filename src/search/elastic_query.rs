@@ -117,10 +117,13 @@ impl Expr {
                 ..
             } => {
                 if *required && !*excluded {
+                    // Pre-compute lowercase keywords once to avoid repeated allocations
+                    let lowercase_keywords: Vec<String> =
+                        keywords.iter().map(|kw| kw.to_lowercase()).collect();
                     // All keywords in this required term must be present
-                    keywords.iter().all(|kw| {
+                    lowercase_keywords.iter().all(|kw| {
                         term_indices
-                            .get(&kw.to_lowercase())
+                            .get(kw)
                             .map(|idx| matched_terms.contains(idx))
                             .unwrap_or(false)
                     })
@@ -184,10 +187,15 @@ impl Expr {
                     // Empty term => if excluded, trivially true, otherwise false
                     return *excluded;
                 }
+
+                // Pre-compute lowercase keywords once to avoid repeated allocations in hot path
+                let lowercase_keywords: Vec<String> =
+                    keywords.iter().map(|kw| kw.to_lowercase()).collect();
+
                 // Are all keywords present?
-                let all_present = keywords.iter().all(|kw| {
+                let all_present = lowercase_keywords.iter().all(|kw| {
                     term_indices
-                        .get(&kw.to_lowercase())
+                        .get(kw)
                         .map(|idx| matched_terms.contains(idx))
                         .unwrap_or(false)
                 });
@@ -198,9 +206,9 @@ impl Expr {
                         true
                     } else {
                         // Excluded => none should be present
-                        !keywords.iter().any(|kw| {
+                        !lowercase_keywords.iter().any(|kw| {
                             term_indices
-                                .get(&kw.to_lowercase())
+                                .get(kw)
                                 .map(|idx| matched_terms.contains(idx))
                                 .unwrap_or(false)
                         })
@@ -223,9 +231,9 @@ impl Expr {
                         // ["jwt", "middleware"], both parts must be present.
 
                         // Check if any keywords are present
-                        let any_present = keywords.iter().any(|kw| {
+                        let any_present = lowercase_keywords.iter().any(|kw| {
                             term_indices
-                                .get(&kw.to_lowercase())
+                                .get(kw)
                                 .map(|idx| matched_terms.contains(idx))
                                 .unwrap_or(false)
                         });
@@ -408,11 +416,16 @@ impl Expr {
             if debug_mode && !required_terms.is_empty() {
                 println!("DEBUG: Required terms (ignoring negatives): {required_terms:?}");
             }
-            for term in &required_terms {
-                if let Some(&idx) = term_indices.get(&term.to_lowercase()) {
+            // Pre-compute lowercase required terms to avoid repeated allocations
+            let lowercase_required: Vec<String> =
+                required_terms.iter().map(|t| t.to_lowercase()).collect();
+            for (original_term, lowercase_term) in
+                required_terms.iter().zip(lowercase_required.iter())
+            {
+                if let Some(&idx) = term_indices.get(lowercase_term) {
                     if !matched_terms.contains(&idx) {
                         if debug_mode {
-                            println!("DEBUG: Missing required term '{term}' (idx={idx})");
+                            println!("DEBUG: Missing required term '{original_term}' (idx={idx})");
                         }
                         return false;
                     }
