@@ -84,7 +84,7 @@
     "@opentelemetry/sdk-node": "^0.203.0",
     "@opentelemetry/sdk-trace-base": "^1.30.0",
     "@opentelemetry/semantic-conventions": "^1.36.0",
-    "@probelabs/maid": "^0.0.15",
+    "@probelabs/maid": "^0.0.16",
     "ai": "^5.0.0",
     "axios": "^1.8.3",
     "dotenv": "^16.4.7",
