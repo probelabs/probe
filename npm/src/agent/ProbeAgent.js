@@ -1,4 +1,9 @@
 // Core ProbeAgent class adapted from examples/chat/probeChat.js
+
+// Load .env file if present (silent fail if not found)
+import dotenv from 'dotenv';
+dotenv.config();
+
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';

@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+
+// Load .env file if present (silent fail if not found)
+import { config } from 'dotenv';
+config();
+
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {

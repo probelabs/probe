@@ -87,6 +87,7 @@
     "@probelabs/maid": "^0.0.15",
     "ai": "^5.0.0",
     "axios": "^1.8.3",
+    "dotenv": "^16.4.7",
     "fs-extra": "^11.1.1",
     "glob": "^10.3.10",
     "gpt-tokenizer": "^3.0.1",
