@@ -7,6 +7,10 @@
  * @module @probelabs/probe
  */
 
+// Load .env file if present (silent fail if not found)
+import dotenv from 'dotenv';
+dotenv.config();
+
 import { search } from './search.js';
 import { query } from './query.js';
 import { extract } from './extract.js';

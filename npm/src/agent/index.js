@@ -1,3 +1,7 @@
+// Load .env file if present (silent fail if not found)
+import dotenv from 'dotenv';
+dotenv.config();
+
 import { ProbeAgent } from './ProbeAgent.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
