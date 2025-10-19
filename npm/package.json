@@ -41,6 +41,8 @@
     "bin/probe-binary",
     "bin/probe.exe",
     "bin/.gitkeep",
+    "bin/binaries/*.tar.gz",
+    "bin/binaries/*.zip",
     "scripts/postinstall.js",
     "build/**/*",
     "MERMAID_SUPPORT_SUMMARY.md",

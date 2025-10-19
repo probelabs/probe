@@ -125,6 +125,14 @@ jobs:
           fi
           echo "CHECKSUM=${ARCHIVE_NAME}.${{ matrix.archive_ext }}.sha256" >> "$GITHUB_ENV"
 
+      # Upload artifact for npm packaging
+      - name: Upload artifact for npm packaging
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          retention-days: 1
+
       # Upload the binary as a release asset
       - name: Release
         timeout-minutes: 15
@@ -209,6 +217,40 @@ jobs:
           # Update version in package.json without git operations
           npm version "$VERSION" --no-git-tag-version
           echo "Updated npm package.json to version $VERSION"
+
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: false
+
+      - name: Bundle binaries for npm package
+        run: |
+          # Create binaries directory
+          mkdir -p npm/bin/binaries
+
+          echo "Copying built binaries to npm package..."
+
+          # Copy all downloaded artifacts to npm binaries directory
+          # Each artifact is in its own directory: artifacts/binary-{target}/*.tar.gz or *.zip
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} npm/bin/binaries/ \;
+
+          # Verify all files were copied
+          echo "Bundled binaries:"
+          ls -lh npm/bin/binaries/
+
+          # Verify we have exactly 5 binaries (count only .tar.gz and .zip files)
+          BINARY_COUNT=$(find npm/bin/binaries/ -type f \( -name "*.tar.gz" -o -name "*.zip" \) | wc -l)
+          echo "Found ${BINARY_COUNT} binary archives"
+          if [ "$BINARY_COUNT" -ne 5 ]; then
+            echo "ERROR: Expected 5 binary archives, found ${BINARY_COUNT}"
+            ls -la npm/bin/binaries/
+            exit 1
+          fi
+
+          # Verify total size (should be ~25-30MB)
+          du -sh npm/bin/binaries/
 
       - name: Build all npm packages
         run: cd npm && npm run build
