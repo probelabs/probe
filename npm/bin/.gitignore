@@ -5,3 +5,6 @@
 !.gitkeep
 !README.md
 !probe
+!binaries/
+!binaries/*.tar.gz
+!binaries/*.zip
