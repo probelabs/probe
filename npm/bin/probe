@@ -119,10 +119,10 @@ async function main() {
       const child = spawn('node', [mcpPath, ...mcpArgs], { stdio: 'inherit' });
       child.on('exit', (code) => process.exit(code || 0));
     } else if (process.argv[2] === 'agent') {
-      // Launch Agent server instead of binary
-      const agentPath = join(__dirname, '..', 'src', 'agent', 'index.js');
+      // Launch Agent server instead of binary (use bundled version to reduce dependencies)
+      const agentPath = join(__dirname, '..', 'build', 'agent', 'index.js');
       const agentArgs = process.argv.slice(3); // Remove 'node', 'probe', and 'agent'
-      
+
       const child = spawn('node', [agentPath, ...agentArgs], { stdio: 'inherit' });
       child.on('exit', (code) => process.exit(code || 0));
     } else {

@@ -39,8 +39,6 @@ import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel
 import { bashTool } from './tools/bash.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
-import { TelemetryConfig, initializeTelemetryFromOptions } from './agent/telemetry.js';
-import { AppTracer } from './agent/appTracer.js';
 import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
 import { StorageAdapter, InMemoryStorageAdapter } from './agent/storage/index.js';
 import { HookManager, HOOK_TYPES } from './agent/hooks/index.js';
@@ -64,14 +62,10 @@ export {
 	// Export hooks
 	HookManager,
 	HOOK_TYPES,
-	// Export simple telemetry classes (no OpenTelemetry dependencies)
+	// Export simple telemetry classes (lightweight, no heavy dependencies)
 	SimpleTelemetry,
 	SimpleAppTracer,
 	initializeSimpleTelemetryFromOptions,
-	// Export full OpenTelemetry telemetry classes
-	TelemetryConfig,
-	AppTracer,
-	initializeTelemetryFromOptions,
 	// Export tool generators directly
 	searchTool,
 	queryTool,

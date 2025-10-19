@@ -104,24 +104,7 @@ await esbuild.build({
   }
 });
 
-// Build telemetry module (full OpenTelemetry)
-await esbuild.build({
-  entryPoints: [join(npmDir, 'src/agent/telemetry.js')],
-  bundle: true,
-  platform: 'node',
-  format: 'cjs',
-  outfile: join(cjsDir, 'agent/telemetry.cjs'),
-  external: [
-    '@opentelemetry/*',
-    'crypto',
-    'fs',
-    'path',
-    'os'
-  ],
-  define: {
-    'import.meta.url': '"file:///"'
-  }
-});
+// Note: telemetry.js removed - using simpleTelemetry.js instead
 
 // Create package.json for CJS directory
 const cjsPackageJson = {

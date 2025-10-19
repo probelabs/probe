@@ -31,6 +31,7 @@ async function buildAgent() {
         'fs-extra',
         'tar',
         'axios',
+        'dotenv',
         // Node.js built-in modules
         'fs',
         'path',

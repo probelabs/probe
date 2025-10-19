@@ -12,8 +12,7 @@ import {
   ListToolsRequestSchema,
   McpError,
 } from '@modelcontextprotocol/sdk/types.js';
-import { readFileSync, existsSync } from 'fs';
-import { resolve } from 'path';
+import { readFileSync } from 'fs';
 import { initializeSimpleTelemetryFromOptions, SimpleAppTracer } from './simpleTelemetry.js';
 import { 
   cleanSchemaResponse, 
