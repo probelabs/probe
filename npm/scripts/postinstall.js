@@ -10,12 +10,12 @@
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { extractBundledBinary } from '../src/extractor.js';
 import { downloadProbeBinary } from '../src/downloader.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // Get the directory of the current module
 const __filename = fileURLToPath(import.meta.url);
@@ -177,7 +177,18 @@ You can download the binary from: https://github.com/probelabs/probe/releases
 			// On macOS, try to remove quarantine attributes that might prevent execution
 			if (process.platform === 'darwin') {
 				try {
-					await execAsync(`xattr -d com.apple.quarantine "${targetBinaryPath}" 2>/dev/null || true`);
+					// Security: Use execFile with array args instead of exec to prevent command injection
+					// Validate that the path is within the bin directory
+					const normalizedPath = path.normalize(targetBinaryPath);
+					const normalizedBinDir = path.normalize(binDir);
+					if (!normalizedPath.startsWith(normalizedBinDir)) {
+						throw new Error('Invalid binary path - outside of bin directory');
+					}
+
+					await execFileAsync('xattr', ['-d', 'com.apple.quarantine', normalizedPath]).catch(() => {
+						// Ignore errors - xattr may not exist or file may not have quarantine attribute
+					});
+
 					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
 						console.log('Removed quarantine attributes from binary');
 					}

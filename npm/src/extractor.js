@@ -6,12 +6,9 @@
 import fs from 'fs-extra';
 import path from 'path';
 import tar from 'tar';
+import AdmZip from 'adm-zip';
 import os from 'os';
-import { promisify } from 'util';
-import { exec as execCallback } from 'child_process';
 import { fileURLToPath } from 'url';
-
-const exec = promisify(execCallback);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -69,6 +66,105 @@ function detectPlatform() {
 }
 
 /**
+ * Validates that a path is within a base directory (prevents path traversal)
+ * @param {string} filePath - Path to validate
+ * @param {string} baseDir - Base directory that filePath must be within
+ * @returns {boolean} True if path is safe
+ */
+function isPathSafe(filePath, baseDir) {
+	const normalizedBase = path.normalize(baseDir);
+	const normalizedPath = path.normalize(filePath);
+	const relativePath = path.relative(normalizedBase, normalizedPath);
+
+	// Path is safe if it doesn't start with '..' and isn't absolute
+	return !relativePath.startsWith('..') && !path.isAbsolute(relativePath);
+}
+
+/**
+ * Extracts a tar.gz archive using the tar library
+ * @param {string} archivePath - Path to the .tar.gz file
+ * @param {string} extractDir - Directory to extract to
+ */
+async function extractTarGz(archivePath, extractDir) {
+	await tar.extract({
+		file: archivePath,
+		cwd: extractDir,
+		// Security: Prevent path traversal attacks
+		onentry: (entry) => {
+			const fullPath = path.join(extractDir, entry.path);
+			if (!isPathSafe(fullPath, extractDir)) {
+				throw new Error(`Path traversal attempt detected: ${entry.path}`);
+			}
+		}
+	});
+}
+
+/**
+ * Extracts a zip archive using adm-zip library
+ * @param {string} archivePath - Path to the .zip file
+ * @param {string} extractDir - Directory to extract to
+ */
+async function extractZip(archivePath, extractDir) {
+	const zip = new AdmZip(archivePath);
+	const zipEntries = zip.getEntries();
+
+	// Extract each entry with path validation
+	for (const entry of zipEntries) {
+		const outputPath = path.join(extractDir, entry.entryName);
+
+		// Security: Validate path to prevent traversal attacks
+		if (!isPathSafe(outputPath, extractDir)) {
+			throw new Error(`Path traversal attempt detected: ${entry.entryName}`);
+		}
+
+		if (entry.isDirectory) {
+			await fs.ensureDir(outputPath);
+		} else {
+			await fs.ensureDir(path.dirname(outputPath));
+			await fs.writeFile(outputPath, entry.getData());
+		}
+	}
+}
+
+/**
+ * Finds the binary file in the extracted directory
+ * @param {string} dir - Directory to search
+ * @param {string} baseDir - Base directory for path validation
+ * @param {string} binaryName - Name of binary to find
+ * @param {boolean} isWindows - Whether running on Windows
+ * @returns {Promise<string|null>} Path to binary or null
+ */
+async function findBinary(dir, baseDir, binaryName, isWindows) {
+	const entries = await fs.readdir(dir, { withFileTypes: true });
+
+	for (const entry of entries) {
+		const fullPath = path.join(dir, entry.name);
+
+		// Security: Validate path to prevent traversal
+		if (!isPathSafe(fullPath, baseDir)) {
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log(`Skipping unsafe path: ${fullPath}`);
+			}
+			continue;
+		}
+
+		if (entry.isDirectory()) {
+			const result = await findBinary(fullPath, baseDir, binaryName, isWindows);
+			if (result) return result;
+		} else if (entry.isFile()) {
+			// Check if this is the binary we're looking for
+			if (entry.name === binaryName ||
+				entry.name === BINARY_NAME ||
+				(isWindows && entry.name.endsWith('.exe'))) {
+				return fullPath;
+			}
+		}
+	}
+
+	return null;
+}
+
+/**
  * Extracts the bundled binary for the current platform
  * @param {string} version - Version string (used for archive naming)
  * @returns {Promise<string>} Path to the extracted binary
@@ -120,14 +216,11 @@ export async function extractBundledBinary(version) {
 	await fs.ensureDir(extractDir);
 
 	try {
-		// Extract based on file type
+		// Extract based on file type using proper libraries (no shell commands!)
 		if (extension === 'tar.gz') {
-			await tar.extract({
-				file: archivePath,
-				cwd: extractDir
-			});
+			await extractTarGz(archivePath, extractDir);
 		} else if (extension === 'zip') {
-			await exec(`unzip -q "${archivePath}" -d "${extractDir}"`);
+			await extractZip(archivePath, extractDir);
 		}
 
 		// Find the binary in the extracted files
@@ -135,29 +228,7 @@ export async function extractBundledBinary(version) {
 			console.log(`Searching for binary in extracted files...`);
 		}
 
-		const findBinary = async (dir) => {
-			const entries = await fs.readdir(dir, { withFileTypes: true });
-
-			for (const entry of entries) {
-				const fullPath = path.join(dir, entry.name);
-
-				if (entry.isDirectory()) {
-					const result = await findBinary(fullPath);
-					if (result) return result;
-				} else if (entry.isFile()) {
-					// Check if this is the binary we're looking for
-					if (entry.name === binaryName ||
-						entry.name === BINARY_NAME ||
-						(isWindows && entry.name.endsWith('.exe'))) {
-						return fullPath;
-					}
-				}
-			}
-
-			return null;
-		};
-
-		const binaryFilePath = await findBinary(extractDir);
+		const binaryFilePath = await findBinary(extractDir, extractDir, binaryName, isWindows);
 
 		if (!binaryFilePath) {
 			const allFiles = await fs.readdir(extractDir, { recursive: true });
