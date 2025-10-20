@@ -364,6 +364,12 @@ fn handle_search(params: SearchParams) -> Result<()> {
         }
     }
 
+    // Add helpful tip at the very bottom of output (but not for JSON/XML formats)
+    if params.format != "json" && params.format != "xml" {
+        println!();
+        println!("💡 Tip: Try using synonyms or making your search more general if you don't find what you're looking for");
+    }
+
     Ok(())
 }
 
