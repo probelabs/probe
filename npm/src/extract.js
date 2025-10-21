@@ -48,7 +48,7 @@ export async function extract(options) {
 	const hasContent = options.content !== undefined && options.content !== null;
 
 	if (!hasFiles && !hasInputFile && !hasContent) {
-		throw new Error('Either files array, inputFile, or content must be provided');
+		throw new Error('Extract requires one of: "files" (array of file paths), "inputFile" (path to input file), or "content" (string/buffer for stdin)');
 	}
 
 	// Get the binary path

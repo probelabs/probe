@@ -199,18 +199,18 @@ class ProbeServer {
         },
         {
           name: 'extract_code',
-          description: "Extract code from files. Formats: file.js (whole file), file.js:42 (from line), file.js#functionName (symbol).",
+          description: "Extract code blocks from files using tree-sitter AST parsing. Each file path can include optional line numbers or symbol names to extract specific code blocks.",
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
-                description: 'Absolute path to the project directory',
+                description: 'Absolute path to the project root directory (used as working directory for relative file paths)',
               },
               files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Array of file paths with optional line/symbol: ["file.rs:10", "file.rs#func_name"]',
+                description: 'Array of file paths to extract from. Formats: "file.js" (entire file), "file.js:42" (code block at line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (specific symbol). Line numbers and symbols are part of the path string, not separate parameters. Paths can be absolute or relative to the project directory.',
               }
             },
             required: ['path', 'files'],

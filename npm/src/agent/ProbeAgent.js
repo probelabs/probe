@@ -920,9 +920,7 @@ Examples:
 </search>
 
 <extract>
-<path>src/config.js</path>
-<start_line>15</start_line>
-<end_line>25</end_line>
+<targets>src/config.js:15-25</targets>
 </extract>
 
 <attempt_completion>
