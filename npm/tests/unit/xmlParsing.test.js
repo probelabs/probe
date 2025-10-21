@@ -14,15 +14,14 @@ describe('XML Tool Call Parsing', () => {
       });
 
       test('should parse extract tool call with multiple params', () => {
-        const xmlString = '<extract><file_path>src/test.js</file_path><line>10</line><end_line>20</end_line></extract>';
+        const xmlString = '<extract><targets>src/test.js:10-20 other.js#func</targets><input_content>some diff</input_content></extract>';
         const result = parseXmlToolCall(xmlString);
-        
+
         expect(result).toEqual({
           toolName: 'extract',
-          params: { 
-            file_path: 'src/test.js',
-            line: 10,
-            end_line: 20
+          params: {
+            targets: 'src/test.js:10-20 other.js#func',
+            input_content: 'some diff'
           }
         });
       });
@@ -53,16 +52,22 @@ describe('XML Tool Call Parsing', () => {
       });
 
       test('should handle all valid tools with structured parameters', () => {
-        // Test tools that use structured parameters (excluding attempt_completion which uses free-form content)
-        const structuredParamTools = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'implement'];
-        
-        structuredParamTools.forEach(toolName => {
-          const xmlString = `<${toolName}><param>value</param></${toolName}>`;
-          const result = parseXmlToolCall(xmlString);
-          
+        // Test tools with valid parameters from their schemas
+        const testCases = [
+          { tool: 'search', xml: '<search><query>test</query></search>', expected: { query: 'test' } },
+          { tool: 'query', xml: '<query><pattern>$NAME</pattern></query>', expected: { pattern: '$NAME' } },
+          { tool: 'extract', xml: '<extract><targets>file.js</targets></extract>', expected: { targets: 'file.js' } },
+          { tool: 'listFiles', xml: '<listFiles><directory>src</directory></listFiles>', expected: { directory: 'src' } },
+          { tool: 'searchFiles', xml: '<searchFiles><pattern>*.js</pattern></searchFiles>', expected: { pattern: '*.js' } },
+          { tool: 'implement', xml: '<implement><task>test</task></implement>', expected: { task: 'test' } }
+        ];
+
+        testCases.forEach(({ tool, xml, expected }) => {
+          const result = parseXmlToolCall(xml);
+
           expect(result).toEqual({
-            toolName,
-            params: { param: 'value' }
+            toolName: tool,
+            params: expected
           });
         });
       });
@@ -193,16 +198,16 @@ describe('XML Tool Call Parsing', () => {
         const xmlString = `
           <search>
             <query>  test query  </query>
-            <recursive>   true   </recursive>
+            <path>  ./src  </path>
           </search>
         `;
         const result = parseXmlToolCall(xmlString);
-        
+
         expect(result).toEqual({
           toolName: 'search',
-          params: { 
+          params: {
             query: 'test query',
-            recursive: true
+            path: './src'
           }
         });
       });
@@ -233,15 +238,15 @@ describe('XML Tool Call Parsing', () => {
         <thinking>First thought</thinking>
         <thinking>Second thought</thinking>
         <extract>
-          <file_path>test.js</file_path>
+          <targets>test.js</targets>
         </extract>
       `;
-      
+
       const result = parseXmlToolCallWithThinking(xmlString);
-      
+
       expect(result).toEqual({
         toolName: 'extract',
-        params: { file_path: 'test.js' }
+        params: { targets: 'test.js' }
       });
     });
 

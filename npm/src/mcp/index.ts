@@ -210,7 +210,7 @@ class ProbeServer {
               files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Array of file paths to extract from. Each path can be:\n- "path/to/file.js" (entire file)\n- "path/to/file.js:42" (code block containing line 42)\n- "path/to/file.js:10-20" (lines 10 through 20)\n- "path/to/file.js#functionName" (specific function/class/symbol)\nPaths can be absolute or relative to the project directory.',
+                description: 'Array of file paths to extract from. Formats: "file.js" (entire file), "file.js:42" (code block at line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (specific symbol). Line numbers and symbols are part of the path string, not separate parameters. Paths can be absolute or relative to the project directory.',
               }
             },
             required: ['path', 'files'],

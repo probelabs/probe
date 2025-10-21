@@ -7,13 +7,8 @@ import { z } from 'zod';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
-	query: z.string().describe('Search query with Elasticsearch syntax. Use + for important terms.'),
-	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.'),
-	allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results'),
-	exact: z.boolean().optional().default(false).describe('Perform exact search without tokenization (case-insensitive)'),
-	maxResults: z.number().optional().describe('Maximum number of results to return'),
-	maxTokens: z.number().optional().default(10000).describe('Maximum number of tokens to return'),
-	language: z.string().optional().describe('Limit search to files of a specific programming language')
+	query: z.string().describe('Search query with Elasticsearch syntax. Use quotes for exact matches, AND/OR for boolean logic, - for negation.'),
+	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.')
 });
 
 export const querySchema = z.object({
@@ -24,13 +19,8 @@ export const querySchema = z.object({
 });
 
 export const extractSchema = z.object({
-	targets: z.string().optional().describe('File paths or symbols to extract from. Can include line numbers, symbol names, or multiple space-separated targets'),
-	input_content: z.string().optional().describe('Text content to extract file paths from'),
-	line: z.number().optional().describe('Start line number to extract a specific code block'),
-	end_line: z.number().optional().describe('End line number for extracting a range of lines'),
-	allow_tests: z.boolean().optional().default(false).describe('Allow test files and test code blocks'),
-	context_lines: z.number().optional().default(10).describe('Number of context lines to include'),
-	format: z.string().optional().default('plain').describe('Output format (plain, markdown, json, xml, color, outline-xml, outline-diff)')
+	targets: z.string().optional().describe('File paths or symbols to extract from. Formats: "file.js" (whole file), "file.js:42" (line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (symbol). Multiple targets separated by spaces.'),
+	input_content: z.string().optional().describe('Text content to extract file paths from (alternative to targets)')
 });
 
 export const delegateSchema = z.object({
@@ -120,13 +110,8 @@ You need to focus on main keywords when constructing the query, and always use e
 - Once data is returned, it's cached and won't return on next runs (this is expected behavior)
 
 Parameters:
-- query: (required) Search query with Elasticsearch syntax. You can use + for important terms, and - for negation.
-- path: (required) Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc. YOU SHOULD ALWAYS provide FULL PATH when searching dependencies, including depency name.
-- allow_tests: (optional, default: false) Allow test files in search results (true/false).
-- exact: (optional, default: false) Perform exact pricise search. Use it when you already know function or struct name, or some other code block, and want exact match.
-- maxResults: (optional) Maximum number of results to return (number).
-- maxTokens: (optional, default: 10000) Maximum number of tokens to return (number).
-- language: (optional) Limit search to files of a specific programming language (e.g., 'rust', 'js', 'python', 'go' etc.).
+- query: (required) Search query with Elasticsearch syntax. Use quotes for exact matches ("functionName"), AND/OR for boolean logic, - for negation, + for important terms.
+- path: (optional, default: '.') Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc.
 
 **Workflow:** Always start with search, then use extract for detailed context when needed.
 
@@ -148,30 +133,24 @@ User: How to calculate the total amount in the payments module?
 <search>
 <query>calculate AND payment</query>
 <path>src/utils</path>
-<allow_tests>false</allow_tests>
 </search>
 
 User: How do the user authentication and authorization work?
 <search>
-<query>+user and (authentification OR authroization OR authz)</query>
+<query>+user AND (authentication OR authorization OR authz)</query>
 <path>.</path>
-<allow_tests>true</allow_tests>
-<language>go</language>
 </search>
 
 User: Find all react imports in the project.
 <search>
-<query>import { react }</query>
+<query>"import" AND "react"</query>
 <path>.</path>
-<exact>true</exact>
-<language>js</language>
 </search>
 
-User: Find how decompoud library works?
+User: Find how decompound library works?
 <search>
-<query>import { react }</query>
+<query>decompound</query>
 <path>/dep/rust/decompound</path>
-<language>rust</language>
 </search>
 
 </examples>
@@ -208,11 +187,9 @@ Full file extraction should be the LAST RESORT! Always prefer search.
 **Session Awareness:** Reuse context from previous tool calls. Don't re-extract the same symbols you already have.
 
 Parameters:
-- targets: (required) File paths or symbols to extract from. Can include line numbers, symbol names, or multiple space-separated targets (e.g., 'src/main.rs:10-20', 'src/utils.js#myFunction').
-  For multiple extractions: 'session.rs#AuthService.login auth.rs:2-100 config.rs#DatabaseConfig'
-- line: (optional) Start line number to extract a specific code block. Use with end_line for ranges.
-- end_line: (optional) End line number for extracting a range of lines.
-- allow_tests: (optional, default: false) Allow test files and test code blocks (true/false).
+- targets: (required) File paths or symbols to extract from. Formats: "file.js" (whole file), "file.js:42" (code block at line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (specific symbol). Multiple targets separated by spaces.
+- input_content: (optional) Text content to extract file paths from (alternative to targets for processing diffs/logs).
+
 Usage Example:
 
 <examples>
@@ -239,9 +216,7 @@ User: Lets read the whole file
 
 User: Read the first 10 lines of the file
 <extract>
-<targets>src/search/ranking.rs</targets>
-<line>1</line>
-<end_line>10</end_line>
+<targets>src/search/ranking.rs:1-10</targets>
 </extract>
 
 User: Read file inside the dependency
@@ -349,7 +324,7 @@ export const bashDescription = 'Execute bash commands for system exploration and
 // Valid tool names that should be parsed as tool calls
 const DEFAULT_VALID_TOOLS = [
 	'search',
-	'query', 
+	'query',
 	'extract',
 	'delegate',
 	'listFiles',
@@ -357,6 +332,43 @@ const DEFAULT_VALID_TOOLS = [
 	'implement',
 	'attempt_completion'
 ];
+
+/**
+ * Get valid parameter names for a specific tool from its schema
+ * @param {string} toolName - Name of the tool
+ * @returns {string[]} - Array of valid parameter names for this tool
+ */
+function getValidParamsForTool(toolName) {
+	// Map tool names to their schemas
+	const schemaMap = {
+		search: searchSchema,
+		query: querySchema,
+		extract: extractSchema,
+		delegate: delegateSchema,
+		bash: bashSchema,
+		attempt_completion: attemptCompletionSchema
+	};
+
+	const schema = schemaMap[toolName];
+	if (!schema) {
+		// For tools without schema (listFiles, searchFiles, implement), return common params
+		// These are the shared params that appear across multiple tools
+		return ['path', 'directory', 'pattern', 'recursive', 'includeHidden', 'task', 'files', 'autoCommits', 'result'];
+	}
+
+	// For attempt_completion, it has custom validation, just return 'result'
+	if (toolName === 'attempt_completion') {
+		return ['result'];
+	}
+
+	// Extract keys from Zod schema
+	if (schema && schema._def && schema._def.shape) {
+		return Object.keys(schema._def.shape());
+	}
+
+	// Fallback: return empty array if we can't extract schema keys
+	return [];
+}
 
 // Simple XML parser helper - safer string-based approach
 export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
@@ -387,15 +399,12 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 
 		const params = {};
 
-		// Parse parameters using string-based approach for better safety
-		// Common parameter names to look for (can be extended as needed)
-		// Note: includes both camelCase and underscore_case variants to handle inconsistencies
-		const commonParams = ['query', 'file_path', 'line', 'end_line', 'path', 'recursive', 'includeHidden',
-		                      'max_results', 'maxResults', 'result', 'command', 'description', 'task', 'param', 'pattern',
-		                      'allow_tests', 'exact', 'maxTokens', 'language', 'input_content',
-		                      'context_lines', 'format', 'directory', 'autoCommits', 'files', 'targets'];
+		// Get valid parameters for this specific tool from its schema
+		const validParams = getValidParamsForTool(toolName);
 
-		for (const paramName of commonParams) {
+		// Parse parameters using string-based approach for better safety
+		// Only look for parameters that are valid for this specific tool
+		for (const paramName of validParams) {
 			const paramOpenTag = `<${paramName}>`;
 			const paramCloseTag = `</${paramName}>`;
 
@@ -410,7 +419,7 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			if (paramCloseIndex === -1) {
 				// Find the next opening tag after this parameter
 				let nextTagIndex = innerContent.length;
-				for (const nextParam of commonParams) {
+				for (const nextParam of validParams) {
 					const nextOpenTag = `<${nextParam}>`;
 					const nextIndex = innerContent.indexOf(nextOpenTag, paramOpenIndex + paramOpenTag.length);
 					if (nextIndex !== -1 && nextIndex < nextTagIndex) {
