@@ -335,26 +335,22 @@ describe('XML Tool Call Parsing', () => {
         The user wants me to extract code from a specific file.
         I should use the extract tool for this.
         </thinking>
-        
+
         I understand you need the code. <ins>Let me extract it for you:</ins>
-        
+
         <extract>
-          <file_path>src/components/Header.js</file_path>
-          <line>1</line>
-          <end_line>50</end_line>
+          <targets>src/components/Header.js:1-50</targets>
         </extract>
-        
+
         <em>This will show you the first 50 lines of the Header component.</em>
       `;
-      
+
       const result = parseXmlToolCallWithThinking(aiResponse);
-      
+
       expect(result).toEqual({
         toolName: 'extract',
-        params: { 
-          file_path: 'src/components/Header.js',
-          line: 1,
-          end_line: 50
+        params: {
+          targets: 'src/components/Header.js:1-50'
         }
       });
     });
@@ -364,25 +360,25 @@ describe('XML Tool Call Parsing', () => {
         <thinking>
         I need to implement this feature using the implement tool.
         </thinking>
-        
+
         <implement>
-          <description>Add user authentication</description>
+          <task>Add user authentication</task>
         </implement>
       `;
-      
+
       const validToolsWithImplement = ['search', 'query', 'extract', 'implement', 'attempt_completion'];
       const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithImplement);
-      
+
       expect(result).toEqual({
         toolName: 'implement',
-        params: { description: 'Add user authentication' }
+        params: { task: 'Add user authentication' }
       });
     });
 
     test('should ignore implement tool when not allowed', () => {
       const aiResponse = `
         <implement>
-          <description>Add user authentication</description>
+          <task>Add user authentication</task>
         </implement>
       `;
 
@@ -521,14 +517,14 @@ Let me analyze this.
 </thinking>
 
 <extract>
-<file_path>src/auth.js</file_path>
+<targets>src/auth.js</targets>
 </extract>`;
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
       expect(result).toEqual({
         toolName: 'extract',
-        params: { file_path: 'src/auth.js' }
+        params: { targets: 'src/auth.js' }
       });
     });
 
@@ -564,16 +560,14 @@ Let me analyze this.
 
     test('should handle extract tool without closing tag', () => {
       const aiResponse = `<extract>
-<file_path>src/index.js</file_path>
-<line>42`;
+<targets>src/index.js:42`;
 
       const result = parseXmlToolCall(aiResponse);
 
       expect(result).toEqual({
         toolName: 'extract',
         params: {
-          file_path: 'src/index.js',
-          line: 42
+          targets: 'src/index.js:42'
         }
       });
     });
@@ -611,7 +605,7 @@ Let me analyze this.
     test('should handle parameter without closing tag followed by another param', () => {
       const aiResponse = `<search>
 <query>authentication
-<max_results>10</max_results>
+<path>./src</path>
 </search>`;
 
       const result = parseXmlToolCall(aiResponse);
@@ -620,15 +614,14 @@ Let me analyze this.
         toolName: 'search',
         params: {
           query: 'authentication',
-          max_results: 10
+          path: './src'
         }
       });
     });
 
     test('should handle last parameter without closing tag', () => {
       const aiResponse = `<extract>
-<file_path>src/test.js</file_path>
-<line>10
+<targets>src/test.js:10
 </extract>`;
 
       const result = parseXmlToolCall(aiResponse);
@@ -636,17 +629,15 @@ Let me analyze this.
       expect(result).toEqual({
         toolName: 'extract',
         params: {
-          file_path: 'src/test.js',
-          line: 10
+          targets: 'src/test.js:10'
         }
       });
     });
 
     test('should handle multiple unclosed parameter tags', () => {
       const aiResponse = `<extract>
-<file_path>src/app.js
-<line>1
-<end_line>100
+<targets>src/app.js:1-100
+<input_content>some diff content
 </extract>`;
 
       const result = parseXmlToolCall(aiResponse);
@@ -654,9 +645,8 @@ Let me analyze this.
       expect(result).toEqual({
         toolName: 'extract',
         params: {
-          file_path: 'src/app.js',
-          line: 1,
-          end_line: 100
+          targets: 'src/app.js:1-100',
+          input_content: 'some diff content'
         }
       });
     });
@@ -666,7 +656,7 @@ Let me analyze this.
 <query>function test() {
   return true;
 }
-<max_results>5</max_results>
+<path>./src</path>
 </search>`;
 
       const result = parseXmlToolCall(aiResponse);
@@ -677,7 +667,7 @@ Let me analyze this.
           query: `function test() {
   return true;
 }`,
-          max_results: 5
+          path: './src'
         }
       });
     });
@@ -713,18 +703,16 @@ I should search for this...
 
     test('should handle mixed properly closed and unclosed tags', () => {
       const aiResponse = `<extract>
-<file_path>src/auth.js</file_path>
-<line>10
-<end_line>20</end_line>`;
+<targets>src/auth.js:10-20
+<input_content>some content</input_content>`;
 
       const result = parseXmlToolCall(aiResponse);
 
       expect(result).toEqual({
         toolName: 'extract',
         params: {
-          file_path: 'src/auth.js',
-          line: 10,
-          end_line: 20
+          targets: 'src/auth.js:10-20',
+          input_content: 'some content'
         }
       });
     });
