@@ -465,6 +465,12 @@ struct SearchConfig {
         "Should show guidance message about using session ID"
     );
 
+    // Check that the tip message appears at the bottom
+    assert!(
+        stdout.contains("💡 Tip: Try using synonyms or making your search more general if you don't find what you're looking for"),
+        "Should show tip about using synonyms or more general search"
+    );
+
     // Should only report 1 result in the summary
     assert!(
         stdout.contains("Found 1 search results"),
