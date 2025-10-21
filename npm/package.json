@@ -76,14 +76,15 @@
     "@ai-sdk/openai": "^2.0.10",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@probelabs/maid": "^0.0.16",
+    "adm-zip": "^0.5.16",
     "ai": "^5.0.0",
+    "ajv": "^8.17.1",
     "axios": "^1.8.3",
     "dotenv": "^16.4.7",
     "fs-extra": "^11.1.1",
     "glob": "^10.3.10",
     "gpt-tokenizer": "^3.0.1",
     "tar": "^6.2.0",
-    "adm-zip": "^0.5.16",
     "zod": "^3.24.2"
   },
   "devDependencies": {

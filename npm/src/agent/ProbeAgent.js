@@ -1831,7 +1831,7 @@ Convert your previous response content into actual JSON data that follows this s
               });
             }
 
-            let validation = validateJsonResponse(finalResult, { debug: this.debug });
+            let validation = validateJsonResponse(finalResult, { debug: this.debug, schema: options.schema });
             let retryCount = 0;
             const maxRetries = 3;
 
@@ -1882,7 +1882,7 @@ Convert your previous response content into actual JSON data that follows this s
                   );
 
                   // Validate the corrected response
-                  currentValidation = validateJsonResponse(currentResult, { debug: this.debug });
+                  currentValidation = validateJsonResponse(currentResult, { debug: this.debug, schema: options.schema });
                   retryCount++;
 
                   if (this.debug) {
