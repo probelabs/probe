@@ -5,6 +5,65 @@
 
 import { createMessagePreview } from '../tools/common.js';
 import { validate, fixText, extractMermaidBlocks } from '@probelabs/maid';
+import Ajv from 'ajv';
+
+/**
+ * Recursively apply additionalProperties: false to all object schemas
+ * This ensures strict validation at all nesting levels
+ * @param {Object} schema - JSON schema object
+ * @returns {Object} - Modified schema with additionalProperties enforced
+ */
+function enforceNoAdditionalProperties(schema) {
+  if (!schema || typeof schema !== 'object') {
+    return schema;
+  }
+
+  // Create a deep clone to avoid modifying the original
+  const cloned = JSON.parse(JSON.stringify(schema));
+
+  function applyRecursively(obj) {
+    if (!obj || typeof obj !== 'object') {
+      return;
+    }
+
+    // If this is an object type schema and doesn't have additionalProperties set
+    if (obj.type === 'object' && obj.additionalProperties === undefined) {
+      obj.additionalProperties = false;
+    }
+
+    // Recursively process properties
+    if (obj.properties && typeof obj.properties === 'object') {
+      Object.values(obj.properties).forEach(applyRecursively);
+    }
+
+    // Process items for arrays
+    if (obj.items) {
+      if (Array.isArray(obj.items)) {
+        obj.items.forEach(applyRecursively);
+      } else {
+        applyRecursively(obj.items);
+      }
+    }
+
+    // Process nested schemas in oneOf, anyOf, allOf
+    ['oneOf', 'anyOf', 'allOf'].forEach(key => {
+      if (Array.isArray(obj[key])) {
+        obj[key].forEach(applyRecursively);
+      }
+    });
+
+    // Process definitions/defs
+    if (obj.definitions && typeof obj.definitions === 'object') {
+      Object.values(obj.definitions).forEach(applyRecursively);
+    }
+    if (obj.$defs && typeof obj.$defs === 'object') {
+      Object.values(obj.$defs).forEach(applyRecursively);
+    }
+  }
+
+  applyRecursively(cloned);
+  return cloned;
+}
 
 /**
  * HTML entity decoder map for common entities that might appear in mermaid diagrams
@@ -141,12 +200,15 @@ export function cleanSchemaResponse(response) {
  * @returns {Object} - {isValid: boolean, parsed?: Object, error?: string}
  */
 export function validateJsonResponse(response, options = {}) {
-  const { debug = false } = options;
+  const { debug = false, schema = null, strictSchema = true } = options;
 
   if (debug) {
     console.log(`[DEBUG] JSON validation: Starting validation for response (${response.length} chars)`);
     const preview = createMessagePreview(response);
     console.log(`[DEBUG] JSON validation: Preview: ${preview}`);
+    if (schema) {
+      console.log(`[DEBUG] JSON validation: Schema validation enabled`);
+    }
   }
 
   try {
@@ -157,6 +219,140 @@ export function validateJsonResponse(response, options = {}) {
     if (debug) {
       console.log(`[DEBUG] JSON validation: Successfully parsed in ${parseTime}ms`);
       console.log(`[DEBUG] JSON validation: Object type: ${typeof parsed}, keys: ${Object.keys(parsed || {}).length}`);
+    }
+
+    // If schema provided, validate against it
+    if (schema) {
+      const schemaStart = Date.now();
+      let schemaObj;
+
+      try {
+        // Parse schema if it's a string
+        schemaObj = typeof schema === 'string' ? JSON.parse(schema) : schema;
+
+        // Apply strict mode: enforce additionalProperties: false on all nested objects
+        // unless explicitly disabled via strictSchema: false option
+        if (strictSchema) {
+          schemaObj = enforceNoAdditionalProperties(schemaObj);
+          if (debug) {
+            console.log(`[DEBUG] JSON validation: Applied strict mode - additionalProperties: false enforced on all levels`);
+          }
+        }
+      } catch (schemaParseError) {
+        if (debug) {
+          console.log(`[DEBUG] JSON validation: Failed to parse schema: ${schemaParseError.message}`);
+        }
+        return {
+          isValid: false,
+          error: 'Invalid schema provided',
+          schemaError: schemaParseError.message
+        };
+      }
+
+      // Create AJV validator with strict mode
+      const ajv = new Ajv({
+        strict: false,  // Don't fail on unknown schema keywords
+        allErrors: true,  // Return all errors, not just the first
+        verbose: true  // Include schema and data in errors
+      });
+
+      let validate;
+      try {
+        validate = ajv.compile(schemaObj);
+      } catch (compileError) {
+        if (debug) {
+          console.log(`[DEBUG] JSON validation: Schema compilation failed: ${compileError.message}`);
+        }
+        return {
+          isValid: false,
+          error: 'Schema compilation failed',
+          schemaError: compileError.message
+        };
+      }
+
+      const valid = validate(parsed);
+      const schemaTime = Date.now() - schemaStart;
+
+      if (debug) {
+        console.log(`[DEBUG] JSON validation: Schema validation completed in ${schemaTime}ms, valid: ${valid}`);
+      }
+
+      if (!valid) {
+        // Format schema errors for better readability and actionability
+        const formattedErrors = validate.errors.map(err => {
+          // Convert JSON Pointer path to dot notation for readability
+          // /user/profile/age -> user.profile.age
+          const path = err.instancePath
+            ? err.instancePath.substring(1).replace(/\//g, '.')
+            : '<root>';
+
+          let message = '';
+          let suggestion = '';
+
+          // Create crisp, actionable error messages based on error type
+          if (err.keyword === 'additionalProperties') {
+            const extraField = err.params.additionalProperty;
+            message = `Extra field '${extraField}' is not allowed`;
+            suggestion = `Remove '${extraField}' or add it to the schema`;
+          } else if (err.keyword === 'required') {
+            const missingField = err.params.missingProperty;
+            message = `Missing required field '${missingField}'`;
+            suggestion = `Add '${missingField}' to this object`;
+          } else if (err.keyword === 'type') {
+            const expected = err.params.type;
+            const actual = typeof err.data;
+            const value = JSON.stringify(err.data);
+            message = `Wrong type: expected ${expected}, got ${actual} (value: ${value})`;
+            suggestion = `Change value to ${expected} type`;
+          } else if (err.keyword === 'enum') {
+            const allowed = err.params.allowedValues;
+            const value = JSON.stringify(err.data);
+            message = `Invalid value ${value}. Allowed: ${allowed.map(v => JSON.stringify(v)).join(', ')}`;
+            suggestion = `Use one of the allowed values`;
+          } else if (err.keyword === 'minimum' || err.keyword === 'maximum') {
+            const limit = err.params.limit;
+            const comparison = err.params.comparison;
+            message = `Value ${err.data} ${err.message} (${comparison} ${limit})`;
+            suggestion = `Adjust value to meet constraint`;
+          } else if (err.keyword === 'minLength' || err.keyword === 'maxLength') {
+            const limit = err.params.limit;
+            message = `String length ${err.message} (current: ${err.data.length}, ${err.keyword}: ${limit})`;
+            suggestion = `Adjust string length`;
+          } else if (err.keyword === 'pattern') {
+            message = `Value doesn't match required pattern: ${err.params.pattern}`;
+            suggestion = `Update value to match the pattern`;
+          } else {
+            // Fallback for other error types
+            message = err.message;
+            suggestion = '';
+          }
+
+          // Format: "path: message | suggestion"
+          const location = path ? `at '${path}'` : 'at root';
+          return suggestion
+            ? `${location}: ${message} → ${suggestion}`
+            : `${location}: ${message}`;
+        });
+
+        const errorSummary = formattedErrors.join('\n  ');
+
+        if (debug) {
+          console.log(`[DEBUG] JSON validation: Schema validation errors:\n  ${errorSummary}`);
+        }
+
+        return {
+          isValid: false,
+          error: 'Schema validation failed',
+          schemaErrors: validate.errors,
+          formattedErrors: formattedErrors,
+          errorSummary: `Schema validation failed:\n  ${errorSummary}`,
+          parsed: parsed  // Still return parsed data for debugging
+        };
+      }
+
+      if (debug) {
+        console.log(`[DEBUG] JSON validation: Schema validation passed`);
+      }
     }
 
     return { isValid: true, parsed };
@@ -886,9 +1082,21 @@ When presented with broken JSON, analyze it thoroughly and provide the corrected
       errorContext = validationResult.enhancedError;
     }
 
+    // Add schema validation errors if present
+    let schemaErrorDetails = '';
+    if (validationResult.errorSummary) {
+      schemaErrorDetails = `\n\nSchema Validation Errors:\n${validationResult.errorSummary}`;
+    } else if (validationResult.schemaErrors && validationResult.schemaErrors.length > 0) {
+      const errors = validationResult.schemaErrors.map(err => {
+        const path = err.instancePath || '(root)';
+        return `  ${path}: ${err.message}`;
+      }).join('\n');
+      schemaErrorDetails = `\n\nSchema Validation Errors:\n${errors}`;
+    }
+
     const prompt = `Fix the following invalid JSON.
 
-Error: ${errorContext}
+Error: ${errorContext}${schemaErrorDetails}
 
 Invalid JSON:
 ${invalidJson}
@@ -896,7 +1104,7 @@ ${invalidJson}
 Expected schema structure:
 ${schema}
 
-Provide only the corrected JSON without any markdown formatting or explanations.`;
+${schemaErrorDetails ? 'CRITICAL: Pay special attention to the schema validation errors above. The JSON may be syntactically valid but does not conform to the required schema. Make sure to:\n- Include all required fields\n- Use correct data types\n- Remove any additional properties not defined in the schema (if additionalProperties is false)\n- Ensure all values match their schema constraints\n\n' : ''}Provide only the corrected JSON without any markdown formatting or explanations.`;
 
     try {
       if (this.options.debug) {

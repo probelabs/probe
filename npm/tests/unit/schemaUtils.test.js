@@ -256,6 +256,683 @@ describe('Schema Utilities', () => {
       expect(result.isValid).toBe(true);
       expect(result.parsed.nested.array[1].deep).toBe(true);
     });
+
+    // Schema validation tests
+    test('should validate JSON against schema with required fields', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          age: { type: 'number' }
+        },
+        required: ['name', 'age']
+      };
+
+      const validJson = '{"name": "John", "age": 30}';
+      const result = validateJsonResponse(validJson, { schema });
+      expect(result.isValid).toBe(true);
+      expect(result.parsed).toEqual({ name: 'John', age: 30 });
+    });
+
+    test('should reject JSON missing required fields', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          age: { type: 'number' }
+        },
+        required: ['name', 'age']
+      };
+
+      const invalidJson = '{"name": "John"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+      expect(result.isValid).toBe(false);
+      expect(result.error).toBe('Schema validation failed');
+      expect(result.schemaErrors).toBeDefined();
+      expect(result.formattedErrors).toBeDefined();
+      expect(result.formattedErrors.some(e => e.includes('age'))).toBe(true);
+    });
+
+    test('should reject JSON with wrong field types', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' },
+          age: { type: 'number' }
+        }
+      };
+
+      const invalidJson = '{"name": "John", "age": "thirty"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+      expect(result.isValid).toBe(false);
+      expect(result.error).toBe('Schema validation failed');
+      expect(result.formattedErrors.some(e => e.includes('number') || e.includes('age'))).toBe(true);
+    });
+
+    test('should reject JSON with additional properties when not allowed', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' }
+        },
+        additionalProperties: false
+      };
+
+      const invalidJson = '{"name": "John", "extra": "field"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+      expect(result.isValid).toBe(false);
+      expect(result.error).toBe('Schema validation failed');
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should allow JSON with additional properties when allowed', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' }
+        },
+        additionalProperties: true
+      };
+
+      const validJson = '{"name": "John", "extra": "field"}';
+      const result = validateJsonResponse(validJson, { schema });
+      expect(result.isValid).toBe(true);
+      expect(result.parsed).toEqual({ name: 'John', extra: 'field' });
+    });
+
+    test('should validate arrays against schema', () => {
+      const schema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'number' },
+            name: { type: 'string' }
+          },
+          required: ['id']
+        }
+      };
+
+      const validJson = '[{"id": 1, "name": "Item 1"}, {"id": 2}]';
+      const result = validateJsonResponse(validJson, { schema });
+      expect(result.isValid).toBe(true);
+    });
+
+    test('should reject invalid array items', () => {
+      const schema = {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'number' }
+          },
+          required: ['id']
+        }
+      };
+
+      const invalidJson = '[{"id": 1}, {"name": "missing id"}]';
+      const result = validateJsonResponse(invalidJson, { schema });
+      expect(result.isValid).toBe(false);
+      expect(result.schemaErrors).toBeDefined();
+    });
+
+    test('should accept schema as string', () => {
+      const schemaString = '{"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}';
+      const validJson = '{"name": "John"}';
+      const result = validateJsonResponse(validJson, { schema: schemaString });
+      expect(result.isValid).toBe(true);
+    });
+
+    test('should handle invalid schema gracefully', () => {
+      const invalidSchema = 'not valid json';
+      const validJson = '{"name": "John"}';
+      const result = validateJsonResponse(validJson, { schema: invalidSchema });
+      expect(result.isValid).toBe(false);
+      expect(result.error).toBe('Invalid schema provided');
+      expect(result.schemaError).toBeDefined();
+    });
+
+    test('should validate nested object schemas', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              email: { type: 'string' }
+            },
+            required: ['name'],
+            additionalProperties: false
+          }
+        },
+        required: ['user']
+      };
+
+      const validJson = '{"user": {"name": "John", "email": "john@example.com"}}';
+      const result = validateJsonResponse(validJson, { schema });
+      expect(result.isValid).toBe(true);
+    });
+
+    test('should provide detailed error messages for nested violations', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' }
+            },
+            required: ['name'],
+            additionalProperties: false
+          }
+        }
+      };
+
+      const invalidJson = '{"user": {"age": 30}}';
+      const result = validateJsonResponse(invalidJson, { schema });
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors).toBeDefined();
+      expect(result.errorSummary).toContain('Schema validation failed');
+    });
+
+    test('should work without schema (backward compatibility)', () => {
+      const validJson = '{"name": "John", "extra": "field"}';
+      const result = validateJsonResponse(validJson);
+      expect(result.isValid).toBe(true);
+      expect(result.parsed).toEqual({ name: 'John', extra: 'field' });
+    });
+
+    // Strict schema mode tests (automatic additionalProperties enforcement)
+    test('should automatically enforce additionalProperties on nested objects in strict mode', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' }
+            }
+            // No additionalProperties specified - should be auto-added
+          }
+        }
+        // No additionalProperties on root either - should be auto-added
+      };
+
+      const invalidJson = '{"user": {"name": "John", "age": 30}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.error).toBe('Schema validation failed');
+      // Should reject the extra 'age' field in nested object
+      expect(result.formattedErrors.some(e => e.includes('age'))).toBe(true);
+    });
+
+    test('should allow disabling strict mode to permit additional properties', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' }
+            }
+          }
+        }
+      };
+
+      const jsonWithExtra = '{"user": {"name": "John", "age": 30}}';
+      const result = validateJsonResponse(jsonWithExtra, { schema, strictSchema: false });
+
+      // Should allow extra fields when strictSchema is disabled
+      expect(result.isValid).toBe(true);
+      expect(result.parsed.user.age).toBe(30);
+    });
+
+    test('should respect explicit additionalProperties: true even in strict mode', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' }
+            },
+            additionalProperties: true  // Explicitly allow
+          }
+        }
+      };
+
+      const jsonWithExtra = '{"user": {"name": "John", "age": 30}}';
+      const result = validateJsonResponse(jsonWithExtra, { schema, strictSchema: true });
+
+      // Should respect explicit additionalProperties: true
+      expect(result.isValid).toBe(true);
+      expect(result.parsed.user.age).toBe(30);
+    });
+
+    test('should enforce strict mode on deeply nested objects', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          level1: {
+            type: 'object',
+            properties: {
+              level2: {
+                type: 'object',
+                properties: {
+                  level3: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string' }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      };
+
+      const invalidJson = '{"level1": {"level2": {"level3": {"name": "test", "extra": "field"}}}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should enforce strict mode on array items', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'number' }
+              }
+              // No additionalProperties - should be enforced
+            }
+          }
+        }
+      };
+
+      const invalidJson = '{"items": [{"id": 1, "extra": "field"}]}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('strict mode should be enabled by default', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' }
+        }
+      };
+
+      const invalidJson = '{"name": "John", "extra": "field"}';
+      // Don't specify strictSchema - should default to true
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should enforce strict mode with oneOf schemas', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          data: {
+            oneOf: [
+              {
+                type: 'object',
+                properties: {
+                  type: { type: 'string', const: 'user' },
+                  name: { type: 'string' }
+                },
+                required: ['type', 'name']
+              },
+              {
+                type: 'object',
+                properties: {
+                  type: { type: 'string', const: 'product' },
+                  price: { type: 'number' }
+                },
+                required: ['type', 'price']
+              }
+            ]
+          }
+        }
+      };
+
+      const invalidJson = '{"data": {"type": "user", "name": "John", "extra": "field"}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should enforce strict mode with anyOf schemas', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          value: {
+            anyOf: [
+              {
+                type: 'object',
+                properties: {
+                  num: { type: 'number' }
+                }
+              },
+              {
+                type: 'object',
+                properties: {
+                  str: { type: 'string' }
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const invalidJson = '{"value": {"num": 42, "extra": "field"}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should enforce strict mode with allOf schemas', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          entity: {
+            allOf: [
+              {
+                type: 'object',
+                properties: {
+                  id: { type: 'number' }
+                }
+              },
+              {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' }
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const invalidJson = '{"entity": {"id": 1, "name": "Test", "extra": "field"}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should enforce strict mode with schema definitions', () => {
+      const schema = {
+        type: 'object',
+        definitions: {
+          address: {
+            type: 'object',
+            properties: {
+              street: { type: 'string' },
+              city: { type: 'string' }
+            }
+          }
+        },
+        properties: {
+          home: { $ref: '#/definitions/address' }
+        }
+      };
+
+      const invalidJson = '{"home": {"street": "123 Main St", "city": "NYC", "extra": "field"}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should enforce strict mode with $defs (JSON Schema 2019-09)', () => {
+      const schema = {
+        type: 'object',
+        $defs: {
+          person: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              age: { type: 'number' }
+            }
+          }
+        },
+        properties: {
+          employee: { $ref: '#/$defs/person' }
+        }
+      };
+
+      const invalidJson = '{"employee": {"name": "John", "age": 30, "extra": "field"}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should enforce strict mode on array items with tuple validation', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          coordinates: {
+            type: 'array',
+            items: [
+              {
+                type: 'object',
+                properties: {
+                  x: { type: 'number' }
+                }
+              },
+              {
+                type: 'object',
+                properties: {
+                  y: { type: 'number' }
+                }
+              }
+            ]
+          }
+        }
+      };
+
+      const invalidJson = '{"coordinates": [{"x": 10, "extra": "bad"}, {"y": 20}]}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    test('should handle schemas without type specified', () => {
+      const schema = {
+        properties: {
+          user: {
+            properties: {
+              name: { type: 'string' }
+            }
+            // No type: 'object' specified, but has properties
+          }
+        }
+      };
+
+      const invalidJson = '{"user": {"name": "John", "extra": "field"}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      // Without explicit type: 'object', strict mode won't add additionalProperties
+      // This is expected behavior - schemas should be well-formed
+      expect(result.isValid).toBe(true);
+    });
+
+    test('should not modify schemas with explicit additionalProperties: false', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          data: {
+            type: 'object',
+            properties: {
+              id: { type: 'number' }
+            },
+            additionalProperties: false  // Already set
+          }
+        },
+        additionalProperties: false  // Already set
+      };
+
+      const invalidJson = '{"data": {"id": 1, "extra": "field"}}';
+      const result = validateJsonResponse(invalidJson, { schema, strictSchema: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors.some(e => e.includes('extra'))).toBe(true);
+    });
+
+    // Enhanced error message tests
+    test('should provide crisp error messages with dot notation paths', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          user: {
+            type: 'object',
+            properties: {
+              profile: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' }
+                },
+                required: ['name']
+              }
+            }
+          }
+        }
+      };
+
+      const invalidJson = '{"user": {"profile": {}}}';
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      // Should use dot notation, not slashes
+      expect(result.formattedErrors[0]).toContain("at 'user.profile'");
+      expect(result.formattedErrors[0]).not.toContain('/user/profile');
+      // Should have actionable suggestion
+      expect(result.formattedErrors[0]).toContain("Missing required field 'name'");
+      expect(result.formattedErrors[0]).toContain("Add 'name' to this object");
+    });
+
+    test('should show actual values in type errors', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          age: { type: 'number' }
+        }
+      };
+
+      const invalidJson = '{"age": "thirty"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors[0]).toContain('Wrong type');
+      expect(result.formattedErrors[0]).toContain('expected number');
+      expect(result.formattedErrors[0]).toContain('got string');
+      expect(result.formattedErrors[0]).toContain('value: "thirty"');
+      expect(result.formattedErrors[0]).toContain('Change value to number type');
+    });
+
+    test('should provide actionable suggestions for additional properties', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' }
+        },
+        additionalProperties: false
+      };
+
+      const invalidJson = '{"name": "John", "extra": "field"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors[0]).toContain("Extra field 'extra' is not allowed");
+      expect(result.formattedErrors[0]).toContain("Remove 'extra' or add it to the schema");
+    });
+
+    test('should show allowed values for enum violations', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          role: { type: 'string', enum: ['admin', 'user', 'guest'] }
+        }
+      };
+
+      const invalidJson = '{"role": "superadmin"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors[0]).toContain('Invalid value "superadmin"');
+      expect(result.formattedErrors[0]).toContain('Allowed: "admin", "user", "guest"');
+      expect(result.formattedErrors[0]).toContain('Use one of the allowed values');
+    });
+
+    test('should show constraint details for range violations', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          age: { type: 'number', minimum: 0, maximum: 150 }
+        }
+      };
+
+      const invalidJson = '{"age": 200}';
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors[0]).toContain('at \'age\'');
+      expect(result.formattedErrors[0]).toContain('Value 200');
+      expect(result.formattedErrors[0]).toContain('150');
+      expect(result.formattedErrors[0]).toContain('Adjust value to meet constraint');
+    });
+
+    test('should show current length for string length violations', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          username: { type: 'string', minLength: 3, maxLength: 20 }
+        }
+      };
+
+      const invalidJson = '{"username": "ab"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors[0]).toContain('String length');
+      expect(result.formattedErrors[0]).toContain('current: 2');
+      expect(result.formattedErrors[0]).toContain('minLength: 3');
+      expect(result.formattedErrors[0]).toContain('Adjust string length');
+    });
+
+    test('should handle root-level errors clearly', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string' }
+        },
+        additionalProperties: false
+      };
+
+      const invalidJson = '{"extra": "field"}';
+      const result = validateJsonResponse(invalidJson, { schema });
+
+      expect(result.isValid).toBe(false);
+      expect(result.formattedErrors[0]).toContain('at \'<root>\'');
+      expect(result.formattedErrors[0]).toContain("Extra field 'extra' is not allowed");
+    });
   });
 
   describe('validateXmlResponse', () => {
