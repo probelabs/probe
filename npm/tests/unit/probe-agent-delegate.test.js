@@ -192,7 +192,7 @@ describe('ProbeAgent enableDelegate option', () => {
       });
 
       expect(agent.enableDelegate).toBe(true);
-      expect(agent.searchPath).toBe('/test/path');
+      expect(agent.allowedFolders).toContain('/test/path');
     });
   });
 
@@ -230,14 +230,14 @@ describe('ProbeAgent enableDelegate option', () => {
       const agent = new ProbeAgent({ enableDelegate: true });
       const systemMessage = await agent.getSystemMessage();
 
-      // Delegate should appear after core tools but before attempt_completion
+      // Delegate should appear after attempt_completion (at the end with optional tools)
       const searchIndex = systemMessage.indexOf('## search');
-      const delegateIndex = systemMessage.indexOf('## delegate');
       const completionIndex = systemMessage.indexOf('## attempt_completion');
+      const delegateIndex = systemMessage.indexOf('## delegate');
 
       expect(searchIndex).toBeGreaterThan(-1);
-      expect(delegateIndex).toBeGreaterThan(searchIndex);
-      expect(completionIndex).toBeGreaterThan(delegateIndex);
+      expect(completionIndex).toBeGreaterThan(searchIndex);
+      expect(delegateIndex).toBeGreaterThan(completionIndex);
     });
   });
 });

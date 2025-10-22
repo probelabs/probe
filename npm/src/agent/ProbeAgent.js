@@ -2219,6 +2219,7 @@ Convert your previous response content into actual JSON data that follows this s
       customPrompt: this.customPrompt,
       promptType: this.promptType,
       allowEdit: this.allowEdit,
+      enableDelegate: this.enableDelegate,
       path: this.allowedFolders[0], // Use first allowed folder as primary path
       allowedFolders: [...this.allowedFolders],
       provider: this.clientApiProvider,
