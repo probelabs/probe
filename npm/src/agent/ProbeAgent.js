@@ -18,11 +18,12 @@ import { TokenCounter } from './tokenCounter.js';
 import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
 import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
 import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES } from './imageConfig.js';
-import { 
+import {
   createTools,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
+  delegateToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
   attemptCompletionToolDefinition,
@@ -75,6 +76,7 @@ export class ProbeAgent {
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
+   * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
    * @param {string} [options.path] - Search directory path
    * @param {string} [options.provider] - Force specific AI provider
    * @param {string} [options.model] - Override model name
@@ -97,6 +99,7 @@ export class ProbeAgent {
     this.customPrompt = options.customPrompt || null;
     this.promptType = options.promptType || 'code-explorer';
     this.allowEdit = !!options.allowEdit;
+    this.enableDelegate = !!options.enableDelegate;
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this.tracer = options.tracer || null;
@@ -888,6 +891,9 @@ ${attemptCompletionToolDefinition}
     if (this.allowEdit) {
       toolDefinitions += `${implementToolDefinition}\n`;
     }
+    if (this.enableDelegate) {
+      toolDefinitions += `${delegateToolDefinition}\n`;
+    }
 
     // Build XML tool guidelines
     let xmlToolGuidelines = `
@@ -951,7 +957,7 @@ Available Tools:
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
-${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
+${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 - attempt_complete: Quick completion using previous response (shorthand).
 `;
