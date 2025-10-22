@@ -283,22 +283,25 @@ describe('Retry and Fallback Integration', () => {
       const fallback = new FallbackManager({
         strategy: 'custom',
         providers: [
-          { provider: 'anthropic', apiKey: '' },  // Empty API key might cause issues
+          { provider: 'anthropic', apiKey: 'test-key-1' },
           { provider: 'openai', apiKey: 'valid-key' }
         ],
         debug: false
       });
 
       const mockFn = jest.fn().mockImplementation((provider, model, config) => {
-        if (config.provider === 'openai') {
-          return 'success';
+        // First provider throws error during execution
+        if (config.provider === 'anthropic') {
+          throw new Error('Provider creation failed');
         }
-        throw new Error('Provider creation failed');
+        // Second provider succeeds
+        return 'success';
       });
 
       // Should fallback to second provider
       const result = await fallback.executeWithFallback(mockFn);
       expect(result).toBe('success');
+      expect(mockFn).toHaveBeenCalledTimes(2);
     });
 
     test('should handle AbortSignal in retry manager', async () => {

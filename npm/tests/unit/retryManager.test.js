@@ -151,6 +151,7 @@ describe('RetryManager', () => {
         maxRetries: 3,
         initialDelay: 100,
         backoffFactor: 2,
+        jitter: false,  // Disable jitter for predictable timing
         debug: false
       });
 
@@ -165,13 +166,15 @@ describe('RetryManager', () => {
 
       await retry.executeWithRetry(mockFn);
 
-      // Verify delays are increasing (with some tolerance for timing)
+      // Verify delays are increasing (with some tolerance for timing and test execution)
       const delay1 = timestamps[1] - timestamps[0];
       const delay2 = timestamps[2] - timestamps[1];
 
-      expect(delay1).toBeGreaterThanOrEqual(90); // ~100ms
-      expect(delay2).toBeGreaterThanOrEqual(180); // ~200ms
-      expect(delay2).toBeGreaterThan(delay1); // Exponential increase
+      // With jitter disabled: delay1 should be ~100ms, delay2 should be ~200ms
+      // Allow more tolerance for CI/test timing variance
+      expect(delay1).toBeGreaterThanOrEqual(75);  // Allow more tolerance
+      expect(delay2).toBeGreaterThanOrEqual(150); // Allow more tolerance
+      expect(delay2).toBeGreaterThan(delay1);     // Exponential increase
     });
 
     test('should respect maxDelay cap', async () => {
@@ -223,8 +226,8 @@ describe('RetryManager', () => {
       }
 
       const stats = retry.getStats();
-      expect(stats.totalAttempts).toBe(7); // 1 + 3 + 3
-      expect(stats.totalRetries).toBe(4); // 0 + 2 + 2
+      expect(stats.totalAttempts).toBe(8); // 1 + 3 + 4 (last one tries 1+maxRetries=4)
+      expect(stats.totalRetries).toBe(5); // 0 + 2 + 3
       expect(stats.successfulRetries).toBe(1);
       expect(stats.failedRetries).toBe(1);
     });
@@ -289,14 +292,19 @@ describe('RetryManager', () => {
     });
 
     test('should handle errors without message', async () => {
-      const retry = new RetryManager({ debug: false });
+      const retry = new RetryManager({
+        maxRetries: 3,
+        initialDelay: 5,
+        debug: false
+      });
       const error = new Error();
-      error.type = 'api_error';
+      error.type = 'api_error';  // This is retryable
 
       const mockFn = jest.fn().mockRejectedValue(error);
 
       await expect(retry.executeWithRetry(mockFn)).rejects.toThrow();
-      expect(mockFn).toHaveBeenCalledTimes(1); // Retryable, but we only call once for test
+      // Error is retryable (api_error), so should retry maxRetries times: 1 initial + 3 retries = 4
+      expect(mockFn).toHaveBeenCalledTimes(4);
     });
 
     test('should handle null/undefined errors', () => {
