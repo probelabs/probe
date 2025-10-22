@@ -8,6 +8,19 @@ import { TelemetryConfig } from './telemetry.js';
 import { trace } from '@opentelemetry/api';
 import { appTracer } from './appTracer.js';
 
+// Image configuration (duplicated from @probelabs/probe/agent/imageConfig for compatibility)
+// TODO: Import from '@probelabs/probe/agent/imageConfig' after next package publish
+const IMAGE_MIME_TYPES = {
+  'png': 'image/png',
+  'jpg': 'image/jpeg',
+  'jpeg': 'image/jpeg',
+  'webp': 'image/webp',
+  'bmp': 'image/bmp',
+  'svg': 'image/svg+xml'
+};
+const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'svg'];
+const getExtensionPattern = (extensions = SUPPORTED_IMAGE_EXTENSIONS) => extensions.join('|');
+
 // Parse and validate allowed folders from environment variable
 const allowedFolders = process.env.ALLOWED_FOLDERS
   ? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
@@ -104,17 +117,9 @@ async function convertImageFileToBase64(filePath, debug = false) {
       return null;
     }
 
-    // Determine MIME type based on file extension
+    // Determine MIME type based on file extension (from shared config)
     const extension = absolutePath.toLowerCase().split('.').pop();
-    const mimeTypes = {
-      'png': 'image/png',
-      'jpg': 'image/jpeg', 
-      'jpeg': 'image/jpeg',
-      'webp': 'image/webp',
-      'gif': 'image/gif'
-    };
-    
-    const mimeType = mimeTypes[extension];
+    const mimeType = IMAGE_MIME_TYPES[extension];
     if (!mimeType) {
       if (debug) {
         console.log(`[DEBUG] Unsupported image format: ${extension}`);
@@ -157,11 +162,13 @@ async function extractImageUrls(message, debug = false) {
       // Pattern to match image URLs, base64 data, and local file paths:
       // 1. GitHub private-user-images URLs (always images, regardless of extension)
       // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
-      // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
+      // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, BMP, SVG)
       // 4. Base64 data URLs (data:image/...)
       // 5. Local file paths with image extensions (relative and absolute)
       // Updated to stop at quotes, spaces, or common HTML/XML delimiters
-      const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|gif))/gi;
+      // Pattern dynamically generated from shared config
+      const extPattern = getExtensionPattern();
+      const imageUrlPattern = new RegExp(`(?:data:image/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?://(?:(?:private-user-images\\.githubusercontent\\.com|github\\.com/user-attachments/assets)/[^\\s"'<>]+|[^\\s"'<>]+\\.(?:${extPattern})(?:\\?[^\\s"'<>]*)?)|(?:\\.?\\.?/)?[^\\s"'<>]*\\.(?:${extPattern}))`, 'gi');
 
       span.setAttributes({
         'message.length': message.length,

@@ -2,14 +2,19 @@
 
 /**
  * Demo script showing local image file support in probe agent
+ *
+ * NOTE: This is a standalone demo file. The MIME types and regex patterns below
+ * are duplicated from @probelabs/probe/agent/imageConfig for self-containment.
+ * When modifying image support, update both the shared config and this file.
  */
 
 import { writeFileSync, unlinkSync, readFileSync, existsSync } from 'fs';
 import { resolve, isAbsolute } from 'path';
 
 // Standalone image extraction function for demo
+// MIME types duplicated from @probelabs/probe/agent/imageConfig (keep in sync!)
 async function extractImageUrls(message, debug = false) {
-  const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|gif))/gi;
+  const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|bmp|svg)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|bmp|svg))/gi;
 
   const urls = [];
   const foundPatterns = [];
@@ -31,9 +36,10 @@ async function extractImageUrls(message, debug = false) {
         if (!existsSync(absolutePath)) continue;
 
         const extension = absolutePath.toLowerCase().split('.').pop();
+        // MIME types from @probelabs/probe/agent/imageConfig (keep in sync!)
         const mimeTypes = {
           'png': 'image/png', 'jpg': 'image/jpeg', 'jpeg': 'image/jpeg',
-          'webp': 'image/webp', 'gif': 'image/gif'
+          'webp': 'image/webp', 'bmp': 'image/bmp', 'svg': 'image/svg+xml'
         };
         
         const mimeType = mimeTypes[extension];

@@ -7,7 +7,7 @@ The probe agent now supports reading local image files directly from file paths 
 ### Automatic Local File Detection
 - Detects local image file paths in user messages
 - Supports both relative and absolute paths  
-- Recognizes common image extensions: `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp`, `.svg`
+- Recognizes common image extensions: `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.svg`
 
 ### 🚀 NEW: Agentic Loop Image Loading
 - **Automatic detection**: Agent automatically detects when it mentions image files in its internal thinking
@@ -26,7 +26,7 @@ The probe agent now supports reading local image files directly from file paths 
 ./image.png                    # Relative path from current directory
 ../assets/screenshot.jpg       # Relative path with directory traversal
 /absolute/path/to/image.webp   # Absolute path
-image.gif                      # File in current directory
+image.png                      # File in current directory
 ```
 
 ### Automatic Conversion
@@ -101,7 +101,7 @@ When the probe agent is working through a task, it can now:
 The agent automatically loads images when it mentions:
 
 - **Direct paths**: `./screenshot.png`, `/path/to/image.jpg`
-- **Contextual references**: "the file diagram.png shows", "looking at chart.gif"  
+- **Contextual references**: "the file diagram.png shows", "looking at chart.png"  
 - **Tool results**: When tools return paths to image files
 - **Generated content**: "saved visualization as ./output.png"
 
@@ -135,7 +135,7 @@ The agent automatically loads images when it mentions:
 ### Pattern Matching
 The system uses an enhanced regex pattern to detect:
 ```javascript
-/(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|gif))/gi
+/(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|bmp|svg)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|bmp|svg))/gi
 ```
 
 ### Processing Pipeline
