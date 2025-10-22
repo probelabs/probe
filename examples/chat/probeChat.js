@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { ProbeAgent } from '@probelabs/probe/agent';
+import { IMAGE_MIME_TYPES, getExtensionPattern } from '@probelabs/probe/agent/imageConfig';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { writeFileSync, existsSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
@@ -104,18 +105,9 @@ async function convertImageFileToBase64(filePath, debug = false) {
       return null;
     }
 
-    // Determine MIME type based on file extension
+    // Determine MIME type based on file extension (from shared config)
     const extension = absolutePath.toLowerCase().split('.').pop();
-    const mimeTypes = {
-      'png': 'image/png',
-      'jpg': 'image/jpeg',
-      'jpeg': 'image/jpeg',
-      'webp': 'image/webp',
-      'bmp': 'image/bmp',
-      'svg': 'image/svg+xml'
-    };
-    
-    const mimeType = mimeTypes[extension];
+    const mimeType = IMAGE_MIME_TYPES[extension];
     if (!mimeType) {
       if (debug) {
         console.log(`[DEBUG] Unsupported image format: ${extension}`);
@@ -162,7 +154,9 @@ async function extractImageUrls(message, debug = false) {
       // 4. Base64 data URLs (data:image/...)
       // 5. Local file paths with image extensions (relative and absolute)
       // Updated to stop at quotes, spaces, or common HTML/XML delimiters
-      const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|bmp|svg)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|bmp|svg))/gi;
+      // Pattern dynamically generated from shared config
+      const extPattern = getExtensionPattern();
+      const imageUrlPattern = new RegExp(`(?:data:image/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?://(?:(?:private-user-images\\.githubusercontent\\.com|github\\.com/user-attachments/assets)/[^\\s"'<>]+|[^\\s"'<>]+\\.(?:${extPattern})(?:\\?[^\\s"'<>]*)?)|(?:\\.?\\.?/)?[^\\s"'<>]*\\.(?:${extPattern}))`, 'gi');
 
       span.setAttributes({
         'message.length': message.length,

@@ -2,12 +2,17 @@
 
 /**
  * Test script to verify agentic loop image loading functionality
+ *
+ * NOTE: This is a standalone test file. The MIME types and regex patterns below
+ * are duplicated from @probelabs/probe/agent/imageConfig for self-containment.
+ * When modifying image support, update both the shared config and this file.
  */
 
 import { writeFileSync, unlinkSync, existsSync } from 'fs';
 import { resolve } from 'path';
 
 // Mock ProbeAgent to test image processing without API calls
+// MIME types duplicated from @probelabs/probe/agent/imageConfig (keep in sync!)
 class MockProbeAgent {
   constructor(options = {}) {
     this.debug = options.debug || true;
@@ -76,6 +81,7 @@ class MockProbeAgent {
       }
 
       const extension = absolutePath.toLowerCase().split('.').pop();
+      // Supported extensions from @probelabs/probe/agent/imageConfig (keep in sync!)
       const supportedExtensions = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'svg'];
       if (!supportedExtensions.includes(extension)) {
         if (this.debug) {
@@ -84,6 +90,7 @@ class MockProbeAgent {
         return false;
       }
 
+      // MIME types from @probelabs/probe/agent/imageConfig (keep in sync!)
       const mimeTypes = {
         'png': 'image/png',
         'jpg': 'image/jpeg',

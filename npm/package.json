@@ -23,6 +23,9 @@
     },
     "./agent/mcp": {
       "import": "./src/agent/mcp/index.js"
+    },
+    "./agent/imageConfig": {
+      "import": "./src/agent/imageConfig.js"
     }
   },
   "bin": {

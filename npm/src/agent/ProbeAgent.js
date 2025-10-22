@@ -17,6 +17,7 @@ import { resolve, isAbsolute, dirname } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
 import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
+import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES } from './imageConfig.js';
 import { 
   createTools,
   searchToolDefinition,
@@ -58,8 +59,7 @@ import {
 const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
 const MAX_HISTORY_MESSAGES = 100;
 
-// Supported image file extensions
-const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'svg'];
+// Supported image file extensions (imported from shared config)
 
 // Maximum image file size (20MB) to prevent OOM attacks
 const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
@@ -671,16 +671,8 @@ export class ProbeAgent {
         return false;
       }
 
-      // Determine MIME type
-      const mimeTypes = {
-        'png': 'image/png',
-        'jpg': 'image/jpeg',
-        'jpeg': 'image/jpeg',
-        'webp': 'image/webp',
-        'bmp': 'image/bmp',
-        'svg': 'image/svg+xml'
-      };
-      const mimeType = mimeTypes[extension];
+      // Determine MIME type (from shared config)
+      const mimeType = IMAGE_MIME_TYPES[extension];
 
       // Read and encode file asynchronously
       const fileBuffer = await readFile(absolutePath);
