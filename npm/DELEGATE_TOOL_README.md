@@ -45,14 +45,47 @@ Each delegated task runs in a clean environment with automatic configuration:
 - **Validation**: Schema and Mermaid validation are automatically disabled for faster, simpler responses
 - **Iterations**: Automatically limited to remaining parent iterations to respect global limits
 - **Isolation**: Each subagent runs independently without inheriting parent context
+- **No Recursion**: Delegation is explicitly disabled in subagents via `--no-delegate` flag to prevent infinite delegation chains
 
 All these settings are applied automatically - no manual configuration needed.
+
+## Security and Resource Management
+
+The delegate tool includes built-in protection against resource exhaustion:
+
+### Concurrent Delegation Limits
+
+- **Global Limit**: Maximum of 3 concurrent delegations by default (configurable via `MAX_CONCURRENT_DELEGATIONS` environment variable)
+- **Per-Session Limit**: Maximum of 10 delegations per parent session (configurable via `MAX_DELEGATIONS_PER_SESSION` environment variable)
+- **Automatic Cleanup**: Counters are automatically decremented when delegations complete, fail, or timeout
+
+### Recursion Prevention
+
+- Subagents cannot spawn their own subagents - the `delegate` tool is explicitly disabled in delegated sessions
+- This prevents infinite delegation chains and ensures bounded resource usage
+
+### Rate Limiting
+
+Delegation requests that exceed limits will fail immediately with clear error messages:
+- `Maximum concurrent delegations (N) reached. Please wait for some delegations to complete.`
+- `Maximum delegations per session (N) reached for session {id}`
+
+### Environment Variables
+
+```bash
+# Set custom limits (optional)
+export MAX_CONCURRENT_DELEGATIONS=5
+export MAX_DELEGATIONS_PER_SESSION=20
+```
 
 ## Configuration Options
 
 - `task` (required): The specific task to delegate. Should be a complete, self-contained task that can be executed independently.
 - `timeout` (optional, default: 300): Maximum time to wait for the subagent in seconds
 - `debug` (optional, default: false): Enable debug logging for troubleshooting
+- `parentSessionId` (optional): Parent session ID for tracking per-session limits (automatically provided by ProbeAgent)
+- `currentIteration` (optional): Current iteration count (automatically provided by ProbeAgent)
+- `maxIterations` (optional): Maximum iterations allowed (automatically provided by ProbeAgent)
 
 ## Error Handling
 

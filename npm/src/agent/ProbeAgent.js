@@ -1470,18 +1470,20 @@ When troubleshooting:
                 
                 // Execute tool with tracing if available
                 const executeToolCall = async () => {
-                  // For delegate tool, pass current iteration and max iterations
+                  // For delegate tool, pass current iteration, max iterations, and session ID
                   if (toolName === 'delegate') {
                     const enhancedParams = {
                       ...toolParams,
                       currentIteration,
                       maxIterations,
+                      parentSessionId: this.sessionId,  // Pass parent session ID for tracking
                       debug: this.debug,
                       tracer: this.tracer
                     };
-                    
+
                     if (this.debug) {
                       console.log(`[DEBUG] Executing delegate tool at iteration ${currentIteration}/${maxIterations}`);
+                      console.log(`[DEBUG] Parent session: ${this.sessionId}`);
                       console.log(`[DEBUG] Delegate task: ${toolParams.task?.substring(0, 100)}...`);
                     }
                     

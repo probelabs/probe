@@ -250,16 +250,23 @@ export const delegateTool = (options = {}) => {
 		name: 'delegate',
 		description: delegateDescription,
 		inputSchema: delegateSchema,
-		execute: async ({ task }) => {
+		execute: async ({ task, currentIteration, maxIterations, parentSessionId, tracer }) => {
 			try {
 				if (debug) {
 					console.error(`Executing delegate with task: "${task}"`);
+					if (parentSessionId) {
+						console.error(`Parent session: ${parentSessionId}`);
+					}
 				}
 
 				const result = await delegate({
 					task,
 					timeout,
-					debug
+					debug,
+					currentIteration,
+					maxIterations,
+					parentSessionId,
+					tracer
 				});
 
 				return result;

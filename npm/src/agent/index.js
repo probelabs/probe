@@ -159,6 +159,8 @@ function parseArgs() {
       config.allowEdit = true;
     } else if (arg === '--enable-delegate') {
       config.enableDelegate = true;
+    } else if (arg === '--no-delegate') {
+      config.enableDelegate = false; // Explicitly disable delegation (used by subagents)
     } else if (arg === '--path' && i + 1 < args.length) {
       config.path = args[++i];
     } else if (arg === '--allowed-folders' && i + 1 < args.length) {

@@ -8,6 +8,36 @@ import { randomUUID } from 'crypto';
 import { getBinaryPath, buildCliArgs } from './utils.js';
 import { createMessagePreview } from './tools/common.js';
 
+// Global delegation tracking to prevent resource exhaustion
+const MAX_CONCURRENT_DELEGATIONS = parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
+const MAX_DELEGATIONS_PER_SESSION = parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
+
+// Track active delegations globally and per session
+const activeDelegations = new Map(); // sessionId -> count
+let globalActiveDelegations = 0;
+
+/**
+ * Decrement delegation counters when a delegation completes
+ */
+function decrementDelegationCounters(parentSessionId, debug = false) {
+	globalActiveDelegations = Math.max(0, globalActiveDelegations - 1);
+
+	if (parentSessionId) {
+		const currentCount = activeDelegations.get(parentSessionId) || 0;
+		if (currentCount > 0) {
+			activeDelegations.set(parentSessionId, currentCount - 1);
+		}
+		// Clean up if count reaches 0
+		if (activeDelegations.get(parentSessionId) === 0) {
+			activeDelegations.delete(parentSessionId);
+		}
+	}
+
+	if (debug) {
+		console.error(`[DELEGATE] Decremented counters. Global active: ${globalActiveDelegations}`);
+	}
+}
+
 /**
  * Delegate a big distinct task to a probe subagent (used automatically by AI agents)
  * 
@@ -29,9 +59,22 @@ import { createMessagePreview } from './tools/common.js';
  * @param {number} [options.maxIterations=30] - Maximum tool iterations allowed
  * @returns {Promise<string>} The response from the delegate agent
  */
-export async function delegate({ task, timeout = 300, debug = false, currentIteration = 0, maxIterations = 30, tracer = null }) {
+export async function delegate({ task, timeout = 300, debug = false, currentIteration = 0, maxIterations = 30, tracer = null, parentSessionId = null }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
+	}
+
+	// Check global concurrent delegation limit
+	if (globalActiveDelegations >= MAX_CONCURRENT_DELEGATIONS) {
+		throw new Error(`Maximum concurrent delegations (${MAX_CONCURRENT_DELEGATIONS}) reached. Please wait for some delegations to complete.`);
+	}
+
+	// Check per-session delegation limit
+	if (parentSessionId) {
+		const sessionCount = activeDelegations.get(parentSessionId) || 0;
+		if (sessionCount >= MAX_DELEGATIONS_PER_SESSION) {
+			throw new Error(`Maximum delegations per session (${MAX_DELEGATIONS_PER_SESSION}) reached for session ${parentSessionId}`);
+		}
 	}
 
 	const sessionId = randomUUID();
@@ -40,12 +83,21 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 	// Calculate remaining iterations for subagent
 	const remainingIterations = Math.max(1, maxIterations - currentIteration);
 
+	// Increment delegation counters
+	globalActiveDelegations++;
+	if (parentSessionId) {
+		const currentCount = activeDelegations.get(parentSessionId) || 0;
+		activeDelegations.set(parentSessionId, currentCount + 1);
+	}
+
 	if (debug) {
 		console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
+		console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
 		console.error(`[DELEGATE] Task: ${task}`);
 		console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
 		console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
 		console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
+		console.error(`[DELEGATE] Global active delegations: ${globalActiveDelegations}/${MAX_CONCURRENT_DELEGATIONS}`);
 		console.error(`[DELEGATE] Using clean agent environment with code-researcher prompt`);
 	}
 
@@ -55,13 +107,14 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 		
 		// Create the agent command with automatic subagent configuration
 		const args = [
-			'agent', 
-			'--task', task, 
+			'agent',
+			'--task', task,
 			'--session-id', sessionId,
 			'--prompt-type', 'code-researcher',  // Automatically use default code researcher prompt
 			'--no-schema-validation',            // Automatically disable schema validation
 			'--no-mermaid-validation',           // Automatically disable mermaid validation
-			'--max-iterations', remainingIterations.toString()  // Automatically limit to remaining iterations
+			'--max-iterations', remainingIterations.toString(),  // Automatically limit to remaining iterations
+			'--no-delegate'                      // Explicitly disable delegation in subagents to prevent recursion
 		];
 		
 		if (debug) {
@@ -111,6 +164,9 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				if (isResolved) return;
 				isResolved = true;
 
+				// Decrement delegation counters
+				decrementDelegationCounters(parentSessionId, debug);
+
 				const duration = Date.now() - startTime;
 
 				if (debug) {
@@ -123,7 +179,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				if (code === 0) {
 					// Successful delegation - return the response
 					const response = stdout.trim();
-					
+
 					if (!response) {
 						if (debug) {
 							console.error(`[DELEGATE] Task completed but returned empty response for session ${sessionId}`);
@@ -136,7 +192,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 						console.error(`[DELEGATE] Task completed successfully for session ${sessionId}`);
 						console.error(`[DELEGATE] Response length: ${response.length} chars`);
 					}
-					
+
 					// Record successful completion in telemetry
 					if (tracer) {
 						tracer.recordDelegationEvent('completed', {
@@ -145,7 +201,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 							'delegation.response_length': response.length,
 							'delegation.success': true
 						});
-						
+
 						if (delegationSpan) {
 							delegationSpan.setAttributes({
 								'delegation.result.success': true,
@@ -156,7 +212,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 							delegationSpan.end();
 						}
 					}
-					
+
 					resolve(response);
 				} else {
 					// Failed delegation
@@ -197,6 +253,9 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				if (isResolved) return;
 				isResolved = true;
 
+				// Decrement delegation counters on error
+				decrementDelegationCounters(parentSessionId, debug);
+
 				const duration = Date.now() - startTime;
 
 				if (debug) {
@@ -213,6 +272,9 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 				if (isResolved) return;
 				isResolved = true;
 
+				// Decrement delegation counters on timeout
+				decrementDelegationCounters(parentSessionId, debug);
+
 				const duration = Date.now() - startTime;
 
 				if (debug) {
@@ -224,7 +286,7 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 
 				// Kill the process
 				process.kill('SIGTERM');
-				
+
 				// Give it a moment to terminate gracefully
 				setTimeout(() => {
 					if (!process.killed) {
@@ -240,6 +302,9 @@ export async function delegate({ task, timeout = 300, debug = false, currentIter
 		});
 
 	} catch (error) {
+		// Decrement delegation counters on setup error
+		decrementDelegationCounters(parentSessionId, debug);
+
 		const duration = Date.now() - startTime;
 
 		if (debug) {
