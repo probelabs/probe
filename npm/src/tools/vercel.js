@@ -250,23 +250,64 @@ export const delegateTool = (options = {}) => {
 		name: 'delegate',
 		description: delegateDescription,
 		inputSchema: delegateSchema,
-		execute: async ({ task }) => {
-			try {
-				if (debug) {
-					console.error(`Executing delegate with task: "${task}"`);
-				}
-
-				const result = await delegate({
-					task,
-					timeout,
-					debug
-				});
-
-				return result;
-			} catch (error) {
-				console.error('Error executing delegate command:', error);
-				return `Error executing delegate command: ${error.message}`;
+		execute: async ({ task, currentIteration, maxIterations, parentSessionId, path, provider, model, tracer }) => {
+			// Validate required parameters - throw errors for consistency
+			if (!task || typeof task !== 'string') {
+				throw new Error('Task parameter is required and must be a non-empty string');
 			}
+
+			if (task.trim().length === 0) {
+				throw new Error('Task parameter cannot be empty or whitespace only');
+			}
+
+			// Validate optional numeric parameters
+			if (currentIteration !== undefined && (typeof currentIteration !== 'number' || currentIteration < 0)) {
+				throw new Error('currentIteration must be a non-negative number');
+			}
+
+			if (maxIterations !== undefined && (typeof maxIterations !== 'number' || maxIterations < 1)) {
+				throw new Error('maxIterations must be a positive number');
+			}
+
+			// Validate optional string parameters for type consistency
+			if (parentSessionId !== undefined && parentSessionId !== null && typeof parentSessionId !== 'string') {
+				throw new TypeError('parentSessionId must be a string, null, or undefined');
+			}
+
+			if (path !== undefined && path !== null && typeof path !== 'string') {
+				throw new TypeError('path must be a string, null, or undefined');
+			}
+
+			if (provider !== undefined && provider !== null && typeof provider !== 'string') {
+				throw new TypeError('provider must be a string, null, or undefined');
+			}
+
+			if (model !== undefined && model !== null && typeof model !== 'string') {
+				throw new TypeError('model must be a string, null, or undefined');
+			}
+
+			if (debug) {
+				console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
+				if (parentSessionId) {
+					console.error(`Parent session: ${parentSessionId}`);
+				}
+			}
+
+			// Execute delegation - let errors propagate naturally
+			const result = await delegate({
+				task,
+				timeout,
+				debug,
+				currentIteration: currentIteration || 0,
+				maxIterations: maxIterations || 30,
+				parentSessionId,
+				path,
+				provider,
+				model,
+				tracer
+			});
+
+			return result;
 		}
 	});
 };

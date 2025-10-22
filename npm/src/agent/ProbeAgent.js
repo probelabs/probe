@@ -18,11 +18,12 @@ import { TokenCounter } from './tokenCounter.js';
 import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
 import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
 import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES } from './imageConfig.js';
-import { 
+import {
   createTools,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
+  delegateToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
   attemptCompletionToolDefinition,
@@ -75,6 +76,7 @@ export class ProbeAgent {
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
+   * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
    * @param {string} [options.path] - Search directory path
    * @param {string} [options.provider] - Force specific AI provider
    * @param {string} [options.model] - Override model name
@@ -97,6 +99,7 @@ export class ProbeAgent {
     this.customPrompt = options.customPrompt || null;
     this.promptType = options.promptType || 'code-explorer';
     this.allowEdit = !!options.allowEdit;
+    this.enableDelegate = !!options.enableDelegate;
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this.tracer = options.tracer || null;
@@ -889,6 +892,9 @@ ${attemptCompletionToolDefinition}
     if (this.allowEdit) {
       toolDefinitions += `${implementToolDefinition}\n`;
     }
+    if (this.enableDelegate) {
+      toolDefinitions += `${delegateToolDefinition}\n`;
+    }
 
     // Build XML tool guidelines
     let xmlToolGuidelines = `
@@ -952,7 +958,7 @@ Available Tools:
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
-${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}
+${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 - attempt_complete: Quick completion using previous response (shorthand).
 `;
@@ -1323,6 +1329,9 @@ When troubleshooting:
         if (this.allowEdit) {
           validTools.push('implement');
         }
+        if (this.enableDelegate) {
+          validTools.push('delegate');
+        }
         
         // Try parsing with hybrid parser that supports both native and MCP tools
         const nativeTools = validTools;
@@ -1462,18 +1471,24 @@ When troubleshooting:
                 
                 // Execute tool with tracing if available
                 const executeToolCall = async () => {
-                  // For delegate tool, pass current iteration and max iterations
+                  // For delegate tool, pass current iteration, max iterations, session ID, and config
                   if (toolName === 'delegate') {
                     const enhancedParams = {
                       ...toolParams,
                       currentIteration,
                       maxIterations,
+                      parentSessionId: this.sessionId,  // Pass parent session ID for tracking
+                      path: this.searchPath,            // Inherit search path
+                      provider: this.provider,          // Inherit AI provider
+                      model: this.model,                // Inherit model
                       debug: this.debug,
                       tracer: this.tracer
                     };
-                    
+
                     if (this.debug) {
                       console.log(`[DEBUG] Executing delegate tool at iteration ${currentIteration}/${maxIterations}`);
+                      console.log(`[DEBUG] Parent session: ${this.sessionId}`);
+                      console.log(`[DEBUG] Inherited config: path=${this.searchPath}, provider=${this.provider}, model=${this.model}`);
                       console.log(`[DEBUG] Delegate task: ${toolParams.task?.substring(0, 100)}...`);
                     }
                     
@@ -2205,6 +2220,7 @@ Convert your previous response content into actual JSON data that follows this s
       customPrompt: this.customPrompt,
       promptType: this.promptType,
       allowEdit: this.allowEdit,
+      enableDelegate: this.enableDelegate,
       path: this.allowedFolders[0], // Use first allowed folder as primary path
       allowedFolders: [...this.allowedFolders],
       provider: this.clientApiProvider,

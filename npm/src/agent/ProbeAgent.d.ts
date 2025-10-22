@@ -13,6 +13,8 @@ export interface ProbeAgentOptions {
   promptType?: 'code-explorer' | 'engineer' | 'code-review' | 'support' | 'architect';
   /** Allow the use of the 'implement' tool for code editing */
   allowEdit?: boolean;
+  /** Enable the delegate tool for task distribution to subagents */
+  enableDelegate?: boolean;
   /** Search directory path */
   path?: string;
   /** Force specific AI provider */

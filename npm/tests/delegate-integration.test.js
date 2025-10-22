@@ -79,30 +79,35 @@ describe('Delegate Tool Integration', () => {
     it('should execute delegate tool with correct parameters', async () => {
       const tool = delegateTool({ debug: true, timeout: 600 });
       const task = 'Analyze security vulnerabilities in authentication code';
-      
+
       mockDelegate.mockResolvedValue('Security analysis complete: Found 3 vulnerabilities');
-      
+
       const result = await tool.execute({ task });
-      
+
       expect(mockDelegate).toHaveBeenCalledWith({
         task,
         timeout: 600,
-        debug: true
+        debug: true,
+        currentIteration: 0,
+        maxIterations: 30,
+        parentSessionId: undefined,
+        path: undefined,
+        provider: undefined,
+        model: undefined,
+        tracer: undefined
       });
-      
+
       expect(result).toBe('Security analysis complete: Found 3 vulnerabilities');
     });
 
     it('should handle delegate execution errors gracefully', async () => {
       const tool = delegateTool();
       const task = 'Invalid task that will fail';
-      
+
       mockDelegate.mockRejectedValue(new Error('Delegation process failed'));
-      
-      const result = await tool.execute({ task });
-      
-      expect(result).toContain('Error executing delegate command');
-      expect(result).toContain('Delegation process failed');
+
+      // Tool now throws errors instead of returning error strings
+      await expect(tool.execute({ task })).rejects.toThrow('Delegation process failed');
     });
 
     it('should support XML parsing format', () => {

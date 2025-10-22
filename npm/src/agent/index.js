@@ -123,6 +123,7 @@ function parseArgs() {
     provider: null,
     model: null,
     allowEdit: false,
+    enableDelegate: false,
     verbose: false,
     help: false,
     maxIterations: null,
@@ -156,6 +157,10 @@ function parseArgs() {
       config.verbose = true;
     } else if (arg === '--allow-edit') {
       config.allowEdit = true;
+    } else if (arg === '--enable-delegate') {
+      config.enableDelegate = true;
+    } else if (arg === '--no-delegate') {
+      config.enableDelegate = false; // Explicitly disable delegation (used by subagents)
     } else if (arg === '--path' && i + 1 < args.length) {
       config.path = args[++i];
     } else if (arg === '--allowed-folders' && i + 1 < args.length) {
@@ -237,6 +242,7 @@ Options:
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
   --allow-edit                     Enable code modification capabilities
+  --enable-delegate                Enable delegate tool for task distribution to subagents
   --verbose                        Enable verbose output
   --outline                        Use outline-xml format for code search results
   --mcp                           Run as MCP server
@@ -565,6 +571,7 @@ async function main() {
       model: config.model,
       path: config.path,
       allowEdit: config.allowEdit,
+      enableDelegate: config.enableDelegate,
       debug: config.verbose
     });
     await server.start();
@@ -713,6 +720,7 @@ async function main() {
       promptType: config.prompt,
       customPrompt: systemPrompt,
       allowEdit: config.allowEdit,
+      enableDelegate: config.enableDelegate,
       debug: config.verbose,
       tracer: appTracer,
       outline: config.outline,
