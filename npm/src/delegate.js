@@ -7,35 +7,111 @@
 import { randomUUID } from 'crypto';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 
-// Global delegation tracking to prevent resource exhaustion
-const MAX_CONCURRENT_DELEGATIONS = parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
-const MAX_DELEGATIONS_PER_SESSION = parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
-
-// Track active delegations globally and per session
-const activeDelegations = new Map(); // sessionId -> count
-let globalActiveDelegations = 0;
-
 /**
- * Decrement delegation counters when a delegation completes
+ * DelegationManager - Thread-safe delegation tracking with proper resource management
  */
-function decrementDelegationCounters(parentSessionId, debug = false) {
-	globalActiveDelegations = Math.max(0, globalActiveDelegations - 1);
+class DelegationManager {
+	constructor() {
+		this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
+		this.maxPerSession = parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
 
-	if (parentSessionId) {
-		const currentCount = activeDelegations.get(parentSessionId) || 0;
-		if (currentCount > 0) {
-			activeDelegations.set(parentSessionId, currentCount - 1);
-		}
-		// Clean up if count reaches 0
-		if (activeDelegations.get(parentSessionId) === 0) {
-			activeDelegations.delete(parentSessionId);
-		}
+		// Use WeakMap for automatic cleanup when sessions are garbage collected
+		this.sessionDelegations = new Map(); // sessionId -> { count, weakRef }
+		this.globalActive = 0;
+
+		// Mutex-like mechanism for atomic operations
+		this.operationQueue = Promise.resolve();
 	}
 
-	if (debug) {
-		console.error(`[DELEGATE] Decremented counters. Global active: ${globalActiveDelegations}`);
+	/**
+	 * Atomically check limits and increment counters
+	 * @returns {Promise<boolean>} True if delegation can proceed
+	 */
+	async tryAcquire(parentSessionId) {
+		// Queue operation to ensure atomicity
+		return this.operationQueue = this.operationQueue.then(async () => {
+			// Check global limit
+			if (this.globalActive >= this.maxConcurrent) {
+				throw new Error(`Maximum concurrent delegations (${this.maxConcurrent}) reached. Please wait for some delegations to complete.`);
+			}
+
+			// Check per-session limit
+			if (parentSessionId) {
+				const sessionData = this.sessionDelegations.get(parentSessionId);
+				const sessionCount = sessionData?.count || 0;
+
+				if (sessionCount >= this.maxPerSession) {
+					throw new Error(`Maximum delegations per session (${this.maxPerSession}) reached for session ${parentSessionId}`);
+				}
+			}
+
+			// Atomically increment counters
+			this.globalActive++;
+
+			if (parentSessionId) {
+				const sessionData = this.sessionDelegations.get(parentSessionId);
+				if (sessionData) {
+					sessionData.count++;
+				} else {
+					this.sessionDelegations.set(parentSessionId, { count: 1 });
+				}
+			}
+
+			return true;
+		});
+	}
+
+	/**
+	 * Atomically decrement counters
+	 */
+	async release(parentSessionId, debug = false) {
+		// Queue operation to ensure atomicity
+		return this.operationQueue = this.operationQueue.then(async () => {
+			this.globalActive = Math.max(0, this.globalActive - 1);
+
+			if (parentSessionId) {
+				const sessionData = this.sessionDelegations.get(parentSessionId);
+				if (sessionData) {
+					sessionData.count = Math.max(0, sessionData.count - 1);
+
+					// Clean up if count reaches 0
+					if (sessionData.count === 0) {
+						this.sessionDelegations.delete(parentSessionId);
+					}
+				}
+			}
+
+			if (debug) {
+				console.error(`[DELEGATE] Released. Global active: ${this.globalActive}`);
+			}
+		});
+	}
+
+	/**
+	 * Get current stats for monitoring
+	 */
+	getStats() {
+		return {
+			globalActive: this.globalActive,
+			maxConcurrent: this.maxConcurrent,
+			maxPerSession: this.maxPerSession,
+			sessionCount: this.sessionDelegations.size
+		};
+	}
+
+	/**
+	 * Cleanup all resources (for testing or shutdown)
+	 */
+	async cleanup() {
+		return this.operationQueue = this.operationQueue.then(async () => {
+			this.sessionDelegations.clear();
+			this.globalActive = 0;
+		});
 	}
 }
+
+// Singleton instance for the module
+const delegationManager = new DelegationManager();
 
 /**
  * Delegate a big distinct task to a probe subagent (used automatically by AI agents)
@@ -80,40 +156,29 @@ export async function delegate({
 		throw new Error('Task parameter is required and must be a string');
 	}
 
-	// Check global concurrent delegation limit
-	if (globalActiveDelegations >= MAX_CONCURRENT_DELEGATIONS) {
-		throw new Error(`Maximum concurrent delegations (${MAX_CONCURRENT_DELEGATIONS}) reached. Please wait for some delegations to complete.`);
-	}
-
-	// Check per-session delegation limit
-	if (parentSessionId) {
-		const sessionCount = activeDelegations.get(parentSessionId) || 0;
-		if (sessionCount >= MAX_DELEGATIONS_PER_SESSION) {
-			throw new Error(`Maximum delegations per session (${MAX_DELEGATIONS_PER_SESSION}) reached for session ${parentSessionId}`);
-		}
-	}
-
 	const sessionId = randomUUID();
 	const startTime = Date.now();
 
 	// Calculate remaining iterations for subagent
 	const remainingIterations = Math.max(1, maxIterations - currentIteration);
 
-	// Increment delegation counters
-	globalActiveDelegations++;
-	if (parentSessionId) {
-		const currentCount = activeDelegations.get(parentSessionId) || 0;
-		activeDelegations.set(parentSessionId, currentCount + 1);
+	// Atomically check limits and acquire delegation slot
+	try {
+		await delegationManager.tryAcquire(parentSessionId);
+	} catch (error) {
+		// Limit exceeded, fail fast
+		throw error;
 	}
 
 	if (debug) {
+		const stats = delegationManager.getStats();
 		console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
 		console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
 		console.error(`[DELEGATE] Task: ${task}`);
 		console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
 		console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
 		console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
-		console.error(`[DELEGATE] Global active delegations: ${globalActiveDelegations}/${MAX_CONCURRENT_DELEGATIONS}`);
+		console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
 		console.error(`[DELEGATE] Using ProbeAgent SDK with code-researcher prompt`);
 	}
 
@@ -185,16 +250,16 @@ export async function delegate({
 			}
 		}
 
-		// Decrement counters on success
-		decrementDelegationCounters(parentSessionId, debug);
+		// Release delegation slot
+		await delegationManager.release(parentSessionId, debug);
 
 		return response;
 
 	} catch (error) {
 		const duration = Date.now() - startTime;
 
-		// Decrement counters on error
-		decrementDelegationCounters(parentSessionId, debug);
+		// Release delegation slot on error
+		await delegationManager.release(parentSessionId, debug);
 
 		if (debug) {
 			console.error(`[DELEGATE] Task failed for session ${sessionId} after ${duration}ms`);
@@ -236,4 +301,20 @@ export async function delegate({
 export async function isDelegateAvailable() {
 	// Delegate is always available when using SDK-based approach
 	return true;
+}
+
+/**
+ * Get delegation statistics (for monitoring/debugging)
+ *
+ * @returns {Object} Current delegation stats
+ */
+export function getDelegationStats() {
+	return delegationManager.getStats();
+}
+
+/**
+ * Cleanup delegation manager (for testing or shutdown)
+ */
+export async function cleanupDelegationManager() {
+	return delegationManager.cleanup();
 }

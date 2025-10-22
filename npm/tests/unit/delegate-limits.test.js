@@ -15,19 +15,24 @@ jest.unstable_mockModule('../src/agent/ProbeAgent.js', () => ({
 }));
 
 // Import after mocking
-const { delegate } = await import('../src/delegate.js');
+const { delegate, cleanupDelegationManager, getDelegationStats } = await import('../src/delegate.js');
 
 describe('Delegate Tool Security and Limits (SDK-based)', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     // Clear previous mocks
     jest.clearAllMocks();
+
+    // Clean up delegation manager state
+    await cleanupDelegationManager();
 
     // Mock successful response by default
     mockAnswer.mockResolvedValue('Test response from subagent');
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     jest.clearAllMocks();
+    // Ensure cleanup after each test
+    await cleanupDelegationManager();
   });
 
   describe('Recursion prevention', () => {

@@ -329,6 +329,7 @@ export class ACPServer {
       provider: this.options.provider,
       model: this.options.model,
       allowEdit: this.options.allowEdit,
+      enableDelegate: this.options.enableDelegate,
       debug: this.options.debug,
       enableMcp: this.options.enableMcp,
       mcpConfig: this.options.mcpConfig,
