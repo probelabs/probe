@@ -6,6 +6,13 @@ import (
 	"testing"
 )
 
+// BM25 score thresholds for test expectations
+const (
+	expectedMultiTermScore  = 2.0 // Expected minimum score when multiple query terms match
+	expectedSingleTermScore = 1.0 // Expected minimum score for single term matches
+	expectedGoodMatchScore  = 1.5 // Expected minimum for good quality matches
+)
+
 // TestE2E_BasicSearch tests basic search functionality
 func TestE2E_BasicSearch(t *testing.T) {
 	engine := search.NewEngine()
@@ -230,21 +237,21 @@ func TestE2E_BM25Ranking(t *testing.T) {
 			query:        "refund charge",
 			topResult:    "POST /charges/{id}/refund",
 			checkRanking: true,
-			minTopScore:  2.0, // Multiple term match should score higher
+			minTopScore:  expectedMultiTermScore, // Multiple term match should score higher
 		},
 		{
 			name:         "Multiple term match - create subscription",
 			query:        "create subscription",
 			topResult:    "POST /subscriptions",
 			checkRanking: true,
-			minTopScore:  1.5,
+			minTopScore:  expectedGoodMatchScore,
 		},
 		{
 			name:         "Exact operation - list repositories",
 			query:        "list repositories",
 			topResult:    "/repos", // Any repo endpoint should match
 			checkRanking: true,
-			minTopScore:  1.0,
+			minTopScore:  expectedSingleTermScore,
 		},
 	}
 

@@ -132,7 +132,7 @@ func (t *Tokenizer) splitCamelCase(s string) []string {
 		}
 
 		// Start new word on digit boundary
-		if unicode.IsDigit(r) && current.Len() > 0 && !unicode.IsDigit(runes[i-1]) {
+		if unicode.IsDigit(r) && current.Len() > 0 && i > 0 && !unicode.IsDigit(runes[i-1]) {
 			result = append(result, current.String())
 			current.Reset()
 		}

@@ -12,6 +12,7 @@ import (
 type Engine struct {
 	specs     []*OpenAPISpec
 	endpoints []Endpoint
+	documents []*ranker.Document // Pre-created documents for efficient search
 	tokenizer *tokenizer.Tokenizer
 	ranker    *ranker.BM25Ranker
 }
@@ -36,13 +37,35 @@ func (e *Engine) IndexSpec(path string) error {
 	// Extract and index endpoints with pre-tokenization
 	endpoints := spec.ExtractEndpoints()
 
-	// Pre-tokenize all endpoints for efficient search
+	// Pre-tokenize all endpoints and create documents once
+	startIdx := len(e.endpoints)
 	for i := range endpoints {
 		text := endpoints[i].GetSearchableText()
 		endpoints[i].Tokens = e.tokenizer.Tokenize(text)
+
+		// Pre-compute term frequency map
+		tf := make(map[string]int)
+		for _, token := range endpoints[i].Tokens {
+			tf[token]++
+		}
+
+		// Create document once during indexing with pre-computed TF
+		doc := &ranker.Document{
+			ID:      fmt.Sprintf("%s:%s", endpoints[i].Method, endpoints[i].Path),
+			Content: text,
+			Tokens:  endpoints[i].Tokens,
+			TF:      tf,
+			Data:    nil, // Will set after appending to e.endpoints
+		}
+		e.documents = append(e.documents, doc)
 	}
 
 	e.endpoints = append(e.endpoints, endpoints...)
+
+	// Fix document Data pointers to point to actual endpoints slice
+	for i := range endpoints {
+		e.documents[startIdx+i].Data = &e.endpoints[startIdx+i]
+	}
 
 	return nil
 }
@@ -92,16 +115,8 @@ func (e *Engine) Search(query string, maxResults int) []SearchResult {
 		return nil
 	}
 
-	// 2. Create documents from endpoints (using pre-tokenized data)
-	documents := make([]*ranker.Document, len(e.endpoints))
-	for i, endpoint := range e.endpoints {
-		documents[i] = &ranker.Document{
-			ID:      fmt.Sprintf("%s:%s", endpoint.Method, endpoint.Path),
-			Content: endpoint.GetSearchableText(),
-			Tokens:  endpoint.Tokens, // Use pre-tokenized tokens
-			Data:    &e.endpoints[i],
-		}
-	}
+	// 2. Use pre-created documents (no allocation overhead)
+	documents := e.documents
 
 	// 3. Rank with BM25
 	scored := e.ranker.Rank(documents, queryTokens)

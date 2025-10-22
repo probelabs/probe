@@ -28,7 +28,8 @@ type Document struct {
 	ID      string
 	Content string
 	Tokens  []string
-	Data    interface{} // Original data (OpenAPI spec, endpoint, etc)
+	TF      map[string]int // Pre-computed term frequency map
+	Data    interface{}    // Original data (OpenAPI spec, endpoint, etc)
 }
 
 // ScoredResult represents a ranked search result
@@ -53,16 +54,21 @@ func (r *BM25Ranker) Rank(documents []*Document, queryTokens []string) []*Scored
 	termDF := make(map[string]int)
 
 	for i, doc := range documents {
-		tf := make(map[string]int)
-		for _, token := range doc.Tokens {
-			tf[token]++
+		// Use pre-computed TF if available, otherwise compute it
+		if doc.TF != nil {
+			docTF[i] = doc.TF
+		} else {
+			tf := make(map[string]int)
+			for _, token := range doc.Tokens {
+				tf[token]++
+			}
+			docTF[i] = tf
 		}
-		docTF[i] = tf
 		docLengths[i] = len(doc.Tokens)
 
 		// Track which documents contain each term (for DF)
 		seen := make(map[string]bool)
-		for token := range tf {
+		for token := range docTF[i] {
 			if !seen[token] {
 				termDF[token]++
 				seen[token] = true
