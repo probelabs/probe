@@ -21,9 +21,9 @@ class MockProbeAgent {
     if (!content) return;
 
     const imagePatterns = [
-      /(?:\.?\.?\/)?[^\s"'<>\[\]]+\.(?:png|jpg|jpeg|webp|gif|bmp|svg)(?!\w)/gi,
-      /(?:image|file|screenshot|diagram|photo|picture|graphic)\s*:?\s*([^\s"'<>\[\]]+\.(?:png|jpg|jpeg|webp|gif|bmp|svg))(?!\w)/gi,
-      /(?:found|saved|created|generated).*?([^\s"'<>\[\]]+\.(?:png|jpg|jpeg|webp|gif|bmp|svg))(?!\w)/gi
+      /(?:\.?\.?\/)?[^\s"'<>\[\]]+\.(?:png|jpg|jpeg|webp|bmp|svg)(?!\w)/gi,
+      /(?:image|file|screenshot|diagram|photo|picture|graphic)\s*:?\s*([^\s"'<>\[\]]+\.(?:png|jpg|jpeg|webp|bmp|svg))(?!\w)/gi,
+      /(?:found|saved|created|generated).*?([^\s"'<>\[\]]+\.(?:png|jpg|jpeg|webp|bmp|svg))(?!\w)/gi
     ];
 
     const foundPaths = new Set();
