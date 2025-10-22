@@ -384,7 +384,7 @@ export class ProbeAgent {
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }),
     });
-    this.model = modelName || 'claude-opus-4-1-20250805';
+    this.model = modelName || 'claude-sonnet-4-5-20250929';
     this.apiType = 'anthropic';
     
     if (this.debug) {
