@@ -68,7 +68,9 @@ describe('ProbeAgent model option', () => {
     const cloned = baseAgent.clone();
 
     // The clone should preserve the model from the original agent
+    // Note: In test mode, the actual model will be 'original-model' since we pass it through
     expect(cloned.model).toBe(baseAgent.model);
+    expect(cloned.model).toBe('original-model');
   });
 
   test('should allow override of model option in clone', () => {
