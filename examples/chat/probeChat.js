@@ -1,6 +1,5 @@
 import 'dotenv/config';
 import { ProbeAgent } from '@probelabs/probe/agent';
-import { IMAGE_MIME_TYPES, getExtensionPattern } from '@probelabs/probe/agent/imageConfig';
 import { TokenUsageDisplay } from './tokenUsageDisplay.js';
 import { writeFileSync, existsSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
@@ -8,6 +7,19 @@ import { join, resolve, isAbsolute } from 'path';
 import { TelemetryConfig } from './telemetry.js';
 import { trace } from '@opentelemetry/api';
 import { appTracer } from './appTracer.js';
+
+// Image configuration (duplicated from @probelabs/probe/agent/imageConfig for compatibility)
+// TODO: Import from '@probelabs/probe/agent/imageConfig' after next package publish
+const IMAGE_MIME_TYPES = {
+  'png': 'image/png',
+  'jpg': 'image/jpeg',
+  'jpeg': 'image/jpeg',
+  'webp': 'image/webp',
+  'bmp': 'image/bmp',
+  'svg': 'image/svg+xml'
+};
+const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'svg'];
+const getExtensionPattern = (extensions = SUPPORTED_IMAGE_EXTENSIONS) => extensions.join('|');
 
 // Parse and validate allowed folders from environment variable
 const allowedFolders = process.env.ALLOWED_FOLDERS
