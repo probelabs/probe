@@ -11,15 +11,29 @@ import { ProbeAgent } from './agent/ProbeAgent.js';
  * DelegationManager - Simple delegation tracking with proper resource management
  * Note: In single-threaded Node.js, simple counter operations are atomic within the event loop.
  * No mutex/locking needed since operations are synchronous.
+ *
+ * Design notes:
+ * - Uses Map instead of WeakMap because sessionIds are strings (UUIDs), not objects
+ * - WeakMap only accepts objects as keys, so it cannot be used for string-based session IDs
+ * - Session entries are automatically cleaned up when their count reaches 0
+ * - For long-running processes, periodic cleanup of stale sessions may be needed
  */
 class DelegationManager {
 	constructor() {
 		this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
 		this.maxPerSession = parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
 
-		// Track delegations per session (Map, not WeakMap, since sessionIds are strings)
-		this.sessionDelegations = new Map(); // sessionId -> { count }
+		// Track delegations per session with timestamp for potential TTL cleanup
+		// Map<string, { count: number, lastUpdated: number }>
+		this.sessionDelegations = new Map();
 		this.globalActive = 0;
+
+		// Start periodic cleanup of stale sessions (every 5 minutes)
+		this.cleanupInterval = setInterval(() => this.cleanupStaleSessions(), 5 * 60 * 1000);
+		// Allow Node.js to exit even if interval is active
+		if (this.cleanupInterval.unref) {
+			this.cleanupInterval.unref();
+		}
 	}
 
 	/**
@@ -48,8 +62,12 @@ class DelegationManager {
 			const sessionData = this.sessionDelegations.get(parentSessionId);
 			if (sessionData) {
 				sessionData.count++;
+				sessionData.lastUpdated = Date.now();
 			} else {
-				this.sessionDelegations.set(parentSessionId, { count: 1 });
+				this.sessionDelegations.set(parentSessionId, {
+					count: 1,
+					lastUpdated: Date.now()
+				});
 			}
 		}
 
@@ -92,9 +110,25 @@ class DelegationManager {
 	}
 
 	/**
+	 * Clean up stale sessions (sessions with count=0 that haven't been updated in 1 hour)
+	 */
+	cleanupStaleSessions() {
+		const oneHourAgo = Date.now() - (60 * 60 * 1000);
+		for (const [sessionId, data] of this.sessionDelegations.entries()) {
+			if (data.count === 0 && data.lastUpdated < oneHourAgo) {
+				this.sessionDelegations.delete(sessionId);
+			}
+		}
+	}
+
+	/**
 	 * Cleanup all resources (for testing or shutdown)
 	 */
 	cleanup() {
+		if (this.cleanupInterval) {
+			clearInterval(this.cleanupInterval);
+			this.cleanupInterval = null;
+		}
 		this.sessionDelegations.clear();
 		this.globalActive = 0;
 	}
@@ -152,34 +186,28 @@ export async function delegate({
 	// Calculate remaining iterations for subagent
 	const remainingIterations = Math.max(1, maxIterations - currentIteration);
 
-	// Check limits and acquire delegation slot
-	try {
-		delegationManager.tryAcquire(parentSessionId);
-	} catch (error) {
-		// Limit exceeded, fail fast
-		throw error;
-	}
-
-	if (debug) {
-		const stats = delegationManager.getStats();
-		console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
-		console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
-		console.error(`[DELEGATE] Task: ${task}`);
-		console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
-		console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
-		console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
-		console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
-		console.error(`[DELEGATE] Using ProbeAgent SDK with code-researcher prompt`);
-	}
-
 	// Create delegation span for telemetry if tracer is available
 	const delegationSpan = tracer ? tracer.createDelegationSpan(sessionId, task) : null;
 
-	// Create AbortController for proper cancellation
-	const abortController = new AbortController();
 	let timeoutId = null;
+	let acquired = false;
 
 	try {
+		// Check limits and acquire delegation slot inside try block for proper cleanup
+		delegationManager.tryAcquire(parentSessionId);
+		acquired = true;
+
+		if (debug) {
+			const stats = delegationManager.getStats();
+			console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
+			console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
+			console.error(`[DELEGATE] Task: ${task}`);
+			console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
+			console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
+			console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
+			console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
+			console.error(`[DELEGATE] Using ProbeAgent SDK with code-researcher prompt`);
+		}
 		// Create a new ProbeAgent instance for the delegated task
 		const subagent = new ProbeAgent({
 			sessionId,
@@ -201,9 +229,9 @@ export async function delegate({
 		}
 
 		// Set up timeout with proper cleanup
+		// Note: AbortController can't cancel ProbeAgent.answer() since it doesn't support signals yet
 		const timeoutPromise = new Promise((_, reject) => {
 			timeoutId = setTimeout(() => {
-				abortController.abort();
 				reject(new Error(`Delegation timed out after ${timeout} seconds`));
 			}, timeout * 1000);
 		});
@@ -263,7 +291,9 @@ export async function delegate({
 		}
 
 		// Release delegation slot
-		delegationManager.release(parentSessionId, debug);
+		if (acquired) {
+			delegationManager.release(parentSessionId, debug);
+		}
 
 		return response;
 
@@ -276,8 +306,10 @@ export async function delegate({
 
 		const duration = Date.now() - startTime;
 
-		// Release delegation slot on error
-		delegationManager.release(parentSessionId, debug);
+		// Release delegation slot on error (only if it was acquired)
+		if (acquired) {
+			delegationManager.release(parentSessionId, debug);
+		}
 
 		if (debug) {
 			console.error(`[DELEGATE] Task failed for session ${sessionId} after ${duration}ms`);
