@@ -67,10 +67,27 @@ describe('ProbeAgent model option', () => {
 
     const cloned = baseAgent.clone();
 
-    // The clone should preserve the model from the original agent
-    // Note: In test mode, the actual model will be 'original-model' since we pass it through
-    expect(cloned.model).toBe(baseAgent.model);
+    // The clone should preserve the user's model preference (clientApiModel)
+    expect(cloned.clientApiModel).toBe(baseAgent.clientApiModel);
+    expect(cloned.clientApiModel).toBe('original-model');
+    // Both should resolve to the same actual model
     expect(cloned.model).toBe('original-model');
+  });
+
+  test('should preserve absence of model option in clone', () => {
+    const baseAgent = new ProbeAgent({
+      path: process.cwd()
+      // No model specified
+    });
+
+    const cloned = baseAgent.clone();
+
+    // The clone should not have a model preference either
+    expect(cloned.clientApiModel).toBeNull();
+    expect(baseAgent.clientApiModel).toBeNull();
+    // Both should use the default mock model
+    expect(cloned.model).toBe('mock-model');
+    expect(baseAgent.model).toBe('mock-model');
   });
 
   test('should allow override of model option in clone', () => {

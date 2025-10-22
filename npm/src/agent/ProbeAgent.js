@@ -2208,7 +2208,7 @@ Convert your previous response content into actual JSON data that follows this s
       path: this.allowedFolders[0], // Use first allowed folder as primary path
       allowedFolders: [...this.allowedFolders],
       provider: this.clientApiProvider,
-      model: this.model,
+      model: this.clientApiModel,
       debug: this.debug,
       outline: this.outline,
       maxResponseTokens: this.maxResponseTokens,
