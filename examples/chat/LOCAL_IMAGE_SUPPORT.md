@@ -135,7 +135,7 @@ The agent automatically loads images when it mentions:
 ### Pattern Matching
 The system uses an enhanced regex pattern to detect:
 ```javascript
-/(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|gif))/gi
+/(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp))/gi
 ```
 
 ### Processing Pipeline
