@@ -250,7 +250,7 @@ export const delegateTool = (options = {}) => {
 		name: 'delegate',
 		description: delegateDescription,
 		inputSchema: delegateSchema,
-		execute: async ({ task, currentIteration, maxIterations, parentSessionId, tracer }) => {
+		execute: async ({ task, currentIteration, maxIterations, parentSessionId, path, provider, model, tracer }) => {
 			try {
 				if (debug) {
 					console.error(`Executing delegate with task: "${task}"`);
@@ -266,6 +266,9 @@ export const delegateTool = (options = {}) => {
 					currentIteration,
 					maxIterations,
 					parentSessionId,
+					path,
+					provider,
+					model,
 					tracer
 				});
 

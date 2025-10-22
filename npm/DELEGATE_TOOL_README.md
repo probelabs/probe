@@ -30,12 +30,13 @@ When users make complex requests, the AI agent should automatically:
 ## How It Works
 
 1. **Task Definition**: You provide a complete, self-contained task description
-2. **Clean Agent Spawning**: The delegate tool spawns a new probe agent process with:
+2. **SDK-Based Agent Creation**: The delegate tool creates a new ProbeAgent instance in-process with:
    - Default 'code-researcher' prompt (not inherited from parent)
    - Schema validation disabled for simpler responses
    - Mermaid validation disabled for faster processing
-3. **Independent Execution**: The subagent processes your task in isolation
-4. **Response Waiting**: The main agent waits for the subagent to complete and return results
+   - Delegation explicitly disabled to prevent recursion
+3. **Independent Execution**: The subagent processes your task in isolation within the same process
+4. **Response Waiting**: The main agent awaits the subagent's completion (Promise-based)
 5. **Result Return**: The delegate tool returns the subagent's clean response
 
 ## Subagent Environment
@@ -44,8 +45,10 @@ Each delegated task runs in a clean environment with automatic configuration:
 - **Prompt**: Automatically uses the default `code-researcher` prompt, regardless of the parent agent's prompt
 - **Validation**: Schema and Mermaid validation are automatically disabled for faster, simpler responses
 - **Iterations**: Automatically limited to remaining parent iterations to respect global limits
-- **Isolation**: Each subagent runs independently without inheriting parent context
-- **No Recursion**: Delegation is explicitly disabled in subagents via `--no-delegate` flag to prevent infinite delegation chains
+- **Isolation**: Each subagent runs independently without inheriting parent context or history
+- **No Recursion**: Delegation is explicitly disabled in subagents (`enableDelegate: false`) to prevent infinite delegation chains
+- **Inherited Config**: Path, provider, and model are inherited from parent for consistency
+- **In-Process**: Runs within the same Node.js process using the ProbeAgent SDK (no process spawning)
 
 All these settings are applied automatically - no manual configuration needed.
 

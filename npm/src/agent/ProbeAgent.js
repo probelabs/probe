@@ -1470,13 +1470,16 @@ When troubleshooting:
                 
                 // Execute tool with tracing if available
                 const executeToolCall = async () => {
-                  // For delegate tool, pass current iteration, max iterations, and session ID
+                  // For delegate tool, pass current iteration, max iterations, session ID, and config
                   if (toolName === 'delegate') {
                     const enhancedParams = {
                       ...toolParams,
                       currentIteration,
                       maxIterations,
                       parentSessionId: this.sessionId,  // Pass parent session ID for tracking
+                      path: this.searchPath,            // Inherit search path
+                      provider: this.provider,          // Inherit AI provider
+                      model: this.model,                // Inherit model
                       debug: this.debug,
                       tracer: this.tracer
                     };
@@ -1484,6 +1487,7 @@ When troubleshooting:
                     if (this.debug) {
                       console.log(`[DEBUG] Executing delegate tool at iteration ${currentIteration}/${maxIterations}`);
                       console.log(`[DEBUG] Parent session: ${this.sessionId}`);
+                      console.log(`[DEBUG] Inherited config: path=${this.searchPath}, provider=${this.provider}, model=${this.model}`);
                       console.log(`[DEBUG] Delegate task: ${toolParams.task?.substring(0, 100)}...`);
                     }
                     
