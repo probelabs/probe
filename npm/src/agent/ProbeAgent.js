@@ -134,6 +134,7 @@ export class ProbeAgent {
 
     // API configuration
     this.clientApiProvider = options.provider || null;
+    this.clientApiModel = options.model || null;
     this.clientApiKey = null; // Will be set from environment
     this.clientApiUrl = null;
 
@@ -327,8 +328,8 @@ export class ProbeAgent {
     const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;
     const awsBedrockBaseUrl = process.env.AWS_BEDROCK_BASE_URL || llmBaseUrl;
 
-    // Get model override if provided
-    const modelName = process.env.MODEL_NAME;
+    // Get model override if provided (options.model takes precedence over environment variable)
+    const modelName = this.clientApiModel || process.env.MODEL_NAME;
 
     // Use client-forced provider or environment variable
     const forceProvider = this.clientApiProvider || (process.env.FORCE_PROVIDER ? process.env.FORCE_PROVIDER.toLowerCase() : null);
