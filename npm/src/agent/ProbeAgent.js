@@ -134,6 +134,7 @@ export class ProbeAgent {
 
     // API configuration
     this.clientApiProvider = options.provider || null;
+    this.clientApiModel = options.model || null;
     this.clientApiKey = null; // Will be set from environment
     this.clientApiUrl = null;
 
@@ -302,9 +303,12 @@ export class ProbeAgent {
    * Initialize the AI model based on available API keys and forced provider setting
    */
   initializeModel() {
+    // Get model override if provided (options.model takes precedence over environment variable)
+    const modelName = this.clientApiModel || process.env.MODEL_NAME;
+
     // Check if we're in test mode and should use mock provider
     if (process.env.NODE_ENV === 'test' || process.env.USE_MOCK_AI === 'true') {
-      this.initializeMockModel();
+      this.initializeMockModel(modelName);
       return;
     }
 
@@ -326,9 +330,6 @@ export class ProbeAgent {
     const openaiApiUrl = process.env.OPENAI_API_URL || llmBaseUrl;
     const googleApiUrl = process.env.GOOGLE_API_URL || llmBaseUrl;
     const awsBedrockBaseUrl = process.env.AWS_BEDROCK_BASE_URL || llmBaseUrl;
-
-    // Get model override if provided
-    const modelName = process.env.MODEL_NAME;
 
     // Use client-forced provider or environment variable
     const forceProvider = this.clientApiProvider || (process.env.FORCE_PROVIDER ? process.env.FORCE_PROVIDER.toLowerCase() : null);
@@ -2207,7 +2208,7 @@ Convert your previous response content into actual JSON data that follows this s
       path: this.allowedFolders[0], // Use first allowed folder as primary path
       allowedFolders: [...this.allowedFolders],
       provider: this.clientApiProvider,
-      model: this.modelName,
+      model: this.clientApiModel,
       debug: this.debug,
       outline: this.outline,
       maxResponseTokens: this.maxResponseTokens,
