@@ -16,7 +16,7 @@ async function testMultipleAllowedDirectories() {
   const testFiles = [
     { dir: './test-images-1', file: 'image1.png' },
     { dir: './test-images-2', file: 'image2.jpg' },
-    { dir: './test-images-3', file: 'image3.gif' }
+    { dir: './test-images-3', file: 'image3.webp' }
   ];
 
   try {
@@ -55,7 +55,7 @@ async function testMultipleAllowedDirectories() {
 
     const result2a = await agent2.loadImageIfValid('./test-images-1/image1.png');
     const result2b = await agent2.loadImageIfValid('./test-images-2/image2.jpg');
-    const result2c = await agent2.loadImageIfValid('./test-images-3/image3.gif');
+    const result2c = await agent2.loadImageIfValid('./test-images-3/image3.webp');
     
     console.log(`   ✓ Image in allowed dir 1: ${result2a} (expected: true)`);
     console.log(`   ✓ Image in allowed dir 2: ${result2b} (expected: true)`);
@@ -70,7 +70,7 @@ async function testMultipleAllowedDirectories() {
 
     const result3a = await agent3.loadImageIfValid('./test-images-1/image1.png');
     const result3b = await agent3.loadImageIfValid('./test-images-2/image2.jpg');
-    const result3c = await agent3.loadImageIfValid('./test-images-3/image3.gif');
+    const result3c = await agent3.loadImageIfValid('./test-images-3/image3.webp');
     
     console.log(`   ✓ Image in allowed dir 1: ${result3a} (expected: true)`);
     console.log(`   ✓ Image in allowed dir 2: ${result3b} (expected: true)`);

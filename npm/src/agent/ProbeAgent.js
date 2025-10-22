@@ -59,7 +59,7 @@ const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10
 const MAX_HISTORY_MESSAGES = 100;
 
 // Supported image file extensions
-const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+const SUPPORTED_IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'svg'];
 
 // Maximum image file size (20MB) to prevent OOM attacks
 const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
@@ -677,7 +677,6 @@ export class ProbeAgent {
         'jpg': 'image/jpeg',
         'jpeg': 'image/jpeg',
         'webp': 'image/webp',
-        'gif': 'image/gif',
         'bmp': 'image/bmp',
         'svg': 'image/svg+xml'
       };

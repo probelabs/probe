@@ -108,10 +108,9 @@ async function convertImageFileToBase64(filePath, debug = false) {
     const extension = absolutePath.toLowerCase().split('.').pop();
     const mimeTypes = {
       'png': 'image/png',
-      'jpg': 'image/jpeg', 
+      'jpg': 'image/jpeg',
       'jpeg': 'image/jpeg',
-      'webp': 'image/webp',
-      'gif': 'image/gif'
+      'webp': 'image/webp'
     };
     
     const mimeType = mimeTypes[extension];
@@ -157,11 +156,11 @@ async function extractImageUrls(message, debug = false) {
       // Pattern to match image URLs, base64 data, and local file paths:
       // 1. GitHub private-user-images URLs (always images, regardless of extension)
       // 2. GitHub user-attachments/assets URLs (always images, regardless of extension)
-      // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP, GIF)
+      // 3. URLs with common image extensions (PNG, JPG, JPEG, WebP)
       // 4. Base64 data URLs (data:image/...)
       // 5. Local file paths with image extensions (relative and absolute)
       // Updated to stop at quotes, spaces, or common HTML/XML delimiters
-      const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|gif)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|gif))/gi;
+      const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp))/gi;
 
       span.setAttributes({
         'message.length': message.length,

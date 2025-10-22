@@ -76,7 +76,7 @@ class MockProbeAgent {
       }
 
       const extension = absolutePath.toLowerCase().split('.').pop();
-      const supportedExtensions = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'];
+      const supportedExtensions = ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'svg'];
       if (!supportedExtensions.includes(extension)) {
         if (this.debug) {
           console.log(`[DEBUG] Unsupported image format: ${extension}`);
@@ -89,7 +89,6 @@ class MockProbeAgent {
         'jpg': 'image/jpeg',
         'jpeg': 'image/jpeg',
         'webp': 'image/webp',
-        'gif': 'image/gif',
         'bmp': 'image/bmp',
         'svg': 'image/svg+xml'
       };
@@ -170,7 +169,7 @@ async function testAgenticImageLoading() {
   console.log('🤖 Testing Agentic Loop Image Loading\n');
 
   // Create test images
-  const testImages = ['./test-diagram.png', './screenshot.jpg', './chart.gif'];
+  const testImages = ['./test-diagram.png', './screenshot.jpg', './chart.png'];
   const simplePng = Buffer.from([
     0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
     0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
@@ -205,7 +204,7 @@ async function testAgenticImageLoading() {
     const toolResult = `
 Found 3 relevant files:
 - screenshot.jpg (contains the error message)
-- chart.gif (shows the performance metrics)
+- chart.png (shows the performance metrics)
 - config.json (configuration file)
     `;
     await agent.processImageReferences(toolResult);
@@ -236,7 +235,7 @@ Found 3 relevant files:
     const contextualTexts = [
       'Look at file ./test-diagram.png',
       'The screenshot screenshot.jpg shows the issue',
-      'I found chart.gif in the directory',
+      'I found chart.png in the directory',
       'Generated diagram at ./output.svg',  // Non-existent file
     ];
 

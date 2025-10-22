@@ -38,10 +38,9 @@ async function extractImageUrls(message, debug = false) {
         const extension = absolutePath.toLowerCase().split('.').pop();
         const mimeTypes = {
           'png': 'image/png',
-          'jpg': 'image/jpeg', 
+          'jpg': 'image/jpeg',
           'jpeg': 'image/jpeg',
-          'webp': 'image/webp',
-          'gif': 'image/gif'
+          'webp': 'image/webp'
         };
         
         const mimeType = mimeTypes[extension];
