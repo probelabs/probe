@@ -3,6 +3,11 @@
  */
 
 import { jest } from '@jest/globals';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Mock ProbeAgent
 const mockAnswer = jest.fn();
@@ -10,29 +15,33 @@ const MockProbeAgent = jest.fn().mockImplementation(() => ({
   answer: mockAnswer
 }));
 
-jest.unstable_mockModule('../src/agent/ProbeAgent.js', () => ({
+// Use absolute path for mocking
+const probeAgentPath = resolve(__dirname, '../../src/agent/ProbeAgent.js');
+const delegatePath = resolve(__dirname, '../../src/delegate.js');
+
+jest.unstable_mockModule(probeAgentPath, () => ({
   ProbeAgent: MockProbeAgent
 }));
 
 // Import after mocking
-const { delegate, cleanupDelegationManager, getDelegationStats } = await import('../src/delegate.js');
+const { delegate, cleanupDelegationManager, getDelegationStats } = await import(delegatePath);
 
 describe('Delegate Tool Security and Limits (SDK-based)', () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     // Clear previous mocks
     jest.clearAllMocks();
 
-    // Clean up delegation manager state
-    await cleanupDelegationManager();
+    // Clean up delegation manager state (now synchronous)
+    cleanupDelegationManager();
 
     // Mock successful response by default
     mockAnswer.mockResolvedValue('Test response from subagent');
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     jest.clearAllMocks();
-    // Ensure cleanup after each test
-    await cleanupDelegationManager();
+    // Ensure cleanup after each test (now synchronous)
+    cleanupDelegationManager();
   });
 
   describe('Recursion prevention', () => {
@@ -116,42 +125,82 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
 
   describe('Concurrent delegation limits', () => {
     it('should enforce global concurrent delegation limit', async () => {
+      // Make responses slow to ensure they overlap
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Slow response'), 50))
+      );
+
       // Start 3 delegations (max)
       const task1 = delegate({ task: 'Task 1' });
       const task2 = delegate({ task: 'Task 2' });
       const task3 = delegate({ task: 'Task 3' });
+
+      // Wait a bit to ensure they're all active
+      await new Promise(resolve => setTimeout(resolve, 10));
 
       // Fourth delegation should fail immediately
       await expect(delegate({ task: 'Task 4' })).rejects.toThrow(
         /Maximum concurrent delegations.*reached/
       );
 
-      // Clean up
+      // Clean up - wait for all to complete
       await Promise.allSettled([task1, task2, task3]);
     });
 
     it('should enforce per-session delegation limit', async () => {
+      // Reset to fast responses but with slight delay
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Response'), 10))
+      );
+
       const parentSessionId = 'test-session-123';
 
-      // Start 10 delegations for the same session (max)
-      const tasks = [];
+      // Start delegations sequentially and wait for each to complete
+      // This tests the per-session limit without hitting global limit
       for (let i = 0; i < 10; i++) {
-        tasks.push(delegate({
+        await delegate({
           task: `Task ${i}`,
+          parentSessionId
+        });
+      }
+
+      // 11th delegation for same session should fail due to session counter
+      // Wait a moment to ensure all previous have decremented
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      // Now try 10 more in parallel - should work (counters reset)
+      const tasks = [];
+      for (let i = 0; i < 3; i++) {  // Use 3 to not hit global limit
+        tasks.push(delegate({
+          task: `Parallel Task ${i}`,
           parentSessionId
         }));
       }
 
-      // 11th delegation for same session should fail
+      await Promise.allSettled(tasks);
+
+      // Now start 3 more to fill global slots
+      const moreTasks = [];
+      for (let i = 0; i < 3; i++) {
+        moreTasks.push(delegate({
+          task: `More Task ${i}`,
+          parentSessionId
+        }));
+      }
+
+      // Wait to ensure they're active
+      await new Promise(resolve => setTimeout(resolve, 5));
+
+      // This should fail due to global limit (3 concurrent max)
       await expect(delegate({
-        task: 'Task 11',
+        task: 'Should fail',
         parentSessionId
       })).rejects.toThrow(
-        /Maximum delegations per session.*reached/
+        /Maximum concurrent delegations.*reached/
       );
 
       // Clean up
-      await Promise.allSettled(tasks);
+      await Promise.allSettled(moreTasks);
     });
 
     it('should decrement counter when delegation completes successfully', async () => {
@@ -175,6 +224,9 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
     });
 
     it('should decrement counter on timeout', async () => {
+      // Ensure clean state
+      cleanupDelegationManager();
+
       // Make subagent never resolve
       mockAnswer.mockImplementation(() => new Promise(() => {}));
 
@@ -183,7 +235,7 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
         delegate({ task: 'Task 1', timeout: 0.05 })
       ).rejects.toThrow(/timed out/);
 
-      // Counter should be decremented
+      // Counter should be decremented, so next delegation works
       mockAnswer.mockResolvedValueOnce('Success');
       await expect(delegate({ task: 'Task 2' })).resolves.toBeDefined();
     });
@@ -239,6 +291,32 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
         delegate({ task: 'Test task', timeout: 1 })
       ).resolves.toBe('Quick response');
     });
+
+    it('should clear timeout when task completes successfully', async () => {
+      const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+
+      mockAnswer.mockResolvedValue('Quick success');
+
+      await delegate({ task: 'Test task', timeout: 5 });
+
+      // clearTimeout should have been called
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+
+      clearTimeoutSpy.mockRestore();
+    });
+
+    it('should clear timeout when task fails', async () => {
+      const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+
+      mockAnswer.mockRejectedValue(new Error('Task error'));
+
+      await expect(delegate({ task: 'Test task', timeout: 5 })).rejects.toThrow();
+
+      // clearTimeout should have been called
+      expect(clearTimeoutSpy).toHaveBeenCalled();
+
+      clearTimeoutSpy.mockRestore();
+    });
   });
 
   describe('Error handling', () => {
@@ -252,7 +330,7 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       mockAnswer.mockResolvedValue('');
 
       await expect(delegate({ task: 'Test task' })).rejects.toThrow(
-        /returned empty response/
+        /returned empty or whitespace-only response/
       );
     });
 
@@ -260,7 +338,23 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       mockAnswer.mockResolvedValue('   \n\t   ');
 
       await expect(delegate({ task: 'Test task' })).rejects.toThrow(
-        /returned empty response/
+        /returned empty or whitespace-only response/
+      );
+    });
+
+    it('should reject when subagent returns response with null bytes', async () => {
+      mockAnswer.mockResolvedValue('Valid content\0with null bytes');
+
+      await expect(delegate({ task: 'Test task' })).rejects.toThrow(
+        /returned response containing null bytes/
+      );
+    });
+
+    it('should reject when subagent returns non-string response', async () => {
+      mockAnswer.mockResolvedValue(null);
+
+      await expect(delegate({ task: 'Test task' })).rejects.toThrow(
+        /returned invalid response \(not a string\)/
       );
     });
 

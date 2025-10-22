@@ -37,28 +37,34 @@ describe('Delegate Tool Configuration', () => {
     it('should execute delegate tool with correct parameters', async () => {
       const tool = delegateTool({ debug: true, timeout: 600 });
       const task = 'Analyze security vulnerabilities in authentication code';
-      
+
       const result = await tool.execute({ task });
-      
+
+      // Tool now passes all parameters including defaults
       expect(mockDelegate).toHaveBeenCalledWith({
         task,
         timeout: 600,
-        debug: true
+        debug: true,
+        currentIteration: 0,
+        maxIterations: 30,
+        parentSessionId: undefined,
+        path: undefined,
+        provider: undefined,
+        model: undefined,
+        tracer: undefined
       });
-      
+
       expect(result).toBe('Mock delegate response');
     });
 
     it('should handle execution errors gracefully', async () => {
       const tool = delegateTool();
       const task = 'Task that will fail';
-      
+
       mockDelegate.mockRejectedValue(new Error('Delegation process failed'));
-      
-      const result = await tool.execute({ task });
-      
-      expect(result).toContain('Error executing delegate command');
-      expect(result).toContain('Delegation process failed');
+
+      // Tool now throws errors instead of returning error strings
+      await expect(tool.execute({ task })).rejects.toThrow('Delegation process failed');
     });
   });
 

@@ -133,7 +133,7 @@ describe('ProbeAgent enableDelegate option', () => {
 
     test('should allow overriding enableDelegate when cloning', () => {
       const baseAgent = new ProbeAgent({ enableDelegate: true });
-      const cloned = baseAgent.clone({ enableDelegate: false });
+      const cloned = baseAgent.clone({ overrides: { enableDelegate: false } });
 
       expect(baseAgent.enableDelegate).toBe(true);
       expect(cloned.enableDelegate).toBe(false);

@@ -251,58 +251,46 @@ export const delegateTool = (options = {}) => {
 		description: delegateDescription,
 		inputSchema: delegateSchema,
 		execute: async ({ task, currentIteration, maxIterations, parentSessionId, path, provider, model, tracer }) => {
-			try {
-				// Validate required parameters
-				if (!task || typeof task !== 'string') {
-					const error = new Error('Task parameter is required and must be a non-empty string');
-					console.error('Error executing delegate command:', error);
-					return `Error executing delegate command: ${error.message}`;
-				}
-
-				if (task.trim().length === 0) {
-					const error = new Error('Task parameter cannot be empty or whitespace only');
-					console.error('Error executing delegate command:', error);
-					return `Error executing delegate command: ${error.message}`;
-				}
-
-				// Validate optional numeric parameters
-				if (currentIteration !== undefined && (typeof currentIteration !== 'number' || currentIteration < 0)) {
-					const error = new Error('currentIteration must be a non-negative number');
-					console.error('Error executing delegate command:', error);
-					return `Error executing delegate command: ${error.message}`;
-				}
-
-				if (maxIterations !== undefined && (typeof maxIterations !== 'number' || maxIterations < 1)) {
-					const error = new Error('maxIterations must be a positive number');
-					console.error('Error executing delegate command:', error);
-					return `Error executing delegate command: ${error.message}`;
-				}
-
-				if (debug) {
-					console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
-					if (parentSessionId) {
-						console.error(`Parent session: ${parentSessionId}`);
-					}
-				}
-
-				const result = await delegate({
-					task,
-					timeout,
-					debug,
-					currentIteration: currentIteration || 0,
-					maxIterations: maxIterations || 30,
-					parentSessionId,
-					path,
-					provider,
-					model,
-					tracer
-				});
-
-				return result;
-			} catch (error) {
-				console.error('Error executing delegate command:', error);
-				return `Error executing delegate command: ${error.message}`;
+			// Validate required parameters - throw errors for consistency
+			if (!task || typeof task !== 'string') {
+				throw new Error('Task parameter is required and must be a non-empty string');
 			}
+
+			if (task.trim().length === 0) {
+				throw new Error('Task parameter cannot be empty or whitespace only');
+			}
+
+			// Validate optional numeric parameters
+			if (currentIteration !== undefined && (typeof currentIteration !== 'number' || currentIteration < 0)) {
+				throw new Error('currentIteration must be a non-negative number');
+			}
+
+			if (maxIterations !== undefined && (typeof maxIterations !== 'number' || maxIterations < 1)) {
+				throw new Error('maxIterations must be a positive number');
+			}
+
+			if (debug) {
+				console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
+				if (parentSessionId) {
+					console.error(`Parent session: ${parentSessionId}`);
+				}
+			}
+
+			// Execute delegation - let errors propagate naturally
+			const result = await delegate({
+				task,
+				timeout,
+				debug,
+				currentIteration: currentIteration || 0,
+				maxIterations: maxIterations || 30,
+				parentSessionId,
+				path,
+				provider,
+				model,
+				tracer
+			});
+
+			return result;
 		}
 	});
 };

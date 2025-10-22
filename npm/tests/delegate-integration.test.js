@@ -103,13 +103,11 @@ describe('Delegate Tool Integration', () => {
     it('should handle delegate execution errors gracefully', async () => {
       const tool = delegateTool();
       const task = 'Invalid task that will fail';
-      
+
       mockDelegate.mockRejectedValue(new Error('Delegation process failed'));
-      
-      const result = await tool.execute({ task });
-      
-      expect(result).toContain('Error executing delegate command');
-      expect(result).toContain('Delegation process failed');
+
+      // Tool now throws errors instead of returning error strings
+      await expect(tool.execute({ task })).rejects.toThrow('Delegation process failed');
     });
 
     it('should support XML parsing format', () => {
