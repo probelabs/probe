@@ -269,6 +269,23 @@ export const delegateTool = (options = {}) => {
 				throw new Error('maxIterations must be a positive number');
 			}
 
+			// Validate optional string parameters for type consistency
+			if (parentSessionId !== undefined && parentSessionId !== null && typeof parentSessionId !== 'string') {
+				throw new TypeError('parentSessionId must be a string, null, or undefined');
+			}
+
+			if (path !== undefined && path !== null && typeof path !== 'string') {
+				throw new TypeError('path must be a string, null, or undefined');
+			}
+
+			if (provider !== undefined && provider !== null && typeof provider !== 'string') {
+				throw new TypeError('provider must be a string, null, or undefined');
+			}
+
+			if (model !== undefined && model !== null && typeof model !== 'string') {
+				throw new TypeError('model must be a string, null, or undefined');
+			}
+
 			if (debug) {
 				console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
 				if (parentSessionId) {

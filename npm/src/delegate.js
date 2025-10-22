@@ -29,7 +29,15 @@ class DelegationManager {
 		this.globalActive = 0;
 
 		// Start periodic cleanup of stale sessions (every 5 minutes)
-		this.cleanupInterval = setInterval(() => this.cleanupStaleSessions(), 5 * 60 * 1000);
+		// Wrapped in try-catch to prevent interval errors from crashing the process
+		this.cleanupInterval = setInterval(() => {
+			try {
+				this.cleanupStaleSessions();
+			} catch (error) {
+				console.error('[DelegationManager] Error during cleanup:', error);
+			}
+		}, 5 * 60 * 1000);
+
 		// Allow Node.js to exit even if interval is active
 		if (this.cleanupInterval.unref) {
 			this.cleanupInterval.unref();
@@ -38,8 +46,14 @@ class DelegationManager {
 
 	/**
 	 * Check limits and increment counters (synchronous, atomic in Node.js event loop)
+	 * @param {string|null|undefined} parentSessionId - Parent session ID for tracking
 	 */
 	tryAcquire(parentSessionId) {
+		// Validate parentSessionId parameter
+		if (parentSessionId !== null && parentSessionId !== undefined && typeof parentSessionId !== 'string') {
+			throw new TypeError('parentSessionId must be a string, null, or undefined');
+		}
+
 		// Check global limit
 		if (this.globalActive >= this.maxConcurrent) {
 			throw new Error(`Maximum concurrent delegations (${this.maxConcurrent}) reached. Please wait for some delegations to complete.`);
@@ -229,7 +243,13 @@ export async function delegate({
 		}
 
 		// Set up timeout with proper cleanup
-		// Note: AbortController can't cancel ProbeAgent.answer() since it doesn't support signals yet
+		// TODO: Implement AbortController support in ProbeAgent.answer() for proper cancellation
+		// Current limitation: When timeout occurs, subagent.answer() continues running in background
+		// This is acceptable since:
+		// 1. The promise will eventually resolve/reject and be garbage collected
+		// 2. The delegation slot is properly released on timeout
+		// 3. The parent receives timeout error and can handle it
+		// Future improvement: Add signal parameter to ProbeAgent.answer(task, [], { signal })
 		const timeoutPromise = new Promise((_, reject) => {
 			timeoutId = setTimeout(() => {
 				reject(new Error(`Delegation timed out after ${timeout} seconds`));
@@ -240,7 +260,9 @@ export async function delegate({
 		const answerPromise = subagent.answer(task);
 		const response = await Promise.race([answerPromise, timeoutPromise]);
 
-		// Clear timeout immediately after race completes
+		// Clear timeout immediately after race completes to prevent memory leak
+		// Note: timeoutId is always set by this point (synchronous in Promise constructor)
+		// but we keep the null check for defensive programming
 		if (timeoutId !== null) {
 			clearTimeout(timeoutId);
 			timeoutId = null;

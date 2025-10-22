@@ -326,6 +326,28 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       );
     });
 
+    it('should reject when parentSessionId is not a string', async () => {
+      await expect(delegate({
+        task: 'Test task',
+        parentSessionId: 123 // Invalid: should be string
+      })).rejects.toThrow(
+        /parentSessionId must be a string/
+      );
+    });
+
+    it('should accept null or undefined parentSessionId', async () => {
+      // null should work
+      await expect(delegate({
+        task: 'Test task',
+        parentSessionId: null
+      })).resolves.toBeDefined();
+
+      // undefined should work (implicit)
+      await expect(delegate({
+        task: 'Test task'
+      })).resolves.toBeDefined();
+    });
+
     it('should reject when subagent returns empty response', async () => {
       mockAnswer.mockResolvedValue('');
 
