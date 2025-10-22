@@ -1328,6 +1328,9 @@ When troubleshooting:
         if (this.allowEdit) {
           validTools.push('implement');
         }
+        if (this.enableDelegate) {
+          validTools.push('delegate');
+        }
         
         // Try parsing with hybrid parser that supports both native and MCP tools
         const nativeTools = validTools;
