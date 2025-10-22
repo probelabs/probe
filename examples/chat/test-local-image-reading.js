@@ -5,7 +5,7 @@ import { resolve, isAbsolute } from 'path';
 
 // Mock the extractImageUrls function for testing (to avoid API key requirements)
 async function extractImageUrls(message, debug = false) {
-  const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp))/gi;
+  const imageUrlPattern = /(?:data:image\/[a-zA-Z]*;base64,[A-Za-z0-9+/=]+|https?:\/\/(?:(?:private-user-images\.githubusercontent\.com|github\.com\/user-attachments\/assets)\/[^\s"'<>]+|[^\s"'<>]+\.(?:png|jpg|jpeg|webp|bmp|svg)(?:\?[^\s"'<>]*)?)|(?:\.?\.?\/)?[^\s"'<>]*\.(?:png|jpg|jpeg|webp|bmp|svg))/gi;
 
   const urls = [];
   const foundPatterns = [];
@@ -40,7 +40,9 @@ async function extractImageUrls(message, debug = false) {
           'png': 'image/png',
           'jpg': 'image/jpeg',
           'jpeg': 'image/jpeg',
-          'webp': 'image/webp'
+          'webp': 'image/webp',
+          'bmp': 'image/bmp',
+          'svg': 'image/svg+xml'
         };
         
         const mimeType = mimeTypes[extension];
