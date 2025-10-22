@@ -33,8 +33,15 @@ func (e *Engine) IndexSpec(path string) error {
 
 	e.specs = append(e.specs, spec)
 
-	// Extract and index endpoints
+	// Extract and index endpoints with pre-tokenization
 	endpoints := spec.ExtractEndpoints()
+
+	// Pre-tokenize all endpoints for efficient search
+	for i := range endpoints {
+		text := endpoints[i].GetSearchableText()
+		endpoints[i].Tokens = e.tokenizer.Tokenize(text)
+	}
+
 	e.endpoints = append(e.endpoints, endpoints...)
 
 	return nil
@@ -85,16 +92,13 @@ func (e *Engine) Search(query string, maxResults int) []SearchResult {
 		return nil
 	}
 
-	// 2. Create documents from endpoints
+	// 2. Create documents from endpoints (using pre-tokenized data)
 	documents := make([]*ranker.Document, len(e.endpoints))
 	for i, endpoint := range e.endpoints {
-		text := endpoint.GetSearchableText()
-		tokens := e.tokenizer.Tokenize(text)
-
 		documents[i] = &ranker.Document{
 			ID:      fmt.Sprintf("%s:%s", endpoint.Method, endpoint.Path),
-			Content: text,
-			Tokens:  tokens,
+			Content: endpoint.GetSearchableText(),
+			Tokens:  endpoint.Tokens, // Use pre-tokenized tokens
 			Data:    &e.endpoints[i],
 		}
 	}

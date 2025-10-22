@@ -65,6 +65,7 @@ type Endpoint struct {
 	OperationID string
 	Tags        []string
 	Parameters  []Parameter
+	Tokens      []string // Pre-tokenized content for efficient search
 }
 
 // LoadSpec loads an OpenAPI spec from a file (JSON or YAML)
@@ -109,15 +110,22 @@ func (s *OpenAPISpec) ExtractEndpoints() []Endpoint {
 				continue
 			}
 
+			// Safely extract operation fields
+			summary := op.Summary
+			description := op.Description
+			operationID := op.OperationID
+			tags := op.Tags
+			parameters := op.Parameters
+
 			endpoint := Endpoint{
 				SpecFile:    s.FilePath,
 				Path:        path,
 				Method:      method,
-				Summary:     op.Summary,
-				Description: op.Description,
-				OperationID: op.OperationID,
-				Tags:        op.Tags,
-				Parameters:  op.Parameters,
+				Summary:     summary,
+				Description: description,
+				OperationID: operationID,
+				Tags:        tags,
+				Parameters:  parameters,
 			}
 
 			// Include path-level description if operation doesn't have one

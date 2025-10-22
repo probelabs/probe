@@ -84,6 +84,12 @@ func (r *BM25Ranker) Rank(documents []*Document, queryTokens []string) []*Scored
 	nDocs := float64(len(documents))
 	for term := range queryTermSet {
 		df := float64(termDF[term])
+		// Guard against division by zero if term appears in all documents
+		if df == 0 {
+			// Term not in any document, assign minimal IDF
+			idf[term] = 0.0
+			continue
+		}
 		idf[term] = math.Log(1.0 + (nDocs-df+0.5)/(df+0.5))
 	}
 
