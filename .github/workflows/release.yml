@@ -18,7 +18,7 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-musl
             binary_ext: ""
             archive_ext: "tar.gz"
           - os: macos-latest
@@ -34,7 +34,7 @@ jobs:
             binary_ext: ".exe"
             archive_ext: "zip"
           - os: ubuntu-latest
-            target: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-musl
             binary_ext: ""
             archive_ext: "tar.gz"
 
@@ -67,26 +67,31 @@ jobs:
             ${{ runner.os }}-${{ matrix.target }}-cargo-
             ${{ runner.os }}-cargo-
 
-      - name: Setup ARM64 cross-compilation
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        uses: taiki-e/setup-cross-toolchain-action@v1
-        with:
-          target: aarch64-unknown-linux-gnu
+      # Install cross for musl targets
+      - name: Install cross (for musl targets)
+        if: contains(matrix.target, 'unknown-linux-musl')
+        run: |
+          cargo install cross --git https://github.com/cross-rs/cross || true
 
       # Build the Rust project
       - name: Build Release
         timeout-minutes: 45
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+          if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
             # For Windows, use static linking of the C++ runtime
             mkdir -p .cargo
             echo '[target.x86_64-pc-windows-msvc]' > .cargo/config.toml
             echo 'rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/DEBUG:NONE", "-C", "link-args=/NOLOGO"]' >> .cargo/config.toml
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target "$TARGET"
+          elif [[ "$TARGET" == *unknown-linux-musl ]]; then
+            # Build static MUSL binaries using cross to ensure toolchains are available
+            cross build --release --target "$TARGET"
           else
             # For other platforms, use the default build
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target "$TARGET"
           fi
 
       # Package the binary into an archive
@@ -389,19 +394,19 @@ jobs:
           mkdir -p binaries/amd64 binaries/arm64
           
           # Download and extract x86_64 binary
-          wget -O probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz"
+          wget -O probe-${{ env.VERSION }}-x86_64-unknown-linux-musl.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/probe-${{ env.VERSION }}-x86_64-unknown-linux-musl.tar.gz"
           
           # Download and extract aarch64 binary  
-          wget -O probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz \
-            "https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz"
+          wget -O probe-${{ env.VERSION }}-aarch64-unknown-linux-musl.tar.gz \
+            "https://github.com/${{ github.repository }}/releases/download/${{ env.VERSION }}/probe-${{ env.VERSION }}-aarch64-unknown-linux-musl.tar.gz"
           
           # Extract binaries to architecture-specific directories
-          tar -xzf probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu.tar.gz
-          tar -xzf probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu.tar.gz
+          tar -xzf probe-${{ env.VERSION }}-x86_64-unknown-linux-musl.tar.gz
+          tar -xzf probe-${{ env.VERSION }}-aarch64-unknown-linux-musl.tar.gz
           
-          cp probe-${{ env.VERSION }}-x86_64-unknown-linux-gnu/probe binaries/amd64/
-          cp probe-${{ env.VERSION }}-aarch64-unknown-linux-gnu/probe binaries/arm64/
+          cp probe-${{ env.VERSION }}-x86_64-unknown-linux-musl/probe binaries/amd64/
+          cp probe-${{ env.VERSION }}-aarch64-unknown-linux-musl/probe binaries/arm64/
           
           # Verify binaries exist and are executable
           ls -la binaries/amd64/ binaries/arm64/
@@ -443,4 +448,3 @@ jobs:
             VERSION=${{ env.VERSION }}
             BUILD_DATE=${{ github.event.head_commit.timestamp }}
             VCS_REF=${{ github.sha }}
-

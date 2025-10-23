@@ -17,13 +17,13 @@ describe('Extractor Integration Tests', () => {
 			let expectedPlatform;
 			let expectedExtension;
 
-			if (platform === 'linux') {
-				expectedExtension = 'tar.gz';
-				if (arch === 'x64') {
-					expectedPlatform = 'x86_64-unknown-linux-gnu';
-				} else if (arch === 'arm64') {
-					expectedPlatform = 'aarch64-unknown-linux-gnu';
-				}
+            if (platform === 'linux') {
+                expectedExtension = 'tar.gz';
+                if (arch === 'x64') {
+                    expectedPlatform = 'x86_64-unknown-linux-musl';
+                } else if (arch === 'arm64') {
+                    expectedPlatform = 'aarch64-unknown-linux-musl';
+                }
 			} else if (platform === 'darwin') {
 				expectedExtension = 'tar.gz';
 				if (arch === 'x64') {
@@ -87,13 +87,13 @@ describe('Extractor Integration Tests', () => {
 		test('should construct correct archive names for all platforms', () => {
 			const version = '1.0.0';
 
-			const platforms = [
-				{ os: 'linux', arch: 'x64', name: 'x86_64-unknown-linux-gnu', ext: 'tar.gz' },
-				{ os: 'linux', arch: 'arm64', name: 'aarch64-unknown-linux-gnu', ext: 'tar.gz' },
-				{ os: 'darwin', arch: 'x64', name: 'x86_64-apple-darwin', ext: 'tar.gz' },
-				{ os: 'darwin', arch: 'arm64', name: 'aarch64-apple-darwin', ext: 'tar.gz' },
-				{ os: 'win32', arch: 'x64', name: 'x86_64-pc-windows-msvc', ext: 'zip' }
-			];
+            const platforms = [
+                { os: 'linux', arch: 'x64', name: 'x86_64-unknown-linux-musl', ext: 'tar.gz' },
+                { os: 'linux', arch: 'arm64', name: 'aarch64-unknown-linux-musl', ext: 'tar.gz' },
+                { os: 'darwin', arch: 'x64', name: 'x86_64-apple-darwin', ext: 'tar.gz' },
+                { os: 'darwin', arch: 'arm64', name: 'aarch64-apple-darwin', ext: 'tar.gz' },
+                { os: 'win32', arch: 'x64', name: 'x86_64-pc-windows-msvc', ext: 'zip' }
+            ];
 
 			platforms.forEach(({ name, ext }) => {
 				const expectedName = `probe-v${version}-${name}.${ext}`;

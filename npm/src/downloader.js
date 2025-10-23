@@ -17,6 +17,35 @@ import { getPackageBinDir } from './directory-resolver.js';
 
 const exec = promisify(execCallback);
 
+/**
+ * Create a plain, serializable Error from possibly complex/circular errors (e.g., axios)
+ * Avoids passing circular req/res objects to IPC serializers and test runners.
+ */
+function sanitizeError(err) {
+    try {
+        const status = err?.response?.status;
+        const statusText = err?.response?.statusText;
+        const url = err?.config?.url || err?.response?.config?.url;
+        const code = err?.code;
+        const serverMsg = typeof err?.response?.data === 'string'
+            ? err.response.data.slice(0, 500)
+            : (typeof err?.response?.data?.message === 'string' ? err.response.data.message : undefined);
+        const base = err?.message || String(err);
+        const parts = [base];
+        if (status || statusText) parts.push(`[${(status ?? '')} ${(statusText ?? '')}]`.trim());
+        if (code) parts.push(`code=${code}`);
+        if (url) parts.push(`url=${url}`);
+        if (serverMsg) parts.push(`server="${String(serverMsg).replace(/\s+/g, ' ').trim()}"`);
+        const e = new Error(parts.filter(Boolean).join(' '));
+        if (status) e.status = status;
+        if (code) e.code = code;
+        if (url) e.url = url;
+        return e;
+    } catch (_) {
+        return new Error(err?.message || String(err));
+    }
+}
+
 // GitHub repository information
 const REPO_OWNER = "probelabs";
 const REPO_NAME = "probe";
@@ -69,7 +98,7 @@ async function acquireFileLock(lockPath, version) {
 			console.log(`Acquired file lock: ${lockPath}`);
 		}
 		return true;
-	} catch (error) {
+    } catch (error) {
 		if (error.code === 'EEXIST') {
 			// Lock file exists - check if it's stale
 			try {
@@ -265,13 +294,13 @@ function detectOsArch() {
 	let archInfo;
 
 	// Detect OS
-	switch (osType) {
-		case 'linux':
-			osInfo = {
-				type: 'linux',
-				keywords: ['linux', 'Linux', 'gnu']
-			};
-			break;
+    switch (osType) {
+        case 'linux':
+            osInfo = {
+                type: 'linux',
+                keywords: ['linux', 'Linux', 'musl', 'gnu']
+            };
+            break;
 		case 'darwin':
 			osInfo = {
 				type: 'darwin',
@@ -324,11 +353,11 @@ function constructAssetInfo(version, osInfo, archInfo) {
 	let extension;
 	
 	// Map OS and arch to the expected format in release names
-	switch (osInfo.type) {
-		case 'linux':
-			platform = `${archInfo.type}-unknown-linux-gnu`;
-			extension = 'tar.gz';
-			break;
+    switch (osInfo.type) {
+        case 'linux':
+            platform = `${archInfo.type}-unknown-linux-musl`;
+            extension = 'tar.gz';
+            break;
 		case 'darwin':
 			platform = `${archInfo.type}-apple-darwin`;
 			extension = 'tar.gz';
@@ -482,7 +511,7 @@ async function getLatestRelease(version) {
 			return { tag, assets };
 		}
 
-		throw error;
+		throw sanitizeError(error);
 	}
 }
 
@@ -787,7 +816,7 @@ async function extractBinary(assetPath, outputDir) {
 		return binaryPath;
 	} catch (error) {
 		console.error(`Error extracting binary: ${error instanceof Error ? error.message : String(error)}`);
-		throw error;
+		throw sanitizeError(error);
 	}
 }
 
@@ -1032,7 +1061,7 @@ export async function downloadProbeBinary(version) {
 		}
 		return await withDownloadLock(version, () => doDownload(version));
 	} catch (error) {
-		console.error('Error downloading probe binary:', error);
-		throw error;
+		console.error('Error downloading probe binary:', error?.message || String(error));
+		throw sanitizeError(error);
 	}
 }

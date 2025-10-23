@@ -6,8 +6,8 @@ This directory contains pre-compiled probe binaries for all supported platforms,
 
 The CI/CD pipeline should place the following compressed binaries here before publishing to npm:
 
-- `probe-v{VERSION}-x86_64-unknown-linux-gnu.tar.gz` - Linux x64
-- `probe-v{VERSION}-aarch64-unknown-linux-gnu.tar.gz` - Linux ARM64
+- `probe-v{VERSION}-x86_64-unknown-linux-musl.tar.gz` - Linux x64 (static)
+- `probe-v{VERSION}-aarch64-unknown-linux-musl.tar.gz` - Linux ARM64 (static)
 - `probe-v{VERSION}-x86_64-apple-darwin.tar.gz` - macOS Intel
 - `probe-v{VERSION}-aarch64-apple-darwin.tar.gz` - macOS Apple Silicon
 - `probe-v{VERSION}-x86_64-pc-windows-msvc.zip` - Windows x64

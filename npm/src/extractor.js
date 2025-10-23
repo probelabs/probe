@@ -27,16 +27,16 @@ function detectPlatform() {
 	let extension;
 
 	// Map to the same format used in release artifacts
-	if (osType === 'linux') {
-		if (archType === 'x64') {
-			platform = 'x86_64-unknown-linux-gnu';
-			extension = 'tar.gz';
-		} else if (archType === 'arm64') {
-			platform = 'aarch64-unknown-linux-gnu';
-			extension = 'tar.gz';
-		} else {
-			throw new Error(`Unsupported Linux architecture: ${archType}`);
-		}
+    if (osType === 'linux') {
+        if (archType === 'x64') {
+            platform = 'x86_64-unknown-linux-musl';
+            extension = 'tar.gz';
+        } else if (archType === 'arm64') {
+            platform = 'aarch64-unknown-linux-musl';
+            extension = 'tar.gz';
+        } else {
+            throw new Error(`Unsupported Linux architecture: ${archType}`);
+        }
 	} else if (osType === 'darwin') {
 		if (archType === 'x64') {
 			platform = 'x86_64-apple-darwin';
@@ -191,8 +191,8 @@ export async function extractBundledBinary(version) {
 			`Searched in: ${binariesDir}\n` +
 			`\n` +
 			`Supported platforms:\n` +
-			`  - x86_64-unknown-linux-gnu (Linux x64)\n` +
-			`  - aarch64-unknown-linux-gnu (Linux ARM64)\n` +
+            `  - x86_64-unknown-linux-musl (Linux x64, static)\n` +
+            `  - aarch64-unknown-linux-musl (Linux ARM64, static)\n` +
 			`  - x86_64-apple-darwin (macOS Intel)\n` +
 			`  - aarch64-apple-darwin (macOS Apple Silicon)\n` +
 			`  - x86_64-pc-windows-msvc (Windows x64)\n` +
