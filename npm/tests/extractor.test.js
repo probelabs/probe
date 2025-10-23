@@ -47,10 +47,10 @@ describe('extractBundledBinary', () => {
 			if (platform === 'darwin' && arch === 'arm64') {
 				// The function should look for aarch64-apple-darwin
 				expect(true).toBe(true); // Placeholder - actual test below
-			} else if (platform === 'linux' && arch === 'x64') {
-				// Should look for x86_64-unknown-linux-gnu
-				expect(true).toBe(true);
-			}
+            } else if (platform === 'linux' && arch === 'x64') {
+                // Should look for x86_64-unknown-linux-musl
+                expect(true).toBe(true);
+            }
 			// This verifies the function doesn't crash
 		});
 
@@ -77,14 +77,14 @@ describe('extractBundledBinary', () => {
 				platformString = 'aarch64-apple-darwin';
 			} else if (platform === 'darwin' && arch === 'x64') {
 				platformString = 'x86_64-apple-darwin';
-			} else if (platform === 'linux' && arch === 'x64') {
-				platformString = 'x86_64-unknown-linux-gnu';
-			} else if (platform === 'linux' && arch === 'arm64') {
-				platformString = 'aarch64-unknown-linux-gnu';
-			} else {
-				// Skip test on unsupported platforms
-				return;
-			}
+            } else if (platform === 'linux' && arch === 'x64') {
+                platformString = 'x86_64-unknown-linux-musl';
+            } else if (platform === 'linux' && arch === 'arm64') {
+                platformString = 'aarch64-unknown-linux-musl';
+            } else {
+                // Skip test on unsupported platforms
+                return;
+            }
 
 			// Create a mock binary file
 			const mockBinaryContent = 'mock binary content';
@@ -206,11 +206,11 @@ describe('extractBundledBinary', () => {
 			let platformString;
 			if (platform === 'darwin' && arch === 'arm64') {
 				platformString = 'aarch64-apple-darwin';
-			} else if (platform === 'linux' && arch === 'x64') {
-				platformString = 'x86_64-unknown-linux-gnu';
-			} else {
-				return; // Skip on other platforms
-			}
+            } else if (platform === 'linux' && arch === 'x64') {
+                platformString = 'x86_64-unknown-linux-musl';
+            } else {
+                return; // Skip on other platforms
+            }
 
 			const archiveName = `probe-v${version}-${platformString}.tar.gz`;
 			const archivePath = path.join(binariesDir, archiveName);

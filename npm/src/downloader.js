@@ -265,13 +265,13 @@ function detectOsArch() {
 	let archInfo;
 
 	// Detect OS
-	switch (osType) {
-		case 'linux':
-			osInfo = {
-				type: 'linux',
-				keywords: ['linux', 'Linux', 'gnu']
-			};
-			break;
+    switch (osType) {
+        case 'linux':
+            osInfo = {
+                type: 'linux',
+                keywords: ['linux', 'Linux', 'musl', 'gnu']
+            };
+            break;
 		case 'darwin':
 			osInfo = {
 				type: 'darwin',
@@ -324,11 +324,11 @@ function constructAssetInfo(version, osInfo, archInfo) {
 	let extension;
 	
 	// Map OS and arch to the expected format in release names
-	switch (osInfo.type) {
-		case 'linux':
-			platform = `${archInfo.type}-unknown-linux-gnu`;
-			extension = 'tar.gz';
-			break;
+    switch (osInfo.type) {
+        case 'linux':
+            platform = `${archInfo.type}-unknown-linux-musl`;
+            extension = 'tar.gz';
+            break;
 		case 'darwin':
 			platform = `${archInfo.type}-apple-darwin`;
 			extension = 'tar.gz';
