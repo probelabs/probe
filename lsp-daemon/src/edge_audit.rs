@@ -10,6 +10,13 @@ static EID010_SELF_LOOP: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
 static EID011_ORPHAN_SOURCE: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
 static EID012_ORPHAN_TARGET: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
 static EID013_LINE_MISMATCH: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
+// Policy-level counters (not errors)
+static POLICY_SKIP_REFS: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
+static POLICY_SKIP_IMPLS: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
+static POLICY_SKIP_IMPLS_NOT_CAND: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
+// Extended / application-level counters
+static EA011_EXTERNAL_SOURCE: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
+static PM001_PATH_MAP_FAILED: Lazy<AtomicU64> = Lazy::new(|| AtomicU64::new(0));
 
 pub fn inc(code: &str) {
     match code {
@@ -40,6 +47,22 @@ pub fn inc(code: &str) {
         "EID013" => {
             EID013_LINE_MISMATCH.fetch_add(1, Ordering::Relaxed);
         }
+        "POLICY_REFS" => {
+            POLICY_SKIP_REFS.fetch_add(1, Ordering::Relaxed);
+        }
+        "POLICY_IMPLS" => {
+            POLICY_SKIP_IMPLS.fetch_add(1, Ordering::Relaxed);
+        }
+        "POLICY_IMPLS_NOT_CAND" => {
+            POLICY_SKIP_IMPLS_NOT_CAND.fetch_add(1, Ordering::Relaxed);
+        }
+        // Extended/app-level
+        "EA011" => {
+            EA011_EXTERNAL_SOURCE.fetch_add(1, Ordering::Relaxed);
+        }
+        "PM001" => {
+            PM001_PATH_MAP_FAILED.fetch_add(1, Ordering::Relaxed);
+        }
         _ => {}
     }
 }
@@ -55,6 +78,11 @@ pub fn snapshot() -> crate::protocol::EdgeAuditInfo {
         eid011_orphan_source: EID011_ORPHAN_SOURCE.load(Ordering::Relaxed),
         eid012_orphan_target: EID012_ORPHAN_TARGET.load(Ordering::Relaxed),
         eid013_line_mismatch: EID013_LINE_MISMATCH.load(Ordering::Relaxed),
+        policy_skip_references: POLICY_SKIP_REFS.load(Ordering::Relaxed),
+        policy_skip_impls: POLICY_SKIP_IMPLS.load(Ordering::Relaxed),
+        policy_skip_impls_not_candidate: POLICY_SKIP_IMPLS_NOT_CAND.load(Ordering::Relaxed),
+        ea011_external_source: EA011_EXTERNAL_SOURCE.load(Ordering::Relaxed),
+        pm001_path_map_failed: PM001_PATH_MAP_FAILED.load(Ordering::Relaxed),
     }
 }
 
@@ -69,4 +97,9 @@ pub fn clear() {
     EID011_ORPHAN_SOURCE.store(0, Ordering::Relaxed);
     EID012_ORPHAN_TARGET.store(0, Ordering::Relaxed);
     EID013_LINE_MISMATCH.store(0, Ordering::Relaxed);
+    POLICY_SKIP_REFS.store(0, Ordering::Relaxed);
+    POLICY_SKIP_IMPLS.store(0, Ordering::Relaxed);
+    POLICY_SKIP_IMPLS_NOT_CAND.store(0, Ordering::Relaxed);
+    EA011_EXTERNAL_SOURCE.store(0, Ordering::Relaxed);
+    PM001_PATH_MAP_FAILED.store(0, Ordering::Relaxed);
 }

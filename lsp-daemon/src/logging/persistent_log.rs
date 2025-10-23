@@ -17,7 +17,13 @@ use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
 /// Maximum number of log entries to persist to disk
-const MAX_PERSISTENT_ENTRIES: usize = 1000;
+fn max_persistent_entries() -> usize {
+    std::env::var("PROBE_LSP_MAX_PERSISTED_LOGS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .map(|v: usize| v.clamp(100, 100_000))
+        .unwrap_or(1000)
+}
 
 /// File name for the persistent log file
 const LOG_FILE_NAME: &str = "lsp-daemon.log.json";
@@ -44,7 +50,7 @@ impl PersistentLogStorage {
         let storage = Self {
             log_dir,
             entries: Arc::new(RwLock::new(Vec::new())),
-            max_entries: MAX_PERSISTENT_ENTRIES,
+            max_entries: max_persistent_entries(),
             persistence_disabled: Arc::new(AtomicBool::new(false)),
         };
 

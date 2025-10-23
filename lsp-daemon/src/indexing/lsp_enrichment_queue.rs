@@ -178,6 +178,8 @@ struct QueueEntryState {
     version: u64,
     // Keep the latest full item so we can regenerate heap entries if needed
     last_item: QueueItem,
+    // First time this UID was enqueued (unix seconds)
+    first_enqueued_secs: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +231,10 @@ impl LspEnrichmentQueue {
                     priority: item.priority,
                     version,
                     last_item: item.clone(),
+                    first_enqueued_secs: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
                 });
                 state.heap.push(PriorityQueueItem::new(item, version));
                 // Wake one waiter
@@ -379,6 +385,46 @@ impl LspEnrichmentQueue {
             implementations_operations,
             call_hierarchy_operations,
         }
+    }
+
+    /// Compute a head candidate and oldest pending age per language
+    pub async fn head_and_oldest_by_language(
+        &self,
+    ) -> Vec<(crate::language_detector::Language, QueueItem, u64)> {
+        let state = self.queue.lock().await;
+        use std::collections::HashMap;
+        let mut best: HashMap<
+            crate::language_detector::Language,
+            (&QueueEntryState, &QueueEntryState),
+        > = HashMap::new();
+        for entry in state.entries.values() {
+            let lang = entry.last_item.language;
+            let e = best.entry(lang).or_insert((entry, entry));
+            // Head: highest priority, then earliest enqueued
+            let (ref mut head_e, ref mut oldest_e) = e;
+            let better_head = match entry.priority.cmp(&head_e.priority) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => entry.first_enqueued_secs < head_e.first_enqueued_secs,
+                std::cmp::Ordering::Less => false,
+            };
+            if better_head {
+                *head_e = entry;
+            }
+            if entry.first_enqueued_secs < oldest_e.first_enqueued_secs {
+                *oldest_e = entry;
+            }
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut out = Vec::new();
+        for (lang, (head_e, oldest_e)) in best {
+            let head_item = head_e.last_item.clone();
+            let age = now.saturating_sub(oldest_e.first_enqueued_secs);
+            out.push((lang, head_item, age));
+        }
+        out
     }
 
     /// Clear all items from the queue

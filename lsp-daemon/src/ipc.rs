@@ -275,6 +275,35 @@ mod unix_impl {
             Ok("unix-peer".to_string()) // Unix sockets don't have traditional addresses
         }
 
+        /// Best-effort peer PID using SO_PEERCRED (Linux/Android only). None on other Unix.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        pub fn peer_pid(&self) -> Option<u32> {
+            use libc::{getsockopt, ucred, SOL_SOCKET, SO_PEERCRED};
+            use std::os::unix::io::AsRawFd;
+            unsafe {
+                let fd = self.stream.as_raw_fd();
+                let mut cred: ucred = std::mem::zeroed();
+                let mut len = std::mem::size_of::<ucred>() as libc::socklen_t;
+                let rc = getsockopt(
+                    fd,
+                    SOL_SOCKET,
+                    SO_PEERCRED,
+                    &mut cred as *mut _ as *mut libc::c_void,
+                    &mut len as *mut _,
+                );
+                if rc == 0 && len as usize == std::mem::size_of::<ucred>() {
+                    Some(cred.pid as u32)
+                } else {
+                    None
+                }
+            }
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        pub fn peer_pid(&self) -> Option<u32> {
+            None
+        }
+
         pub fn into_split(self) -> (OwnedReadHalf, OwnedWriteHalf) {
             let (reader, writer) = self.stream.into_split();
             (

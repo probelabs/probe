@@ -11,6 +11,7 @@
 //! LSP daemon serves requests, providing semantic enhancement capabilities.
 
 pub mod analyzer;
+pub mod anomaly_guard;
 pub mod ast_extractor;
 pub mod batch_conversion;
 pub mod config;
@@ -25,6 +26,7 @@ pub mod progress;
 pub mod queue;
 pub mod skiplist;
 pub mod symbol_conversion;
+pub mod uid_validator;
 pub mod versioning;
 
 // Re-export commonly used types

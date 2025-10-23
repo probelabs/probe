@@ -44,17 +44,17 @@ pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
 
     // Look for common project root markers in priority order
     let markers = [
-        "Cargo.toml",     // Rust
-        "package.json",   // JavaScript/TypeScript
-        "go.mod",         // Go
-        "pyproject.toml", // Python
-        "setup.py",       // Python
+        "Cargo.toml",     // Rust (workspace root handled specially below)
+        "package.json",   // JavaScript/TypeScript (prefer nearest package)
+        "go.mod",         // Go (prefer nearest module)
+        "pyproject.toml", // Python (prefer nearest project)
+        "setup.py",       // Python (legacy)
         "composer.json",  // PHP - prioritized before .git for PHP files
-        "tsconfig.json",  // TypeScript
-        ".git",           // Generic VCS
-        "pom.xml",        // Java
-        "build.gradle",   // Java/Gradle
-        "CMakeLists.txt", // C/C++
+        "tsconfig.json",  // TypeScript (prefer nearest project)
+        ".git",           // Generic VCS (topmost)
+        "pom.xml",        // Java (prefer nearest module)
+        "build.gradle",   // Java/Gradle (prefer nearest module)
+        "CMakeLists.txt", // C/C++ (prefer nearest project)
     ];
 
     let mut found_workspace: Option<PathBuf> = None;
@@ -77,6 +77,28 @@ pub fn find_workspace_root(file_path: &Path) -> Option<PathBuf> {
                         debug!("Found Cargo workspace root at: {}", current.display());
                         return Some(current.to_path_buf());
                     }
+                }
+
+                // Prefer nearest roots for per-module/package languages
+                match *marker {
+                    // JS/TS monorepos: treat each package as a workspace folder for tsserver
+                    "package.json" | "tsconfig.json" |
+                    // Go multi-module repos: gopls prefers module root
+                    "go.mod" |
+                    // Python
+                    "pyproject.toml" | "setup.py" |
+                    // Java / Gradle
+                    "pom.xml" | "build.gradle" |
+                    // C/C++ projects
+                    "CMakeLists.txt" => {
+                        debug!(
+                            "Found per-module/project marker '{}' at: {} (preferring nearest)",
+                            marker,
+                            current.display()
+                        );
+                        return Some(current.to_path_buf());
+                    }
+                    _ => {}
                 }
 
                 // Special handling for PHP files: prefer composer.json over .git
@@ -185,8 +207,132 @@ pub fn resolve_lsp_workspace_root(language: Language, file_path: &Path) -> Resul
             // Fallback to the generic detection if we couldn't find a crate manifest.
             find_workspace_root_with_fallback(&canonical_file)
         }
+        Language::JavaScript | Language::TypeScript => {
+            // Prefer nearest package root and (optionally) update parent workspace package.json
+            if let Some(pkg_root) = find_nearest_with_marker(&canonical_file, "package.json") {
+                if std::env::var("PROBE_LSP_EDIT_NODE_WORKSPACES")
+                    .ok()
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+                {
+                    if let Some(parent_ws) = find_parent_node_workspace_root(&pkg_root) {
+                        let _ = ensure_node_workspace_membership(&pkg_root, &parent_ws);
+                    }
+                }
+                Ok(pkg_root)
+            } else {
+                find_workspace_root_with_fallback(&canonical_file)
+            }
+        }
+        Language::Go => {
+            // Prefer nearest go.mod and (optionally) add to parent go.work
+            if let Some(mod_root) = find_nearest_with_marker(&canonical_file, "go.mod") {
+                if std::env::var("PROBE_LSP_EDIT_GOWORK")
+                    .ok()
+                    .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                    .unwrap_or(false)
+                {
+                    if let Some(work_root) = find_parent_go_work_root(&mod_root) {
+                        let _ = ensure_go_work_membership(&mod_root, &work_root);
+                    }
+                }
+                Ok(mod_root)
+            } else {
+                find_workspace_root_with_fallback(&canonical_file)
+            }
+        }
+        // Python/Java/C++ default to nearest marker (handled by find_workspace_root)
         _ => find_workspace_root_with_fallback(&canonical_file),
     }
+}
+
+/// Discover additional per-language workspace roots under `anchor_root`.
+///
+/// This scans a limited depth for language-specific project markers and returns
+/// candidate roots that can be registered with the LSP server as workspaceFolders.
+/// The scan avoids common vendor/build directories to keep cost low.
+pub fn discover_language_roots(
+    anchor_root: &Path,
+    language: Language,
+    max_depth: usize,
+    max_roots: usize,
+) -> Vec<PathBuf> {
+    fn skip_dir(name: &str) -> bool {
+        matches!(
+            name,
+            ".git"
+                | "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | ".venv"
+                | "venv"
+                | "__pycache__"
+                | ".idea"
+                | ".vscode"
+                | "out"
+                | ".gradle"
+                | "vendor"
+        )
+    }
+
+    let anchor = safe_canonicalize(anchor_root);
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut queue: std::collections::VecDeque<(PathBuf, usize)> = std::collections::VecDeque::new();
+    queue.push_back((anchor.clone(), 0));
+
+    while let Some((dir, depth)) = queue.pop_front() {
+        if out.len() >= max_roots {
+            break;
+        }
+        // Check marker by language
+        let is_root = match language {
+            Language::JavaScript | Language::TypeScript => {
+                path_safety::exists_no_follow(&dir.join("package.json"))
+                    || path_safety::exists_no_follow(&dir.join("tsconfig.json"))
+            }
+            Language::Go => path_safety::exists_no_follow(&dir.join("go.mod")),
+            Language::Python => {
+                path_safety::exists_no_follow(&dir.join("pyproject.toml"))
+                    || path_safety::exists_no_follow(&dir.join("setup.cfg"))
+                    || path_safety::exists_no_follow(&dir.join("setup.py"))
+            }
+            Language::Rust => path_safety::exists_no_follow(&dir.join("Cargo.toml")),
+            _ => false,
+        };
+        if is_root {
+            // Avoid duplicates
+            if !out
+                .iter()
+                .any(|p| safe_canonicalize(p) == safe_canonicalize(&dir))
+            {
+                out.push(dir.clone());
+            }
+        }
+        if depth >= max_depth {
+            continue;
+        }
+        // Enqueue children
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for entry in rd.flatten() {
+                if let Ok(ft) = entry.file_type() {
+                    if ft.is_dir() {
+                        let name = entry.file_name();
+                        let name = name.to_string_lossy();
+                        if skip_dir(&name) {
+                            continue;
+                        }
+                        queue.push_back((entry.path(), depth + 1));
+                    }
+                }
+            }
+        }
+    }
+    // Always include the anchor itself if it looks like a root
+    if out.is_empty() && is_workspace_root(&anchor) {
+        out.push(anchor);
+    }
+    out
 }
 
 fn find_nearest_with_marker(file_path: &Path, marker: &str) -> Option<PathBuf> {
@@ -362,6 +508,150 @@ fn ensure_rust_workspace_membership(crate_root: &Path, workspace_root: &Path) ->
     }
 
     RUST_MEMBERSHIP_CACHE.insert(crate_real);
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Node.js / TypeScript workspaces (opt-in): update parent package.json "workspaces"
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn find_parent_node_workspace_root(module_root: &Path) -> Option<PathBuf> {
+    let mut current = module_root.parent();
+    while let Some(dir) = current {
+        let pkg = dir.join("package.json");
+        if path_safety::exists_no_follow(&pkg) {
+            if let Ok(text) = std::fs::read_to_string(&pkg) {
+                if text.contains("\"workspaces\"") {
+                    return Some(dir.to_path_buf());
+                }
+            }
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn ensure_node_workspace_membership(module_root: &Path, workspace_root: &Path) -> Result<()> {
+    let ws_pkg = workspace_root.join("package.json");
+    if !path_safety::exists_no_follow(&ws_pkg) {
+        return Ok(());
+    }
+    let text = std::fs::read_to_string(&ws_pkg)
+        .with_context(|| format!("Failed to read {}", ws_pkg.display()))?;
+    let mut json: serde_json::Value = serde_json::from_str(&text)
+        .with_context(|| format!("Failed to parse JSON {}", ws_pkg.display()))?;
+
+    let rel = pathdiff::diff_paths(module_root, workspace_root)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let mut modified = false;
+    if json.get("workspaces").and_then(|v| v.as_array()).is_some() {
+        let arr = json.get_mut("workspaces").unwrap().as_array_mut().unwrap();
+        let exists = arr
+            .iter()
+            .any(|v| v.as_str().map(|s| s == rel).unwrap_or(false));
+        if !exists {
+            arr.push(serde_json::Value::String(rel.clone()));
+            modified = true;
+            info!(
+                "Added '{}' to package.json workspaces in {}",
+                rel,
+                ws_pkg.display()
+            );
+        }
+    } else if json
+        .get("workspaces")
+        .and_then(|v| v.get("packages"))
+        .and_then(|v| v.as_array())
+        .is_some()
+    {
+        let packages = json
+            .get_mut("workspaces")
+            .unwrap()
+            .get_mut("packages")
+            .unwrap()
+            .as_array_mut()
+            .unwrap();
+        let exists = packages
+            .iter()
+            .any(|v| v.as_str().map(|s| s == rel).unwrap_or(false));
+        if !exists {
+            packages.push(serde_json::Value::String(rel.clone()));
+            modified = true;
+            info!(
+                "Added '{}' to workspaces.packages in {}",
+                rel,
+                ws_pkg.display()
+            );
+        }
+    } else if std::env::var("PROBE_LSP_CREATE_NODE_WORKSPACES")
+        .ok()
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        json["workspaces"] = serde_json::Value::Array(vec![serde_json::Value::String(rel.clone())]);
+        modified = true;
+        info!(
+            "Created workspaces array with '{}' in {}",
+            rel,
+            ws_pkg.display()
+        );
+    }
+
+    if modified {
+        let new_text = serde_json::to_string_pretty(&json)?;
+        std::fs::write(&ws_pkg, new_text)
+            .with_context(|| format!("Failed to update {}", ws_pkg.display()))?;
+    }
+    Ok(())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Go workspaces (opt-in): update parent go.work
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn find_parent_go_work_root(module_root: &Path) -> Option<PathBuf> {
+    let mut current = module_root.parent();
+    while let Some(dir) = current {
+        let work = dir.join("go.work");
+        if path_safety::exists_no_follow(&work) {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn ensure_go_work_membership(module_root: &Path, work_root: &Path) -> Result<()> {
+    let work_file = work_root.join("go.work");
+    let rel = pathdiff::diff_paths(module_root, work_root)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .to_string_lossy()
+        .replace('\\', "/");
+
+    let mut contents = if path_safety::exists_no_follow(&work_file) {
+        std::fs::read_to_string(&work_file)
+            .with_context(|| format!("Failed to read go.work at {}", work_file.display()))?
+    } else {
+        String::from("go 1.20\n\nuse (\n)\n")
+    };
+
+    if contents.contains(&format!("\n\t./{}\n", rel))
+        || contents.contains(&format!(" use ./{}", rel))
+    {
+        return Ok(());
+    }
+
+    if let Some(pos) = contents.rfind("\n)\n") {
+        contents.insert_str(pos, &format!("\t./{}\n", rel));
+    } else {
+        contents.push_str(&format!("\nuse ./{}\n", rel));
+    }
+    std::fs::write(&work_file, contents)
+        .with_context(|| format!("Failed to update go.work at {}", work_file.display()))?;
+    info!("Added './{}' to go.work in {}", rel, work_file.display());
     Ok(())
 }
 

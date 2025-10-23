@@ -58,7 +58,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Instant;
-use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock, Semaphore};
 use tokio::time::{timeout, Duration};
 
 // Connection management constants
@@ -204,6 +204,25 @@ enum DatabaseHealth {
 
 // PID lock path is now handled directly by PidLock::new(socket_path)
 // which creates socket_path.pid internally
+// Lightweight control-plane requests serviced on a dedicated thread/runtime
+enum ControlMsg {
+    Status {
+        resp: oneshot::Sender<crate::protocol::IndexingStatusInfo>,
+    },
+    Logs {
+        lines: usize,
+        since_sequence: Option<u64>,
+        min_level: Option<crate::protocol::LogLevel>,
+        resp: oneshot::Sender<Vec<crate::protocol::LogEntry>>,
+    },
+}
+
+#[derive(Clone, Debug)]
+struct ConnectionEntryInternal {
+    started_at: Instant,
+    last_activity: Instant,
+    peer_pid: Option<u32>,
+}
 
 pub struct LspDaemon {
     socket_path: String,
@@ -211,7 +230,7 @@ pub struct LspDaemon {
     detector: Arc<LanguageDetector>,
     server_manager: Arc<SingleServerManager>,
     workspace_resolver: Arc<tokio::sync::Mutex<WorkspaceResolver>>,
-    connections: Arc<DashMap<Uuid, Instant>>,
+    connections: Arc<DashMap<Uuid, ConnectionEntryInternal>>,
     connection_semaphore: Arc<Semaphore>, // Limit concurrent connections
     start_time: Instant,
     request_count: Arc<RwLock<u64>>,
@@ -253,6 +272,14 @@ pub struct LspDaemon {
     database_health_status: Arc<Mutex<DatabaseHealth>>, // Overall health
     // Cancellation flags for long-running operations keyed by request_id
     cancel_flags: Arc<DashMap<Uuid, Arc<AtomicBool>>>,
+    // Precomputed control-plane snapshot: refreshed periodically to keep
+    // Status RPCs responsive under heavy load.
+    control_snapshot: Arc<RwLock<Option<crate::protocol::IndexingStatusInfo>>>,
+    control_snapshot_updated: Arc<RwLock<Option<std::time::Instant>>>,
+    // Fast, DB-free snapshot to keep IndexingStatus responsive under load
+    fast_snapshot: Arc<RwLock<Option<crate::protocol::IndexingStatusInfo>>>,
+    fast_snapshot_updated: Arc<RwLock<Option<std::time::Instant>>>,
+    control_tx: Option<mpsc::Sender<ControlMsg>>,
 }
 
 // Bounded concurrency for background DB stores (default concurrency is 4)
@@ -662,6 +689,11 @@ impl LspDaemon {
             last_database_error: Arc::new(Mutex::new(None)),
             database_health_status: Arc::new(Mutex::new(DatabaseHealth::Healthy)),
             cancel_flags: Arc::new(DashMap::new()),
+            control_snapshot: Arc::new(RwLock::new(None)),
+            control_snapshot_updated: Arc::new(RwLock::new(None)),
+            fast_snapshot: Arc::new(RwLock::new(None)),
+            fast_snapshot_updated: Arc::new(RwLock::new(None)),
+            control_tx: None,
         })
     }
 
@@ -789,6 +821,99 @@ impl LspDaemon {
             .await
             .with_context(|| format!("Failed to bind IPC listener at {}", self.socket_path))?;
         info!("LSP daemon listening on {}", self.socket_path);
+
+        // Move the IPC accept/connection loop to a dedicated OS thread with its own
+        // single-threaded Tokio runtime so Status/Logs remain responsive under load.
+        {
+            let daemon_ipc = self.clone_refs();
+            let shutdown_flag = self.shutdown.clone();
+            // Move listener into the IPC thread
+            let ipc_listener = listener;
+            std::thread::Builder::new()
+                .name("probe-ipc".into())
+                .spawn(move || {
+                    // Use a small multi-threaded runtime so one blocking handler
+                    // cannot starve all IPC requests. This keeps Status/Logs
+                    // responsive even if another connection misbehaves.
+                    let rt = tokio::runtime::Builder::new_multi_thread()
+                        .worker_threads(2)
+                        .enable_io()
+                        .enable_time()
+                        .build()
+                        .expect("ipc runtime");
+                    rt.block_on(async move {
+                        let semaphore = daemon_ipc.connection_semaphore.clone();
+                        loop {
+                            if *shutdown_flag.read().await { break; }
+                            tokio::select! {
+                                res = ipc_listener.accept() => {
+                                    match res {
+                                        Ok(stream) => {
+                                            // Acquire a connection slot; wait briefly rather than dropping
+                                            match semaphore.clone().acquire_owned().await {
+                                                Ok(permit) => {
+                                                    let d = daemon_ipc.clone_refs();
+                                                    tokio::spawn(async move {
+                                                        let _permit = permit;
+                                                        if let Err(e) = d.handle_connection(stream).await {
+                                                            error!("[ipc] Error handling connection: {}", e);
+                                                        }
+                                                    });
+                                                }
+                                                Err(_) => {
+                                                    // Reject connection quickly when at limit
+                                                    drop(stream);
+                                                    *daemon_ipc.connections_rejected_due_to_limit.write().await += 1;
+                                                    warn!("[ipc] Connection limit reached ({} connections)", MAX_CONCURRENT_CONNECTIONS);
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("[ipc] Error accepting connection: {}", e);
+                                            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                                        }
+                                    }
+                                }
+                                _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                                    if *shutdown_flag.read().await { break; }
+                                }
+                            }
+                        }
+                        debug!("[ipc] accept loop exiting");
+                    });
+                })
+                .expect("spawn ipc thread");
+        }
+
+        // Lightweight, DB-free status refresher at 500ms cadence
+        {
+            let daemon_cp = self.clone_refs();
+            tokio::spawn(async move {
+                let mut tick = tokio::time::interval(std::time::Duration::from_millis(500));
+                loop {
+                    tick.tick().await;
+                    let maybe = tokio::time::timeout(
+                        std::time::Duration::from_millis(200),
+                        daemon_cp.build_status_fast(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok());
+                    if let Some(mut s) = maybe {
+                        s.snapshot_updated_at = Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                        );
+                        s.snapshot_age_secs = Some(0);
+                        *daemon_cp.fast_snapshot.write().await = Some(s);
+                        *daemon_cp.fast_snapshot_updated.write().await =
+                            Some(std::time::Instant::now());
+                    }
+                }
+            });
+        }
 
         // Watchdog is started only when explicitly enabled via --watchdog flag
         // See enable_watchdog() method which is called from handle_init_workspaces
@@ -957,65 +1082,150 @@ impl LspDaemon {
         // Trigger auto-indexing if enabled in configuration
         self.trigger_auto_indexing().await;
 
-        loop {
-            // Update watchdog heartbeat if enabled
-            if self.watchdog_enabled.load(Ordering::Relaxed) {
-                if let Some(ref watchdog) = *self.watchdog.lock().await {
-                    watchdog.heartbeat();
+        // Spawn control-plane snapshot task: compute a lightweight indexing
+        // status snapshot every ~1s so Status RPCs never block on heavy
+        // database/LSP activity.
+        {
+            let daemon = self.clone_refs();
+            let shutdown = self.shutdown.clone();
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(Duration::from_millis(1000));
+                loop {
+                    ticker.tick().await;
+                    if *shutdown.read().await {
+                        break;
+                    }
+                    // Best-effort compute; if it times out or fails, keep last snapshot
+                    let st = tokio::time::timeout(
+                        std::time::Duration::from_millis(1500),
+                        daemon.handle_indexing_status(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok());
+                    if let Some(s) = st {
+                        // Stamp snapshot time
+                        let mut s2 = s;
+                        s2.snapshot_updated_at = Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_secs(),
+                        );
+                        s2.snapshot_age_secs = Some(0);
+                        if let Ok(mut w) = daemon.control_snapshot.try_write() {
+                            *w = Some(s2);
+                            if let Ok(mut ts) = daemon.control_snapshot_updated.try_write() {
+                                *ts = Some(std::time::Instant::now());
+                            }
+                        } else {
+                            // fall back to blocking write to avoid starving snapshots
+                            let mut w = daemon.control_snapshot.write().await;
+                            *w = Some(s2);
+                            let mut ts = daemon.control_snapshot_updated.write().await;
+                            *ts = Some(std::time::Instant::now());
+                        }
+                    }
                 }
-            }
+                tracing::debug!("control-plane snapshot task stopped");
+            });
+        }
 
-            // Check shutdown flag
+        // Start control-plane service on a dedicated OS thread with its own
+        // current-thread tokio runtime. It serves Status/Logs using only
+        // lightweight data (precomputed snapshot + log buffer), so it remains
+        // responsive even when the main runtime is busy.
+        let (tx, mut rx) = mpsc::channel::<ControlMsg>(64);
+        self.control_tx = Some(tx.clone());
+        let log_buffer = self.log_buffer.clone();
+        let snap = self.control_snapshot.clone();
+        let snap_ts = self.control_snapshot_updated.clone();
+        let daemon_cp = self.clone_refs();
+        std::thread::Builder::new()
+            .name("probe-control-plane".into())
+            .spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_time()
+                    .build()
+                    .expect("control-plane runtime");
+                rt.block_on(async move {
+                    // Periodic snapshot on control-plane runtime (1s cadence)
+                    let mut tick = tokio::time::interval(std::time::Duration::from_millis(1000));
+                    tokio::spawn({
+                        let snap = snap.clone();
+                        let snap_ts = snap_ts.clone();
+                        let daemon_cp = daemon_cp.clone_refs();
+                        async move {
+                            loop {
+                                tick.tick().await;
+                                // Best-effort compute; do not block the control-plane loop
+                                if let Ok(Ok(mut s)) = tokio::time::timeout(
+                                    std::time::Duration::from_millis(1200),
+                                    daemon_cp.handle_indexing_status(),
+                                )
+                                .await
+                                {
+                                    s.snapshot_updated_at = Some(
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs(),
+                                    );
+                                    s.snapshot_age_secs = Some(0);
+                                    *snap.write().await = Some(s);
+                                    *snap_ts.write().await = Some(std::time::Instant::now());
+                                }
+                            }
+                        }
+                    });
+                    while let Some(msg) = rx.recv().await {
+                        match msg {
+                            ControlMsg::Status { resp } => {
+                                let status =
+                                    snap.read().await.clone().unwrap_or_else(|| {
+                                        crate::protocol::IndexingStatusInfo::idle()
+                                    });
+                                let _ = resp.send(status);
+                            }
+                            ControlMsg::Logs {
+                                lines,
+                                since_sequence,
+                                min_level,
+                                resp,
+                            } => {
+                                let mut entries = if let Some(since) = since_sequence {
+                                    log_buffer.get_since_sequence(since, lines)
+                                } else {
+                                    log_buffer.get_last(lines)
+                                };
+                                if let Some(min) = min_level {
+                                    fn rank(level: &crate::protocol::LogLevel) -> u8 {
+                                        match level {
+                                            crate::protocol::LogLevel::Trace => 0,
+                                            crate::protocol::LogLevel::Debug => 1,
+                                            crate::protocol::LogLevel::Info => 2,
+                                            crate::protocol::LogLevel::Warn => 3,
+                                            crate::protocol::LogLevel::Error => 4,
+                                        }
+                                    }
+                                    let min_r = rank(&min);
+                                    entries.retain(|e| rank(&e.level) >= min_r);
+                                }
+                                let _ = resp.send(entries);
+                            }
+                        }
+                    }
+                });
+            })
+            .expect("spawn control-plane thread");
+
+        // IPC accept loop moved to dedicated thread; wait for shutdown here.
+        loop {
             if *self.shutdown.read().await {
                 info!("Daemon shutting down...");
                 break;
             }
-
-            // Use select! to make accept interruptible by shutdown
-            tokio::select! {
-                    accept_result = listener.accept() => {
-                        match accept_result {
-                            Ok(stream) => {
-                                // Acquire semaphore permit before spawning handler
-                                let semaphore = self.connection_semaphore.clone();
-                                match semaphore.try_acquire_owned() {
-                                    Ok(permit) => {
-                                        // Track accepted connection
-                                        *self.total_connections_accepted.write().await += 1;
-
-                                        let daemon = self.clone_refs();
-                                        tokio::spawn(async move {
-                                            // Hold permit for duration of connection
-                                            let _permit = permit;
-                                            if let Err(e) = daemon.handle_connection(stream).await {
-                                                error!("Error handling connection: {}", e);
-                                            }
-                                        });
-                                    }
-                                    Err(_) => {
-                                        // No permits available - reject connection
-                                        *self.connections_rejected_due_to_limit.write().await += 1;
-                                        warn!(
-                                            "Connection limit reached ({} connections), rejecting new connection",
-                                            MAX_CONCURRENT_CONNECTIONS
-                                        );
-                                        drop(stream); // Close connection immediately
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Error accepting connection: {}", e);
-                            }
-                        }
-                    }
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                    // Periodic check for shutdown flag
-                    if *self.shutdown.read().await {
-                        info!("Daemon shutting down (periodic check)...");
-                        break;
-                    }
-                }
-            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
         }
 
         // Cleanup
@@ -1025,17 +1235,35 @@ impl LspDaemon {
 
     async fn handle_connection(&self, stream: IpcStream) -> Result<()> {
         let client_id = Uuid::new_v4();
-        info!("New client connected: {}", client_id);
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let peer_pid = stream.peer_pid();
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        let peer_pid: Option<u32> = None;
+        if let Some(pid) = peer_pid {
+            info!("New client connected: {} (pid={})", client_id, pid);
+        } else {
+            info!("New client connected: {}", client_id);
+        }
 
         let connection_start = Instant::now();
         let mut last_activity = Instant::now();
 
-        // Store connection timestamp
-        self.connections.insert(client_id, last_activity);
+        // Store connection info (start, last activity, pid)
+        self.connections.insert(
+            client_id,
+            ConnectionEntryInternal {
+                started_at: connection_start,
+                last_activity,
+                peer_pid,
+            },
+        );
 
         // Split stream for concurrent read/write operations
         let (mut reader, mut writer) = stream.into_split();
 
+        // First-frame deadline: if no bytes arrive within this window, drop the connection quickly.
+        let first_deadline = std::time::Duration::from_millis(800);
+        let mut saw_first_frame = false;
         loop {
             // Check for idle timeout
             if last_activity.elapsed() > IDLE_TIMEOUT {
@@ -1072,6 +1300,13 @@ impl LspDaemon {
                 Err(e) => {
                     let error_msg = e.to_string();
                     if error_msg.contains("Timeout") {
+                        if !saw_first_frame && connection_start.elapsed() > first_deadline {
+                            debug!(
+                                "First-frame timeout from client {} after {:?}; closing",
+                                client_id, first_deadline
+                            );
+                            break;
+                        }
                         debug!("Read timeout from client {} - continuing", client_id);
                         continue; // Continue loop on timeout, don't close connection
                     } else if error_msg.contains("early eof") || error_msg.contains("UnexpectedEof")
@@ -1096,6 +1331,8 @@ impl LspDaemon {
                 }
             };
 
+            // Mark that we passed the first read
+            saw_first_frame = true;
             // Decode request
             let request = match serde_json::from_slice::<DaemonRequest>(&message_data) {
                 Ok(req) => req,
@@ -1118,9 +1355,30 @@ impl LspDaemon {
                 }
             };
 
+            // Light request tracing (variant only)
+            let req_name: &str = match &request {
+                DaemonRequest::IndexingStatus { .. } => "IndexingStatus",
+                DaemonRequest::IndexingStatusFast { .. } => "IndexingStatusFast",
+                DaemonRequest::GetLogs { .. } => "GetLogs",
+                DaemonRequest::Connect { .. } => "Connect",
+                _ => "Other",
+            };
+            tracing::debug!("[ipc] recv {}", req_name);
+
             // Update activity timestamp
             last_activity = Instant::now();
-            self.connections.insert(client_id, last_activity);
+            if let Some(mut ci) = self.connections.get_mut(&client_id) {
+                ci.last_activity = last_activity;
+            } else {
+                self.connections.insert(
+                    client_id,
+                    ConnectionEntryInternal {
+                        started_at: connection_start,
+                        last_activity,
+                        peer_pid,
+                    },
+                );
+            }
 
             // Increment request count
             *self.request_count.write().await += 1;
@@ -1247,6 +1505,15 @@ impl LspDaemon {
                 error!("[{}] Failed to send response: {}", client_id, e);
                 break; // Close connection on write errors
             }
+            // Light response tracing (variant)
+            let resp_name: &str = match &response {
+                DaemonResponse::IndexingStatusResponse { .. } => "IndexingStatusResponse",
+                DaemonResponse::Logs { .. } => "Logs",
+                DaemonResponse::Connected { .. } => "Connected",
+                DaemonResponse::Error { .. } => "Error",
+                _ => "Other",
+            };
+            tracing::debug!("[ipc] sent {}", resp_name);
 
             // Check if shutdown was requested
             if let DaemonResponse::Shutdown { .. } = response {
@@ -1300,8 +1567,8 @@ impl LspDaemon {
         let connections_before = self.connections.len();
         let mut cleaned_connections = Vec::new();
 
-        self.connections.retain(|client_id, last_activity| {
-            let idle_time = now.duration_since(*last_activity);
+        self.connections.retain(|client_id, entry| {
+            let idle_time = now.duration_since(entry.last_activity);
             if idle_time > max_idle_time {
                 cleaned_connections.push((*client_id, idle_time));
                 false
@@ -1717,34 +1984,66 @@ impl LspDaemon {
                 since_sequence,
                 min_level,
             } => {
-                let entries = if let Some(since) = since_sequence {
-                    // Get logs since sequence
-                    self.log_buffer.get_since_sequence(since, lines)
+                // Prefer the control-plane fast path (dedicated thread)
+                let entries = if let Some(tx) = &self.control_tx {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = tx.try_send(ControlMsg::Logs {
+                        lines,
+                        since_sequence,
+                        min_level,
+                        resp: resp_tx,
+                    });
+                    tokio::time::timeout(Duration::from_millis(500), resp_rx)
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok())
+                        .unwrap_or_else(|| {
+                            // Fallback to local path
+                            if let Some(since) = since_sequence {
+                                self.log_buffer.get_since_sequence(since, lines)
+                            } else {
+                                self.log_buffer.get_last(lines)
+                            }
+                        })
                 } else {
-                    // Backward compatibility: get last N logs
-                    self.log_buffer.get_last(lines)
-                };
-                // Optional level filtering (server-side) to reduce payload
-                let entries = if let Some(min) = min_level {
-                    fn rank(level: &crate::protocol::LogLevel) -> u8 {
-                        match level {
-                            crate::protocol::LogLevel::Trace => 0,
-                            crate::protocol::LogLevel::Debug => 1,
-                            crate::protocol::LogLevel::Info => 2,
-                            crate::protocol::LogLevel::Warn => 3,
-                            crate::protocol::LogLevel::Error => 4,
-                        }
+                    if let Some(since) = since_sequence {
+                        self.log_buffer.get_since_sequence(since, lines)
+                    } else {
+                        self.log_buffer.get_last(lines)
                     }
-                    let min_r = rank(&min);
-                    entries
-                        .into_iter()
-                        .filter(|e| rank(&e.level) >= min_r)
-                        .collect()
-                } else {
-                    entries
                 };
                 DaemonResponse::Logs {
                     request_id,
+                    entries,
+                }
+            }
+
+            DaemonRequest::Connections { request_id } => {
+                let now = Instant::now();
+                let mut entries: Vec<crate::protocol::ConnectionInfo> = Vec::new();
+                for kv in self.connections.iter() {
+                    let (client_id, info) = (kv.key(), kv.value());
+                    let connected_for_ms =
+                        now.saturating_duration_since(info.started_at).as_millis() as u64;
+                    let idle_ms = now
+                        .saturating_duration_since(info.last_activity)
+                        .as_millis() as u64;
+                    entries.push(crate::protocol::ConnectionInfo {
+                        client_id: client_id.to_string(),
+                        pid: info.peer_pid,
+                        connected_for_ms,
+                        idle_ms,
+                    });
+                }
+                // Sort by connected duration desc, then idle asc
+                entries.sort_by(|a, b| {
+                    b.connected_for_ms
+                        .cmp(&a.connected_for_ms)
+                        .then(a.idle_ms.cmp(&b.idle_ms))
+                });
+                DaemonResponse::Connections {
+                    request_id,
+                    total: entries.len(),
                     entries,
                 }
             }
@@ -1972,13 +2271,133 @@ impl LspDaemon {
             }
 
             DaemonRequest::IndexingStatus { request_id } => {
-                match self.handle_indexing_status().await {
-                    Ok(status) => DaemonResponse::IndexingStatusResponse { request_id, status },
-                    Err(e) => DaemonResponse::Error {
-                        request_id,
-                        error: e.to_string(),
-                    },
+                tracing::debug!("[status] IndexingStatus request received");
+                // Prefer control-plane snapshot (no DB) to guarantee responsiveness
+                if let Some(tx) = &self.control_tx {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = tx.try_send(ControlMsg::Status { resp: resp_tx });
+                    if let Ok(Ok(mut status)) =
+                        tokio::time::timeout(Duration::from_millis(700), resp_rx).await
+                    {
+                        tracing::debug!("[status] responded via control-plane snapshot");
+                        // If Database is missing, fill it best-effort without blocking long
+                        if status.database.is_none() {
+                            if let Ok(Ok(db)) = tokio::time::timeout(
+                                Duration::from_millis(600),
+                                self.get_database_info(),
+                            )
+                            .await
+                            {
+                                status.database = Some(db);
+                            }
+                        }
+                        return DaemonResponse::IndexingStatusResponse { request_id, status };
+                    }
                 }
+                // Fallback: serve cached fast snapshot or build minimal
+                if let Some(mut snap) = self.fast_snapshot.read().await.clone() {
+                    tracing::debug!("[status] responding with cached fast snapshot");
+                    if snap.database.is_none() {
+                        if let Ok(Ok(db)) = tokio::time::timeout(
+                            Duration::from_millis(600),
+                            self.get_database_info(),
+                        )
+                        .await
+                        {
+                            snap.database = Some(db);
+                        }
+                    }
+                    return DaemonResponse::IndexingStatusResponse {
+                        request_id,
+                        status: snap,
+                    };
+                }
+                tracing::debug!("[status] fast snapshot missing; building on-demand");
+                let mut status = self
+                    .build_status_fast()
+                    .await
+                    .unwrap_or_else(|_| crate::protocol::IndexingStatusInfo::idle());
+                if status.database.is_none() {
+                    if let Ok(Ok(db)) =
+                        tokio::time::timeout(Duration::from_millis(600), self.get_database_info())
+                            .await
+                    {
+                        status.database = Some(db);
+                    }
+                }
+                tracing::debug!("[status] built fast snapshot on-demand");
+                DaemonResponse::IndexingStatusResponse { request_id, status }
+            }
+
+            DaemonRequest::IndexingStatusFast { request_id } => {
+                tracing::debug!("[status] IndexingStatusFast request received");
+                // Prefer control-plane snapshot first
+                if let Some(tx) = &self.control_tx {
+                    let (resp_tx, resp_rx) = oneshot::channel();
+                    let _ = tx.try_send(ControlMsg::Status { resp: resp_tx });
+                    if let Ok(Ok(status)) =
+                        tokio::time::timeout(Duration::from_millis(600), resp_rx).await
+                    {
+                        tracing::debug!("[status] fast: responded via control-plane snapshot");
+                        return DaemonResponse::IndexingStatusResponse { request_id, status };
+                    }
+                }
+                // Return cached fast snapshot immediately when available
+                if let Some(snap) = self.fast_snapshot.read().await.clone() {
+                    tracing::debug!("[status] fast: responding with cached snapshot");
+                    return DaemonResponse::IndexingStatusResponse {
+                        request_id,
+                        status: snap,
+                    };
+                }
+                // As a minimal fallback, construct a tiny, DB-free snapshot with just progress/queue
+                let minimal = {
+                    let mgr = { self.indexing_manager.lock().await.clone() };
+                    if let Some(m) = mgr {
+                        tracing::debug!(
+                            "[status] fast: cache empty; constructing minimal snapshot"
+                        );
+                        let progress = m.get_progress().await;
+                        let queue = Self::queue_info_from_snapshot(&m.get_queue_snapshot().await);
+                        crate::protocol::IndexingStatusInfo {
+                            manager_status: format!("{:?}", m.get_status().await),
+                            progress: crate::protocol::IndexingProgressInfo {
+                                total_files: progress.total_files,
+                                processed_files: progress.processed_files,
+                                failed_files: progress.failed_files,
+                                active_files: progress.active_files,
+                                skipped_files: progress.skipped_files,
+                                processed_bytes: progress.processed_bytes,
+                                symbols_extracted: progress.symbols_extracted,
+                                progress_ratio: 0.0,
+                                files_per_second: 0.0,
+                                bytes_per_second: 0.0,
+                            },
+                            queue,
+                            workers: vec![],
+                            session_id: Some("current".to_string()),
+                            started_at: None,
+                            elapsed_seconds: progress.elapsed_seconds,
+                            lsp_enrichment: None,
+                            lsp_indexing: None,
+                            database: None,
+                            sync: None,
+                            empty_cache: None,
+                            snapshot_updated_at: Some(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs(),
+                            ),
+                            snapshot_age_secs: Some(0),
+                        }
+                    } else {
+                        crate::protocol::IndexingStatusInfo::idle()
+                    }
+                };
+                let status = minimal;
+                tracing::debug!("[status] fast: minimal snapshot ready");
+                DaemonResponse::IndexingStatusResponse { request_id, status }
             }
 
             DaemonRequest::IndexingConfig { request_id } => {
@@ -4974,7 +5393,7 @@ impl LspDaemon {
             let mut all_idle = true;
 
             for entry in self.connections.iter() {
-                let last_activity = *entry.value();
+                let last_activity = entry.value().last_activity;
                 if now.duration_since(last_activity) < idle_timeout {
                     all_idle = false;
                     break;
@@ -5170,6 +5589,11 @@ impl LspDaemon {
             last_database_error: self.last_database_error.clone(),
             database_health_status: self.database_health_status.clone(),
             cancel_flags: self.cancel_flags.clone(),
+            control_snapshot: self.control_snapshot.clone(),
+            control_snapshot_updated: self.control_snapshot_updated.clone(),
+            fast_snapshot: self.fast_snapshot.clone(),
+            fast_snapshot_updated: self.fast_snapshot_updated.clone(),
+            control_tx: self.control_tx.clone(),
         }
     }
 
@@ -5508,111 +5932,208 @@ impl LspDaemon {
             // Time-bounded DB/sync sections to avoid status timeouts under heavy load
             // Allow a bit more time for DB snapshot under load
             // Prefer DB info for the manager's workspace root; fall back to CWD on error
-            let db_info = {
+            let db_info_primary = {
                 if let Some(ws_root) = manager.get_workspace_root().await {
                     let cache = self
                         .workspace_cache_router
                         .cache_for_workspace(&ws_root)
                         .await
                         .ok();
-                    cache.and_then(|c| {
-                        let backend = c.backend();
-                        match backend {
-                            crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
-                                let (
-                                    symbol_count,
-                                    edge_count,
-                                    file_count,
-                                    mut db_quiesced,
-                                    counts_locked,
-                                ) = sqlite_backend
-                                    .get_table_counts_try()
-                                    .now_or_never()
-                                    .and_then(|r| r.ok())
-                                    .and_then(|o| o)
-                                    .map(|(s, e, f)| (s, e, f, false, false))
-                                    .unwrap_or((0, 0, 0, false, true));
-                                let workspace_id = self
-                                    .workspace_cache_router
-                                    .workspace_id_for(&ws_root)
-                                    .unwrap_or_else(|_| "unknown".to_string());
-                                let reader_snapshot = futures::executor::block_on(
-                                    sqlite_backend.reader_status_snapshot(),
-                                );
-                                let write_held = sqlite_backend.is_reader_write_held();
-                                if !db_quiesced {
-                                    db_quiesced =
-                                        futures::executor::block_on(sqlite_backend.is_quiesced())
-                                            || write_held;
-                                }
-                                let writer_snapshot = futures::executor::block_on(
-                                    sqlite_backend.writer_status_snapshot(),
-                                );
-                                Some(crate::protocol::DatabaseInfo {
-                                    total_symbols: symbol_count,
-                                    total_edges: edge_count,
-                                    total_files: file_count,
-                                    workspace_id: Some(workspace_id),
-                                    counts_locked,
-                                    db_quiesced,
-                                    rw_gate_write_held: write_held,
-                                    reader_active: reader_snapshot.active as u64,
-                                    reader_last_label: reader_snapshot
-                                        .last_label
-                                        .unwrap_or_default(),
-                                    reader_last_ms: reader_snapshot.last_ms.unwrap_or(0) as u64,
-                                    writer_busy: writer_snapshot.busy,
-                                    writer_active_ms: writer_snapshot.active_ms.unwrap_or(0) as u64,
-                                    writer_last_ms: writer_snapshot
-                                        .recent
-                                        .first()
-                                        .map(|r| r.duration_ms as u64)
-                                        .unwrap_or(0),
-                                    writer_last_symbols: writer_snapshot
-                                        .recent
-                                        .first()
-                                        .map(|r| r.symbols as u64)
-                                        .unwrap_or(0),
-                                    writer_last_edges: writer_snapshot
-                                        .recent
-                                        .first()
-                                        .map(|r| r.edges as u64)
-                                        .unwrap_or(0),
-                                    writer_gate_owner_op: writer_snapshot
-                                        .gate_owner_op
-                                        .unwrap_or_default(),
-                                    writer_gate_owner_ms: writer_snapshot.gate_owner_ms.unwrap_or(0)
-                                        as u64,
-                                    writer_section_label: writer_snapshot
-                                        .section_label
-                                        .unwrap_or_default(),
-                                    writer_section_ms: writer_snapshot.section_ms.unwrap_or(0)
-                                        as u64,
-                                    mvcc_enabled: match backend {
-                                        crate::database_cache_adapter::BackendType::SQLite(sql) => {
-                                            sql.is_mvcc_enabled()
+                    {
+                        let info = if let Some(c) = cache {
+                            let backend = c.backend();
+                            match backend {
+                                crate::database_cache_adapter::BackendType::SQLite(
+                                    sqlite_backend,
+                                ) => {
+                                    let (
+                                        symbol_count,
+                                        edge_count,
+                                        file_count,
+                                        mut db_quiesced,
+                                        counts_locked,
+                                    ) = {
+                                        let try_now = sqlite_backend
+                                            .get_table_counts_try()
+                                            .now_or_never()
+                                            .and_then(|r| r.ok())
+                                            .and_then(|o| o);
+                                        if let Some((s, e, f)) = try_now {
+                                            (s, e, f, false, false)
+                                        } else if let Some((s, e, f, _age)) = sqlite_backend
+                                            .get_cached_counts()
+                                            .now_or_never()
+                                            .flatten()
+                                        {
+                                            // Use cached counts and mark as locked to signal they may be stale
+                                            (s, e, f, false, true)
+                                        } else {
+                                            (0, 0, 0, false, true)
                                         }
-                                    },
-                                    edge_audit: Some(crate::edge_audit::snapshot()),
-                                })
+                                    };
+                                    let workspace_id = self
+                                        .workspace_cache_router
+                                        .workspace_id_for(&ws_root)
+                                        .unwrap_or_else(|_| "unknown".to_string());
+                                    // Non-blocking reader/writer/quiet snapshots with tight timeouts
+                                    let reader_snapshot = tokio::time::timeout(
+                                        std::time::Duration::from_millis(200),
+                                        sqlite_backend.reader_status_snapshot(),
+                                    )
+                                    .await
+                                    .ok();
+                                    let write_held = sqlite_backend.is_reader_write_held();
+                                    if !db_quiesced {
+                                        let is_quiesced = tokio::time::timeout(
+                                            std::time::Duration::from_millis(150),
+                                            sqlite_backend.is_quiesced(),
+                                        )
+                                        .await
+                                        .ok()
+                                        .unwrap_or(false);
+                                        db_quiesced = is_quiesced || write_held;
+                                    }
+                                    let writer_snapshot = tokio::time::timeout(
+                                        std::time::Duration::from_millis(200),
+                                        sqlite_backend.writer_status_snapshot(),
+                                    )
+                                    .await
+                                    .ok();
+                                    let reader_active = reader_snapshot
+                                        .as_ref()
+                                        .map(|r| r.active as u64)
+                                        .unwrap_or(0);
+                                    let reader_last_label = reader_snapshot
+                                        .as_ref()
+                                        .and_then(|r| r.last_label.clone())
+                                        .unwrap_or_default();
+                                    let reader_last_ms = reader_snapshot
+                                        .as_ref()
+                                        .and_then(|r| r.last_ms)
+                                        .unwrap_or(0)
+                                        as u64;
+                                    let writer_busy =
+                                        writer_snapshot.as_ref().map(|w| w.busy).unwrap_or(false);
+                                    let writer_active_ms = writer_snapshot
+                                        .as_ref()
+                                        .and_then(|w| w.active_ms)
+                                        .unwrap_or(0)
+                                        as u64;
+                                    let (writer_last_ms, writer_last_symbols, writer_last_edges) =
+                                        if let Some(w) = writer_snapshot.as_ref() {
+                                            if let Some(r) = w.recent.first() {
+                                                (
+                                                    r.duration_ms as u64,
+                                                    r.symbols as u64,
+                                                    r.edges as u64,
+                                                )
+                                            } else {
+                                                (0, 0, 0)
+                                            }
+                                        } else {
+                                            (0, 0, 0)
+                                        };
+                                    let writer_gate_owner_op = writer_snapshot
+                                        .as_ref()
+                                        .and_then(|w| w.gate_owner_op.clone())
+                                        .unwrap_or_default();
+                                    let writer_gate_owner_ms = writer_snapshot
+                                        .as_ref()
+                                        .and_then(|w| w.gate_owner_ms)
+                                        .unwrap_or(0)
+                                        as u64;
+                                    let writer_section_label = writer_snapshot
+                                        .as_ref()
+                                        .and_then(|w| w.section_label.clone())
+                                        .unwrap_or_default();
+                                    let writer_section_ms = writer_snapshot
+                                        .as_ref()
+                                        .and_then(|w| w.section_ms)
+                                        .unwrap_or(0)
+                                        as u64;
+
+                                    Some(crate::protocol::DatabaseInfo {
+                                        total_symbols: symbol_count,
+                                        total_edges: edge_count,
+                                        total_files: file_count,
+                                        workspace_id: Some(workspace_id),
+                                        counts_locked,
+                                        db_quiesced,
+                                        rw_gate_write_held: write_held,
+                                        reader_active,
+                                        reader_last_label,
+                                        reader_last_ms,
+                                        writer_busy,
+                                        writer_active_ms,
+                                        writer_last_ms,
+                                        writer_last_symbols,
+                                        writer_last_edges,
+                                        writer_gate_owner_op,
+                                        writer_gate_owner_ms,
+                                        writer_section_label,
+                                        writer_section_ms,
+                                        mvcc_enabled: match backend {
+                                            crate::database_cache_adapter::BackendType::SQLite(
+                                                sql,
+                                            ) => sql.is_mvcc_enabled(),
+                                        },
+                                        edge_audit: Some(crate::edge_audit::snapshot()),
+                                    })
+                                }
                             }
-                        }
-                    })
+                        } else {
+                            None
+                        };
+                        info
+                    }
                 } else {
                     None
                 }
+            };
+
+            // Async fallback: avoid nested runtimes by awaiting directly
+            let db_info_fallback = tokio::time::timeout(
+                std::time::Duration::from_millis(1000),
+                self.get_database_info(),
+            )
+            .await
+            .ok()
+            .and_then(|r| r.ok());
+
+            let mut db_info = db_info_primary.or(db_info_fallback);
+            if db_info.is_none() {
+                let workspace_id = if let Some(ws_root) = manager.get_workspace_root().await {
+                    self.workspace_cache_router
+                        .workspace_id_for(&ws_root)
+                        .unwrap_or_else(|_| "unknown".to_string())
+                } else {
+                    "unknown".to_string()
+                };
+                db_info = Some(crate::protocol::DatabaseInfo {
+                    total_symbols: 0,
+                    total_edges: 0,
+                    total_files: 0,
+                    workspace_id: Some(workspace_id),
+                    counts_locked: true,
+                    db_quiesced: false,
+                    rw_gate_write_held: false,
+                    reader_active: 0,
+                    reader_last_label: String::new(),
+                    reader_last_ms: 0,
+                    writer_busy: false,
+                    writer_active_ms: 0,
+                    writer_last_ms: 0,
+                    writer_last_symbols: 0,
+                    writer_last_edges: 0,
+                    writer_gate_owner_op: String::new(),
+                    writer_gate_owner_ms: 0,
+                    writer_section_label: String::new(),
+                    writer_section_ms: 0,
+                    mvcc_enabled: false,
+                    edge_audit: Some(crate::edge_audit::snapshot()),
+                });
             }
-            .or_else(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    tokio::time::timeout(
-                        std::time::Duration::from_millis(1000),
-                        self.get_database_info(),
-                    )
-                    .await
-                    .ok()
-                    .and_then(|r| r.ok())
-                })
-            });
+
             let sync_info =
                 tokio::time::timeout(std::time::Duration::from_millis(1000), self.get_sync_info())
                     .await
@@ -5663,6 +6184,8 @@ impl LspDaemon {
                 database: db_info,
                 sync: sync_info,
                 empty_cache: None,
+                snapshot_updated_at: None,
+                snapshot_age_secs: None,
             };
 
             // Attach empty-cache snapshot (best-effort)
@@ -5716,9 +6239,91 @@ impl LspDaemon {
                 database: db_info,
                 sync: sync_info,
                 empty_cache: None,
+                snapshot_updated_at: None,
+                snapshot_age_secs: None,
             };
 
             Ok(status_info)
+        }
+    }
+
+    /// Build a fast, DB-free status snapshot from in-memory structures only.
+    /// This avoids database calls and remains responsive under heavy load.
+    async fn build_status_fast(&self) -> Result<crate::protocol::IndexingStatusInfo> {
+        use crate::protocol::{IndexingProgressInfo, IndexingQueueInfo, IndexingWorkerInfo};
+        let manager_opt = {
+            let guard = self.indexing_manager.lock().await;
+            guard.clone()
+        };
+        if let Some(manager) = manager_opt {
+            let status = manager.get_status().await;
+            let progress = manager.get_progress().await;
+            let queue_snapshot = manager.get_queue_snapshot().await;
+            let worker_stats = manager.get_worker_stats().await;
+            let queue_info = Self::queue_info_from_snapshot(&queue_snapshot);
+            let workers: Vec<IndexingWorkerInfo> = worker_stats
+                .into_iter()
+                .map(|w| IndexingWorkerInfo {
+                    worker_id: w.worker_id,
+                    is_active: w.is_active,
+                    current_file: w.current_file,
+                    files_processed: w.files_processed,
+                    bytes_processed: w.bytes_processed,
+                    symbols_extracted: w.symbols_extracted,
+                    errors_encountered: w.errors_encountered,
+                    last_activity: w.last_activity,
+                })
+                .collect();
+            let mut out = crate::protocol::IndexingStatusInfo {
+                manager_status: format!("{status:?}"),
+                progress: IndexingProgressInfo {
+                    total_files: progress.total_files,
+                    processed_files: progress.processed_files,
+                    failed_files: progress.failed_files,
+                    active_files: progress.active_files,
+                    skipped_files: progress.skipped_files,
+                    processed_bytes: progress.processed_bytes,
+                    symbols_extracted: progress.symbols_extracted,
+                    progress_ratio: if progress.total_files > 0 {
+                        (progress.processed_files + progress.failed_files + progress.skipped_files)
+                            as f64
+                            / progress.total_files as f64
+                    } else {
+                        0.0
+                    },
+                    files_per_second: if progress.elapsed_seconds > 0 {
+                        progress.processed_files as f64 / progress.elapsed_seconds as f64
+                    } else {
+                        0.0
+                    },
+                    bytes_per_second: if progress.elapsed_seconds > 0 {
+                        progress.processed_bytes as f64 / progress.elapsed_seconds as f64
+                    } else {
+                        0.0
+                    },
+                },
+                queue: queue_info,
+                workers,
+                session_id: Some("current".to_string()),
+                started_at: Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs()
+                        .saturating_sub(progress.elapsed_seconds),
+                ),
+                elapsed_seconds: progress.elapsed_seconds,
+                lsp_enrichment: manager.get_lsp_enrichment_info().await,
+                lsp_indexing: manager.get_lsp_indexing_info().await,
+                database: None, // DB-free
+                sync: None,     // DB-free
+                empty_cache: Some(manager.get_empty_cache_info().await),
+                snapshot_updated_at: None,
+                snapshot_age_secs: None,
+            };
+            Ok(out)
+        } else {
+            Ok(crate::protocol::IndexingStatusInfo::idle())
         }
     }
 
@@ -7155,9 +7760,11 @@ impl LspDaemon {
             column
         );
 
-        // Generate version-aware UID using the same helper as storage path
+        // Generate version-aware UID anchored to repo root for stability across sub-workspaces
+        let repo_root = crate::path_resolver::find_git_root(file_path)
+            .unwrap_or_else(|| workspace_root.to_path_buf());
         let uid = generate_version_aware_uid(
-            workspace_root,
+            &repo_root,
             file_path,
             file_content,
             symbol_name,
@@ -7209,8 +7816,11 @@ async fn store_call_hierarchy_async(
     // If empty, synthesize "none" edges to cache emptiness
     if edges.is_empty() && result.incoming.is_empty() && result.outgoing.is_empty() {
         let content = std::fs::read_to_string(&request_file_path).unwrap_or_default();
+        // Anchor UID to repo root for consistent path prefix (e.g., "npm/")
+        let repo_root = crate::path_resolver::find_git_root(&request_file_path)
+            .unwrap_or_else(|| workspace_root.clone());
         let uid = generate_version_aware_uid(
-            &workspace_root,
+            &repo_root,
             &request_file_path,
             &content,
             &symbol_name,
@@ -7218,7 +7828,7 @@ async fn store_call_hierarchy_async(
         )
         .unwrap_or_else(|_| {
             // Fallback UID on failure
-            let rel = get_workspace_relative_path(&request_file_path, &workspace_root)
+            let rel = get_workspace_relative_path(&request_file_path, &repo_root)
                 .unwrap_or_else(|_| request_file_path.to_string_lossy().to_string());
             format!("{}:{}:{}:{}", rel, symbol_name, line, column)
         });

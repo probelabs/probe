@@ -5,10 +5,13 @@
 //! SingleServerManager handles all concurrency control and health tracking internally.
 
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+// use dashmap::DashMap; // reserved for future watchdog snapshots
+use tokio::task::JoinSet;
 use tokio::time::{sleep, timeout};
 use tracing::{debug, error, info, warn};
 
@@ -18,7 +21,11 @@ use crate::database::{
     create_none_reference_edges, DatabaseBackend, Edge, SQLiteBackend,
 };
 use crate::database_cache_adapter::{BackendType, DatabaseCacheAdapter};
+use crate::indexing::anomaly_guard::{AnomalyGuard, OpKey, OpKind};
 use crate::indexing::empty_result_cache::{EmptyRelation, EmptyResultCache};
+use std::sync::OnceLock;
+
+static ANOMALY_GUARD: OnceLock<AnomalyGuard> = OnceLock::new();
 use crate::indexing::lsp_enrichment_queue::{EnrichmentOperation, LspEnrichmentQueue, QueueItem};
 use crate::language_detector::Language;
 use crate::lsp_database_adapter::LspDatabaseAdapter;
@@ -26,7 +33,6 @@ use crate::path_resolver::PathResolver;
 use crate::server_manager::SingleServerManager;
 use crate::symbol::uid_generator::SymbolUIDGenerator;
 use crate::symbol::{SymbolContext, SymbolInfo, SymbolKind, SymbolLocation};
-use crate::workspace_utils;
 use url::Url;
 
 /// Configuration for LSP enrichment worker (single worker design)
@@ -40,6 +46,12 @@ pub struct EnrichmentWorkerConfig {
     pub empty_queue_delay: Duration,
     /// Maximum retries for failed LSP requests
     pub max_retries: u32,
+    /// Heartbeat interval seconds
+    pub heartbeat_secs: u64,
+    /// Max concurrent in-flight ops per language
+    pub per_language_concurrency: usize,
+    /// DB fetch timeout (ms) for pending symbols
+    pub db_fetch_timeout_ms: u64,
 }
 
 impl Default for EnrichmentWorkerConfig {
@@ -52,6 +64,19 @@ impl Default for EnrichmentWorkerConfig {
             request_timeout: Duration::from_secs(25), // Same as existing LSP timeout
             empty_queue_delay: Duration::from_secs(5),
             max_retries: 2,
+            heartbeat_secs: std::env::var("PROBE_LSP_HEARTBEAT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
+            // Default to 3 to utilize servers unless overridden
+            per_language_concurrency: std::env::var("PROBE_LSP_PER_LANGUAGE_CONCURRENCY")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
+            db_fetch_timeout_ms: std::env::var("PROBE_LSP_DB_FETCH_TIMEOUT_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(2000),
         }
     }
 }
@@ -83,6 +108,8 @@ pub struct EnrichmentWorkerStats {
     pub call_hierarchy_attempted: AtomicU64,
     /// Total edges persisted from call hierarchy
     pub edges_persisted: AtomicU64,
+    /// Total edges attempted (before DB write), all relations
+    pub edges_attempted: AtomicU64,
     /// Total edges persisted from references
     pub reference_edges_persisted: AtomicU64,
     /// Total edges persisted from implementations
@@ -114,6 +141,7 @@ impl EnrichmentWorkerStats {
             references_attempted: self.references_attempted.load(Ordering::Relaxed),
             implementations_attempted: self.implementations_attempted.load(Ordering::Relaxed),
             call_hierarchy_attempted: self.call_hierarchy_attempted.load(Ordering::Relaxed),
+            edges_attempted: self.edges_attempted.load(Ordering::Relaxed),
             edges_persisted: self.edges_persisted.load(Ordering::Relaxed),
             reference_edges_persisted: self.reference_edges_persisted.load(Ordering::Relaxed),
             implementation_edges_persisted: self
@@ -139,6 +167,14 @@ impl EnrichmentWorkerStats {
     }
 }
 
+#[derive(Debug, Clone)]
+struct RunningOp {
+    uid: String,
+    lang: Language,
+    kind: EnrichmentOperation,
+    started: Instant,
+}
+
 /// Immutable snapshot of worker stats (single worker design)
 #[derive(Debug, Clone)]
 pub struct EnrichmentWorkerStatsSnapshot {
@@ -153,6 +189,7 @@ pub struct EnrichmentWorkerStatsSnapshot {
     pub references_attempted: u64,
     pub implementations_attempted: u64,
     pub call_hierarchy_attempted: u64,
+    pub edges_attempted: u64,
     pub edges_persisted: u64,
     pub reference_edges_persisted: u64,
     pub implementation_edges_persisted: u64,
@@ -187,6 +224,7 @@ pub struct LspEnrichmentWorkerPool {
     uid_generator: Arc<SymbolUIDGenerator>,
     /// In-memory soft cache for empty LSP results (TTL-based)
     empty_cache: Arc<EmptyResultCache>,
+    // anomaly_guard kept global via OnceLock; no per-instance field needed
 }
 
 impl LspEnrichmentWorkerPool {
@@ -268,34 +306,789 @@ impl LspEnrichmentWorkerPool {
         enrichment_tracker: Arc<EnrichmentTracker>,
         uid_generator: Arc<SymbolUIDGenerator>,
         empty_cache: Arc<EmptyResultCache>,
-        _queue: Arc<LspEnrichmentQueue>,
+        queue: Arc<LspEnrichmentQueue>,
         cache_adapter: Arc<DatabaseCacheAdapter>,
         workspace_root: std::path::PathBuf,
     ) {
+        // Anomaly guard is retrieved from global OnceLock when needed
         info!("LSP enrichment worker started (SingleServerManager handles concurrency)");
+        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+              "[lanes] scheduler enabled per_language_concurrency={} db_timeout_ms={}",
+              config.per_language_concurrency,
+              config.db_fetch_timeout_ms);
         stats.worker_active.store(true, Ordering::Relaxed);
 
-        while !shutdown.load(Ordering::Relaxed) {
-            // Fetch a small batch of pending symbols directly from the DB
-            let plans = match cache_adapter.backend() {
-                BackendType::SQLite(sqlite_backend) => {
-                    let fetch = config.batch_size.max(1);
-                    match sqlite_backend
-                        .find_symbols_pending_enrichment_internal(fetch)
-                        .await
-                    {
-                        Ok(v) => v,
-                        Err(e) => {
-                            debug!("Phase 2 worker: failed to fetch pending symbols: {}", e);
-                            Vec::new()
+        // Dedicated heartbeat: prints every ~heartbeat_secs regardless of inner awaits
+        let hb_secs = config.heartbeat_secs;
+        {
+            let queue_hb = queue.clone();
+            let server_manager_hb = server_manager.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_secs(hb_secs.max(1)));
+                loop {
+                    interval.tick().await;
+                    let qsize = queue_hb.size().await;
+                    let inflight = server_manager_hb.total_inflight();
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[heartbeat] queue={} inflight={}", qsize, inflight);
+                }
+            });
+        }
+
+        // Stall watchdog: if in-flight requests exist but no result completes
+        // for PROBE_LSP_STALL_SECS (default 60s), emit a snapshot and (optionally)
+        // trigger a server restart for the affected languages when
+        // PROBE_LSP_STALL_HEAL=1.
+        {
+            let sm = server_manager.clone();
+            let stats_wd = stats.clone();
+            let queue_wd = queue.clone();
+            let stall_secs: u64 = std::env::var("PROBE_LSP_STALL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(60);
+            let auto_heal = std::env::var("PROBE_LSP_STALL_HEAL")
+                .map(|v| {
+                    v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes")
+                })
+                .unwrap_or(false);
+            tokio::spawn(async move {
+                let mut last_progress: u64 = 0;
+                let mut last_progress_at = std::time::Instant::now();
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+                loop {
+                    ticker.tick().await;
+                    let inflight = sm.total_inflight();
+                    let progress_now = stats_wd.edges_persisted.load(Ordering::Relaxed)
+                        + stats_wd.reference_edges_persisted.load(Ordering::Relaxed)
+                        + stats_wd
+                            .implementation_edges_persisted
+                            .load(Ordering::Relaxed);
+                    if progress_now != last_progress {
+                        last_progress = progress_now;
+                        last_progress_at = std::time::Instant::now();
+                        continue;
+                    }
+                    if inflight > 0 && last_progress_at.elapsed().as_secs() >= stall_secs {
+                        let qsize = queue_wd.size().await;
+                        let load = sm.get_load_snapshot().await;
+                        warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[stall] detected: inflight={} queue={} stall_for={}s loads={:?}",
+                              inflight, qsize, stall_secs, load);
+                        if auto_heal {
+                            for l in load
+                                .iter()
+                                .filter(|e| e.inflight_current > 0)
+                                .map(|e| e.language)
+                            {
+                                warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                      "[stall-heal] restarting {:?} server", l);
+                                let _ = sm.restart_server(l).await;
+                            }
                         }
+                        // Avoid spamming: reset timer after reporting
+                        last_progress_at = std::time::Instant::now();
+                    }
+                }
+            });
+        }
+
+        // One-time visibility for correct DB routing
+        {
+            let db_path = match cache_adapter.backend() {
+                BackendType::SQLite(db) => db.database_path(),
+            };
+            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                  "[worker] workspace_root={} db_path={}",
+                  workspace_root.display(),
+                  db_path.display());
+        }
+
+        // Stall watchdog disabled for this build to keep runtime lean; per-language concurrency increased
+
+        // Heartbeat window tracking
+        let mut last_heartbeat = tokio::time::Instant::now();
+        let mut last_attempted_sum: u64 = stats.references_attempted.load(Ordering::Relaxed)
+            + stats.implementations_attempted.load(Ordering::Relaxed)
+            + stats.call_hierarchy_attempted.load(Ordering::Relaxed);
+
+        while !shutdown.load(Ordering::Relaxed) {
+            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker", "[loop] enter");
+            // Heartbeat snapshot every 10s
+            if last_heartbeat.elapsed() >= Duration::from_secs(10) {
+                let attempted_now = stats.references_attempted.load(Ordering::Relaxed)
+                    + stats.implementations_attempted.load(Ordering::Relaxed)
+                    + stats.call_hierarchy_attempted.load(Ordering::Relaxed);
+                let dispatched_delta = attempted_now.saturating_sub(last_attempted_sum);
+                last_attempted_sum = attempted_now;
+                let qsize = queue.size().await;
+                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                      "[heartbeat] queue={} dispatched_last_10s={}", qsize, dispatched_delta);
+                last_heartbeat = tokio::time::Instant::now();
+            }
+            // Fetch from DB only if RAM queue is empty; otherwise dispatch RAM first to avoid stalls
+            let mut plans = if queue.size().await > 0 {
+                Vec::new()
+            } else {
+                match cache_adapter.backend() {
+                    BackendType::SQLite(sqlite_backend) => {
+                        let fetch = config.batch_size.max(1);
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[db] find-pending start fetch={} timeout_ms={}", fetch, config.db_fetch_timeout_ms);
+                        let start = tokio::time::Instant::now();
+                        let timeout_total = Duration::from_millis(config.db_fetch_timeout_ms);
+                        let mut waiting_ticks: u64 = 0;
+                        let mut ticker = tokio::time::interval(Duration::from_millis(1000));
+                        let mut fut = Box::pin(
+                            sqlite_backend.find_symbols_pending_enrichment_internal(fetch),
+                        );
+                        let out: Vec<crate::database::SymbolEnrichmentPlan> = 'done: loop {
+                            tokio::select! {
+                                res = &mut fut => {
+                                    let el = start.elapsed().as_millis();
+                                    match res {
+                                        Ok(v) => {
+                                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                                  "[db] find-pending fetched={} elapsed_ms={}", v.len(), el);
+                                            break 'done v;
+                                        }
+                                        Err(e) => {
+                                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                                  "[db] find-pending error='{}'", e);
+                                            break 'done Vec::new();
+                                        }
+                                    }
+                                }
+                                _ = ticker.tick() => {
+                                    waiting_ticks += 1;
+                                    let waited = waiting_ticks * 1000;
+                                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                          "[db] waiting find-pending {}ms (timeout={}ms)",
+                                          waited,
+                                          config.db_fetch_timeout_ms);
+                                    if start.elapsed() >= timeout_total {
+                                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                              "[db] find-pending timeout_ms={}", config.db_fetch_timeout_ms);
+                                        break 'done Vec::new();
+                                    }
+                                }
+                            }
+                        };
+                        out
                     }
                 }
             };
 
+            // Fallback path: if internal query returned nothing, assemble plans on the fly
             if plans.is_empty() {
-                // No work available, short sleep
-                sleep(config.empty_queue_delay).await;
+                {
+                    let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+                    let _ = uid_generator; // keep param referenced to avoid warning when UIDs come from queue
+                    let fetch = config.batch_size.max(1);
+                    let timeout_total = Duration::from_millis(config.db_fetch_timeout_ms);
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[db] find-pending (fallback) start fetch={} timeout_ms={}", fetch, config.db_fetch_timeout_ms);
+                    let start = tokio::time::Instant::now();
+                    let mut waiting_ticks: u64 = 0;
+                    let mut ticker = tokio::time::interval(Duration::from_millis(1000));
+                    let mut fut =
+                        Box::pin(sqlite_backend.find_symbols_pending_enrichment_fallback(fetch));
+                    let fallback_out: Vec<crate::database::SymbolEnrichmentPlan> = 'done_fb: loop {
+                        tokio::select! {
+                            res = &mut fut => {
+                                let el = start.elapsed().as_millis();
+                                match res {
+                                    Ok(v) => {
+                                        if !v.is_empty() {
+                                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                                  "[db] find-pending (fallback) fetched={} elapsed_ms={}", v.len(), el);
+                                            break 'done_fb v;
+                                        } else {
+                                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                                  "[db] find-pending (fallback) fetched=0 elapsed_ms={}", el);
+                                            break 'done_fb Vec::new();
+                                        }
+                                    }
+                                    Err(e) => {
+                                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                              "[db] find-pending (fallback) error='{}'", e);
+                                        break 'done_fb Vec::new();
+                                    }
+                                }
+                            }
+                            _ = ticker.tick() => {
+                                waiting_ticks += 1;
+                                let waited = waiting_ticks * 1000;
+                                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                      "[db] waiting find-pending (fallback) {}ms (timeout={}ms)",
+                                      waited,
+                                      config.db_fetch_timeout_ms);
+                                if start.elapsed() >= timeout_total {
+                                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                          "[db] find-pending (fallback) timeout_ms={}", config.db_fetch_timeout_ms);
+                                    break 'done_fb Vec::new();
+                                }
+                            }
+                        }
+                    };
+                    plans = fallback_out;
+                }
+            }
+
+            // Build per-language lanes from DB plans first; if non-empty, dispatch concurrently.
+            let mut lanes: HashMap<Language, Vec<QueueItem>> = HashMap::new();
+            {
+                for plan in plans.iter() {
+                    if shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let language = match Language::from_str(&plan.symbol.language) {
+                        Some(lang) if !matches!(lang, Language::Unknown) => lang,
+                        _ => continue,
+                    };
+                    let rel = std::path::PathBuf::from(&plan.symbol.file_path);
+                    let file_abs = if rel.is_absolute() {
+                        if rel.exists() {
+                            rel
+                        } else {
+                            let mut f = rel.clone();
+                            if rel.starts_with(&workspace_root) {
+                                if let Ok(tail) = rel.strip_prefix(&workspace_root) {
+                                    let tail = tail
+                                        .strip_prefix(std::path::MAIN_SEPARATOR_STR)
+                                        .unwrap_or(tail);
+                                    let roots = server_manager.registered_workspaces_for(language);
+                                    for r in roots {
+                                        let t = r.join(tail);
+                                        if t.exists() {
+                                            f = t;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            f
+                        }
+                    } else {
+                        let c = workspace_root.join(&rel);
+                        if c.exists() {
+                            c
+                        } else {
+                            let mut f = c.clone();
+                            let roots = server_manager.registered_workspaces_for(language);
+                            for r in roots {
+                                let t = r.join(&rel);
+                                if t.exists() {
+                                    f = t;
+                                    break;
+                                }
+                            }
+                            f
+                        }
+                    };
+
+                    // Decide operations with kind-gating: only call hierarchy for callables
+                    let kind_lc = plan.symbol.kind.to_lowercase();
+                    let is_callable = matches!(
+                        kind_lc.as_str(),
+                        "function" | "method" | "constructor" | "destructor"
+                    );
+                    let mut ops = Vec::new();
+                    if plan.needs_references {
+                        ops.push(EnrichmentOperation::References);
+                    }
+                    if plan.needs_implementations {
+                        ops.push(EnrichmentOperation::Implementations);
+                    }
+                    if plan.needs_call_hierarchy && is_callable {
+                        ops.push(EnrichmentOperation::CallHierarchy);
+                    }
+                    if ops.is_empty() {
+                        continue;
+                    }
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[plan] uid='{}' kind={} planned={:?}",
+                          plan.symbol.symbol_uid, plan.symbol.kind, ops);
+
+                    // Soft empty-cache filter
+                    let file_mtime_secs = std::fs::metadata(&file_abs)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let uid = &plan.symbol.symbol_uid;
+                    let mut filtered_ops = Vec::new();
+                    for op in ops.into_iter() {
+                        let rel = match op {
+                            EnrichmentOperation::CallHierarchy => EmptyRelation::CallHierarchy,
+                            EnrichmentOperation::References => EmptyRelation::References,
+                            EnrichmentOperation::Implementations => EmptyRelation::Implementations,
+                        };
+                        if empty_cache.should_skip(uid, rel, file_mtime_secs).await {
+                            let seen = empty_cache.seen_count(uid, rel).await.unwrap_or(0);
+                            let min_seen = empty_cache.min_seen();
+                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                  "[empty-cache] skip {:?} uid='{}' attempt={} min_seen={} ttl={}s",
+                                  rel, uid, seen, min_seen, empty_cache.ttl_secs());
+                            if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend() {
+                                let _ = Self::mark_operation_complete(
+                                    sqlite_backend,
+                                    uid,
+                                    plan.symbol.language.as_str(),
+                                    op,
+                                )
+                                .await;
+                            }
+                        } else {
+                            filtered_ops.push(op);
+                        }
+                    }
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[plan] uid='{}' kept={:?}", uid, filtered_ops);
+                    if filtered_ops.is_empty() {
+                        continue;
+                    }
+
+                    let qi = QueueItem::new(
+                        plan.symbol.symbol_uid.clone(),
+                        file_abs,
+                        plan.symbol.def_start_line,
+                        plan.symbol.def_start_char,
+                        plan.symbol.name.clone(),
+                        language,
+                        plan.symbol.kind.clone(),
+                    )
+                    .with_operations(filtered_ops);
+                    lanes.entry(language).or_default().push(qi);
+                }
+            }
+
+            if !lanes.is_empty() {
+                // Lane scheduler: spawn up to per_language_concurrency per language and keep feeding until lanes drain
+                let mut js = JoinSet::new();
+                // helper closure to spawn next task for a lane
+                let spawn_next =
+                    |lang: Language,
+                     lanes: &mut HashMap<Language, Vec<QueueItem>>,
+                     js: &mut JoinSet<(Language, Result<()>)>| {
+                        if let Some(vec) = lanes.get_mut(&lang) {
+                            if let Some(queue_item) = vec.pop() {
+                                let sm = server_manager.clone();
+                                let pr = path_resolver.clone();
+                                let ca = cache_adapter.clone();
+                                let cfg = config.clone();
+                                let st = stats.clone();
+                                let et = enrichment_tracker.clone();
+                                let uidg = uid_generator.clone();
+                                let ec = empty_cache.clone();
+                                let ws = workspace_root.clone();
+                                js.spawn(async move {
+                                    // Cooldown/failed-skip logic mirrors sequential path
+                                    let symbol_uid =
+                                        Self::generate_symbol_uid(&queue_item, &uidg).await;
+                                    let mut skipped = false;
+                                    if let Ok(uid) = &symbol_uid {
+                                        if et.has_failed(uid).await
+                                            && !et.get_symbols_ready_for_retry().await.contains(uid)
+                                        {
+                                            st.symbols_skipped_failed
+                                                .fetch_add(1, Ordering::Relaxed);
+                                            skipped = true;
+                                        }
+                                    }
+                                    if !skipped {
+                                        let res = Self::process_symbol_with_retries(
+                                            &queue_item,
+                                            &sm,
+                                            &pr,
+                                            &ca,
+                                            &cfg,
+                                            &st,
+                                            &et,
+                                            &uidg,
+                                            &ec,
+                                            ws,
+                                        )
+                                        .await;
+                                        if res.is_ok() {
+                                            st.symbols_enriched.fetch_add(1, Ordering::Relaxed);
+                                            if let Ok(uid) = symbol_uid {
+                                                et.clear_failure(&uid).await;
+                                            }
+                                        } else {
+                                            st.symbols_failed.fetch_add(1, Ordering::Relaxed);
+                                        }
+                                    }
+                                    st.symbols_processed.fetch_add(1, Ordering::Relaxed);
+                                    (lang, Ok(()))
+                                });
+                                return true;
+                            }
+                        }
+                        false
+                    };
+
+                // Seed initial tasks per lane
+                let langs: Vec<Language> = lanes.keys().copied().collect();
+                for lang in langs.into_iter() {
+                    let mut started = 0usize;
+                    while started < config.per_language_concurrency
+                        && spawn_next(lang, &mut lanes, &mut js)
+                    {
+                        started += 1;
+                    }
+                }
+
+                // Drain tasks; on completion, feed the same lane again until it empties
+                while let Some(res) = js.join_next().await {
+                    let (lang, _r) = match res {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    // Try to keep the lane busy
+                    let _ = spawn_next(lang, &mut lanes, &mut js);
+                }
+
+                // Proceed to next iteration after lane-based dispatch
+                continue;
+            }
+
+            // If no DB work planned into lanes, try to build lanes from RAM queue
+            if lanes.is_empty() {
+                let mut ram_items: Vec<QueueItem> = Vec::new();
+                for _ in 0..config.batch_size {
+                    if let Some(item) = queue.pop_next().await {
+                        ram_items.push(item);
+                    } else {
+                        break;
+                    }
+                }
+                if !ram_items.is_empty() {
+                    // Filter and group by language
+                    let mut lanes_ram: HashMap<Language, Vec<QueueItem>> = HashMap::new();
+                    for mut qi in ram_items.into_iter() {
+                        if shutdown.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        let file_abs = if qi.file_path.is_absolute() {
+                            if qi.file_path.exists() {
+                                qi.file_path.clone()
+                            } else {
+                                let mut f = qi.file_path.clone();
+                                if qi.file_path.starts_with(&workspace_root) {
+                                    if let Ok(tail) = qi.file_path.strip_prefix(&workspace_root) {
+                                        let tail = tail
+                                            .strip_prefix(std::path::MAIN_SEPARATOR_STR)
+                                            .unwrap_or(tail);
+                                        let roots =
+                                            server_manager.registered_workspaces_for(qi.language);
+                                        for r in roots {
+                                            let t = r.join(tail);
+                                            if t.exists() {
+                                                f = t;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                f
+                            }
+                        } else {
+                            let c = workspace_root.join(&qi.file_path);
+                            if c.exists() {
+                                c
+                            } else {
+                                let mut f = c.clone();
+                                let roots = server_manager.registered_workspaces_for(qi.language);
+                                for r in roots {
+                                    let t = r.join(&qi.file_path);
+                                    if t.exists() {
+                                        f = t;
+                                        break;
+                                    }
+                                }
+                                f
+                            }
+                        };
+                        let file_mtime_secs = std::fs::metadata(&file_abs)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let uid = qi.symbol_uid.clone();
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[plan] (ram) uid='{}' kind={} planned={:?}", uid, qi.kind, qi.operations);
+                        let mut kept = Vec::new();
+                        for op in qi.operations.iter().copied() {
+                            let rel = match op {
+                                EnrichmentOperation::CallHierarchy => EmptyRelation::CallHierarchy,
+                                EnrichmentOperation::References => EmptyRelation::References,
+                                EnrichmentOperation::Implementations => {
+                                    EmptyRelation::Implementations
+                                }
+                            };
+                            if empty_cache.should_skip(&uid, rel, file_mtime_secs).await {
+                                let seen = empty_cache.seen_count(&uid, rel).await.unwrap_or(0);
+                                let min_seen = empty_cache.min_seen();
+                                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                      "[empty-cache] skip {:?} uid='{}' attempt={} min_seen={} ttl={}s",
+                                      rel, uid, seen, min_seen, empty_cache.ttl_secs());
+                                if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend()
+                                {
+                                    let _ = Self::mark_operation_complete(
+                                        sqlite_backend,
+                                        &uid,
+                                        qi.language.as_str(),
+                                        op,
+                                    )
+                                    .await;
+                                }
+                            } else {
+                                kept.push(op);
+                            }
+                        }
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[plan] (ram) uid='{}' kept={:?}", uid, kept);
+                        if kept.is_empty() {
+                            continue;
+                        }
+                        qi.file_path = file_abs;
+                        qi.operations = kept;
+                        lanes_ram.entry(qi.language).or_default().push(qi);
+                    }
+
+                    if !lanes_ram.is_empty() {
+                        // Run the same lane scheduler for RAM lanes
+                        let mut js = JoinSet::new();
+                        let spawn_next_ram =
+                            |lang: Language,
+                             lanes: &mut HashMap<Language, Vec<QueueItem>>,
+                             js: &mut JoinSet<(Language, Result<()>)>| {
+                                if let Some(vec) = lanes.get_mut(&lang) {
+                                    if let Some(queue_item) = vec.pop() {
+                                        let sm = server_manager.clone();
+                                        let pr = path_resolver.clone();
+                                        let ca = cache_adapter.clone();
+                                        let cfg = config.clone();
+                                        let st = stats.clone();
+                                        let et = enrichment_tracker.clone();
+                                        let uidg = uid_generator.clone();
+                                        let ec = empty_cache.clone();
+                                        let ws = workspace_root.clone();
+                                        js.spawn(async move {
+                                            let symbol_uid =
+                                                Self::generate_symbol_uid(&queue_item, &uidg).await;
+                                            let mut skipped = false;
+                                            if let Ok(uid) = &symbol_uid {
+                                                if et.has_failed(uid).await
+                                                    && !et
+                                                        .get_symbols_ready_for_retry()
+                                                        .await
+                                                        .contains(uid)
+                                                {
+                                                    st.symbols_skipped_failed
+                                                        .fetch_add(1, Ordering::Relaxed);
+                                                    skipped = true;
+                                                }
+                                            }
+                                            if !skipped {
+                                                let res = Self::process_symbol_with_retries(
+                                                    &queue_item,
+                                                    &sm,
+                                                    &pr,
+                                                    &ca,
+                                                    &cfg,
+                                                    &st,
+                                                    &et,
+                                                    &uidg,
+                                                    &ec,
+                                                    ws,
+                                                )
+                                                .await;
+                                                if res.is_ok() {
+                                                    st.symbols_enriched
+                                                        .fetch_add(1, Ordering::Relaxed);
+                                                    if let Ok(uid) = symbol_uid {
+                                                        et.clear_failure(&uid).await;
+                                                    }
+                                                } else {
+                                                    st.symbols_failed
+                                                        .fetch_add(1, Ordering::Relaxed);
+                                                }
+                                            }
+                                            st.symbols_processed.fetch_add(1, Ordering::Relaxed);
+                                            (lang, Ok(()))
+                                        });
+                                        return true;
+                                    }
+                                }
+                                false
+                            };
+
+                        let langs: Vec<Language> = lanes_ram.keys().copied().collect();
+                        for lang in langs.into_iter() {
+                            let mut started = 0usize;
+                            while started < config.per_language_concurrency
+                                && spawn_next_ram(lang, &mut lanes_ram, &mut js)
+                            {
+                                started += 1;
+                            }
+                        }
+
+                        while let Some(res) = js.join_next().await {
+                            let (lang, _r) = match res {
+                                Ok(v) => v,
+                                Err(_) => continue,
+                            };
+                            let _ = spawn_next_ram(lang, &mut lanes_ram, &mut js);
+                        }
+
+                        continue;
+                    }
+                }
+            }
+
+            if plans.is_empty() {
+                // Try to consume from in-memory queue before idling
+                let mut queue_items: Vec<QueueItem> = Vec::new();
+                for _ in 0..config.batch_size {
+                    if let Some(item) = queue.pop_next().await {
+                        queue_items.push(item);
+                    } else {
+                        break;
+                    }
+                }
+                if queue_items.is_empty() {
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker", "[idle] db-empty + queue-empty; sleeping={}ms", config.empty_queue_delay.as_millis());
+                    sleep(config.empty_queue_delay).await;
+                    continue;
+                }
+
+                // Process the popped items
+                for mut queue_item in queue_items {
+                    if shutdown.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    let file_abs = if queue_item.file_path.is_absolute() {
+                        if queue_item.file_path.exists() {
+                            queue_item.file_path.clone()
+                        } else {
+                            let mut f = queue_item.file_path.clone();
+                            if queue_item.file_path.starts_with(&workspace_root) {
+                                if let Ok(tail) = queue_item.file_path.strip_prefix(&workspace_root)
+                                {
+                                    let tail = tail
+                                        .strip_prefix(std::path::MAIN_SEPARATOR_STR)
+                                        .unwrap_or(tail);
+                                    let roots = server_manager
+                                        .registered_workspaces_for(queue_item.language);
+                                    for r in roots {
+                                        let t = r.join(tail);
+                                        if t.exists() {
+                                            f = t;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            f
+                        }
+                    } else {
+                        let c = workspace_root.join(&queue_item.file_path);
+                        if c.exists() {
+                            c
+                        } else {
+                            let mut f = c.clone();
+                            let roots =
+                                server_manager.registered_workspaces_for(queue_item.language);
+                            for r in roots {
+                                let t = r.join(&queue_item.file_path);
+                                if t.exists() {
+                                    f = t;
+                                    break;
+                                }
+                            }
+                            f
+                        }
+                    };
+                    // Check soft empty cache per operation
+                    let file_mtime_secs = std::fs::metadata(&file_abs)
+                        .and_then(|m| m.modified())
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let uid = &queue_item.symbol_uid;
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[plan] (ram) uid='{}' kind={} planned={:?}",
+                          uid, queue_item.kind, queue_item.operations);
+                    let mut filtered_ops = Vec::new();
+                    for op in queue_item.operations.iter().copied() {
+                        let rel = match op {
+                            EnrichmentOperation::CallHierarchy => EmptyRelation::CallHierarchy,
+                            EnrichmentOperation::References => EmptyRelation::References,
+                            EnrichmentOperation::Implementations => EmptyRelation::Implementations,
+                        };
+                        if empty_cache.should_skip(uid, rel, file_mtime_secs).await {
+                            let seen = empty_cache.seen_count(uid, rel).await.unwrap_or(0);
+                            let min_seen = empty_cache.min_seen();
+                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                  "[empty-cache] skip {:?} uid='{}' attempt={} min_seen={} ttl={}s",
+                                  rel, uid, seen, min_seen, empty_cache.ttl_secs());
+                            if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend() {
+                                let _ = Self::mark_operation_complete(
+                                    sqlite_backend,
+                                    uid,
+                                    queue_item.language.as_str(),
+                                    op,
+                                )
+                                .await;
+                            }
+                        } else {
+                            filtered_ops.push(op);
+                        }
+                    }
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[plan] (ram) uid='{}' kept={:?}", uid, filtered_ops);
+                    if filtered_ops.is_empty() {
+                        continue;
+                    }
+                    queue_item.file_path = file_abs.clone();
+                    queue_item.operations = filtered_ops;
+
+                    match Self::process_symbol_with_retries(
+                        &queue_item,
+                        &server_manager,
+                        &path_resolver,
+                        &cache_adapter,
+                        &config,
+                        &stats,
+                        &enrichment_tracker,
+                        &uid_generator,
+                        &empty_cache,
+                        workspace_root.clone(),
+                    )
+                    .await
+                    {
+                        Ok(_) => {
+                            stats.symbols_enriched.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to enrich symbol '{}' ({}:{}) via queue item: {}",
+                                queue_item.name,
+                                queue_item.file_path.display(),
+                                queue_item.def_start_line,
+                                e
+                            );
+                            stats.symbols_failed.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    stats.symbols_processed.fetch_add(1, Ordering::Relaxed);
+                }
                 continue;
             }
 
@@ -316,6 +1109,12 @@ impl LspEnrichmentWorkerPool {
                     workspace_root.join(rel)
                 };
 
+                // Decide operations with kind-gating: only call hierarchy for callables
+                let kind_lc = plan.symbol.kind.to_lowercase();
+                let is_callable = matches!(
+                    kind_lc.as_str(),
+                    "function" | "method" | "constructor" | "destructor"
+                );
                 let mut ops = Vec::new();
                 if plan.needs_references {
                     ops.push(EnrichmentOperation::References);
@@ -323,12 +1122,15 @@ impl LspEnrichmentWorkerPool {
                 if plan.needs_implementations {
                     ops.push(EnrichmentOperation::Implementations);
                 }
-                if plan.needs_call_hierarchy {
+                if plan.needs_call_hierarchy && is_callable {
                     ops.push(EnrichmentOperation::CallHierarchy);
                 }
                 if ops.is_empty() {
                     continue;
                 }
+                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                      "[plan] uid='{}' kind={} planned={:?}",
+                      plan.symbol.symbol_uid, plan.symbol.kind, ops);
                 // Check soft empty cache to avoid thrashing
                 let file_mtime_secs = std::fs::metadata(&file_abs)
                     .and_then(|m| m.modified())
@@ -355,6 +1157,8 @@ impl LspEnrichmentWorkerPool {
                         filtered_ops.push(op);
                     }
                 }
+                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                      "[plan] uid='{}' kept={:?}", uid, filtered_ops);
                 let ops = filtered_ops;
                 if ops.is_empty() {
                     continue;
@@ -413,6 +1217,7 @@ impl LspEnrichmentWorkerPool {
                         &enrichment_tracker,
                         &uid_generator,
                         &empty_cache,
+                        workspace_root.clone(),
                     )
                     .await
                     {
@@ -597,6 +1402,7 @@ impl LspEnrichmentWorkerPool {
         enrichment_tracker: &Arc<EnrichmentTracker>,
         uid_generator: &Arc<SymbolUIDGenerator>,
         empty_cache: &Arc<EmptyResultCache>,
+        db_workspace_root: std::path::PathBuf,
     ) -> Result<()> {
         let mut last_error = None;
 
@@ -618,8 +1424,10 @@ impl LspEnrichmentWorkerPool {
                 cache_adapter,
                 config,
                 stats,
+                enrichment_tracker,
                 uid_generator,
                 empty_cache,
+                db_workspace_root.clone(),
             )
             .await
             {
@@ -641,7 +1449,8 @@ impl LspEnrichmentWorkerPool {
         }
 
         // Record failure in tracker after all retries exhausted
-        if let Ok(symbol_uid) = Self::generate_symbol_uid(queue_item, uid_generator).await {
+        {
+            let symbol_uid = queue_item.symbol_uid.clone();
             let failure_reason = last_error
                 .as_ref()
                 .map(|e| e.to_string())
@@ -673,19 +1482,132 @@ impl LspEnrichmentWorkerPool {
         cache_adapter: &Arc<DatabaseCacheAdapter>,
         config: &EnrichmentWorkerConfig,
         stats: &Arc<EnrichmentWorkerStats>,
+        enrichment_tracker: &Arc<EnrichmentTracker>,
         uid_generator: &Arc<SymbolUIDGenerator>,
         empty_cache: &Arc<EmptyResultCache>,
+        db_workspace_root: std::path::PathBuf,
     ) -> Result<()> {
-        let workspace_root =
-            workspace_utils::find_workspace_root_with_fallback(&queue_item.file_path)
-                .context("Failed to resolve workspace root")?;
-
-        // Always resolve an absolute file path using the workspace root to avoid relying on
-        // daemon current_dir. Relative paths here are workspace-relative.
+        // Skip synthetic dependency paths under "/dep/" to avoid futile IO and cooldown loops.
+        if let Some(pstr) = queue_item.file_path.to_str() {
+            if pstr.starts_with("/dep/") {
+                let language_str = queue_item.language.as_str();
+                if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend() {
+                    for op in queue_item.operations.iter().copied() {
+                        let _ = Self::mark_operation_complete(
+                            sqlite_backend,
+                            &queue_item.symbol_uid,
+                            language_str,
+                            op,
+                        )
+                        .await;
+                    }
+                }
+                tracing::debug!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                    "[dep-skip] Skipping enrichment for uid='{}' path='{}' ops={:?}",
+                    queue_item.symbol_uid,
+                    queue_item.file_path.display(),
+                    queue_item.operations);
+                return Ok(());
+            }
+        }
+        let workspace_root = db_workspace_root;
+        // Robust multi-root path mapping; record all attempts for diagnostics
+        let mut candidates: Vec<std::path::PathBuf> = Vec::new();
         let abs_file_path = if queue_item.file_path.is_absolute() {
-            queue_item.file_path.clone()
+            let p = queue_item.file_path.clone();
+            candidates.push(p.clone());
+            p
         } else {
-            workspace_root.join(&queue_item.file_path)
+            let rel = &queue_item.file_path;
+            // Prefer registered LSP workspace folders for the language (deterministic, multi-root aware)
+            let mut found = None;
+            let roots = server_manager.registered_workspaces_for(queue_item.language);
+            for r in roots {
+                let p = r.join(rel);
+                candidates.push(p.clone());
+                if p.exists() {
+                    found = Some(p);
+                    break;
+                }
+            }
+            // Fallback to the DB/workflow workspace root
+            if found.is_none() {
+                let c1 = workspace_root.join(rel);
+                candidates.push(c1.clone());
+                if c1.exists() {
+                    found = Some(c1);
+                }
+            }
+            found.unwrap_or_else(|| queue_item.file_path.clone())
+        };
+
+        // If absolute path doesn't exist, resolve via DB-stored relative path for the symbol UID
+        let abs_file_path = if !abs_file_path.exists() {
+            let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+            if let Some(rel) = sqlite_backend
+                .file_path_for_uid(&queue_item.symbol_uid)
+                .await
+            {
+                let relp = std::path::PathBuf::from(rel);
+                let mut resolved: Option<std::path::PathBuf> = None;
+                // Try LSP-registered roots first
+                let roots = server_manager.registered_workspaces_for(queue_item.language);
+                for r in roots {
+                    let p = r.join(&relp);
+                    candidates.push(p.clone());
+                    if p.exists() {
+                        resolved = Some(p);
+                        break;
+                    }
+                    // Heuristic: if rel starts with the workspace folder name (e.g., "npm/"),
+                    // also try stripping that segment when joining with the root.
+                    if let Some(base) = r.file_name().and_then(|s| s.to_str()) {
+                        if let Some(stripped) = relp.strip_prefix(base).ok() {
+                            let p2 = r.join(stripped);
+                            candidates.push(p2.clone());
+                            if p2.exists() {
+                                resolved = Some(p2);
+                                break;
+                            }
+                        }
+                    }
+                }
+                // Then manager workspace root
+                if resolved.is_none() {
+                    let p = workspace_root.join(&relp);
+                    candidates.push(p.clone());
+                    if p.exists() {
+                        resolved = Some(p);
+                    }
+                    // Same heuristic for the manager root
+                    if resolved.is_none() {
+                        if let Some(base) = workspace_root.file_name().and_then(|s| s.to_str()) {
+                            if let Some(stripped) = relp.strip_prefix(base).ok() {
+                                let p2 = workspace_root.join(stripped);
+                                candidates.push(p2.clone());
+                                if p2.exists() {
+                                    resolved = Some(p2);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Finally, try repository root join for git-root relative paths
+                if resolved.is_none() {
+                    if let Some(repo_root) = crate::path_resolver::find_git_root(&workspace_root) {
+                        let p = repo_root.join(&relp);
+                        candidates.push(p.clone());
+                        if p.exists() {
+                            resolved = Some(p);
+                        }
+                    }
+                }
+                resolved.unwrap_or(abs_file_path)
+            } else {
+                abs_file_path
+            }
+        } else {
+            abs_file_path
         };
 
         debug!(
@@ -713,6 +1635,16 @@ impl LspEnrichmentWorkerPool {
         }
 
         let language = queue_item.language;
+
+        // If the LSP server binary for this language is not available, skip processing.
+        // The monitor will surface these symbols in the Missing LSP snapshot and will
+        // reattempt once the server is installed and the daemon restarts.
+        if !server_manager.is_lsp_available(language) {
+            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                  "[skip] LSP server unavailable for lang={:?}; deferring symbol '{}'",
+                  language, queue_item.name);
+            return Ok(());
+        }
         let language_str = language.as_str();
 
         let original_line = queue_item.def_start_line;
@@ -737,39 +1669,71 @@ impl LspEnrichmentWorkerPool {
         );
 
         let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+        let _ = uid_generator; // keep param referenced to avoid warning when UIDs come from queue
         let database_adapter = LspDatabaseAdapter::new();
+
+        // Fast-fail if file does not exist after all remapping attempts.
+        if !abs_file_path.exists() {
+            crate::edge_audit::inc("PM001");
+            warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                  "[PM001] path_map_failed uid='{}' file='{}' tried={:?}",
+                  queue_item.symbol_uid,
+                  queue_item.file_path.display(),
+                  candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>());
+            return Err(anyhow::anyhow!("path_map_failed"));
+        }
 
         if need_call_hierarchy {
             stats
                 .call_hierarchy_attempted
                 .fetch_add(1, Ordering::Relaxed);
+            {
+                let uid = queue_item.symbol_uid.clone();
+                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                      "[dispatch] op=CH lang={} uid='{}' file={} pos={}:{}",
+                      language_str,
+                      uid,
+                      abs_file_path.display(),
+                      adj_line,
+                      adj_char);
+            }
             // Signal enrichment context to the LSP layer to avoid aggressive readiness probing
             std::env::set_var("PROBE_LSP_ENRICHMENT", "1");
+            let t0 = std::time::Instant::now();
             let call_hierarchy_result = match timeout(
                 config.request_timeout,
                 server_manager.call_hierarchy(language, &abs_file_path, adj_line, adj_char),
             )
             .await
             {
-                Ok(Ok(result)) => Some(result),
+                Ok(Ok(result)) => {
+                    let el = t0.elapsed().as_millis();
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                          "[result] op=CH elapsed_ms={}", el);
+                    Some(result)
+                }
                 Ok(Err(e)) => {
+                    let el = t0.elapsed().as_millis();
                     debug!(
-                        "Call hierarchy unavailable for '{}' ({}:{}:{}): {}",
+                        "Call hierarchy unavailable for '{}' ({}:{}:{}): {} ({} ms)",
                         queue_item.name,
                         queue_item.file_path.display(),
                         queue_item.def_start_line,
                         queue_item.def_start_char,
-                        e
+                        e,
+                        el
                     );
                     None
                 }
                 Err(_) => {
+                    let el = t0.elapsed().as_millis();
                     debug!(
-                        "Call hierarchy request timed out for '{}' at {}:{}:{}",
+                        "Call hierarchy request timed out for '{}' at {}:{}:{} ({} ms)",
                         queue_item.name,
                         queue_item.file_path.display(),
                         queue_item.def_start_line,
-                        queue_item.def_start_char
+                        queue_item.def_start_char,
+                        el
                     );
                     None
                 }
@@ -779,7 +1743,7 @@ impl LspEnrichmentWorkerPool {
             std::env::remove_var("PROBE_LSP_ENRICHMENT");
 
             if let Some(call_hierarchy_result) = call_hierarchy_result {
-                let (symbols, edges) = database_adapter
+                let (symbols, mut edges) = database_adapter
                     .convert_call_hierarchy_to_database(
                         &call_hierarchy_result,
                         &abs_file_path,
@@ -792,6 +1756,23 @@ impl LspEnrichmentWorkerPool {
                 // Phase-2 edges-only mode: do not update symbol_state here
 
                 if !edges.is_empty() {
+                    // Drop self-loop edges to avoid EID010 and meaningless relations
+                    let before = edges.len();
+                    edges.retain(|e| e.source_symbol_uid != e.target_symbol_uid);
+                    if edges.iter().any(|e| {
+                        e.source_symbol_uid != queue_item.symbol_uid
+                            && e.source_symbol_uid != "none"
+                    }) {
+                        if let Some(sample) = edges
+                            .iter()
+                            .find(|e| e.source_symbol_uid != queue_item.symbol_uid)
+                        {
+                            debug!(target: "lsp_daemon::edge_audit", "[uid_mismatch] queue_uid='{}' example_source='{}' relation={:?}", queue_item.symbol_uid, sample.source_symbol_uid, sample.relation);
+                        }
+                    }
+                    stats
+                        .edges_attempted
+                        .fetch_add(edges.len() as u64, Ordering::Relaxed);
                     sqlite_backend
                         .store_edges(&edges)
                         .await
@@ -800,7 +1781,8 @@ impl LspEnrichmentWorkerPool {
                         .edges_persisted
                         .fetch_add(edges.len() as u64, Ordering::Relaxed);
                 } else {
-                    if let Ok(uid) = Self::generate_symbol_uid(queue_item, uid_generator).await {
+                    {
+                        let uid = queue_item.symbol_uid.clone();
                         let mtime = std::fs::metadata(&abs_file_path)
                             .and_then(|m| m.modified())
                             .ok()
@@ -810,23 +1792,45 @@ impl LspEnrichmentWorkerPool {
                         empty_cache
                             .record_empty(&uid, EmptyRelation::CallHierarchy, mtime)
                             .await;
+
+                        // Anomaly guard: if this op repeatedly returns zero within window, short-circuit to durable none
+                        let anomalous = ANOMALY_GUARD
+                            .get_or_init(AnomalyGuard::from_env)
+                            .record_zero_and_check(OpKey {
+                                uid: uid.clone(),
+                                kind: OpKind::CallHierarchy,
+                            })
+                            .await;
                         let attempt = empty_cache
                             .seen_count(&uid, EmptyRelation::CallHierarchy)
                             .await
                             .unwrap_or(1);
                         let min_seen = empty_cache.min_seen();
-                        if empty_cache
-                            .is_stable(&uid, EmptyRelation::CallHierarchy, mtime)
-                            .await
+                        if anomalous
+                            || empty_cache
+                                .is_stable(&uid, EmptyRelation::CallHierarchy, mtime)
+                                .await
                         {
-                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
-                                  "[empty-cache] CH empty: attempt {}/{} uid='{}' → persisting durable 'none'",
-                                  attempt, min_seen, uid);
+                            if anomalous {
+                                warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                      "[anomaly] CH zero-results loop detected uid='{}' → persisting durable 'none'", uid);
+                            } else {
+                                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                      "[empty-cache] CH empty: attempt {}/{} uid='{}' → persisting durable 'none'",
+                                      attempt, min_seen, uid);
+                            }
                             let mut sentinels = create_none_call_hierarchy_edges(&uid);
                             for e in sentinels.iter_mut() {
                                 e.language = language_str.to_string();
-                                e.metadata = Some("lsp_call_hierarchy_stable_empty".to_string());
+                                e.metadata = Some(if anomalous {
+                                    "lsp_call_hierarchy_anomaly_empty".to_string()
+                                } else {
+                                    "lsp_call_hierarchy_stable_empty".to_string()
+                                });
                             }
+                            stats
+                                .edges_attempted
+                                .fetch_add(sentinels.len() as u64, Ordering::Relaxed);
                             sqlite_backend
                                 .store_edges(&sentinels)
                                 .await
@@ -856,39 +1860,144 @@ impl LspEnrichmentWorkerPool {
                 )
                 .await?;
             } else {
-                // No result (timeout or error). Do not mark complete so DB can retry later.
-                debug!(
-                    "Call hierarchy not marked complete for '{}' due to transient error/timeout",
-                    queue_item.name
-                );
+                // No result (timeout or error). Treat as empty after repeated observations (anomaly fuse)
+                let uid = queue_item.symbol_uid.clone();
+                let mtime = std::fs::metadata(&abs_file_path)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                // Record a soft empty sighting; combine with anomaly fuse to avoid loops
+                empty_cache
+                    .record_empty(&uid, EmptyRelation::CallHierarchy, mtime)
+                    .await;
+                let anomalous = ANOMALY_GUARD
+                    .get_or_init(AnomalyGuard::from_env)
+                    .record_zero_and_check(OpKey {
+                        uid: uid.clone(),
+                        kind: OpKind::CallHierarchy,
+                    })
+                    .await;
+                let attempt = empty_cache
+                    .seen_count(&uid, EmptyRelation::CallHierarchy)
+                    .await
+                    .unwrap_or(1);
+                let min_seen = empty_cache.min_seen();
+                if anomalous
+                    || empty_cache
+                        .is_stable(&uid, EmptyRelation::CallHierarchy, mtime)
+                        .await
+                {
+                    if anomalous {
+                        warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[anomaly] CH no-result loop detected uid='{}' → persisting durable 'none'", uid);
+                    } else {
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[empty-cache] CH no-result: attempt {}/{} uid='{}' → persisting durable 'none'",
+                              attempt, min_seen, uid);
+                    }
+                    let mut sentinels = create_none_call_hierarchy_edges(&uid);
+                    for e in sentinels.iter_mut() {
+                        e.language = language_str.to_string();
+                        e.metadata = Some(if anomalous {
+                            "lsp_call_hierarchy_anomaly_empty".to_string()
+                        } else {
+                            "lsp_call_hierarchy_no_result_empty".to_string()
+                        });
+                    }
+                    stats
+                        .edges_attempted
+                        .fetch_add(sentinels.len() as u64, Ordering::Relaxed);
+                    sqlite_backend
+                        .store_edges(&sentinels)
+                        .await
+                        .context("Failed to store CH no-result sentinels")?;
+                    // Mark operation complete now that sentinel persisted
+                    Self::mark_operation_complete(
+                        sqlite_backend,
+                        &queue_item.symbol_uid,
+                        language_str,
+                        EnrichmentOperation::CallHierarchy,
+                    )
+                    .await?;
+                } else {
+                    debug!(
+                        "Call hierarchy not marked complete for '{}' (transient no-result)",
+                        queue_item.name
+                    );
+                }
             }
+            // end CH
         }
 
         if need_references {
             stats.references_attempted.fetch_add(1, Ordering::Relaxed);
+            {
+                let uid = queue_item.symbol_uid.clone();
+                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                      "[dispatch] op=Refs lang={} uid='{}' file={} pos={}:{}",
+                      language_str,
+                      uid,
+                      abs_file_path.display(),
+                      adj_line,
+                      adj_char);
+            }
             // Prefer to exclude declarations to avoid trait-wide explosions (e.g., fmt across Display/Debug impls)
             let include_decls = std::env::var("PROBE_LSP_REFS_INCLUDE_DECLS")
                 .ok()
                 .map(|v| v.to_lowercase() == "true" || v == "1")
                 .unwrap_or(false);
 
-            let references_result = timeout(
-                config.request_timeout,
-                server_manager.references(
-                    language,
-                    &queue_item.file_path,
-                    adj_line,
-                    adj_char,
-                    include_decls,
-                ),
-            )
-            .await
-            .context("References request timed out")?
-            .context("Failed to get references from LSP")?;
-
-            let mut references_locations =
-                Self::parse_references_json_to_locations(&references_result)
-                    .context("Failed to parse references result to locations")?;
+            let t_refs = std::time::Instant::now();
+            let mut references_locations = {
+                let outcome = timeout(
+                    config.request_timeout,
+                    server_manager.references(
+                        language,
+                        &abs_file_path,
+                        adj_line,
+                        adj_char,
+                        include_decls,
+                    ),
+                )
+                .await;
+                match outcome {
+                    Ok(Ok(json)) => {
+                        let el = t_refs.elapsed().as_millis();
+                        let parsed = Self::parse_references_json_to_locations(&json)
+                            .context("Failed to parse references result to locations")?;
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[result] op=Refs elapsed_ms={} items={}", el, parsed.len());
+                        parsed
+                    }
+                    Ok(Err(e)) => {
+                        let el = t_refs.elapsed().as_millis();
+                        debug!(
+                            "References unavailable for '{}' ({}:{}:{}): {} ({} ms)",
+                            queue_item.name,
+                            queue_item.file_path.display(),
+                            queue_item.def_start_line,
+                            queue_item.def_start_char,
+                            e,
+                            el
+                        );
+                        Vec::new()
+                    }
+                    Err(_) => {
+                        let el = t_refs.elapsed().as_millis();
+                        debug!(
+                            "References request timed out for '{}' at {}:{}:{} ({} ms)",
+                            queue_item.name,
+                            queue_item.file_path.display(),
+                            queue_item.def_start_line,
+                            queue_item.def_start_char,
+                            el
+                        );
+                        Vec::new()
+                    }
+                }
+            };
 
             // Optional: skip references for noisy Rust core traits (mirrors impl heuristic)
             let skip_core_refs = std::env::var("PROBE_LSP_REFS_SKIP_CORE")
@@ -905,6 +2014,12 @@ impl LspEnrichmentWorkerPool {
                     "Skipping LSP references for '{}' by per-language skiplist",
                     queue_item.name
                 );
+                let mut sentinels = create_none_implementation_edges(&queue_item.symbol_uid);
+                for e in sentinels.iter_mut() {
+                    e.language = language_str.to_string();
+                    e.metadata = Some("policy_skip_impls_not_candidate".to_string());
+                }
+                let _ = sqlite_backend.store_edges(&sentinels).await;
                 Self::mark_operation_complete(
                     sqlite_backend,
                     &queue_item.symbol_uid,
@@ -942,10 +2057,10 @@ impl LspEnrichmentWorkerPool {
                     .fetch_add(references_locations.len() as u64, Ordering::Relaxed);
             }
 
-            let (_ref_symbols, ref_edges) = database_adapter
+            let (_ref_symbols, mut ref_edges) = database_adapter
                 .convert_references_to_database(
                     &references_locations,
-                    &queue_item.file_path,
+                    &abs_file_path,
                     (adj_line, adj_char),
                     language_str,
                     1,
@@ -957,6 +2072,20 @@ impl LspEnrichmentWorkerPool {
             // Phase-2 edges-only mode: do not update symbol_state here
 
             if !ref_edges.is_empty() {
+                ref_edges.retain(|e| e.source_symbol_uid != e.target_symbol_uid);
+                if ref_edges.iter().any(|e| {
+                    e.source_symbol_uid != queue_item.symbol_uid && e.source_symbol_uid != "none"
+                }) {
+                    if let Some(sample) = ref_edges
+                        .iter()
+                        .find(|e| e.source_symbol_uid != queue_item.symbol_uid)
+                    {
+                        debug!(target: "lsp_daemon::edge_audit", "[uid_mismatch] queue_uid='{}' example_source='{}' relation={:?}", queue_item.symbol_uid, sample.source_symbol_uid, sample.relation);
+                    }
+                }
+                stats
+                    .edges_attempted
+                    .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
                 sqlite_backend
                     .store_edges(&ref_edges)
                     .await
@@ -965,7 +2094,8 @@ impl LspEnrichmentWorkerPool {
                     .reference_edges_persisted
                     .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
             } else {
-                if let Ok(uid) = Self::generate_symbol_uid(queue_item, uid_generator).await {
+                {
+                    let uid = queue_item.symbol_uid.clone();
                     let mtime = std::fs::metadata(&queue_item.file_path)
                         .and_then(|m| m.modified())
                         .ok()
@@ -975,23 +2105,45 @@ impl LspEnrichmentWorkerPool {
                     empty_cache
                         .record_empty(&uid, EmptyRelation::References, mtime)
                         .await;
+
+                    // Anomaly guard for references
+                    let anomalous = ANOMALY_GUARD
+                        .get_or_init(AnomalyGuard::from_env)
+                        .record_zero_and_check(OpKey {
+                            uid: uid.clone(),
+                            kind: OpKind::References,
+                        })
+                        .await;
                     let attempt = empty_cache
                         .seen_count(&uid, EmptyRelation::References)
                         .await
                         .unwrap_or(1);
                     let min_seen = empty_cache.min_seen();
-                    if empty_cache
-                        .is_stable(&uid, EmptyRelation::References, mtime)
-                        .await
+                    if anomalous
+                        || empty_cache
+                            .is_stable(&uid, EmptyRelation::References, mtime)
+                            .await
                     {
-                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
-                              "[empty-cache] Refs empty: attempt {}/{} uid='{}' → persisting durable 'none'",
-                              attempt, min_seen, uid);
+                        if anomalous {
+                            warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                  "[anomaly] Refs zero-results loop detected uid='{}' → persisting durable 'none'", uid);
+                        } else {
+                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                                  "[empty-cache] Refs empty: attempt {}/{} uid='{}' → persisting durable 'none'",
+                                  attempt, min_seen, uid);
+                        }
                         let mut sentinels = create_none_reference_edges(&uid);
                         for e in sentinels.iter_mut() {
                             e.language = language_str.to_string();
-                            e.metadata = Some("lsp_references_stable_empty".to_string());
+                            e.metadata = Some(if anomalous {
+                                "lsp_references_anomaly_empty".to_string()
+                            } else {
+                                "lsp_references_stable_empty".to_string()
+                            });
                         }
+                        stats
+                            .edges_attempted
+                            .fetch_add(sentinels.len() as u64, Ordering::Relaxed);
                         sqlite_backend
                             .store_edges(&sentinels)
                             .await
@@ -1011,15 +2163,57 @@ impl LspEnrichmentWorkerPool {
                 EnrichmentOperation::References,
             )
             .await?;
+            // end Refs
         }
 
         if need_implementations {
+            // Kind-based gating for Implementations to avoid server errors (e.g., gopls on free functions)
+            let kind_lc_impl = queue_item.kind.to_ascii_lowercase();
+            let impl_candidate = match queue_item.language {
+                Language::Go => matches!(kind_lc_impl.as_str(), "interface" | "method" | "type"),
+                Language::Rust => matches!(
+                    kind_lc_impl.as_str(),
+                    "trait" | "struct" | "enum" | "impl" | "method" | "type" | "typealias"
+                ),
+                Language::JavaScript | Language::TypeScript => {
+                    matches!(kind_lc_impl.as_str(), "interface" | "class" | "method")
+                }
+                _ => !matches!(
+                    kind_lc_impl.as_str(),
+                    "function" | "variable" | "module" | "namespace"
+                ),
+            };
+            if !impl_candidate {
+                debug!(
+                    "Skipping LSP implementations for '{}' (lang={:?}, kind={}) — not an impl candidate",
+                    queue_item.name,
+                    queue_item.language,
+                    queue_item.kind
+                );
+                Self::mark_operation_complete(
+                    sqlite_backend,
+                    &queue_item.symbol_uid,
+                    language_str,
+                    EnrichmentOperation::Implementations,
+                )
+                .await?;
+                return Ok(());
+            }
             // Special-case: when cursor is inside a Rust impl header (impl Trait for Type { ... })
             // derive a single Implements edge locally instead of asking LSP for global implementers
             if queue_item.language == Language::Rust {
-                if let Some((trait_pos, type_pos)) =
-                    Self::detect_rust_impl_header_positions(&queue_item.file_path, adj_line)
+                // Offload file read + tree-sitter parse to a blocking thread to avoid starving the async runtime
+                let path_clone = queue_item.file_path.clone();
+                let line0 = adj_line;
+                let impl_header_positions = match tokio::task::spawn_blocking(move || {
+                    Self::detect_rust_impl_header_positions(&path_clone, line0)
+                })
+                .await
                 {
+                    Ok(v) => v,
+                    Err(_) => None,
+                };
+                if let Some((trait_pos, type_pos)) = impl_header_positions {
                     debug!(
                         "Deriving Implements edge locally from impl header at {}:{}",
                         queue_item.file_path.display(),
@@ -1118,14 +2312,20 @@ impl LspEnrichmentWorkerPool {
                 stats
                     .implementations_attempted
                     .fetch_add(1, Ordering::Relaxed);
+                {
+                    let uid = queue_item.symbol_uid.clone();
+                    info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                      "[dispatch] op=Impls lang={} uid='{}' file={} pos={}:{}",
+                      language_str,
+                      uid,
+                      queue_item.file_path.display(),
+                      adj_line,
+                      adj_char);
+                }
+                let t_impls = std::time::Instant::now();
                 let implementation_locations = match timeout(
                     config.request_timeout,
-                    server_manager.implementation(
-                        language,
-                        &queue_item.file_path,
-                        adj_line,
-                        adj_char,
-                    ),
+                    server_manager.implementation(language, &abs_file_path, adj_line, adj_char),
                 )
                 .await
                 {
@@ -1137,26 +2337,33 @@ impl LspEnrichmentWorkerPool {
                                 .implementations_found
                                 .fetch_add(locations.len() as u64, Ordering::Relaxed);
                         }
+                        let el = t_impls.elapsed().as_millis();
+                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                              "[result] op=Impls elapsed_ms={} items={}", el, locations.len());
                         locations
                     }
                     Ok(Err(e)) => {
+                        let el = t_impls.elapsed().as_millis();
                         debug!(
-                            "Implementations unavailable for '{}' ({}:{}:{}): {}",
+                            "Implementations unavailable for '{}' ({}:{}:{}): {} ({} ms)",
                             queue_item.name,
                             queue_item.file_path.display(),
                             queue_item.def_start_line,
                             queue_item.def_start_char,
-                            e
+                            e,
+                            el
                         );
                         Vec::new()
                     }
                     Err(_) => {
+                        let el = t_impls.elapsed().as_millis();
                         debug!(
-                            "Implementation request timed out for '{}' at {}:{}:{}",
+                            "Implementation request timed out for '{}' at {}:{}:{} ({} ms)",
                             queue_item.name,
                             queue_item.file_path.display(),
                             queue_item.def_start_line,
                             queue_item.def_start_char,
+                            el
                         );
                         Vec::new()
                     }
@@ -1168,10 +2375,10 @@ impl LspEnrichmentWorkerPool {
                         .fetch_add(implementation_locations.len() as u64, Ordering::Relaxed);
                 }
 
-                let impl_edges = database_adapter
+                let mut impl_edges = database_adapter
                     .convert_implementations_to_database(
                         &implementation_locations,
-                        &queue_item.file_path,
+                        &abs_file_path,
                         (adj_line, adj_char),
                         language_str,
                         1,
@@ -1180,6 +2387,21 @@ impl LspEnrichmentWorkerPool {
                     .context("Failed to convert implementations to database edges")?;
 
                 if !impl_edges.is_empty() {
+                    impl_edges.retain(|e| e.source_symbol_uid != e.target_symbol_uid);
+                    if impl_edges.iter().any(|e| {
+                        e.source_symbol_uid != queue_item.symbol_uid
+                            && e.source_symbol_uid != "none"
+                    }) {
+                        if let Some(sample) = impl_edges
+                            .iter()
+                            .find(|e| e.source_symbol_uid != queue_item.symbol_uid)
+                        {
+                            debug!(target: "lsp_daemon::edge_audit", "[uid_mismatch] queue_uid='{}' example_source='{}' relation={:?}", queue_item.symbol_uid, sample.source_symbol_uid, sample.relation);
+                        }
+                    }
+                    stats
+                        .edges_attempted
+                        .fetch_add(impl_edges.len() as u64, Ordering::Relaxed);
                     sqlite_backend
                         .store_edges(&impl_edges)
                         .await
@@ -1196,6 +2418,7 @@ impl LspEnrichmentWorkerPool {
                     EnrichmentOperation::Implementations,
                 )
                 .await?;
+                // end Impls
             }
         }
 
@@ -1316,7 +2539,7 @@ impl LspEnrichmentWorkerPool {
     }
 
     async fn mark_operation_complete(
-        _sqlite_backend: &Arc<SQLiteBackend>,
+        sqlite_backend: &Arc<SQLiteBackend>,
         symbol_uid: &str,
         language: &str,
         operation: EnrichmentOperation,
@@ -1341,7 +2564,11 @@ impl LspEnrichmentWorkerPool {
             edge.language = language.to_string();
             edge.metadata = Some(marker_metadata.to_string());
         }
-
+        // Persist completion markers so the planner treats this op as complete
+        sqlite_backend
+            .store_edges(&sentinel_edges)
+            .await
+            .context("Failed to store completion sentinel edges")?;
         Ok(())
     }
 

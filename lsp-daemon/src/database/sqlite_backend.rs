@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -604,17 +604,15 @@ impl ConnectionPool {
             }
         }
         if let Ok(v) = std::env::var("PROBE_LSP_DB_ENABLE_MVCC") {
-            if v == "1" || v.eq_ignore_ascii_case("true") {
+            let s = v.to_lowercase();
+            if matches!(s.as_str(), "1" | "true" | "yes" | "on") {
                 return true;
             }
-        }
-        // 2) Sidecar file marker (workspace preference persists across restarts)
-        if let Some(p) = Self::mvcc_sidecar_path(&config.path) {
-            if p.exists() {
-                return true;
+            if matches!(s.as_str(), "0" | "false" | "no" | "off") {
+                return false;
             }
         }
-        // 3) Default ON for persistent databases to minimize `database is locked` stalls
+        // 2) Default ON for persistent databases to reduce reader stalls.
         true
     }
     /// Create a new connection pool
@@ -623,8 +621,76 @@ impl ConnectionPool {
         if !config.temporary {
             Self::maybe_migrate_legacy_mvcc_log(&config.path);
         }
-        // Resolve MVCC using env overrides or a persistent sidecar marker
-        let mvcc_enabled = Self::resolve_mvcc_enabled(&config);
+        // Resolve MVCC using env/marker, but if the DB already exists, honor its current mode.
+        let mut mvcc_enabled = Self::resolve_mvcc_enabled(&config);
+        if !config.temporary && config.path != ":memory:" {
+            use std::path::{Path, PathBuf};
+            let base = Path::new(&config.path);
+            if let Some(fname) = base.file_name().map(|s| s.to_string_lossy().to_string()) {
+                let wal_path = base.with_file_name(format!("{}-wal", fname));
+                let mvcc_log_path = base.with_file_name(format!("{}-log", fname));
+                let mvcc_marker = PathBuf::from(format!("{}.mvcc", &config.path));
+                let wal_exists = wal_path.exists();
+                let mvcc_exists = mvcc_log_path.exists() || mvcc_marker.exists();
+
+                if mvcc_log_path.exists() {
+                    if let Ok(meta) = std::fs::metadata(&mvcc_log_path) {
+                        // Minimal header+record size observed in crashes: 112 bytes
+                        if meta.len() > 0 && meta.len() < 112 {
+                            warn!(
+                                "[db-open] Detected truncated MVCC log sidecar ({} bytes) at {} — disabling MVCC and removing sidecar to prevent engine panic",
+                                meta.len(),
+                                mvcc_log_path.display()
+                            );
+                            let _ = std::fs::remove_file(&mvcc_log_path);
+                            if mvcc_marker.exists() {
+                                let _ = std::fs::remove_file(&mvcc_marker);
+                            }
+                        }
+                    }
+                }
+                // Recompute existence after possible removal
+                let mvcc_exists = mvcc_log_path.exists() || mvcc_marker.exists();
+
+                if mvcc_exists && !wal_exists {
+                    // Prefer MVCC when clean
+                    info!(
+                        "[db-open] Existing MVCC sidecar detected ({}); MVCC=on for {}",
+                        mvcc_log_path.display(),
+                        &config.path
+                    );
+                    mvcc_enabled = true;
+                } else if wal_exists && !mvcc_exists {
+                    if mvcc_enabled {
+                        info!(
+                            "[db-open] Existing WAL detected ({}), honoring MVCC=off for {}",
+                            wal_path.display(),
+                            &config.path
+                        );
+                    }
+                    mvcc_enabled = false;
+                } else if wal_exists && mvcc_exists {
+                    warn!(
+                        "[db-open] Both WAL and MVCC artifacts present; preferring MVCC for {}",
+                        &config.path
+                    );
+                    // Prefer MVCC; remove WAL to harmonize
+                    if let Err(e) = std::fs::remove_file(&wal_path) {
+                        warn!(
+                            "[db-open] Failed to remove WAL file {} before MVCC open: {}",
+                            wal_path.display(),
+                            e
+                        );
+                    } else {
+                        info!(
+                            "[db-open] Removed WAL file {} to harmonize with MVCC",
+                            wal_path.display()
+                        );
+                    }
+                    mvcc_enabled = true;
+                }
+            }
+        }
 
         let io = coredb::Database::io_for_path(&config.path).map_err(|e| {
             DatabaseError::Configuration {
@@ -635,6 +701,26 @@ impl ConnectionPool {
         // Try to open with requested MVCC. Some libsql builds currently do not support
         // MVCC together with indexes and return a clear error. Detect and fall back.
         let mut requested_mvcc = mvcc_enabled;
+        // If MVCC is disabled by config/env, proactively remove any stale sidecar marker to avoid
+        // the engine attempting to replay a truncated logical log from previous runs.
+        if !requested_mvcc {
+            if let Some(marker) = Self::mvcc_sidecar_path(&config.path) {
+                if marker.exists() {
+                    if let Err(e) = std::fs::remove_file(&marker) {
+                        warn!(
+                            "MVCC disabled by configuration but failed to remove sidecar {}: {}",
+                            marker.display(),
+                            e
+                        );
+                    } else {
+                        info!(
+                            "MVCC disabled by configuration — removed sidecar {}",
+                            marker.display()
+                        );
+                    }
+                }
+            }
+        }
         // Determine engine-level index support. When MVCC is enabled, default to disabling
         // engine indexes unless explicitly allowed via env; after open, prefer the engine's
         // own indexes_enabled() truth.
@@ -671,7 +757,10 @@ impl ConnectionPool {
                 let mvcc_index_incompatible = msg
                     .to_ascii_lowercase()
                     .contains("indexes not yet supported for mvcc");
-                if mvcc_index_incompatible {
+                let mvcc_log_read_err = msg
+                    .to_ascii_lowercase()
+                    .contains("couldn't read enough data");
+                if mvcc_index_incompatible || mvcc_log_read_err {
                     warn!(
                         "MVCC requested but unsupported with indexes in this engine: {} — falling back to MVCC=off",
                         msg
@@ -679,6 +768,17 @@ impl ConnectionPool {
                     // Remove any persisted MVCC sidecar to avoid retry loops on next start
                     if let Some(marker) = Self::mvcc_sidecar_path(&config.path) {
                         let _ = std::fs::remove_file(marker);
+                    }
+                    if config.path != ":memory:" {
+                        let base = std::path::Path::new(&config.path);
+                        if let Some(fname) =
+                            base.file_name().map(|s| s.to_string_lossy().to_string())
+                        {
+                            let current_log = base.with_file_name(format!("{}-log", fname));
+                            if current_log.exists() {
+                                let _ = std::fs::remove_file(&current_log);
+                            }
+                        }
                     }
                     requested_mvcc = false;
                     indexes_enabled = true;
@@ -744,7 +844,7 @@ impl ConnectionPool {
         let conn = Connection::create(conn);
 
         // Migrations removed: ensure minimal schema instead
-        Self::ensure_minimal_schema(&conn, &config, indexes_enabled).await?;
+        Self::ensure_minimal_schema(&conn, &config, indexes_enabled, requested_mvcc).await?;
 
         // Pre-populate with some connections
         let initial_size = 1;
@@ -775,13 +875,33 @@ impl ConnectionPool {
         conn: &Connection,
         _config: &SQLiteConfig,
         indexes_enabled: bool,
+        mvcc_active: bool,
     ) -> Result<(), DatabaseError> {
         // Create core project/workspace tables (no-ops where unused)
         Self::create_core_tables(conn, indexes_enabled).await?;
         // Create symbol_state and edge tables used by the indexer
         Self::create_relationship_tables(conn, indexes_enabled).await?;
         // Create a few essential indexes for performance (optional)
-        let index_sqls = vec![
+        // Attempt a one-time data cleanup so the unique index can be created
+        // safely on existing databases. Keep only the earliest row per
+        // (relation, source, target, language).
+        if indexes_enabled {
+            let _ = conn
+                .execute(
+                    r#"
+                    DELETE FROM edge
+                    WHERE rowid NOT IN (
+                        SELECT MIN(rowid)
+                        FROM edge
+                        GROUP BY relation, source_symbol_uid, target_symbol_uid, language
+                    )
+                    "#,
+                    (),
+                )
+                .await;
+        }
+
+        let mut index_sqls: Vec<&str> = vec![
             // symbol lookups by file and language
             "CREATE INDEX IF NOT EXISTS idx_symbol_state_file_lang ON symbol_state(file_path, language)",
             // edge lookups for references/impls/calls
@@ -791,6 +911,9 @@ impl ConnectionPool {
             // composite index to accelerate dedup lookups
             "CREATE INDEX IF NOT EXISTS idx_edge_dedup ON edge(relation, source_symbol_uid, target_symbol_uid, language, start_line, start_char)",
         ];
+        if !mvcc_active {
+            index_sqls.push("CREATE UNIQUE INDEX IF NOT EXISTS idx_edge_unique_rel_src_tgt_lang ON edge(relation, source_symbol_uid, target_symbol_uid, language)");
+        }
         if indexes_enabled {
             for sql in index_sqls {
                 let _ = conn.execute(sql, ()).await; // best-effort
@@ -809,7 +932,7 @@ impl ConnectionPool {
         config: &SQLiteConfig,
     ) -> Result<(), DatabaseError> {
         // Default to enabling indexes when using the legacy initializer
-        Self::ensure_minimal_schema(conn, config, true).await
+        Self::ensure_minimal_schema(conn, config, true, false).await
     }
 
     /// Configure a connection with optimal settings
@@ -1889,7 +2012,7 @@ pub struct SQLiteBackend {
     /// SQLite-specific configuration
     sqlite_config: SQLiteConfig,
     /// Cache of opened trees
-    trees: RwLock<HashMap<String, Arc<SQLiteTree>>>,
+    trees: RwLock<std::collections::HashMap<String, Arc<SQLiteTree>>>,
     /// Single-writer channel (serializes all DB write operations)
     writer_tx: mpsc::Sender<WriteMsg>,
     /// Indicates writer is performing a batch (monitor can back off)
@@ -1911,6 +2034,12 @@ pub struct SQLiteBackend {
     indexes_enabled: bool,
     /// Enforce graph integrity: auto-create missing symbols for edge endpoints (except deps)
     strict_graph: bool,
+    /// Cached table counts for status (symbols, edges, files, sampled_at)
+    cached_counts: Arc<RwLock<Option<(u64, u64, u64, std::time::Instant)>>>,
+    /// Background sampler task handle
+    sampler_task: Arc<tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    /// Last time writer refreshed cached counts
+    writer_counts_last: Arc<Mutex<std::time::Instant>>,
 }
 
 #[derive(Clone, Debug)]
@@ -1977,6 +2106,159 @@ enum WriteMsg {
 }
 
 impl SQLiteBackend {
+    /// Best-effort lookup of the stored relative file_path for a symbol UID.
+    pub async fn file_path_for_uid(&self, symbol_uid: &str) -> Option<String> {
+        let conn = match ConnectionPool::checkout_arc(&self.pool).await {
+            Ok(c) => c,
+            Err(_) => return None,
+        };
+        let mut rows = match conn
+            .query(
+                "SELECT file_path FROM symbol_state WHERE symbol_uid = ?",
+                [turso::Value::Text(symbol_uid.to_string())],
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(_) => {
+                let _ = ConnectionPool::return_connection_arc(&self.pool, conn);
+                return None;
+            }
+        };
+        let out = match rows.next().await {
+            Ok(Some(row)) => match row.get_value(0) {
+                Ok(turso::Value::Text(s)) if !s.is_empty() => Some(s),
+                _ => None,
+            },
+            _ => None,
+        };
+        let _ = ConnectionPool::return_connection_arc(&self.pool, conn);
+        out
+    }
+
+    /// Fetch up to `max` symbols for an exact `file_path` from `symbol_state`.
+    /// Convenience method for diagnostics and tooling; does not modify state.
+    pub async fn get_symbols_by_file_exact(
+        &self,
+        file_path: &str,
+        max: usize,
+    ) -> Result<Vec<crate::database::SymbolState>, DatabaseError> {
+        let conn = ConnectionPool::checkout_arc(&self.pool)
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("conn: {}", e),
+            })?;
+        let mut rows = safe_query(
+            &conn,
+            "SELECT symbol_uid, file_path, language, name, fqn, kind, signature, visibility, \
+                    def_start_line, def_start_char, def_end_line, def_end_char, is_definition, documentation, metadata \
+               FROM symbol_state WHERE file_path = ? ORDER BY def_start_line ASC LIMIT ?",
+            (turso::Value::Text(file_path.to_string()), turso::Value::Integer(max as i64)),
+            "get_symbols_by_file_exact",
+        )
+        .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("row: {}", e),
+            })?
+        {
+            if let Some(sym) = Self::symbol_state_from_row(&row) {
+                out.push(sym);
+            }
+        }
+        let _ = ConnectionPool::return_connection_arc(&self.pool, conn);
+        Ok(out)
+    }
+
+    /// Return (absolute_paths, relative_paths) counts for symbol_state.file_path
+    pub async fn count_abs_rel_paths(&self) -> Result<(u64, u64), DatabaseError> {
+        let conn = self.get_direct_connection().await?;
+        let mut abs_rows = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM symbol_state WHERE file_path LIKE '/%'",
+            (),
+            "count_abs",
+        )
+        .await?;
+        let abs = {
+            let next = abs_rows
+                .next()
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("abs row: {}", e),
+                })?;
+            if let Some(row) = next {
+                match row.get_value(0) {
+                    Ok(turso::Value::Integer(n)) => n as u64,
+                    _ => 0,
+                }
+            } else {
+                0
+            }
+        };
+        let mut rel_rows = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM symbol_state WHERE file_path NOT LIKE '/%'",
+            (),
+            "count_rel",
+        )
+        .await?;
+        let rel = {
+            let next = rel_rows
+                .next()
+                .await
+                .map_err(|e| DatabaseError::OperationFailed {
+                    message: format!("rel row: {}", e),
+                })?;
+            if let Some(row) = next {
+                match row.get_value(0) {
+                    Ok(turso::Value::Integer(n)) => n as u64,
+                    _ => 0,
+                }
+            } else {
+                0
+            }
+        };
+        Ok((abs, rel))
+    }
+
+    /// Return language counts limited to common JS/TS kinds
+    pub async fn language_counts_js_ts(&self) -> Result<Vec<(String, u64)>, DatabaseError> {
+        let conn = self.get_direct_connection().await?;
+        let mut rows = safe_query(
+            &conn,
+            "SELECT language, COUNT(*) FROM symbol_state \
+             WHERE language IN ('javascript','typescript','jsx','tsx') \
+             GROUP BY language ORDER BY COUNT(*) DESC",
+            (),
+            "lang_counts_js_ts",
+        )
+        .await?;
+        let mut out = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("row: {}", e),
+            })?
+        {
+            let lang = match row.get_value(0) {
+                Ok(turso::Value::Text(s)) => s,
+                _ => String::new(),
+            };
+            let cnt = match row.get_value(1) {
+                Ok(turso::Value::Integer(n)) => n as u64,
+                _ => 0,
+            };
+            if !lang.is_empty() {
+                out.push((lang, cnt));
+            }
+        }
+        Ok(out)
+    }
     async fn count_distinct_files_fallback(
         &self,
         conn: &Connection,
@@ -2119,7 +2401,7 @@ impl SQLiteBackend {
         let backend = Self {
             pool: Arc::new(Mutex::new(pool)),
             sqlite_config: sqlite_config.clone(),
-            trees: RwLock::new(HashMap::new()),
+            trees: RwLock::new(std::collections::HashMap::new()),
             writer_tx: tx.clone(),
             writer_busy: busy_flag.clone(),
             writer_span_seq: Arc::new(std::sync::atomic::AtomicU64::new(1)),
@@ -2133,6 +2415,11 @@ impl SQLiteBackend {
             mvcc_enabled: mvcc_enabled_flag,
             indexes_enabled: indexes_enabled_flag,
             strict_graph: strict_graph_flag,
+            cached_counts: Arc::new(RwLock::new(None)),
+            sampler_task: Arc::new(tokio::sync::Mutex::new(None)),
+            writer_counts_last: Arc::new(Mutex::new(
+                std::time::Instant::now() - std::time::Duration::from_secs(3600),
+            )),
         };
 
         if sqlite_config.temporary {
@@ -2146,6 +2433,10 @@ impl SQLiteBackend {
 
         // Initialize the default workspace record for this database
         backend.ensure_default_workspace().await?;
+
+        // Start background DB sampler — samples counts periodically with
+        // short, bounded tries and caches the last successful result for status.
+        backend.start_status_sampler().await;
 
         // Spawn single-writer task
         let writer_backend = backend.clone_for_writer();
@@ -2241,7 +2532,7 @@ impl SQLiteBackend {
         Self {
             pool: self.pool.clone(),
             sqlite_config: self.sqlite_config.clone(),
-            trees: RwLock::new(HashMap::new()), // not used by writer
+            trees: RwLock::new(std::collections::HashMap::new()), // not used by writer
             writer_tx: self.writer_tx.clone(),
             writer_busy: self.writer_busy.clone(),
             writer_span_seq: self.writer_span_seq.clone(),
@@ -2253,7 +2544,127 @@ impl SQLiteBackend {
             mvcc_enabled: self.mvcc_enabled,
             indexes_enabled: self.indexes_enabled,
             strict_graph: self.strict_graph,
+            cached_counts: self.cached_counts.clone(),
+            sampler_task: self.sampler_task.clone(),
+            writer_counts_last: self.writer_counts_last.clone(),
         }
+    }
+
+    /// Launch a lightweight periodic sampler that tries to read table counts with tight bounds
+    /// and caches the last successful result. Skips sampling while writer is busy or pool quiesced.
+    async fn start_status_sampler(&self) {
+        let mut guard = self.sampler_task.lock().await;
+        if guard.is_some() {
+            return;
+        }
+        let backend = self.clone_for_writer();
+        let handle = tokio::spawn(async move {
+            let interval_secs: u64 = std::env::var("PROBE_LSP_STATUS_DB_SAMPLE_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3);
+            let mut tick =
+                tokio::time::interval(std::time::Duration::from_secs(interval_secs.max(1)));
+            loop {
+                tick.tick().await;
+                // Skip only during quiesce; allow sampling during writer activity using soft snapshot
+                if backend.is_quiesced().await {
+                    continue;
+                }
+                let res = if backend.is_writer_busy() {
+                    // Writer busy: attempt a soft snapshot without taking read gate
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(400),
+                        backend.get_table_counts_soft(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .map(|(s, e, f)| (s, e, f))
+                } else {
+                    tokio::time::timeout(
+                        std::time::Duration::from_millis(400),
+                        backend.get_table_counts_try(),
+                    )
+                    .await
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .flatten()
+                };
+                if let Some((sym, edge, file)) = res {
+                    *backend.cached_counts.write().await =
+                        Some((sym, edge, file, std::time::Instant::now()));
+                }
+            }
+        });
+        *guard = Some(handle);
+    }
+
+    /// Get cached counts and age in seconds (if available)
+    pub async fn get_cached_counts(&self) -> Option<(u64, u64, u64, u64)> {
+        if let Some((s, e, f, ts)) = self.cached_counts.read().await.clone() {
+            let age = ts.elapsed().as_secs();
+            Some((s, e, f, age))
+        } else {
+            None
+        }
+    }
+
+    /// Best-effort snapshot without read gate; tolerates writer activity.
+    pub async fn get_table_counts_soft(&self) -> Result<(u64, u64, u64), DatabaseError> {
+        let conn = ConnectionPool::checkout_arc(&self.pool).await?;
+        // Symbols
+        let mut rows = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM symbol_state",
+            (),
+            "status.soft.count-symbols",
+        )
+        .await?;
+        let symbols = match rows.next().await {
+            Ok(Some(row)) => match row.get_value(0) {
+                Ok(turso::Value::Integer(c)) => c as u64,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        // Edges
+        let mut rows = safe_query(
+            &conn,
+            "SELECT COUNT(*) FROM edge",
+            (),
+            "status.soft.count-edges",
+        )
+        .await?;
+        let edges = match rows.next().await {
+            Ok(Some(row)) => match row.get_value(0) {
+                Ok(turso::Value::Integer(c)) => c as u64,
+                _ => 0,
+            },
+            _ => 0,
+        };
+        // Files
+        let files = if self.indexes_enabled {
+            let mut rows = safe_query(
+                &conn,
+                "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
+                (),
+                "status.soft.count-files",
+            )
+            .await?;
+            match rows.next().await {
+                Ok(Some(row)) => match row.get_value(0) {
+                    Ok(turso::Value::Integer(c)) => c as u64,
+                    _ => 0,
+                },
+                _ => 0,
+            }
+        } else {
+            self.count_distinct_files_fallback(&conn, "status.soft.count-files.fallback")
+                .await?
+        };
+        ConnectionPool::return_connection_arc(&self.pool, conn);
+        Ok((symbols, edges, files))
     }
 
     /// Flush pending writes in a single pass
@@ -2377,6 +2788,98 @@ impl SQLiteBackend {
             *o = None;
         }
         drop(permit);
+
+        // Periodic counts refresh (default every 10s) using the writer's connection
+        let interval_secs: u64 = std::env::var("PROBE_LSP_WRITER_COUNT_INTERVAL_SECS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10);
+        let need_sample = {
+            let mut last = self.writer_counts_last.lock().await;
+            if last.elapsed() >= std::time::Duration::from_secs(interval_secs.max(1)) {
+                *last = std::time::Instant::now();
+                true
+            } else {
+                false
+            }
+        };
+        if need_sample {
+            // Spawn a lightweight background sampling using a separate pooled connection with tight timeouts
+            let backend = self.clone_for_writer();
+            tokio::spawn(async move {
+                let whole = std::time::Duration::from_millis(500);
+                let res = tokio::time::timeout(whole, async {
+                    let conn = match ConnectionPool::checkout_arc(&backend.pool).await {
+                        Ok(c) => c,
+                        Err(_) => return None,
+                    };
+                    // Symbols
+                    let mut rows = safe_query(
+                        &conn,
+                        "SELECT COUNT(*) FROM symbol_state",
+                        (),
+                        "writer.bg.count-symbols",
+                    )
+                    .await
+                    .ok()?;
+                    let symbols = match rows.next().await.ok()? {
+                        Some(row) => match row.get_value(0) {
+                            Ok(turso::Value::Integer(c)) => c as u64,
+                            _ => 0,
+                        },
+                        None => 0,
+                    };
+                    // Edges
+                    let mut rows = safe_query(
+                        &conn,
+                        "SELECT COUNT(*) FROM edge",
+                        (),
+                        "writer.bg.count-edges",
+                    )
+                    .await
+                    .ok()?;
+                    let edges = match rows.next().await.ok()? {
+                        Some(row) => match row.get_value(0) {
+                            Ok(turso::Value::Integer(c)) => c as u64,
+                            _ => 0,
+                        },
+                        None => 0,
+                    };
+                    // Files
+                    let files = if backend.indexes_enabled {
+                        let mut rows = safe_query(
+                            &conn,
+                            "SELECT COUNT(DISTINCT file_path) FROM symbol_state",
+                            (),
+                            "writer.bg.count-files",
+                        )
+                        .await
+                        .ok()?;
+                        match rows.next().await.ok()? {
+                            Some(row) => match row.get_value(0) {
+                                Ok(turso::Value::Integer(c)) => c as u64,
+                                _ => 0,
+                            },
+                            None => 0,
+                        }
+                    } else {
+                        backend
+                            .count_distinct_files_fallback(&conn, "writer.bg.count-files.fallback")
+                            .await
+                            .ok()?
+                    };
+                    ConnectionPool::return_connection_arc(&backend.pool, conn);
+                    Some((symbols, edges, files))
+                })
+                .await
+                .ok()
+                .flatten();
+                if let Some((s, e, f)) = res {
+                    *backend.cached_counts.write().await =
+                        Some((s, e, f, std::time::Instant::now()));
+                }
+            });
+        }
         Ok(())
     }
 
@@ -2536,8 +3039,8 @@ impl SQLiteBackend {
             }
         }
 
-        let edges = unique_edges;
-        let edges_len = edges.len();
+        let mut edges = unique_edges;
+        let mut edges_len = edges.len();
 
         // Use deferred BEGIN to reduce lock contention with readers and background tasks
         let begin_ctx = format!("store_edges_with_conn begin (edges_total={})", edges_len);
@@ -2547,8 +3050,9 @@ impl SQLiteBackend {
             // Edge audit: log suspicious UIDs and normalize issues for debugging.
             if std::env::var("PROBE_LSP_EDGE_AUDIT")
                 .ok()
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
+                .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+                .map(|is_false| !is_false)
+                .unwrap_or(true)
             {
                 let sample_every: usize = std::env::var("PROBE_LSP_EDGE_AUDIT_SAMPLE")
                     .ok()
@@ -2559,44 +3063,42 @@ impl SQLiteBackend {
                         continue;
                     }
                     // Parse UID
-                    let (file_part_opt, _name, line_opt) =
-                        Self::parse_symbol_uid(&e.source_symbol_uid);
-                    if let Some(fp) = &file_part_opt {
-                        if fp.starts_with('/') && !fp.starts_with("/dep/") {
-                            warn!("[edge_audit] EID001 absolute path in source_uid fp='{}' uid='{}' origin={:?}", fp, e.source_symbol_uid, e.metadata);
-                        }
-                        if let Some(ref path) = e.file_path {
-                            // EID002 applies only when file_path should equal the def-site
-                            // parsed from the UID (e.g., Definition edges). For References,
-                            // Implements, and Calls, file_path is the usage/call site and may
-                            // legitimately differ.
-                            use crate::database::EdgeRelation as R;
-                            let check_mismatch = matches!(e.relation, R::Definition);
-                            if check_mismatch {
-                                if !fp.is_empty()
-                                    && !path.is_empty()
-                                    && fp != path
-                                    && !fp.starts_with("dep/")
-                                {
-                                    crate::edge_audit::inc("EID002");
-                                    warn!("[edge_audit] EID002 uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}' origin={:?}", fp, path, e.source_symbol_uid, e.metadata);
+                    if e.source_symbol_uid != "none" {
+                        let (file_part_opt, _name, line_opt) =
+                            Self::parse_symbol_uid(&e.source_symbol_uid);
+                        if let Some(fp) = &file_part_opt {
+                            if fp.starts_with('/') && !fp.starts_with("/dep/") {
+                                warn!("[edge_audit] EID001 absolute path in source_uid fp='{}' uid='{}' origin={:?}", fp, e.source_symbol_uid, e.metadata);
+                            }
+                            if let Some(ref path) = e.file_path {
+                                use crate::database::EdgeRelation as R;
+                                let check_mismatch = matches!(e.relation, R::Definition);
+                                if check_mismatch {
+                                    if !fp.is_empty()
+                                        && !path.is_empty()
+                                        && fp != path
+                                        && !fp.starts_with("dep/")
+                                    {
+                                        crate::edge_audit::inc("EID002");
+                                        warn!("[edge_audit] EID002 uid path != edge.file_path uid_fp='{}' file_path='{}' uid='{}' origin={:?}", fp, path, e.source_symbol_uid, e.metadata);
+                                    }
                                 }
                             }
-                        }
-                    } else {
-                        crate::edge_audit::inc("EID003");
-                        warn!(
-                            "[edge_audit] EID003 malformed source_uid='{}' origin={:?}",
-                            e.source_symbol_uid, e.metadata
-                        );
-                    }
-                    if let Some(l) = line_opt {
-                        if l == 0 {
-                            crate::edge_audit::inc("EID004");
+                        } else {
+                            crate::edge_audit::inc("EID003");
                             warn!(
-                                "[edge_audit] EID004 zero line in uid uid='{}' origin={:?}",
+                                "[edge_audit] EID003 malformed source_uid='{}' origin={:?}",
                                 e.source_symbol_uid, e.metadata
                             );
+                        }
+                        if let Some(l) = line_opt {
+                            if l == 0 {
+                                crate::edge_audit::inc("EID004");
+                                warn!(
+                                    "[edge_audit] EID004 zero line in uid uid='{}' origin={:?}",
+                                    e.source_symbol_uid, e.metadata
+                                );
+                            }
                         }
                     }
                     // Target checks as well
@@ -2660,17 +3162,33 @@ impl SQLiteBackend {
                             have.insert(uid);
                         }
                     }
-                    for uid in need.into_iter().filter(|u| !have.contains(u)) {
+                    // Split missing into sources and targets
+                    let missing: std::collections::HashSet<String> =
+                        need.into_iter().filter(|u| !have.contains(u)).collect();
+                    let missing_sources: std::collections::HashSet<String> = missing
+                        .iter()
+                        .filter(|u| edges.iter().any(|e| &e.source_symbol_uid == *u))
+                        .cloned()
+                        .collect();
+                    if !missing_sources.is_empty() {
+                        edges.retain(|e| {
+                            if missing_sources.contains(&e.source_symbol_uid) {
+                                crate::edge_audit::inc("EID011");
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        edges_len = edges.len();
+                    }
+                    for uid in missing.into_iter().filter(|u| !missing_sources.contains(u)) {
                         let (file_part_opt, _name, line_from_uid) = Self::parse_symbol_uid(&uid);
                         if let Some(file_part) = file_part_opt {
-                            if file_part.starts_with("dep/") || file_part.starts_with("/dep/") {
-                                continue;
-                            }
                             let file_path = std::path::PathBuf::from(&file_part);
                             let (line, col) = edges
                                 .iter()
                                 .find_map(|e| {
-                                    if e.source_symbol_uid == uid {
+                                    if e.target_symbol_uid == uid {
                                         Some((e.start_line.unwrap_or(1), e.start_char.unwrap_or(1)))
                                     } else {
                                         None
@@ -2682,7 +3200,7 @@ impl SQLiteBackend {
                                 .await
                             {
                                 warn!(
-                                    "strict_graph: failed to auto-create missing symbol '{}': {}",
+                                    "strict_graph: failed to auto-create missing target '{}': {}",
                                     uid, e
                                 );
                             } else {
@@ -2710,30 +3228,17 @@ impl SQLiteBackend {
                 let mut existing_keys: HashSet<EdgeDedupKey> = HashSet::new();
                 if !chunk_keys.is_empty() {
                     let mut query = String::from(
-                        "SELECT relation, source_symbol_uid, target_symbol_uid, start_line, start_char, language FROM edge WHERE ",
+                        "SELECT relation, source_symbol_uid, target_symbol_uid, language FROM edge WHERE ",
                     );
                     let mut params: Vec<turso::Value> = Vec::new();
                     for (idx, key) in chunk_keys.iter().enumerate() {
                         if idx > 0 {
                             query.push_str(" OR ");
                         }
-                        query.push_str("(relation = ? AND source_symbol_uid = ? AND target_symbol_uid = ? AND ");
+                        query.push_str("(relation = ? AND source_symbol_uid = ? AND target_symbol_uid = ? AND language = ?)");
                         params.push(turso::Value::Text(key.relation.clone()));
                         params.push(turso::Value::Text(key.source.clone()));
                         params.push(turso::Value::Text(key.target.clone()));
-                        if key.start_line < 0 {
-                            query.push_str("start_line IS NULL AND ");
-                        } else {
-                            query.push_str("start_line = ? AND ");
-                            params.push(turso::Value::Integer(key.start_line));
-                        }
-                        if key.start_char < 0 {
-                            query.push_str("start_char IS NULL AND ");
-                        } else {
-                            query.push_str("start_char = ? AND ");
-                            params.push(turso::Value::Integer(key.start_char));
-                        }
-                        query.push_str("language = ?)");
                         params.push(turso::Value::Text(key.language.clone()));
                     }
                     let label = format!(
@@ -2769,17 +3274,7 @@ impl SQLiteBackend {
                             Ok(turso::Value::Text(v)) => v,
                             _ => continue,
                         };
-                        let start_line = match row.get_value(3) {
-                            Ok(turso::Value::Integer(v)) => v,
-                            Ok(turso::Value::Null) => -1,
-                            _ => -1,
-                        };
-                        let start_char = match row.get_value(4) {
-                            Ok(turso::Value::Integer(v)) => v,
-                            Ok(turso::Value::Null) => -1,
-                            _ => -1,
-                        };
-                        let language = match row.get_value(5) {
+                        let language = match row.get_value(3) {
                             Ok(turso::Value::Text(v)) => v,
                             _ => continue,
                         };
@@ -2788,8 +3283,6 @@ impl SQLiteBackend {
                             source,
                             target,
                             language,
-                            start_line,
-                            start_char,
                         });
                     }
                     self.clear_active_section().await;
@@ -2852,7 +3345,24 @@ impl SQLiteBackend {
                     edges_to_insert.len(),
                     edges_len
                 );
-                safe_execute_with_retry(conn, &batch_sql, params, &insert_ctx, 6).await?;
+                match safe_execute_with_retry(conn, &batch_sql, params, &insert_ctx, 6).await {
+                    Ok(_) => {}
+                    Err(DatabaseError::OperationFailed { message }) => {
+                        if message.to_ascii_lowercase().contains("unique constraint")
+                            || message
+                                .to_ascii_lowercase()
+                                .contains("column .* is not unique")
+                        {
+                            warn!(
+                                "[edges] duplicate batch ignored due to UNIQUE index: {}",
+                                message
+                            );
+                        } else {
+                            return Err(DatabaseError::OperationFailed { message });
+                        }
+                    }
+                    Err(e) => return Err(e),
+                }
                 self.clear_active_section().await;
                 offset = end;
             }
@@ -3970,6 +4480,126 @@ impl SQLiteBackend {
         PathBuf::from(&self.sqlite_config.path)
     }
 
+    /// Convenience helper for offline export: open an existing database at `db_path`
+    /// (resolving MVCC automatically) and clone it into `out_path` as a single-file DB.
+    pub async fn export_file_to_path(
+        db_path: &std::path::Path,
+        out_path: &std::path::Path,
+    ) -> Result<usize, DatabaseError> {
+        let cfg = DatabaseConfig::default();
+        let path_str = db_path.to_string_lossy().to_string();
+        let base_sqlite_cfg = SQLiteConfig {
+            path: path_str.clone(),
+            temporary: false,
+            enable_wal: true,
+            page_size: 4096,
+            cache_size: 256, // small page cache is fine for clone
+            enable_foreign_keys: true,
+        };
+
+        // Preflight: if an MVCC logical log sidecar exists but looks truncated (<112 bytes),
+        // remove it (and its marker) and prefer WAL for this export to avoid engine panics.
+        {
+            use std::path::PathBuf;
+            if let Some(fname) = db_path.file_name().map(|s| s.to_string_lossy().to_string()) {
+                let mvcc_log_path = db_path.with_file_name(format!("{}-log", fname));
+                let mvcc_marker = PathBuf::from(format!("{}.mvcc", path_str));
+                if mvcc_log_path.exists() {
+                    if let Ok(meta) = std::fs::metadata(&mvcc_log_path) {
+                        if meta.len() > 0 && meta.len() < 112 {
+                            tracing::warn!(
+                                target: "lsp_daemon::database::sqlite_backend",
+                                "[export] Detected truncated MVCC sidecar ({} bytes) at {} — removing sidecar/marker and exporting via WAL",
+                                meta.len(),
+                                mvcc_log_path.display()
+                            );
+                            let _ = std::fs::remove_file(&mvcc_log_path);
+                            if mvcc_marker.exists() {
+                                let _ = std::fs::remove_file(&mvcc_marker);
+                            }
+                            // Ensure MVCC stays disabled for this export attempt
+                            std::env::set_var("PROBE_LSP_DB_DISABLE_MVCC", "1");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Try open with default MVCC resolution first
+        match SQLiteBackend::with_sqlite_config(cfg.clone(), base_sqlite_cfg.clone()).await {
+            Ok(backend) => match backend.export_to(out_path).await {
+                Ok(sz) => Ok(sz),
+                Err(e) => {
+                    let msg = format!("{}", e);
+                    let needs_mvcc = msg
+                        .to_ascii_lowercase()
+                        .contains("mvcc logical log file exists")
+                        || msg
+                            .to_ascii_lowercase()
+                            .contains("couldn't read enough data")
+                        || msg.to_ascii_lowercase().contains("mvcc is disabled");
+                    if needs_mvcc {
+                        let prev_disable = std::env::var("PROBE_LSP_DB_DISABLE_MVCC").ok();
+                        let prev_enable = std::env::var("PROBE_LSP_DB_ENABLE_MVCC").ok();
+                        std::env::remove_var("PROBE_LSP_DB_DISABLE_MVCC");
+                        std::env::set_var("PROBE_LSP_DB_ENABLE_MVCC", "1");
+                        let retry = SQLiteBackend::with_sqlite_config(cfg, base_sqlite_cfg).await;
+                        if let Some(v) = prev_disable {
+                            std::env::set_var("PROBE_LSP_DB_DISABLE_MVCC", v);
+                        } else {
+                            std::env::remove_var("PROBE_LSP_DB_DISABLE_MVCC");
+                        }
+                        if let Some(v) = prev_enable {
+                            std::env::set_var("PROBE_LSP_DB_ENABLE_MVCC", v);
+                        } else {
+                            std::env::remove_var("PROBE_LSP_DB_ENABLE_MVCC");
+                        }
+                        match retry {
+                            Ok(backend2) => backend2.export_to(out_path).await,
+                            Err(e2) => Err(e2),
+                        }
+                    } else {
+                        Err(e)
+                    }
+                }
+            },
+            Err(e) => {
+                let msg = format!("{}", e);
+                let needs_mvcc = msg
+                    .to_ascii_lowercase()
+                    .contains("mvcc logical log file exists")
+                    || msg
+                        .to_ascii_lowercase()
+                        .contains("couldn't read enough data");
+                if needs_mvcc {
+                    // Force MVCC on this attempt (and clear any disable flag)
+                    let prev_disable = std::env::var("PROBE_LSP_DB_DISABLE_MVCC").ok();
+                    let prev_enable = std::env::var("PROBE_LSP_DB_ENABLE_MVCC").ok();
+                    std::env::remove_var("PROBE_LSP_DB_DISABLE_MVCC");
+                    std::env::set_var("PROBE_LSP_DB_ENABLE_MVCC", "1");
+                    let retry = SQLiteBackend::with_sqlite_config(cfg, base_sqlite_cfg).await;
+                    // Restore env
+                    if let Some(v) = prev_disable {
+                        std::env::set_var("PROBE_LSP_DB_DISABLE_MVCC", v);
+                    } else {
+                        std::env::remove_var("PROBE_LSP_DB_DISABLE_MVCC");
+                    }
+                    if let Some(v) = prev_enable {
+                        std::env::set_var("PROBE_LSP_DB_ENABLE_MVCC", v);
+                    } else {
+                        std::env::remove_var("PROBE_LSP_DB_ENABLE_MVCC");
+                    }
+                    match retry {
+                        Ok(backend) => backend.export_to(out_path).await,
+                        Err(e2) => Err(e2),
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+        }
+    }
+
     /// Perform a checkpoint to ensure WAL is flushed to the main database file
     pub async fn checkpoint(&self) -> Result<(), DatabaseError> {
         // Serialize explicit checkpoint with writer gate to avoid racing commits
@@ -4372,8 +5002,6 @@ struct EdgeDedupKey {
     source: String,
     target: String,
     language: String,
-    start_line: i64,
-    start_char: i64,
 }
 
 impl EdgeDedupKey {
@@ -4383,26 +5011,6 @@ impl EdgeDedupKey {
             source: edge.source_symbol_uid.clone(),
             target: edge.target_symbol_uid.clone(),
             language: edge.language.clone(),
-            start_line: {
-                if edge.relation.to_string() == "calls"
-                    && edge.source_symbol_uid == edge.target_symbol_uid
-                    && edge.target_symbol_uid != "none"
-                {
-                    -2
-                } else {
-                    edge.start_line.map(|v| v as i64).unwrap_or(-1)
-                }
-            },
-            start_char: {
-                if edge.relation.to_string() == "calls"
-                    && edge.source_symbol_uid == edge.target_symbol_uid
-                    && edge.target_symbol_uid != "none"
-                {
-                    -2
-                } else {
-                    edge.start_char.map(|v| v as i64).unwrap_or(-1)
-                }
-            },
         }
     }
 }
@@ -6870,7 +7478,9 @@ impl SQLiteBackend {
             WHERE s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
               AND s.file_path IS NOT NULL
               AND trim(s.file_path) != ''
+              AND s.file_path NOT LIKE '/dep/%'
               AND e.source_symbol_uid IS NULL
+            ORDER BY RANDOM()
             LIMIT ?
         "#;
 
@@ -6959,7 +7569,9 @@ impl SQLiteBackend {
             WHERE s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
               AND s.file_path IS NOT NULL
               AND trim(s.file_path) != ''
+              AND s.file_path NOT LIKE '/dep/%'
               AND e.source_symbol_uid IS NULL
+            ORDER BY RANDOM()
             LIMIT ?
         "#;
 
@@ -7005,7 +7617,9 @@ impl SQLiteBackend {
             WHERE s.kind IN ('function', 'method', 'class', 'struct', 'enum', 'interface', 'trait')
               AND s.file_path IS NOT NULL
               AND trim(s.file_path) != ''
+              AND s.file_path NOT LIKE '/dep/%'
               AND e.relation IS NULL
+            ORDER BY RANDOM()
             LIMIT ?
         "#;
 
@@ -7039,6 +7653,12 @@ impl SQLiteBackend {
         }
 
         let fetch_limit = usize::max(limit * 3, limit);
+        // Slow-path tracing for diagnosing admission stalls
+        let slow_ms: u128 = std::env::var("PROBE_SQL_FIND_PENDING_SLOW_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(500);
+        let t_total = Instant::now();
         // Take a reader snapshot so we don't race a quiesce/write section
         // If we cannot get a reader quickly, signal the caller to back off
         let _reader_guard = match self.try_begin_reader("phase2.find-pending").await {
@@ -7070,22 +7690,28 @@ impl SQLiteBackend {
         };
 
         let conn = ConnectionPool::checkout_arc(&self.pool).await?;
-
+        let t_refs = Instant::now();
         let references = self
             .query_symbols_missing_references(&conn, fetch_limit)
             .await?;
+        let d_refs = t_refs.elapsed().as_millis();
+        let t_impls = Instant::now();
         let implementations = self
             .query_symbols_missing_implementations(&conn, fetch_limit)
             .await?;
+        let d_impls = t_impls.elapsed().as_millis();
+        let t_calls = Instant::now();
         let call_hierarchy = self
             .query_symbols_missing_call_hierarchy(&conn, fetch_limit)
             .await?;
+        let d_calls = t_calls.elapsed().as_millis();
 
         ConnectionPool::return_connection_arc(&self.pool, conn);
 
         let mut plans: Vec<SymbolEnrichmentPlan> = Vec::new();
-        let mut index: HashMap<String, usize> = HashMap::new();
+        let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
+        let refs_cnt = references.len();
         for symbol in references {
             let uid = symbol.symbol_uid.clone();
             if let Some(&idx) = index.get(&uid) {
@@ -7101,6 +7727,7 @@ impl SQLiteBackend {
             }
         }
 
+        let impls_cnt = implementations.len();
         for symbol in implementations {
             let uid = symbol.symbol_uid.clone();
             if let Some(&idx) = index.get(&uid) {
@@ -7116,6 +7743,7 @@ impl SQLiteBackend {
             }
         }
 
+        let calls_cnt = call_hierarchy.len();
         for symbol in call_hierarchy {
             let uid = symbol.symbol_uid.clone();
             if let Some(&idx) = index.get(&uid) {
@@ -7132,6 +7760,21 @@ impl SQLiteBackend {
         }
 
         plans.retain(|plan| plan.has_operations());
+        let total_ms = t_total.elapsed().as_millis();
+        if total_ms >= slow_ms || d_refs >= slow_ms || d_impls >= slow_ms || d_calls >= slow_ms {
+            info!(
+                target: "lsp_daemon::database::sqlite_backend",
+                "[slow-sql] find_pending total_ms={} refs_ms={} refs_cnt={} impls_ms={} impls_cnt={} calls_ms={} calls_cnt={} fetch_limit={}",
+                total_ms,
+                d_refs,
+                refs_cnt,
+                d_impls,
+                impls_cnt,
+                d_calls,
+                calls_cnt,
+                fetch_limit
+            );
+        }
 
         plans.sort_by(|a, b| {
             let pa = Self::enrichment_priority(&a.symbol.kind);
@@ -7145,6 +7788,129 @@ impl SQLiteBackend {
             plans.truncate(limit);
         }
 
+        Ok(plans)
+    }
+
+    /// Fallback: derive pending enrichment plans by scanning candidates and existing edges
+    /// in Rust. Mirrors get_pending_enrichment_counts, but returns SymbolEnrichmentPlan rows.
+    pub async fn find_symbols_pending_enrichment_fallback(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<SymbolEnrichmentPlan>, DatabaseError> {
+        use std::collections::HashSet;
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        let conn = self.get_direct_connection().await?;
+
+        let candidate_symbols_sql = r#"
+            SELECT s.symbol_uid, s.file_path, s.language, s.name, s.fqn, s.kind,
+                   s.signature, s.visibility, s.def_start_line, s.def_start_char,
+                   s.def_end_line, s.def_end_char, s.is_definition, s.documentation,
+                   s.metadata
+            FROM symbol_state s
+            WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
+              AND s.file_path IS NOT NULL
+              AND trim(s.file_path) != ''
+              AND s.file_path NOT LIKE '/dep/%'
+        "#;
+
+        let refs_sources_sql = "SELECT source_symbol_uid FROM edge WHERE relation = 'references'";
+        let impl_sources_sql =
+            "SELECT source_symbol_uid FROM edge WHERE relation IN ('implementation','implements')";
+        let calls_sources_sql = "SELECT source_symbol_uid FROM edge WHERE relation = 'calls'";
+        let calls_targets_sql = "SELECT target_symbol_uid FROM edge WHERE relation = 'calls'";
+
+        let mut refs_sources = HashSet::new();
+        let mut impl_sources = HashSet::new();
+        let mut calls_sources = HashSet::new();
+        let mut calls_targets = HashSet::new();
+
+        let mut rows = safe_query(&conn, refs_sources_sql, (), "fallback.refs_sources").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("fallback.refs_sources read: {}", e),
+            })?
+        {
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                refs_sources.insert(uid);
+            }
+        }
+        let mut rows = safe_query(&conn, impl_sources_sql, (), "fallback.impl_sources").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("fallback.impl_sources read: {}", e),
+            })?
+        {
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                impl_sources.insert(uid);
+            }
+        }
+        let mut rows = safe_query(&conn, calls_sources_sql, (), "fallback.calls_sources").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("fallback.calls_sources read: {}", e),
+            })?
+        {
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                calls_sources.insert(uid);
+            }
+        }
+        let mut rows = safe_query(&conn, calls_targets_sql, (), "fallback.calls_targets").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("fallback.calls_targets read: {}", e),
+            })?
+        {
+            if let Ok(turso::Value::Text(uid)) = row.get_value(0) {
+                calls_targets.insert(uid);
+            }
+        }
+
+        let mut plans: Vec<SymbolEnrichmentPlan> = Vec::new();
+        let mut rows = safe_query(&conn, candidate_symbols_sql, (), "fallback.candidates").await?;
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|e| DatabaseError::OperationFailed {
+                message: format!("fallback.candidates read: {}", e),
+            })?
+        {
+            if let Some(symbol) = Self::symbol_state_from_row(&row) {
+                let uid = &symbol.symbol_uid;
+                let has_refs = refs_sources.contains(uid);
+                let has_impls = impl_sources.contains(uid);
+                let has_calls = calls_sources.contains(uid) || calls_targets.contains(uid);
+                if has_refs && has_impls && has_calls {
+                    continue;
+                }
+                let plan = SymbolEnrichmentPlan {
+                    symbol,
+                    needs_references: !has_refs,
+                    needs_implementations: !has_impls,
+                    needs_call_hierarchy: !has_calls,
+                };
+                plans.push(plan);
+                if plans.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        plans.sort_by(|a, b| {
+            let pa = Self::enrichment_priority(&a.symbol.kind);
+            let pb = Self::enrichment_priority(&b.symbol.kind);
+            pa.cmp(&pb).then_with(|| a.symbol.name.cmp(&b.symbol.name))
+        });
         Ok(plans)
     }
 
@@ -7269,6 +8035,7 @@ impl SQLiteBackend {
             WHERE s.kind IN ('function','method','class','struct','enum','interface','trait')
               AND s.file_path IS NOT NULL
               AND trim(s.file_path) != ''
+              AND s.file_path NOT LIKE '/dep/%'
         "#;
 
         let refs_sources_sql = r#"
@@ -10057,6 +10824,131 @@ mod tests {
         // Test traverse graph with empty relations
         let paths = backend.traverse_graph("any_symbol", 2, &[]).await.unwrap();
         assert!(paths.is_empty());
+    }
+    async fn test_none_refs_edge_excludes_symbol_from_planner(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new()?;
+        let backend = create_backend(&temp_dir, "planner_none.db").await;
+
+        // Create a function symbol inside the workspace
+        let uid = "src/lib.rs:aaaaaaaa:Foo:1".to_string();
+        let symbol = SymbolState {
+            symbol_uid: uid.clone(),
+            file_path: "src/lib.rs".to_string(),
+            language: "rust".to_string(),
+            name: "Foo".to_string(),
+            fqn: None,
+            kind: "function".to_string(),
+            signature: None,
+            visibility: None,
+            def_start_line: 1,
+            def_start_char: 0,
+            def_end_line: 1,
+            def_end_char: 3,
+            is_definition: true,
+            documentation: None,
+            metadata: None,
+        };
+        backend.store_symbols(&[symbol]).await?;
+
+        // Persist a durable empty for references (source -> none)
+        let none_edge = Edge {
+            relation: EdgeRelation::References,
+            source_symbol_uid: uid.clone(),
+            target_symbol_uid: "none".to_string(),
+            file_path: Some("src/lib.rs".to_string()),
+            start_line: Some(2),
+            start_char: Some(1),
+            confidence: 1.0,
+            language: "rust".to_string(),
+            metadata: Some("lsp_references_stable_empty".to_string()),
+        };
+        backend.store_edges(&[none_edge]).await?;
+
+        // Ask the planner for pending enrichment. The symbol may still need other ops
+        // (e.g., call hierarchy), but it must NOT need references anymore.
+        let plans = backend.find_symbols_pending_enrichment_internal(64).await?;
+        for p in plans.iter().filter(|p| p.symbol.symbol_uid == uid) {
+            assert!(
+                !p.needs_references,
+                "symbol with 'none' refs must not need references"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_strict_graph_creates_placeholder_for_dep_uid(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new()?;
+        let backend = create_backend(&temp_dir, "dep_placeholders.db").await;
+
+        // Ensure a local workspace symbol exists
+        let src_uid = "src/lib.rs:deadbeef:Foo:1".to_string();
+        backend
+            .store_symbols(&[SymbolState {
+                symbol_uid: src_uid.clone(),
+                file_path: "src/lib.rs".to_string(),
+                language: "rust".to_string(),
+                name: "Foo".to_string(),
+                fqn: None,
+                kind: "function".to_string(),
+                signature: None,
+                visibility: None,
+                def_start_line: 1,
+                def_start_char: 0,
+                def_end_line: 1,
+                def_end_char: 3,
+                is_definition: true,
+                documentation: None,
+                metadata: None,
+            }])
+            .await?;
+
+        // Create an edge pointing to a dependency UID (no preexisting symbol_state for target)
+        let dep_uid = "/dep/rust/serde/src/lib.rs:feedc0de:Serialize:10".to_string();
+        let edge = Edge {
+            relation: EdgeRelation::References,
+            source_symbol_uid: src_uid,
+            target_symbol_uid: dep_uid.clone(),
+            file_path: Some("src/lib.rs".to_string()),
+            start_line: Some(10),
+            start_char: Some(2),
+            confidence: 1.0,
+            language: "rust".to_string(),
+            metadata: Some("test_dep_edge".to_string()),
+        };
+
+        backend.store_edges(&[edge]).await?;
+
+        // Verify placeholder was created for /dep/... target
+        let conn = backend.get_direct_connection().await?;
+        let mut rows = conn
+            .query(
+                "SELECT file_path FROM symbol_state WHERE symbol_uid = ?",
+                [turso::Value::Text(dep_uid.clone())],
+            )
+            .await?;
+
+        let mut found = false;
+        while let Some(row) = rows.next().await? {
+            if let Ok(turso::Value::Text(path)) = row.get_value(0) {
+                assert!(
+                    path.starts_with("/dep/"),
+                    "placeholder path must be /dep/...: {}",
+                    path
+                );
+                found = true;
+            }
+        }
+        assert!(
+            found,
+            "expected placeholder symbol_state row for {}",
+            dep_uid
+        );
+        Ok(())
     }
 }
 #[tokio::test]

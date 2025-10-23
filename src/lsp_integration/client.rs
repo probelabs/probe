@@ -181,53 +181,13 @@ impl LspClient {
                     "Successfully connected to daemon socket at: {}",
                     socket_path
                 );
-                // Non-blocking connect handshake: write Connect and continue even if
-                // the immediate response is delayed. This avoids spurious 10s timeouts
-                // when the daemon is under load. Subsequent requests will validate the stream.
+                // Skip handshake entirely; treat the socket as ready and let the
+                // first real request drive the framing. This avoids leaving a
+                // stray 'Connected' frame in the stream that would confuse the
+                // next RPC.
                 self.stream = Some(stream);
-
-                let req = DaemonRequest::Connect {
-                    client_id: Uuid::new_v4(),
-                };
-                if let Some(s) = self.stream.as_mut() {
-                    if let Ok(encoded) = MessageCodec::encode(&req) {
-                        // Best-effort write with a short guard; ignore failure (the next request will retry)
-                        let _ = timeout(Duration::from_millis(500), s.write_all(&encoded)).await;
-                        let _ = timeout(Duration::from_millis(100), s.flush()).await;
-                    }
-                }
-                // Try to peek a response quickly; otherwise treat as connected
-                let mut ok = false;
-                if let Some(s) = self.stream.as_mut() {
-                    let mut length_buf = [0u8; 4];
-                    if timeout(Duration::from_millis(500), s.read_exact(&mut length_buf))
-                        .await
-                        .is_ok()
-                    {
-                        let len = u32::from_be_bytes(length_buf) as usize;
-                        let mut body = vec![0u8; len];
-                        if timeout(Duration::from_millis(500), s.read_exact(&mut body))
-                            .await
-                            .is_ok()
-                        {
-                            let mut framed = Vec::with_capacity(4 + len);
-                            framed.extend_from_slice(&length_buf);
-                            framed.extend_from_slice(&body);
-                            if let Ok(DaemonResponse::Connected { .. }) =
-                                MessageCodec::decode_response(&framed)
-                            {
-                                ok = true;
-                            }
-                        }
-                    }
-                }
-                if ok {
-                    debug!("Connected: received handshake response");
-                    return Ok(());
-                } else {
-                    debug!("Connected: proceeding without immediate handshake response");
-                    return Ok(());
-                }
+                debug!("Connected: skipping handshake (stateless)");
+                return Ok(());
             }
             Ok(Err(e)) => {
                 debug!("Failed to connect to daemon: {}", e);
@@ -1796,12 +1756,42 @@ impl LspClient {
         }
     }
 
+    /// Get fast, DB-free indexing status (fallback when detailed status is slow)
+    pub async fn get_indexing_status_fast(
+        &mut self,
+    ) -> Result<lsp_daemon::protocol::IndexingStatusInfo> {
+        let request = DaemonRequest::IndexingStatusFast {
+            request_id: Uuid::new_v4(),
+        };
+
+        let response = self.send_request(request).await?;
+
+        match response {
+            DaemonResponse::IndexingStatusResponse { status, .. } => Ok(status),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
+    }
+
     /// Fetch lightweight DB lock snapshot (diagnostics fallback)
     pub async fn get_db_lock_snapshot(&mut self) -> Result<lsp_daemon::protocol::DaemonResponse> {
         let request = DaemonRequest::DbLockSnapshot {
             request_id: Uuid::new_v4(),
         };
         self.send_request(request).await
+    }
+
+    pub async fn get_connections(
+        &mut self,
+    ) -> Result<(usize, Vec<lsp_daemon::protocol::ConnectionInfo>)> {
+        let request = DaemonRequest::Connections {
+            request_id: Uuid::new_v4(),
+        };
+        match self.send_request(request).await? {
+            DaemonResponse::Connections { total, entries, .. } => Ok((total, entries)),
+            DaemonResponse::Error { error, .. } => Err(anyhow!(error)),
+            _ => Err(anyhow!("Unexpected response type")),
+        }
     }
 
     /// Fetch workspace DB path from daemon

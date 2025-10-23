@@ -7,16 +7,19 @@
 use anyhow::{Context, Result};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tracing::{debug, info, warn};
 
 use crate::database::{DatabaseBackend, Edge, EdgeRelation, SymbolState};
 use crate::path_resolver::PathResolver;
-use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
+use crate::protocol::{CallHierarchyItem, CallHierarchyResult, Position, Range};
 use crate::symbol::{
     generate_version_aware_uid, normalize_uid_with_hint, uid_generator::SymbolUIDGenerator,
     SymbolInfo, SymbolKind, SymbolLocation,
 };
 use crate::workspace_utils;
+
+static PATH_ASSERT_TRACKER: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RustReferenceContext {
@@ -172,6 +175,34 @@ impl LspDatabaseAdapter {
                 }
             }
         }
+
+        // Assert relative prefix for stored file_path against workspace root
+        if let Some(ref p) = edge.file_path {
+            if !p.is_empty() && !p.starts_with('/') && !p.starts_with("dep/") {
+                let rel = p.replace("\\", "/");
+                let first = rel.split('/').next().unwrap_or("");
+                if !first.is_empty() {
+                    let abs = workspace_root.join(&rel);
+                    if !abs.exists() {
+                        let guard = PATH_ASSERT_TRACKER
+                            .get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+                        if let Ok(mut set) = guard.lock() {
+                            if set.insert(rel.clone()) {
+                                use crate::edge_audit;
+                                edge_audit::inc("EID011");
+                                log_warn!(
+                                    "EID011",
+                                    "stored relative path '{}' does not exist under '{}' (joined='{}'). Paths may be normalized against a sub-workspace.",
+                                    rel,
+                                    workspace_root.display(),
+                                    abs.display()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
     /// Create a new LSP database adapter
     pub fn new() -> Self {
@@ -192,6 +223,13 @@ impl LspDatabaseAdapter {
         column: u32,
         language: &str,
     ) -> Result<(u32, u32)> {
+        // Do not attempt filesystem reads for synthetic dependency paths
+        if let Some(p) = file_path.to_str() {
+            if p.starts_with("/dep/") {
+                return Ok((line, column));
+            }
+        }
+
         debug!(
             "[POSITION_RESOLVER] Resolving position for {}:{}:{} ({})",
             file_path.display(),
@@ -524,8 +562,12 @@ impl LspDatabaseAdapter {
         });
 
         // Generate version-aware UID using the canonical start line
+        // Prefer repository root for UID anchoring
+        let repo_root = PathResolver::new()
+            .find_git_root(&file_path)
+            .unwrap_or_else(|| workspace_root.to_path_buf());
         let uid = generate_version_aware_uid(
-            workspace_root,
+            &repo_root,
             &file_path,
             &file_content,
             &item.name,
@@ -542,7 +584,7 @@ impl LspDatabaseAdapter {
             "[UID_FACTORY] version-aware UID for '{}': {} (line={})",
             item.name, uid, canonical_line_1_based
         );
-        Ok(normalize_uid_with_hint(&uid, Some(workspace_root)))
+        Ok(normalize_uid_with_hint(&uid, Some(&repo_root)))
     }
 
     /// Parse LSP symbol kind to internal SymbolKind
@@ -677,8 +719,12 @@ impl LspDatabaseAdapter {
         };
 
         let uid_line = resolved_symbol.location.start_line.saturating_add(1).max(1);
+        // Use repo root when available for stable UIDs across sub-workspaces
+        let repo_root = PathResolver::new()
+            .find_git_root(file_path)
+            .unwrap_or_else(|| workspace_root.to_path_buf());
         let uid = generate_version_aware_uid(
-            &workspace_root,
+            &repo_root,
             file_path,
             &content,
             &resolved_symbol.name,
@@ -691,7 +737,7 @@ impl LspDatabaseAdapter {
             )
         })?;
 
-        let normalized_uid = normalize_uid_with_hint(&uid, Some(&workspace_root));
+        let normalized_uid = normalize_uid_with_hint(&uid, Some(&repo_root));
         debug!(
             "[SYMBOL_RESOLVE] Generated UID for '{}' at canonical line {}: {}",
             resolved_symbol.name, uid_line, normalized_uid
@@ -1986,15 +2032,18 @@ impl LspDatabaseAdapter {
                 }
             };
 
-            // Generate LSP-compatible UID using generate_version_aware_uid
+            // Generate LSP-compatible UID using generate_version_aware_uid anchored to repo root
+            let repo_root = PathResolver::new()
+                .find_git_root(&extracted.location.file_path)
+                .unwrap_or_else(|| workspace_root.to_path_buf());
             let symbol_uid = match generate_version_aware_uid(
-                workspace_root,
+                &repo_root,
                 &extracted.location.file_path,
                 &file_content,
                 &extracted.name,
                 extracted.location.start_line,
             ) {
-                Ok(uid) => normalize_uid_with_hint(&uid, Some(workspace_root)),
+                Ok(uid) => normalize_uid_with_hint(&uid, Some(&repo_root)),
                 Err(e) => {
                     warn!(
                         "Failed to generate version-aware UID for symbol '{}': {}",
@@ -2004,9 +2053,8 @@ impl LspDatabaseAdapter {
                 }
             };
 
-            // Convert file path to relative path consistent with normalized UID
-            let mut relative_path = match extracted.location.file_path.strip_prefix(workspace_root)
-            {
+            // Convert file path to repo-root relative (consistent with normalized UID)
+            let mut relative_path = match extracted.location.file_path.strip_prefix(&repo_root) {
                 Ok(relative) => relative.to_string_lossy().to_string(),
                 Err(_) => extracted.location.file_path.to_string_lossy().to_string(),
             };
@@ -5231,7 +5279,7 @@ impl Calculator {
 /// Ensure the same UID is produced across AST, references and call-hierarchy paths.
 #[tokio::test]
 async fn test_uid_consistency_ast_refs_hierarchy() {
-    use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
+    use crate::protocol::{CallHierarchyItem, CallHierarchyResult, Position, Range};
 
     let adapter = LspDatabaseAdapter::new();
 

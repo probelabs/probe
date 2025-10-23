@@ -50,12 +50,17 @@ impl ConversionContext {
 
     /// Get relative file path for database storage
     pub fn get_relative_path(&self) -> String {
-        if let Ok(relative) = self.file_path.strip_prefix(&self.workspace_root) {
-            relative.to_string_lossy().to_string()
-        } else {
-            // Fallback to absolute path if relative calculation fails
-            self.file_path.to_string_lossy().to_string()
+        // Prefer git root; fall back to workspace root, then absolute
+        if let Some(git_root) = crate::path_resolver::find_git_root(&self.file_path) {
+            if let Ok(relative) = self.file_path.strip_prefix(&git_root) {
+                return relative.to_string_lossy().to_string();
+            }
         }
+        if let Ok(relative) = self.file_path.strip_prefix(&self.workspace_root) {
+            return relative.to_string_lossy().to_string();
+        }
+        // Fallback to absolute
+        self.file_path.to_string_lossy().to_string()
     }
 }
 
@@ -372,16 +377,47 @@ impl ToSymbolState for AnalyzerExtractedSymbol {
         FieldValidator::validate_optional_string(&self.signature, "Signature", 5000)?;
         FieldValidator::validate_optional_string(&self.documentation, "Documentation", 50000)?;
 
-        // Generate UID (use existing one if available, otherwise generate)
+        // Generate UID (prefer canonical version-aware uid). If content read fails, fall back
+        // to the legacy generator to avoid dropping symbols.
         let symbol_uid = if !self.uid.is_empty() {
             self.uid.clone()
         } else {
-            uid_generator.generate_uid(
-                &relative_path,
-                &self.name,
-                self.location.start_line.saturating_add(1),
-                self.location.start_char,
-            )?
+            // Attempt canonical version-aware UID using git root (stable across sub-workspaces)
+            let abs_path = if context.file_path.is_absolute() {
+                context.file_path.clone()
+            } else {
+                context.workspace_root.join(&context.file_path)
+            };
+
+            match std::fs::read_to_string(&abs_path) {
+                Ok(content) => {
+                    let line1 = self.location.start_line.saturating_add(1).max(1);
+                    // Use the Git repository root as the anchor when available.
+                    let anchor_root = crate::path_resolver::find_git_root(&abs_path)
+                        .unwrap_or_else(|| context.workspace_root.clone());
+                    match crate::symbol::generate_version_aware_uid(
+                        &anchor_root,
+                        &abs_path,
+                        &content,
+                        &self.name,
+                        line1,
+                    ) {
+                        Ok(uid) => crate::symbol::normalize_uid_with_hint(&uid, Some(&anchor_root)),
+                        Err(_) => uid_generator.generate_uid(
+                            &relative_path,
+                            &self.name,
+                            self.location.start_line.saturating_add(1),
+                            self.location.start_char,
+                        )?,
+                    }
+                }
+                Err(_) => uid_generator.generate_uid(
+                    &relative_path,
+                    &self.name,
+                    self.location.start_line.saturating_add(1),
+                    self.location.start_char,
+                )?,
+            }
         };
 
         // Build metadata from analyzer-specific data

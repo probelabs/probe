@@ -42,10 +42,12 @@ impl EmptyResultCache {
     }
 
     pub fn from_env() -> Self {
+        // Default TTL is 5 minutes; override via PROBE_LSP_EMPTY_TTL_SECS
         let ttl_secs = std::env::var("PROBE_LSP_EMPTY_TTL_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(30 * 60);
+            .unwrap_or(5 * 60);
+        // Default retries before persisting durable 'none' is 2; override via PROBE_LSP_EMPTY_MIN_SEEN
         let min_seen = std::env::var("PROBE_LSP_EMPTY_MIN_SEEN")
             .ok()
             .and_then(|v| v.parse::<u32>().ok())

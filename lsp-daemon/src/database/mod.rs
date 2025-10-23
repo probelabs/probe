@@ -355,7 +355,7 @@ pub fn create_none_edge(source_symbol_uid: &str, relation: EdgeRelation) -> Edge
 /// Create "none" edges for empty call hierarchy results
 /// Used when LSP returns {incoming: [], outgoing: []} (not null!)
 pub fn create_none_call_hierarchy_edges(symbol_uid: &str) -> Vec<Edge> {
-    // No outgoing: source symbol → none
+    // Encode emptiness with a single sentinel edge: source symbol → none
     let outgoing = Edge {
         relation: EdgeRelation::Calls,
         source_symbol_uid: symbol_uid.to_string(),
@@ -365,23 +365,10 @@ pub fn create_none_call_hierarchy_edges(symbol_uid: &str) -> Vec<Edge> {
         start_char: None,
         confidence: 1.0,
         language: "unknown".to_string(),
-        metadata: Some("lsp_call_hierarchy_empty_outgoing".to_string()),
+        metadata: Some("lsp_call_hierarchy_empty".to_string()),
     };
 
-    // No incoming: none → target symbol
-    let incoming = Edge {
-        relation: EdgeRelation::Calls,
-        source_symbol_uid: "none".to_string(),
-        target_symbol_uid: symbol_uid.to_string(),
-        file_path: None,
-        start_line: None,
-        start_char: None,
-        confidence: 1.0,
-        language: "unknown".to_string(),
-        metadata: Some("lsp_call_hierarchy_empty_incoming".to_string()),
-    };
-
-    vec![incoming, outgoing]
+    vec![outgoing]
 }
 
 /// Create "none" edges for empty references results  

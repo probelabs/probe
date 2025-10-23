@@ -162,6 +162,16 @@ node npm/bin/probe agent "test query" --path . --provider google  # End-to-end t
 make build              # Debug build
 cargo build --release   # Release build with optimizations
 
+# IMPORTANT for workspace builds (probe binary)
+# This repository is a Cargo workspace. The CLI you run (./target/release/probe)
+# is produced by the package named `probe-code`. Changes inside `lsp-daemon/`
+# do NOT update the `probe` binary unless you relink that package.
+
+# Recommended build commands from the repo root:
+cargo build -p probe-code --release          # Build only the CLI binary and relink against lsp-daemon
+# or
+cargo build --workspace --release            # Build all workspace members
+
 # Testing & Quality
 make test              # All tests
 make test-unit         # Unit tests only
@@ -176,6 +186,53 @@ probe search "function" ./src --max-results 10
 
 # Performance debugging
 DEBUG=1 probe search "query" ./path  # Shows timing information
+```
+
+## LSP Daemon: Build, Restart, Validate
+
+When changing code under `lsp-daemon/`, you must relink the `probe` binary to pick up the changes.
+
+1) Build from the workspace root (NOT from `lsp-daemon/`):
+   - `cargo build -p probe-code --release`
+   - Sanity check the new binary contains expected markers:
+     - `strings ./target/release/probe | rg -F "[lanes] scheduler enabled"`
+     - `strings ./target/release/probe | rg -F "[db] find-pending start"`
+
+2) Hard-restart the daemon to ensure the new binary runs:
+   - `./target/release/probe lsp shutdown || true`
+   - `rm -f /tmp/lsp-daemon.sock /tmp/lsp-daemon.sock.pid`
+   - `RUST_LOG=info ./target/release/probe lsp start -f`
+
+3) Validate runtime behavior via logs:
+   - Follow logs: `./target/release/probe lsp logs -f --level info`
+   - You should see INFO lines similar to:
+     - `[lanes] scheduler enabled per_language_concurrency=... db_timeout_ms=...`
+     - `[worker] workspace_root=... db_path=...`
+     - `[loop] enter`
+     - `[db] find-pending start fetch=... timeout_ms=...`
+     - `[dispatch] op=...`
+     - periodic `[heartbeat] queue=... inflight=...`
+
+4) Kick off Phase 2 (optional):
+   - `./target/release/probe lsp index --workspace .` (use `--wait` to block)
+   - `./target/release/probe lsp index-status` should show non-zero inflight and rpm per server once lanes dispatch.
+
+Troubleshooting
+- Only heartbeats, no `[db]` lines: ensure you rebuilt `probe-code` (see step 1) and restarted the daemon (step 2).
+- Writer holds the DB lock frequently: the worker will still attempt a bounded-time DB fetch and a fallback planner; expect occasional `[db] ... timeout_ms=...` lines while Phase 1 is busy.
+- Can’t connect to logs: remove stale socket/PID files and start in foreground (`-f`).
+
+### Log Anomaly Scanner
+- Detect repeated LSP requests (method, uri, position) to spot potential loops:
+
+```bash
+./target/release/probe lsp logs --analyze -n 50000 --top 50
+```
+
+- Raw grep equivalent (handy for quick checks):
+
+```bash
+./target/release/probe lsp logs -n 50000 | rg -oPN '>>> TO LSP: .*\"method\":\"([^\"]+)\".*?\"position\":\\{\\\"character\\\":(\\d+),\\\"line\\\":(\\d+)\\}.*?\"uri\":\"file://([^\"\\n]+)' --replace '$1\tL$3:C$2\t$4' | sort | uniq -c | sort -nr | head
 ```
 
 ## Architecture Quick Reference
@@ -1048,3 +1105,15 @@ This guide includes:
 # Another test change for consent mechanism
 # Test change for consent mechanism
 - Always run Bash command with 10 minute timeout
+
+
+
+### LSP Daemon Environment Knobs
+- `PROBE_LSP_HEARTBEAT_SECS` (default 10) — heartbeat interval for worker logs.
+- `PROBE_LSP_DB_FETCH_TIMEOUT_MS` (default 2000) — timeout for DB planning before fallback planner.
+- `PROBE_LSP_PER_LANGUAGE_CONCURRENCY` (default 1) — per-language lane concurrency when lane scheduler is enabled.
+- `PROBE_LSP_EMPTY_MIN_SEEN` (default 2) & `PROBE_LSP_EMPTY_TTL_SECS` (default 300) — empty-result memory before persisting durable `none` and its TTL.
+- `PROBE_LSP_STRICT_GRAPH` (default true) — enforce both endpoints in `symbol_state`; `/dep/...` targets receive minimal placeholders.
+
+> Build reminder: always relink the CLI after daemon changes
+> `cargo build -p probe-code --release` then restart the daemon.

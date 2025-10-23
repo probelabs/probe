@@ -1297,9 +1297,20 @@ where
         // Create analysis context
         let uid_generator = Arc::new(crate::symbol::SymbolUIDGenerator::new());
 
-        // Get workspace path using PathResolver
-        let path_resolver = crate::path_resolver::PathResolver::new();
-        let workspace_path = path_resolver.find_workspace_root(&task.file_path);
+        // Get language-aware workspace path (e.g., npm package root for JS/TS)
+        let language_enum = crate::language_detector::Language::from_str(&detected_language)
+            .unwrap_or(crate::language_detector::Language::Unknown);
+        let workspace_path = match crate::workspace_utils::resolve_lsp_workspace_root(
+            language_enum,
+            &task.file_path,
+        ) {
+            Ok(p) => p,
+            Err(_) => {
+                // Fallback to the generic resolver if language-specific resolution fails
+                let path_resolver = crate::path_resolver::PathResolver::new();
+                path_resolver.find_workspace_root(&task.file_path)
+            }
+        };
 
         let context = AnalysisContext {
             workspace_id: task.workspace_id,

@@ -43,11 +43,15 @@ impl PathResolver {
         Self { max_depth, timeout }
     }
 
-    /// Get the relative path for a file, using git root when available, workspace root as fallback
+    /// Get the relative path for a file.
+    ///
+    /// Preference order (updated to prefer repository stability):
+    /// 1) git root (repository-wide, gives paths like `npm/src/...`)
+    /// 2) workspace_path (language/workspace aware)
+    /// 3) absolute path fallback
     pub fn get_relative_path(&self, file_path: &Path, workspace_path: &Path) -> String {
-        // Try to find git root first
+        // Prefer the repository root when available (stable across sub-workspaces).
         if let Some(git_root) = self.find_git_root(file_path) {
-            // Ensure the file is within the git root
             if file_path.starts_with(&git_root) {
                 return file_path
                     .strip_prefix(&git_root)
@@ -56,16 +60,16 @@ impl PathResolver {
             }
         }
 
-        // Fallback to workspace-relative path
+        // Fall back to the caller-provided workspace root (e.g., package root for JS/TS).
         if file_path.starts_with(workspace_path) {
-            file_path
+            return file_path
                 .strip_prefix(workspace_path)
                 .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| file_path.to_string_lossy().to_string())
-        } else {
-            // Return absolute path if file is not within workspace
-            file_path.to_string_lossy().to_string()
+                .unwrap_or_else(|_| file_path.to_string_lossy().to_string());
         }
+
+        // Absolute path as last resort
+        file_path.to_string_lossy().to_string()
     }
 
     /// Find the git repository root by traversing up directories

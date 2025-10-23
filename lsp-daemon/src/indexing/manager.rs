@@ -327,6 +327,8 @@ pub struct IndexingManager {
     lsp_indexing_counters: Arc<LspIndexingCounters>,
     /// In-memory TTL cache for empty LSP results to avoid thrash
     empty_cache: Arc<EmptyResultCache>,
+    missing_lsp_snapshot:
+        Arc<RwLock<std::collections::HashMap<crate::language_detector::Language, (u64, u64)>>>,
 }
 
 /// Compute content hash for a file (used for change detection)
@@ -602,6 +604,7 @@ impl IndexingManager {
             workspace_root: Arc::new(RwLock::new(None)),
             lsp_indexing_counters: Arc::new(LspIndexingCounters::default()),
             empty_cache: Arc::new(EmptyResultCache::from_env()),
+            missing_lsp_snapshot: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -2997,6 +3000,10 @@ impl IndexingManager {
         let mut queued_implementation_ops = 0usize;
         let mut queued_call_ops = 0usize;
 
+        // Track per-language missing-LSP snapshot for this batch
+        let mut missing_snapshot: std::collections::HashMap<Language, (u64, u64)> =
+            std::collections::HashMap::new();
+
         for plan in plans {
             let language = match Language::from_str(&plan.symbol.language) {
                 Some(lang) if !matches!(lang, Language::Unknown) => lang,
@@ -3008,6 +3015,16 @@ impl IndexingManager {
                     continue;
                 }
             };
+
+            // Skip if the LSP server for this language is not installed/available
+            if !self.server_manager.is_lsp_available(language) {
+                let ops_est = (plan.needs_references as u64)
+                    + (plan.needs_implementations as u64)
+                    + (plan.needs_call_hierarchy as u64);
+                let entry = missing_snapshot.entry(language).or_insert((0, 0));
+                *entry = (entry.0 + 1, entry.1 + ops_est);
+                continue;
+            }
 
             let relative_path = PathBuf::from(&plan.symbol.file_path);
             let absolute_path = if relative_path.is_absolute() {
@@ -3095,6 +3112,12 @@ impl IndexingManager {
 
             self.lsp_enrichment_queue.add_symbol(queue_item).await?;
             queued_symbols += 1;
+        }
+
+        // Publish snapshot for index-status
+        {
+            let mut guard = self.missing_lsp_snapshot.write().await;
+            *guard = missing_snapshot.clone();
         }
 
         let queue_stats = self.lsp_enrichment_queue.get_stats().await;
@@ -3193,6 +3216,7 @@ impl IndexingManager {
         let workspace_cache_router = self.workspace_cache_router.clone();
         let workspace_root_holder = self.workspace_root.clone();
         let server_manager = self.server_manager.clone();
+        let missing_lsp_snapshot_holder = self.missing_lsp_snapshot.clone();
 
         // Spawn the background monitor task
         let monitor_handle = tokio::spawn(async move {
@@ -3299,9 +3323,10 @@ impl IndexingManager {
                                         > Duration::from_secs(no_progress_secs)
                                 } {
                                     warn!(
-                                        "Phase 2 monitor: no enrichment progress for {:?} with {} items queued; restarting worker",
+                                        "Phase 2 monitor: no enrichment progress for {:?} with {} items queued; inflight_total={}; restarting worker",
                                         last_progress_instant.elapsed(),
-                                        queue_size_now
+                                        queue_size_now,
+                                        server_manager.total_inflight()
                                     );
                                     // Abort existing workers and restart
                                     let mut handles = enrichment_worker_handles.write().await;
@@ -3448,7 +3473,7 @@ impl IndexingManager {
                                     std::env::var("PROBE_LSP_PHASE2_MIN_ENQUEUE_WHEN_IDLE")
                                         .ok()
                                         .and_then(|s| s.parse().ok())
-                                        .unwrap_or(25);
+                                        .unwrap_or(200);
                                 // If the DB writer is currently busy, we still allow a trickle of work
                                 // to bootstrap Phase 2. Only skip entirely when the in-memory queue already
                                 // has adequate headroom (reduces lock contention during heavy Phase 1 writes).
@@ -3469,7 +3494,7 @@ impl IndexingManager {
                                     std::env::var("PROBE_LSP_PHASE2_MAX_PER_TICK")
                                         .ok()
                                         .and_then(|s| s.parse().ok())
-                                        .unwrap_or(batch_size);
+                                        .unwrap_or(200);
                                 let headroom = low_watermark.saturating_sub(queue_size_now).max(1);
                                 // When writer is busy, throttle fetch limit to a very small trickle to avoid contention
                                 let mut fetch_limit = if writer_busy_now {
@@ -3482,12 +3507,40 @@ impl IndexingManager {
                                 if inflight_now == 0 {
                                     fetch_limit = fetch_limit.max(min_when_idle).min(max_per_tick);
                                 }
+                                // Admission trace: log before/after fetch to identify stalls
+                                let admit_started = tokio::time::Instant::now();
+                                info!(
+                                    target: "lsp_daemon::indexing::manager",
+                                    "[admission] fetch start headroom={} inflight_total={} writer_busy={} limit={} watermark={} queue_size={}",
+                                    headroom,
+                                    inflight_now,
+                                    writer_busy_now,
+                                    fetch_limit,
+                                    low_watermark,
+                                    queue_size_now
+                                );
 
                                 match sqlite_backend
                                     .find_symbols_pending_enrichment_internal(fetch_limit)
                                     .await
                                 {
                                     Ok(pending_plans) => {
+                                        let admit_ms = admit_started.elapsed().as_millis();
+                                        if admit_ms >= 250 || !pending_plans.is_empty() {
+                                            info!(
+                                                target: "lsp_daemon::indexing::manager",
+                                                "[admission] fetch done elapsed_ms={} plans={}",
+                                                admit_ms,
+                                                pending_plans.len()
+                                            );
+                                        } else {
+                                            debug!(
+                                                target: "lsp_daemon::indexing::manager",
+                                                "[admission] fetch done elapsed_ms={} plans={}",
+                                                admit_ms,
+                                                pending_plans.len()
+                                            );
+                                        }
                                         if pending_plans.is_empty() {
                                             debug!(
                                                 "Phase 2 monitor: no symbols pending enrichment"
@@ -3504,6 +3557,10 @@ impl IndexingManager {
                                             let retry_ready = enrichment_tracker
                                                 .get_symbols_ready_for_retry()
                                                 .await;
+                                            let mut missing_snapshot: std::collections::HashMap<
+                                                Language,
+                                                (u64, u64),
+                                            > = std::collections::HashMap::new();
                                             for plan in pending_plans {
                                                 let uid = &plan.symbol.symbol_uid;
                                                 let has_failed =
@@ -3543,7 +3600,17 @@ impl IndexingManager {
                                         let mut queued_implementation_ops = 0usize;
                                         let mut queued_call_ops = 0usize;
 
+                                        // Admission summary counters
+                                        let mut summary_candidates: usize = 0;
+                                        let mut summary_skip_no_server: usize = 0;
+                                        let mut summary_skip_unsupported: usize = 0;
+
+                                        let mut missing_snapshot: std::collections::HashMap<
+                                            Language,
+                                            (u64, u64),
+                                        > = std::collections::HashMap::new();
                                         for plan in plans_to_queue {
+                                            summary_candidates += 1;
                                             let language =
                                                 match Language::from_str(&plan.symbol.language) {
                                                     Some(lang)
@@ -3553,6 +3620,19 @@ impl IndexingManager {
                                                     }
                                                     _ => continue,
                                                 };
+
+                                            // Skip if the LSP server for this language is not installed/available
+                                            if !server_manager.is_lsp_available(language) {
+                                                summary_skip_no_server += 1;
+                                                let ops_est = (plan.needs_references as u64)
+                                                    + (plan.needs_implementations as u64)
+                                                    + (plan.needs_call_hierarchy as u64);
+                                                let entry = missing_snapshot
+                                                    .entry(language)
+                                                    .or_insert((0, 0));
+                                                *entry = (entry.0 + 1, entry.1 + ops_est);
+                                                continue;
+                                            }
 
                                             let relative_path =
                                                 PathBuf::from(&plan.symbol.file_path);
@@ -3664,6 +3744,7 @@ impl IndexingManager {
                                             }
 
                                             if operations.is_empty() {
+                                                summary_skip_unsupported += 1;
                                                 continue;
                                             }
 
@@ -3698,6 +3779,17 @@ impl IndexingManager {
                                                 continue;
                                                 }
                                             }
+                                            {
+                                                let mut guard =
+                                                    missing_lsp_snapshot_holder.write().await;
+                                                *guard = missing_snapshot.clone();
+                                            }
+
+                                            {
+                                                let mut guard =
+                                                    missing_lsp_snapshot_holder.write().await;
+                                                *guard = missing_snapshot.clone();
+                                            }
                                         }
 
                                         if queued_symbols > 0
@@ -3717,6 +3809,14 @@ impl IndexingManager {
                                                 queued_implementation_ops,
                                                 queued_call_ops
                                             );
+                                            info!(target: "lsp_daemon::indexing::manager",
+                                                  "[admission] summary candidates={} queued_new={} merged={} skip_cooldown={} skip_no_server={} skip_unsupported={}",
+                                                  summary_candidates,
+                                                  queued_symbols,
+                                                  merged_symbols,
+                                                  skipped_count,
+                                                  summary_skip_no_server,
+                                                  summary_skip_unsupported);
                                         } else if skipped_count > 0 {
                                             info!(
                                                 "Phase 2 monitor: queued none; skipped {} symbols due to cooldown",
@@ -4029,6 +4129,24 @@ impl IndexingManager {
             }
         };
 
+        let server_load = self.server_manager.get_load_snapshot().await;
+        let inflight_total = self.server_manager.total_inflight() as u64;
+        let per_lang = self
+            .lsp_enrichment_queue
+            .head_and_oldest_by_language()
+            .await;
+        let mut queue_heads: Vec<crate::protocol::QueueHeadInfo> = Vec::new();
+        for (lang, head_item, oldest_age) in per_lang {
+            queue_heads.push(crate::protocol::QueueHeadInfo {
+                language: lang,
+                head_uid: head_item.symbol_uid,
+                head_file: head_item.file_path.to_string_lossy().to_string(),
+                head_line: head_item.def_start_line,
+                head_kind: head_item.kind.clone(),
+                head_ops: head_item.operations.len(),
+                oldest_pending_age_secs: oldest_age,
+            });
+        }
         if let Some(stats) = worker_stats {
             Some(crate::protocol::LspEnrichmentInfo {
                 is_enabled: true,
@@ -4047,6 +4165,7 @@ impl IndexingManager {
                     .implementations_operations,
                 in_memory_call_hierarchy_operations: queue_stats_fallback.call_hierarchy_operations,
                 edges_created: stats.edges_persisted,
+                edges_attempted: stats.edges_attempted,
                 reference_edges_created: stats.reference_edges_persisted,
                 implementation_edges_created: stats.implementation_edges_persisted,
                 positions_adjusted: stats.positions_adjusted,
@@ -4109,6 +4228,24 @@ impl IndexingManager {
                     .as_ref()
                     .and_then(|r| r.last_ms)
                     .unwrap_or(0) as u64,
+                server_load,
+                inflight_total,
+                queue_heads: queue_heads.clone(),
+                missing_lsp: {
+                    let snap = self.missing_lsp_snapshot.read().await;
+                    let mut v = Vec::new();
+                    for (lang, (sym, ops)) in snap.iter() {
+                        // Only report when server currently unavailable
+                        if !self.server_manager.is_lsp_available(*lang) {
+                            v.push(crate::protocol::MissingLspStat {
+                                language: *lang,
+                                symbols: *sym,
+                                operations: *ops,
+                            });
+                        }
+                    }
+                    v
+                },
             })
         } else {
             // Return basic info even without worker stats
@@ -4129,6 +4266,7 @@ impl IndexingManager {
                     .implementations_operations,
                 in_memory_call_hierarchy_operations: queue_stats_fallback.call_hierarchy_operations,
                 edges_created: 0,
+                edges_attempted: 0,
                 reference_edges_created: 0,
                 implementation_edges_created: 0,
                 positions_adjusted: 0,
@@ -4187,6 +4325,23 @@ impl IndexingManager {
                     .as_ref()
                     .and_then(|r| r.last_ms)
                     .unwrap_or(0) as u64,
+                server_load,
+                inflight_total,
+                queue_heads,
+                missing_lsp: {
+                    let snap = self.missing_lsp_snapshot.read().await;
+                    let mut v = Vec::new();
+                    for (lang, (sym, ops)) in snap.iter() {
+                        if !self.server_manager.is_lsp_available(*lang) {
+                            v.push(crate::protocol::MissingLspStat {
+                                language: *lang,
+                                symbols: *sym,
+                                operations: *ops,
+                            });
+                        }
+                    }
+                    v
+                },
             })
         }
     }

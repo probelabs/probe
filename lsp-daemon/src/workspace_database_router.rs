@@ -11,6 +11,8 @@ use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::SystemTime;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
 use tracing::{debug, info, warn};
 
@@ -73,6 +75,11 @@ pub struct WorkspaceDatabaseRouter {
         Option<std::sync::Arc<tokio::sync::Mutex<crate::workspace_resolver::WorkspaceResolver>>>,
     /// Dedicated reverse mapping: workspace_id -> workspace_root
     workspace_id_to_root: Arc<RwLock<HashMap<String, PathBuf>>>,
+    /// Per-workspace open cooldowns to avoid hammering the DB when another process holds a lock
+    open_cooldown_until: Arc<TokioMutex<HashMap<String, Instant>>>,
+
+    /// Exponential backoff state (next delay in ms) per workspace
+    open_backoff_ms: Arc<TokioMutex<HashMap<String, u64>>>,
 }
 
 impl WorkspaceDatabaseRouter {
@@ -110,6 +117,8 @@ impl WorkspaceDatabaseRouter {
             workspace_cache: Arc::new(RwLock::new(HashMap::new())),
             workspace_resolver,
             workspace_id_to_root: Arc::new(RwLock::new(HashMap::new())),
+            open_cooldown_until: Arc::new(TokioMutex::new(HashMap::new())),
+            open_backoff_ms: Arc::new(TokioMutex::new(HashMap::new())),
         }
     }
 
@@ -150,13 +159,23 @@ impl WorkspaceDatabaseRouter {
                 return Ok(cache.clone());
             }
         }
+        {
+            let cd = self.open_cooldown_until.lock().await;
+            if let Some(until) = cd.get(&workspace_id) {
+                if Instant::now() < *until {
+                    return Err(anyhow!(
+                        "open for workspace '{}' is cooling down after a lock; retry later",
+                        workspace_id
+                    ));
+                }
+            }
+        }
 
         info!(
             "Cache miss for workspace '{}' ({}), creating new cache",
             workspace_id,
             workspace_root.display()
         );
-
         // Create cache directory path for this workspace
         let cache_dir = self.config.base_cache_dir.join(&workspace_id);
 
@@ -191,12 +210,31 @@ impl WorkspaceDatabaseRouter {
             match DatabaseCacheAdapter::new_with_workspace_id(cache_config, &workspace_id).await {
                 Ok(cache) => cache,
                 Err(err) => {
-                    warn!(
-                        "Workspace cache creation failed for '{}': {:?}",
-                        workspace_id, err
-                    );
+                    // Exponential backoff per-workspace on DB lock to avoid log spam
+                    let mut bm = self.open_backoff_ms.lock().await;
+                    let cur = *bm.get(&workspace_id).unwrap_or(&1000);
+                    let jitter_ms: u64 = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .subsec_millis() as u64)
+                        % (cur / 5 + 1);
+                    let until = Instant::now() + Duration::from_millis(cur + jitter_ms);
+                    let next = (cur.saturating_mul(2)).min(30000);
+                    bm.insert(workspace_id.clone(), next);
+                    drop(bm);
+                    let mut cd = self.open_cooldown_until.lock().await;
+                    let prev = cd.insert(workspace_id.clone(), until);
+                    drop(cd);
+                    let should_log = prev.map(|p| Instant::now() > p).unwrap_or(true);
+                    if should_log {
+                        warn!(
+                            "Workspace cache {} open locked; backing off ~{}ms",
+                            workspace_id,
+                            cur + jitter_ms
+                        );
+                    }
                     return Err(err.context(format!(
-                        "Failed to create cache for workspace '{workspace_id}' at {cache_dir:?}"
+                        "Failed to create cache for workspace {workspace_id} at {cache_dir:?}"
                     )));
                 }
             };

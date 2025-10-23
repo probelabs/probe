@@ -4,6 +4,7 @@ use dirs;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::time::{self, MissedTickBehavior};
 use tracing::warn;
 
@@ -54,6 +55,46 @@ impl LspManager {
         // Workspace initialization will happen on-demand when LSP features are actually used
         // This prevents test timeouts and improves startup time for simple search operations
 
+        Ok(())
+    }
+
+    fn print_connections(
+        entries: &Vec<lsp_daemon::protocol::ConnectionInfo>,
+        total: usize,
+        fmt: &str,
+    ) -> Result<()> {
+        match fmt {
+            "json" => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "total": total,
+                        "connections": entries,
+                    }))?
+                );
+            }
+            _ => {
+                use colored::Colorize;
+                println!(
+                    "{} {}",
+                    "Connections".bold().cyan(),
+                    format!("({total})").dimmed()
+                );
+                for e in entries.iter().take(100) {
+                    let pid = e.pid.map(|p| p.to_string()).unwrap_or("-".to_string());
+                    println!(
+                        "  {} pid={} connected={}s idle={}ms",
+                        e.client_id,
+                        pid,
+                        e.connected_for_ms / 1000,
+                        e.idle_ms
+                    );
+                }
+                if entries.len() > 100 {
+                    println!("  ... ({} more)", entries.len() - 100);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -259,7 +300,9 @@ impl LspManager {
                 lines,
                 clear,
                 level,
+                ..
             } => Self::handle_logs(*follow, *lines, *clear, Some(level.clone())).await,
+            LspSubcommands::Doctor => Self::handle_doctor_command().await,
             LspSubcommands::CrashLogs {
                 lines,
                 clear,
@@ -366,6 +409,49 @@ impl LspManager {
                 workspace_hint,
                 format,
             } => Self::handle_enrich_symbol(target, workspace_hint.clone(), format).await,
+
+            LspSubcommands::Connections { format: fmt } => {
+                // Try quick non-blocking connect first
+                let cfg_quick = LspConfig {
+                    use_daemon: true,
+                    workspace_hint: None,
+                    timeout_ms: 1500,
+                    include_stdlib: false,
+                    auto_start: false,
+                };
+                if let Some(mut client) = LspClient::new_non_blocking(cfg_quick).await {
+                    // ok
+                    match client.get_connections().await {
+                        Ok((total, entries)) => Self::print_connections(&entries, total, &fmt),
+                        Err(e) => {
+                            eprintln!("{} {}", "Failed to fetch connections:".red(), e);
+                            Err(e)
+                        }
+                    }
+                } else {
+                    // Fallback to a short blocking connect; do not auto-start
+                    let cfg_block = LspConfig {
+                        use_daemon: true,
+                        workspace_hint: None,
+                        timeout_ms: 4000,
+                        include_stdlib: false,
+                        auto_start: false,
+                    };
+                    match LspClient::new(cfg_block).await {
+                        Ok(mut client) => match client.get_connections().await {
+                            Ok((total, entries)) => Self::print_connections(&entries, total, &fmt),
+                            Err(e) => {
+                                eprintln!("{} {}", "Failed to fetch connections:".red(), e);
+                                Err(e)
+                            }
+                        },
+                        Err(_) => {
+                            eprintln!("{}", "Daemon not reachable".red());
+                            Ok(())
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -765,24 +851,23 @@ impl LspManager {
         };
         match LspClient::new(config).await {
             Ok(mut client) => {
-                client.shutdown_daemon().await?;
+                // Try graceful shutdown via IPC first
+                if let Err(e) = client.shutdown_daemon().await {
+                    eprintln!("{} {}", "⚠".yellow(), format!("IPC shutdown failed: {e}"));
+                    // Fall back to PID-based shutdown if IPC fails
+                    Self::force_kill_by_pidfile().ok();
+                }
             }
             Err(_) => {
-                // Daemon was not running — treat as no-op for user convenience.
-                match format {
-                    "json" => {
-                        let json_output = json!({ "status": "not_running", "message": "LSP daemon was not running" });
-                        println!("{}", serde_json::to_string_pretty(&json_output)?);
-                    }
-                    _ => {
-                        println!(
-                            "{} {}",
-                            "✓".green(),
-                            "LSP daemon is not running".bold().green()
-                        );
-                    }
+                // Socket not reachable: fall back to PID-based shutdown (stale foreground daemon)
+                if let Err(e) = Self::force_kill_by_pidfile() {
+                    // If fallback also fails, report but do not hard error for UX
+                    eprintln!(
+                        "{} {}",
+                        "⚠".yellow(),
+                        format!("No socket and no valid PID file to kill: {e}")
+                    );
                 }
-                return Ok(());
             }
         }
 
@@ -803,6 +888,140 @@ impl LspManager {
             }
         }
 
+        Ok(())
+    }
+
+    /// Diagnose common issues and restart daemon with safe settings
+    async fn handle_doctor_command() -> Result<()> {
+        use colored::Colorize;
+        println!("{}", "Probe LSP Doctor".bold().green());
+
+        // Socket path
+        let socket_path = if let Ok(path) = std::env::var("PROBE_LSP_SOCKET_PATH") {
+            path
+        } else {
+            lsp_daemon::get_default_socket_path()
+        };
+
+        // 1) Try graceful shutdown if reachable
+        print!("- Probing socket {} ... ", socket_path);
+        let reachable = tokio::time::timeout(
+            std::time::Duration::from_millis(300),
+            lsp_daemon::IpcStream::connect(&socket_path),
+        )
+        .await
+        .is_ok();
+        println!(
+            "{}",
+            if reachable {
+                "reachable".green()
+            } else {
+                "unreachable".yellow()
+            }
+        );
+        if reachable {
+            let _ = Self::shutdown_daemon("terminal").await;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        } else {
+            let _ = Self::force_kill_by_pidfile();
+        }
+
+        // 2) Clean stale socket/PID
+        let _ = std::fs::remove_file(&socket_path);
+        let pid_path = format!("{}.pid", &socket_path);
+        let _ = std::fs::remove_file(&pid_path);
+
+        // 3) Start with safe timeouts and isolated workspace cache
+        let iso_dir = dirs::cache_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join("probe")
+            .join("lsp")
+            .join(format!(
+                "workspaces-isolated-{}",
+                chrono::Utc::now().timestamp()
+            ));
+        let _ = std::fs::create_dir_all(&iso_dir);
+        std::env::set_var("PROBE_LSP_WORKSPACE_CACHE_DIR", &iso_dir);
+        std::env::set_var("PROBE_LSP_LEADER_TIMEOUT_SECS", "20");
+        std::env::set_var("PROBE_LSP_SERVER_LOCK_TIMEOUT_SECS", "5");
+        std::env::set_var("PROBE_LSP_AUTO_WAL_INTERVAL", "10");
+        println!("- Restarting daemon with cache at {}", iso_dir.display());
+        Self::start_embedded_daemon(None, "info".into(), false, true, 10, true).await?;
+
+        // 4) Verify fast status
+        let mut client = LspClient::new(LspConfig {
+            timeout_ms: 5000,
+            ..Default::default()
+        })
+        .await?;
+        match tokio::time::timeout(
+            std::time::Duration::from_millis(1500),
+            client.get_indexing_status_fast(),
+        )
+        .await
+        {
+            Ok(Ok(status)) => {
+                println!("\n{}", "Indexing Status (fast)".bold().green());
+                Self::display_indexing_status(&status, "terminal", false).await?;
+                println!("\n{}", "Doctor completed successfully".bold().green());
+            }
+            other => {
+                println!("{} {:?}", "Fast status check failed:".yellow(), other);
+                println!("{}", "Try: probe lsp logs -f".dimmed());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Best-effort kill using the PID file next to the socket path when IPC is unavailable.
+    fn force_kill_by_pidfile() -> Result<()> {
+        use std::io::Read;
+        use std::time::Duration;
+        let socket_path = if let Ok(path) = std::env::var("PROBE_LSP_SOCKET_PATH") {
+            path
+        } else {
+            lsp_daemon::get_default_socket_path()
+        };
+        let pid_path = format!("{}.pid", &socket_path);
+        let mut s = String::new();
+        let mut f = std::fs::File::open(&pid_path)
+            .with_context(|| format!("PID file not found: {}", pid_path))?;
+        f.read_to_string(&mut s)?;
+        let s = s.trim();
+        let pid: i32 = s
+            .parse()
+            .with_context(|| format!("Invalid PID in {}: '{}'", pid_path, s))?;
+
+        // If process is gone, just clean up files
+        let proc_path = format!("/proc/{}", pid);
+        let exists = std::path::Path::new(&proc_path).exists();
+        if !exists {
+            let _ = std::fs::remove_file(&socket_path);
+            let _ = std::fs::remove_file(&pid_path);
+            return Ok(());
+        }
+
+        // Try TERM, then KILL
+        let term = std::process::Command::new("kill")
+            .arg("-TERM")
+            .arg(pid.to_string())
+            .status();
+        if term.is_ok() {
+            std::thread::sleep(Duration::from_millis(300));
+            if !std::path::Path::new(&proc_path).exists() {
+                let _ = std::fs::remove_file(&socket_path);
+                let _ = std::fs::remove_file(&pid_path);
+                return Ok(());
+            }
+        }
+        let _ = std::process::Command::new("kill")
+            .arg("-KILL")
+            .arg(pid.to_string())
+            .status();
+        std::thread::sleep(Duration::from_millis(200));
+        let _ = std::fs::remove_file(&socket_path);
+        let _ = std::fs::remove_file(&pid_path);
         Ok(())
     }
 
@@ -979,6 +1198,7 @@ impl LspManager {
             println!("{}", "─".repeat(60).dimmed());
 
             // First show the last N lines with timeout
+            let mut persisted_initial = false;
             let entries = match time::timeout(
                 Duration::from_millis(LOG_RPC_TIMEOUT_MS),
                 client.get_logs_filtered(lines, min_level),
@@ -986,9 +1206,29 @@ impl LspManager {
             .await
             {
                 Err(_) => {
-                    println!("{} Failed to get logs: timed out", "❌".red());
-                    println!("{}","(Tip: logs do not depend on the DB; try increasing verbosity with PROBE_LOG_LEVEL=info or use --level info)".dimmed());
-                    return Ok(());
+                    let entries = Self::read_persisted_log_tail(lines, min_level)?;
+                    if entries.is_empty() {
+                        println!(
+                            "{}",
+                            "(no recent log entries; waiting for new events…)".dimmed()
+                        );
+                    } else {
+                        let total_entries = entries.len();
+                        println!(
+                            "{}",
+                            format!("LSP Daemon Log (last {total_entries} entries)")
+                                .bold()
+                                .green()
+                        );
+                        println!("{}", "─".repeat(60).dimmed());
+                        for entry in &entries {
+                            Self::print_log_entry(entry);
+                        }
+                        println!("{}", "─".repeat(60).dimmed());
+                    }
+                    // Mark that we seeded from persisted JSON; do not trust sequence for since= cursor
+                    persisted_initial = true;
+                    entries
                 }
                 Ok(Ok(entries)) => {
                     if entries.is_empty() {
@@ -1003,21 +1243,30 @@ impl LspManager {
                     entries
                 }
                 Ok(Err(e)) => {
-                    println!("{} Failed to get logs: {}", "❌".red(), e);
-                    return Ok(());
+                    println!(
+                        "{} Failed to get initial logs; falling back to persisted logs (streaming)",
+                        "⚠".yellow()
+                    );
+                    let entries = Self::read_persisted_log_tail(lines, min_level)?;
+                    for entry in &entries {
+                        Self::print_log_entry(entry);
+                    }
+                    entries
                 }
             };
 
             // Track the last sequence number seen to avoid duplicates
-            let mut last_seen_sequence = entries
-                .iter()
-                .map(|entry| entry.sequence)
-                .max()
-                .unwrap_or(0);
+            let mut last_seen_sequence = if persisted_initial {
+                0 // force the daemon to send fresh entries regardless of persisted sequence domain
+            } else {
+                entries.iter().map(|e| e.sequence).max().unwrap_or(0)
+            };
 
             // Poll for new logs with interval to avoid backlog
             let mut ticker = time::interval(Duration::from_millis(LOG_FOLLOW_POLL_MS));
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+            // Track consecutive empty polls to detect daemon restarts (sequence reset)
+            let mut empty_polls: u32 = 0;
 
             loop {
                 ticker.tick().await;
@@ -1032,24 +1281,87 @@ impl LspManager {
                     Err(_) => {
                         // Timed out talking to the daemon; continue polling without blocking the UI
                         // (Logs are served from the daemon's in-memory ring buffer and do not read the DB.)
-                        continue;
-                    }
-                    Ok(Ok(new_entries)) => {
-                        // Show only entries with sequence numbers newer than our last seen
+                        let new_entries =
+                            Self::read_persisted_log_tail(LOG_FETCH_LIMIT, min_level)?;
+                        let mut printed_any = false;
                         for entry in &new_entries {
                             if entry.sequence > last_seen_sequence {
                                 Self::print_log_entry(entry);
                                 last_seen_sequence = entry.sequence;
+                                printed_any = true;
+                            }
+                        }
+                        if !printed_any {
+                            empty_polls = empty_polls.saturating_add(1);
+                        } else {
+                            empty_polls = 0;
+                        }
+                    }
+                    Ok(Ok(new_entries)) => {
+                        if new_entries.is_empty() {
+                            // Possible daemon restart (sequence reset). Peek last few entries without since
+                            if let Ok(peek) = client.get_logs_filtered(50, min_level).await {
+                                let peek_max = peek.iter().map(|e| e.sequence).max().unwrap_or(0);
+                                if peek_max < last_seen_sequence {
+                                    // Detected sequence regression → reset cursor to latest
+                                    last_seen_sequence = peek_max;
+                                    // Print the peeked lines to advance the view
+                                    for entry in &peek {
+                                        Self::print_log_entry(entry);
+                                    }
+                                    empty_polls = 0;
+                                    continue;
+                                }
+                            }
+                            empty_polls = empty_polls.saturating_add(1);
+                        } else {
+                            // Show only entries newer than our last seen
+                            let mut printed_any = false;
+                            for entry in &new_entries {
+                                if entry.sequence > last_seen_sequence {
+                                    Self::print_log_entry(entry);
+                                    last_seen_sequence = entry.sequence;
+                                    printed_any = true;
+                                }
+                            }
+                            if printed_any {
+                                empty_polls = 0;
+                            } else {
+                                empty_polls = empty_polls.saturating_add(1);
                             }
                         }
                     }
                     Ok(Err(_e)) => {
-                        // Check if daemon is still running
-                        if client.ping().await.is_err() {
-                            println!("\n{}", "Daemon connection lost".yellow());
-                            break;
+                        // Connection likely broken (e.g., Broken pipe). Try to re-create client.
+                        if let Some(new_client) = LspClient::new_non_blocking(LspConfig {
+                            use_daemon: true,
+                            auto_start: false,
+                            timeout_ms: LOG_RPC_TIMEOUT_MS as u64,
+                            ..Default::default()
+                        })
+                        .await
+                        {
+                            client = new_client;
+                        } else {
+                            // Fall back to reading persisted tail and keep polling.
+                            let new_entries =
+                                Self::read_persisted_log_tail(LOG_FETCH_LIMIT, min_level)?;
+                            let mut printed_any = false;
+                            for entry in &new_entries {
+                                if entry.sequence > last_seen_sequence {
+                                    Self::print_log_entry(entry);
+                                    last_seen_sequence = entry.sequence;
+                                    printed_any = true;
+                                }
+                            }
+                            if !printed_any {
+                                empty_polls = empty_polls.saturating_add(1);
+                            } else {
+                                empty_polls = 0;
+                            }
+                            // Small sleep to avoid tight loop on repeated failure
+                            tokio::time::sleep(Duration::from_millis(500)).await;
                         }
-                        // Otherwise, continue polling
                     }
                 }
             }
@@ -1062,8 +1374,28 @@ impl LspManager {
             .await
             {
                 Err(_) => {
-                    println!("{} Failed to get logs: timed out", "❌".red());
-                    println!("{}","(Tip: logs do not depend on the DB; try increasing verbosity with PROBE_LOG_LEVEL=info or use --level info)".dimmed());
+                    let entries = Self::read_persisted_log_tail(lines, min_level)?;
+                    if entries.is_empty() {
+                        println!("{}", "No logs available".yellow());
+                        return Ok(());
+                    }
+                    let total_entries = entries.len();
+                    println!(
+                        "{}",
+                        format!("LSP Daemon Log (last {total_entries} entries)")
+                            .bold()
+                            .green()
+                    );
+                    println!("{}", "─".repeat(60).dimmed());
+                    for entry in &entries {
+                        Self::print_log_entry(entry);
+                    }
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!("Use {} to follow log in real-time", "--follow".cyan());
+                    println!(
+                        "Use {} to restart daemon (clears logs)",
+                        "probe lsp restart".cyan()
+                    );
                 }
                 Ok(Ok(entries)) => {
                     if entries.is_empty() {
@@ -1091,13 +1423,108 @@ impl LspManager {
                         "probe lsp restart".cyan()
                     );
                 }
-                Ok(Err(e)) => {
-                    println!("{} Failed to get logs: {}", "❌".red(), e);
+                Ok(Err(_e)) => {
+                    let entries = Self::read_persisted_log_tail(lines, min_level)?;
+                    if entries.is_empty() {
+                        println!("{}", "No logs available".yellow());
+                        return Ok(());
+                    }
+                    let total_entries = entries.len();
+                    println!(
+                        "{}",
+                        format!("LSP Daemon Log (last {total_entries} entries)")
+                            .bold()
+                            .green()
+                    );
+                    println!("{}", "─".repeat(60).dimmed());
+                    for entry in &entries {
+                        Self::print_log_entry(entry);
+                    }
+                    println!("{}", "─".repeat(60).dimmed());
+                    println!("Use {} to follow log in real-time", "--follow".cyan());
+                    println!(
+                        "Use {} to restart daemon (clears logs)",
+                        "probe lsp restart".cyan()
+                    );
                 }
             }
         }
 
         Ok(())
+    }
+
+    /// Read tail of the persisted daemon log file (JSON). Best-effort.
+    fn read_persisted_log_tail(
+        lines: usize,
+        min_level: Option<lsp_daemon::protocol::LogLevel>,
+    ) -> Result<Vec<lsp_daemon::protocol::LogEntry>> {
+        use std::fs;
+        use std::path::PathBuf;
+        let log_dir = if let Ok(d) = std::env::var("PROBE_LSP_LOG_DIR") {
+            PathBuf::from(d)
+        } else {
+            #[cfg(target_os = "linux")]
+            {
+                let home = std::env::var("HOME").unwrap_or_default();
+                PathBuf::from(home).join(".local/share/probe/logs/lsp")
+            }
+            #[cfg(target_os = "macos")]
+            {
+                let home = std::env::var("HOME").unwrap_or_default();
+                PathBuf::from(home).join("Library/Logs/probe/lsp")
+            }
+            #[cfg(target_os = "windows")]
+            {
+                let lad = std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into());
+                PathBuf::from(lad).join("probe/logs/lsp")
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            {
+                std::env::temp_dir().join("probe/logs/lsp")
+            }
+        };
+        let cur = log_dir.join("lsp-daemon.log.json");
+        let prev = log_dir.join("lsp-daemon.previous.log.json");
+        let mut entries: Vec<lsp_daemon::protocol::LogEntry> = Vec::new();
+        for path in [cur, prev] {
+            if let Ok(text) = fs::read_to_string(&path) {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                    if let Some(arr) = val.get("entries").and_then(|v| v.as_array()) {
+                        for e in arr {
+                            if let Ok(le) =
+                                serde_json::from_value::<lsp_daemon::protocol::LogEntry>(e.clone())
+                            {
+                                entries.push(le);
+                            }
+                        }
+                    }
+                }
+            }
+            if entries.len() >= lines {
+                break;
+            }
+        }
+        // Filter + take last N
+        let rank = |lv: &lsp_daemon::protocol::LogLevel| match lv {
+            lsp_daemon::protocol::LogLevel::Trace => 0,
+            lsp_daemon::protocol::LogLevel::Debug => 1,
+            lsp_daemon::protocol::LogLevel::Info => 2,
+            lsp_daemon::protocol::LogLevel::Warn => 3,
+            lsp_daemon::protocol::LogLevel::Error => 4,
+        };
+        let mut out: Vec<_> = if let Some(min) = min_level {
+            let cutoff = rank(&min);
+            entries
+                .into_iter()
+                .filter(|e| rank(&e.level) >= cutoff)
+                .collect()
+        } else {
+            entries
+        };
+        if out.len() > lines {
+            out = out.split_off(out.len() - lines);
+        }
+        Ok(out)
     }
 
     /// Start embedded LSP daemon
@@ -2691,15 +3118,366 @@ impl LspManager {
         follow: bool,
         interval: u64,
     ) -> Result<()> {
-        let config = LspConfig::default();
-        let mut client = LspClient::new(config).await?;
-
-        if follow {
-            Self::follow_indexing_status(&mut client, format, detailed, interval).await
-        } else {
-            let status = client.get_indexing_status().await?;
-            Self::display_indexing_status(&status, format, detailed).await
+        // Fast path: try a one-shot IPC call that avoids handshake/state (up to 3 quick attempts).
+        if !follow {
+            for _ in 0..3 {
+                if let Ok(Some(status)) = Self::one_shot_index_status_fast(3200, 1400).await {
+                    if status.database.is_some() {
+                        return Self::display_indexing_status(&status, format, detailed).await;
+                    } else {
+                        // Fast snapshot returned without DB; fall through to try detailed below.
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            }
         }
+        let cfg = LspConfig {
+            use_daemon: true,
+            workspace_hint: None,
+            timeout_ms: 4000, // give control-plane a bit more headroom
+            include_stdlib: false,
+            auto_start: false,
+        };
+        if let Some(mut client) = LspClient::new_non_blocking(cfg.clone()).await {
+            if follow {
+                return Self::follow_indexing_status(&mut client, format, detailed, interval).await;
+            }
+            // Prefer fast (DB-free) snapshot first for instant response under load
+            if let Ok(Ok(status_fast)) = tokio::time::timeout(
+                std::time::Duration::from_millis(1200),
+                client.get_indexing_status_fast(),
+            )
+            .await
+            {
+                if status_fast.database.is_none() {
+                    // Try to augment with a detailed snapshot quickly.
+                    if let Ok(Ok(status_full)) = tokio::time::timeout(
+                        std::time::Duration::from_millis(1200),
+                        client.get_indexing_status(),
+                    )
+                    .await
+                    {
+                        return Self::display_indexing_status(&status_full, format, detailed).await;
+                    }
+                }
+                return Self::display_indexing_status(&status_fast, format, detailed).await;
+            }
+            // Then attempt detailed snapshot with bounded timeouts
+            for attempt in 0..2 {
+                let t = if attempt == 0 { 5000 } else { 9000 };
+                if let Ok(Ok(status)) = tokio::time::timeout(
+                    std::time::Duration::from_millis(t),
+                    client.get_indexing_status(),
+                )
+                .await
+                {
+                    return Self::display_indexing_status(&status, format, detailed).await;
+                }
+            }
+            // Prefer an online signal over offline: if logs RPC returns, daemon is up → report busy
+            if let Ok(Ok(_)) = tokio::time::timeout(
+                std::time::Duration::from_millis(1500),
+                client.get_logs_filtered(5, None),
+            )
+            .await
+            {
+                match format {
+                    "json" => {
+                        println!(
+                            "{}",
+                            serde_json::to_string_pretty(&json!({
+                                "mode": "online",
+                                "status": "timeout",
+                                "hint": "daemon is busy; try --follow or increase timeout",
+                            }))?
+                        );
+                    }
+                    _ => {
+                        println!("{}", "Indexing Status".bold().cyan());
+                        println!(
+                            "  {}",
+                            "Daemon is running but status request timed out (under load)".yellow()
+                        );
+                        println!(
+                            "  {}",
+                            "Try: 'probe lsp index-status --follow' or 'probe lsp logs -f'"
+                                .dimmed()
+                        );
+                    }
+                }
+                return Ok(());
+            }
+            // Daemon not reachable → Offline fallback
+            Self::display_offline_index_status(format).await
+        } else {
+            // If quick non-blocking connect failed, try a one-shot blocking connect
+            let cfg_blocking = LspConfig {
+                timeout_ms: 8000,
+                ..cfg.clone()
+            };
+            if let Ok(mut client) = LspClient::new(cfg_blocking).await {
+                if follow {
+                    return Self::follow_indexing_status(&mut client, format, detailed, interval)
+                        .await;
+                }
+                if let Ok(Ok(status_fast)) = tokio::time::timeout(
+                    std::time::Duration::from_millis(1500),
+                    client.get_indexing_status_fast(),
+                )
+                .await
+                {
+                    if status_fast.database.is_none() {
+                        if let Ok(Ok(status_full)) = tokio::time::timeout(
+                            std::time::Duration::from_millis(1200),
+                            client.get_indexing_status(),
+                        )
+                        .await
+                        {
+                            return Self::display_indexing_status(&status_full, format, detailed)
+                                .await;
+                        }
+                    }
+                    return Self::display_indexing_status(&status_fast, format, detailed).await;
+                }
+                for attempt in 0..2 {
+                    let t = if attempt == 0 { 5000 } else { 9000 };
+                    if let Ok(Ok(status)) = tokio::time::timeout(
+                        std::time::Duration::from_millis(t),
+                        client.get_indexing_status(),
+                    )
+                    .await
+                    {
+                        return Self::display_indexing_status(&status, format, detailed).await;
+                    }
+                }
+            }
+            // As a last check, probe the socket directly; if it's up, report busy instead of offline
+            let socket_path = if let Ok(path) = std::env::var("PROBE_LSP_SOCKET_PATH") {
+                path
+            } else {
+                lsp_daemon::get_default_socket_path()
+            };
+            if lsp_daemon::IpcStream::connect(&socket_path).await.is_ok() {
+                match format {
+                    "json" => println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                        "mode":"online","status":"timeout","hint":"daemon is busy; try --follow or increase timeout"}))?
+                    ),
+                    _ => {
+                        println!("{}", "Indexing Status".bold().cyan());
+                        println!(
+                            "  {}",
+                            "Daemon is running but status request timed out (under load)".yellow()
+                        );
+                        println!(
+                            "  {}",
+                            "Try: 'probe lsp index-status --follow' or 'probe lsp logs -f'"
+                                .dimmed()
+                        );
+                    }
+                }
+                Ok(())
+            } else {
+                Self::display_offline_index_status(format).await
+            }
+        }
+    }
+
+    /// Minimal, one-shot IPC call to fetch fast status without client handshake.
+    /// Returns Ok(Some(status)) on success, Ok(None) if daemon reachable but call failed,
+    /// and Err on connect failure.
+    async fn one_shot_index_status_fast(
+        read_timeout_ms: u64,
+        connect_timeout_ms: u64,
+    ) -> Result<Option<lsp_daemon::protocol::IndexingStatusInfo>> {
+        use tokio::time::timeout;
+        let socket_path = if let Ok(path) = std::env::var("PROBE_LSP_SOCKET_PATH") {
+            path
+        } else {
+            lsp_daemon::get_default_socket_path()
+        };
+        let mut stream = match timeout(
+            std::time::Duration::from_millis(connect_timeout_ms),
+            lsp_daemon::IpcStream::connect(&socket_path),
+        )
+        .await
+        {
+            Ok(Ok(s)) => s,
+            Ok(Err(_)) => return Ok(None),
+            Err(_) => return Ok(None),
+        };
+        let req = lsp_daemon::protocol::DaemonRequest::IndexingStatusFast {
+            request_id: uuid::Uuid::new_v4(),
+        };
+        let encoded = lsp_daemon::protocol::MessageCodec::encode(&req)?;
+        if timeout(
+            std::time::Duration::from_millis(800),
+            stream.write_all(&encoded),
+        )
+        .await
+        .is_err()
+        {
+            return Ok(None);
+        }
+        if timeout(std::time::Duration::from_millis(200), stream.flush())
+            .await
+            .is_err()
+        {
+            // non-fatal
+        }
+        // Read framed response
+        let mut length_buf = [0u8; 4];
+        match timeout(
+            std::time::Duration::from_millis(read_timeout_ms),
+            stream.read_exact(&mut length_buf),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            _ => return Ok(None),
+        }
+        let len = u32::from_be_bytes(length_buf) as usize;
+        if len > lsp_daemon::protocol::MAX_MESSAGE_SIZE {
+            return Ok(None);
+        }
+        let mut body = vec![0u8; len];
+        match timeout(
+            std::time::Duration::from_millis(read_timeout_ms),
+            stream.read_exact(&mut body),
+        )
+        .await
+        {
+            Ok(Ok(_)) => {}
+            _ => return Ok(None),
+        }
+        let mut framed = Vec::with_capacity(4 + len);
+        framed.extend_from_slice(&length_buf);
+        framed.extend_from_slice(&body);
+        match lsp_daemon::protocol::MessageCodec::decode_response(&framed) {
+            Ok(lsp_daemon::protocol::DaemonResponse::IndexingStatusResponse { status, .. }) => {
+                Ok(Some(status))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Offline status snapshot: open the workspace DB directly and compute lightweight counts.
+    async fn display_offline_index_status(format: &str) -> Result<()> {
+        use colored::Colorize;
+        use turso::Builder;
+        let cwd = std::env::current_dir()?;
+        let db_path = Self::compute_workspace_db_path_offline(&cwd);
+        let try_paths = [
+            db_path.clone(),
+            db_path.parent().unwrap_or(&db_path).to_path_buf(),
+        ];
+        let mut db_opt = None;
+        for pth in &try_paths {
+            let builder = Builder::new_local(&pth.to_string_lossy());
+            if let Ok(db) = builder.build().await {
+                db_opt = Some(db);
+                break;
+            }
+        }
+        let db = match db_opt {
+            Some(db) => db,
+            None => {
+                match format {
+                    "json" => println!(
+                        "{}",
+                        serde_json::to_string_pretty(&json!({
+                            "mode":"offline",
+                            "workspace_db": db_path,
+                            "error":"failed to open database"
+                        }))?
+                    ),
+                    _ => {
+                        println!("{}", "Indexing Status (offline)".bold().cyan());
+                        println!("  {} {}", "Workspace DB:".bold(), db_path.display());
+                        println!("  {}", "Failed to open database".red());
+                    }
+                }
+                return Ok(());
+            }
+        };
+        let conn = db.connect()?;
+        async fn count(conn: &turso::Connection, sql: &str) -> Option<u64> {
+            use turso::Value;
+            match conn.query(sql, ()).await {
+                Ok(mut rows) => match rows.next().await {
+                    Ok(Some(row)) => match row.get_value(0) {
+                        Ok(Value::Integer(v)) => Some((v.max(0)) as u64),
+                        Ok(Value::Text(s)) => s.parse::<i64>().ok().map(|v| v.max(0) as u64),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
+        let total_symbols = count(&conn, "SELECT COUNT(*) FROM symbol_state")
+            .await
+            .unwrap_or(0);
+        let total_edges = count(&conn, "SELECT COUNT(*) FROM edge").await.unwrap_or(0);
+        let total_files = count(&conn, "SELECT COUNT(*) FROM file").await.unwrap_or(0);
+        let refs_pending = count(&conn, "SELECT COUNT(*) FROM symbol_state s WHERE s.kind IN ('function','method','class','struct','enum','interface','trait') AND s.file_path IS NOT NULL AND TRIM(s.file_path)<>'' AND NOT EXISTS (SELECT 1 FROM edge e WHERE e.relation='references' AND e.source_symbol_uid=s.symbol_uid)").await.unwrap_or(0);
+        let impls_pending = count(&conn, "SELECT COUNT(*) FROM symbol_state s WHERE s.kind IN ('function','method','class','struct','enum','interface','trait') AND s.file_path IS NOT NULL AND TRIM(s.file_path)<>'' AND NOT EXISTS (SELECT 1 FROM edge e WHERE e.relation IN ('implementation','implements') AND e.source_symbol_uid=s.symbol_uid)").await.unwrap_or(0);
+        let calls_pending = count(&conn, "SELECT COUNT(*) FROM symbol_state s WHERE s.kind IN ('function','method','class','struct','enum','interface','trait') AND s.file_path IS NOT NULL AND TRIM(s.file_path)<>'' AND NOT EXISTS (SELECT 1 FROM edge e WHERE e.relation='calls' AND (e.source_symbol_uid=s.symbol_uid OR e.target_symbol_uid=s.symbol_uid))").await.unwrap_or(0);
+        match format {
+            "json" => println!(
+                "{}",
+                serde_json::to_string_pretty(&json!({
+                    "mode":"offline",
+                    "workspace_db": db_path,
+                    "symbols": total_symbols,
+                    "edges": total_edges,
+                    "files": total_files,
+                    "pending": { "references": refs_pending, "implementations": impls_pending, "calls": calls_pending }
+                }))?
+            ),
+            _ => {
+                println!("{}", "Indexing Status (offline)".bold().cyan());
+                println!("  {} {}", "Workspace DB:".bold(), db_path.display());
+                println!(
+                    "
+{}",
+                    "Progress".bold().cyan()
+                );
+                println!(
+                    "  {}: {}",
+                    "Files".bold(),
+                    if total_files > 0 {
+                        total_files.to_string()
+                    } else {
+                        "N/A".into()
+                    }
+                );
+                println!("  {}: {}", "Extracted".bold(), total_symbols);
+                println!(
+                    "
+{}",
+                    "LSP Enrichment".bold().cyan()
+                );
+                println!(
+                    "  {}: {} {} {}",
+                    "Pending".bold(),
+                    format!("refs:{}", refs_pending),
+                    format!("impls:{}", impls_pending),
+                    format!("calls:{}", calls_pending)
+                );
+                println!(
+                    "
+{}",
+                    "Database".bold().cyan()
+                );
+                println!("  {}: {}", "Symbols".bold(), total_symbols);
+                println!("  {}: {}", "Edges".bold(), total_edges);
+                println!("  {}: {}", "Files".bold(), total_files);
+            }
+        }
+        Ok(())
     }
 
     /// Handle index stop command
@@ -2901,6 +3679,19 @@ impl LspManager {
             _ => {
                 println!("{}", "Indexing Status".bold().green());
                 println!("  {}: {}", "Status".bold(), status.manager_status);
+                if let Some(updated) = status.snapshot_updated_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let age = status
+                        .snapshot_age_secs
+                        .unwrap_or_else(|| now.saturating_sub(updated));
+                    let when = chrono::NaiveDateTime::from_timestamp_opt(updated as i64, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| updated.to_string());
+                    println!("  {}: {} (age: {}s)", "Last Update".bold(), when, age);
+                }
 
                 if let Some(session_id) = &status.session_id {
                     println!("  {}: {}", "Session ID".bold(), session_id);
@@ -2957,7 +3748,26 @@ impl LspManager {
 
                 println!("  {}: {}", "Memory".bold(), "N/A".to_string());
 
-                // (Queue section removed: obsolete top-level queue view)
+                // Queue summary (top-level view from manager planner)
+                let q = &status.queue;
+                println!("\n{}", "Queue".bold().cyan());
+                println!(
+                    "  {}: {} (H:{} M:{} L:{})",
+                    "Items".bold(),
+                    q.total_items,
+                    q.high_priority_items,
+                    q.medium_priority_items,
+                    q.low_priority_items
+                );
+                println!("  {}: {}", "Pending".bold(), q.pending_items);
+                if q.is_paused || q.memory_pressure {
+                    println!(
+                        "  {}: paused={} memory_pressure={}",
+                        "State".bold(),
+                        q.is_paused,
+                        q.memory_pressure
+                    );
+                }
 
                 // Display LSP enrichment stats
                 if let Some(ref lsp_enrichment) = status.lsp_enrichment {
@@ -3005,6 +3815,48 @@ impl LspManager {
                             "Edges Created".bold(),
                             lsp_enrichment.edges_created
                         );
+
+                        // Per-server load summary
+                        if !lsp_enrichment.server_load.is_empty() {
+                            println!("  {}:", "LSP Servers".bold());
+                            for s in &lsp_enrichment.server_load {
+                                println!(
+                                    "    {:<11} inflight:{}/{} pending:{} rpm:{:.1} rph:{:.1} fail_total:{}{}",
+                                    format!("{:?}", s.language).to_lowercase(),
+                                    s.inflight_current,
+                                    s.max_concurrent,
+                                    s.pending_current,
+                                    s.rpm,
+                                    s.rph,
+                                    s.failures_total,
+                                    match s.oldest_inflight_age_secs { Some(a)=> format!(" oldest:{}s", a), None=> String::new() }
+                                );
+                            }
+                        }
+                        if lsp_enrichment.inflight_total > 0 {
+                            println!(
+                                "  {}: {}",
+                                "Inflight (global)".bold(),
+                                lsp_enrichment.inflight_total
+                            );
+                        }
+
+                        // Queue heads per language (best-effort)
+                        if !lsp_enrichment.queue_heads.is_empty() {
+                            println!("  {}:", "Queue Heads".bold());
+                            for h in &lsp_enrichment.queue_heads {
+                                println!(
+                                    "    {:<11} head={} ({}:{} kind:{} ops:{}) oldest:{}s",
+                                    format!("{:?}", h.language).to_lowercase(),
+                                    h.head_uid,
+                                    h.head_file,
+                                    h.head_line,
+                                    h.head_kind,
+                                    h.head_ops,
+                                    h.oldest_pending_age_secs,
+                                );
+                            }
+                        }
 
                         let queue = &lsp_enrichment.queue_stats;
                         if queue.total_items > 0 {
@@ -3114,35 +3966,40 @@ impl LspManager {
                     println!("  {}: {}", "Edges".bold(), database.total_edges);
                     println!("  {}: {}", "Files".bold(), database.total_files);
                     if let Some(ref ea) = database.edge_audit {
-                        let total = ea.eid001_abs_path
-                            + ea.eid002_uid_path_mismatch
-                            + ea.eid003_malformed_uid
-                            + ea.eid004_zero_line
-                            + ea.eid009_non_relative_file_path;
-                        if total > 0 {
-                            println!("  {}:", "Edge Audit".bold());
-                            if ea.eid001_abs_path > 0 {
-                                println!("    EID001 abs path: {}", ea.eid001_abs_path);
-                            }
-                            if ea.eid002_uid_path_mismatch > 0 {
-                                println!(
-                                    "    EID002 uid/file mismatch: {}",
-                                    ea.eid002_uid_path_mismatch
-                                );
-                            }
-                            if ea.eid003_malformed_uid > 0 {
-                                println!("    EID003 malformed uid: {}", ea.eid003_malformed_uid);
-                            }
-                            if ea.eid004_zero_line > 0 {
-                                println!("    EID004 zero line: {}", ea.eid004_zero_line);
-                            }
-                            if ea.eid009_non_relative_file_path > 0 {
-                                println!(
-                                    "    EID009 non-relative file_path: {}",
-                                    ea.eid009_non_relative_file_path
-                                );
-                            }
+                        // Print all non-zero counters we track, including extended ones
+                        let mut printed = false;
+                        macro_rules! print_if {
+                            ($label:literal, $val:expr) => {
+                                if $val > 0 {
+                                    if !printed {
+                                        println!("  {}:", "Edge Audit".bold());
+                                        printed = true;
+                                    }
+                                    println!("    {}: {}", $label, $val);
+                                }
+                            };
                         }
+                        print_if!("EID001 abs path", ea.eid001_abs_path);
+                        print_if!("EID002 uid/file mismatch", ea.eid002_uid_path_mismatch);
+                        print_if!("EID003 malformed uid", ea.eid003_malformed_uid);
+                        print_if!("EID004 zero line", ea.eid004_zero_line);
+                        print_if!(
+                            "EID009 non-relative file_path",
+                            ea.eid009_non_relative_file_path
+                        );
+                        print_if!("EID010 self-loop", ea.eid010_self_loop);
+                        print_if!("EID011 orphan source", ea.eid011_orphan_source);
+                        print_if!("EID012 orphan target", ea.eid012_orphan_target);
+                        print_if!("EID013 line mismatch", ea.eid013_line_mismatch);
+                        print_if!("EA011 external source (dropped)", ea.ea011_external_source);
+                        print_if!("PM001 path map failed", ea.pm001_path_map_failed);
+                        // Policy counters (non-error) also useful
+                        print_if!("POLICY skip references", ea.policy_skip_references);
+                        print_if!("POLICY skip impls", ea.policy_skip_impls);
+                        print_if!(
+                            "POLICY skip impls (not candidate)",
+                            ea.policy_skip_impls_not_candidate
+                        );
                     }
                     if database.db_quiesced {
                         println!("  {}: {}", "DB Quiesced".bold(), "true".yellow());
@@ -3198,9 +4055,14 @@ impl LspManager {
                         println!("  {}: {}", "Workspace".bold(), workspace_id);
                     }
                 } else {
-                    // Best-effort visibility when DB snapshot was skipped (e.g., quiesced/busy)
+                    // Best-effort visibility when DB snapshot was skipped (e.g., writer busy/lock held)
                     println!("\n{}", "Database".bold().cyan());
                     println!("  {}", "(snapshot unavailable under current load; will appear once readers are allowed)".dimmed());
+                    println!(
+                        "  {} {}",
+                        "Hint:".bold().dimmed(),
+                        "run 'probe lsp wal-sync --timeout 3' to briefly quiesce and refresh counts"
+                    );
                 }
 
                 // (Sync section removed: currently not populated)
@@ -3266,8 +4128,20 @@ impl LspManager {
         // Give OS a brief moment to release file locks
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-        // Offline checkpoint via Turso (FULL + TRUNCATE) and set journal to DELETE
-        {
+        // Detect MVCC artifacts; if present, WAL checkpoint is not applicable.
+        let mvcc_marker = std::path::PathBuf::from(format!("{}.mvcc", db_path.display()));
+        let mvcc_log = {
+            let fname = db_path.file_name().unwrap_or_default().to_string_lossy();
+            db_path.with_file_name(format!("{}-log", fname))
+        };
+        if mvcc_marker.exists() || mvcc_log.exists() {
+            println!(
+                "{} {}",
+                "MVCC detected; WAL sync is not required for".green().bold(),
+                db_path.display()
+            );
+        } else {
+            // Offline checkpoint via Turso (FULL + TRUNCATE) and set journal to DELETE
             use turso::Builder;
             let builder = Builder::new_local(&db_path.to_string_lossy());
             let db = builder.build().await?;
@@ -3557,7 +4431,18 @@ impl LspManager {
         loop {
             interval.tick().await;
 
-            match client.get_indexing_status().await {
+            // Prefer fast, DB-free snapshot on every tick to avoid stalling under load
+            let fast_first = tokio::time::timeout(
+                std::time::Duration::from_millis(1200),
+                client.get_indexing_status_fast(),
+            )
+            .await;
+            let result = match fast_first {
+                Ok(Ok(status)) => Ok(status),
+                _ => client.get_indexing_status().await,
+            };
+
+            match result {
                 Ok(status) => {
                     // Clear screen for terminal output
                     if format != "json" {
@@ -4792,26 +5677,8 @@ impl LspManager {
             }
         }
 
-        // Offline checkpoint: FULL + TRUNCATE + DELETE journaling, then copy base file
-        let copied_bytes = {
-            use turso::Builder;
-            let builder = Builder::new_local(&db_path.to_string_lossy());
-            let db = builder.build().await?;
-            let conn = db.connect()?;
-            // Try a few times in case of transient locks
-            for attempt in 1..=8 {
-                let full = conn.query("PRAGMA wal_checkpoint(FULL)", ()).await;
-                let trunc = conn.query("PRAGMA wal_checkpoint(TRUNCATE)", ()).await;
-                let jdel = conn.query("PRAGMA journal_mode=DELETE", ()).await;
-                if full.is_ok() && trunc.is_ok() && jdel.is_ok() {
-                    break;
-                }
-                // Exponential-ish backoff up to ~2.5s total
-                let backoff = 100u64 * attempt.min(10) as u64;
-                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
-            }
-            std::fs::copy(&db_path, &output)? as usize
-        };
+        // Offline export using MVCC-aware helper (handles MVCC vs non-MVCC automatically)
+        let copied_bytes = lsp_daemon::offline_export_clone(&db_path, &output).await?;
 
         // Remove any legacy/confusing objects (e.g., a stray `symbols` table/view)
         {

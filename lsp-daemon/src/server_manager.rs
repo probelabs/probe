@@ -3,6 +3,7 @@ use crate::lsp_registry::LspServerConfig;
 use crate::lsp_server::LspServer;
 use crate::protocol::{ServerReadinessInfo, WorkspaceInfo};
 use crate::workspace_utils;
+use crate::workspace_utils::discover_language_roots;
 // Removed unused imports - readiness types are used in method implementations
 use crate::watchdog::ProcessMonitor;
 use anyhow::{anyhow, Context, Result};
@@ -416,7 +417,31 @@ impl CallSingleflight {
             }
         }
 
-        // We are the leader: perform the operation
+        // We are the leader: ensure cleanup on cancellation/timeouts via RAII
+        struct LeaderGuard<'a> {
+            active: &'a DashMap<CallKey, broadcast::Sender<CallBroadcastResult>>,
+            key: CallKey,
+            sender: broadcast::Sender<CallBroadcastResult>,
+            finished: bool,
+        }
+        impl<'a> Drop for LeaderGuard<'a> {
+            fn drop(&mut self) {
+                if !self.finished {
+                    let _ = self.sender.send(CallBroadcastResult::Err(
+                        "singleflight leader cancelled".to_string(),
+                    ));
+                    self.active.remove(&self.key);
+                }
+            }
+        }
+
+        let mut guard = LeaderGuard {
+            active: &self.active,
+            key: key.clone(),
+            sender: sender.clone(),
+            finished: false,
+        };
+
         let res = op().await;
 
         // Broadcast and remove the entry
@@ -428,6 +453,8 @@ impl CallSingleflight {
                 let _ = sender.send(CallBroadcastResult::Err(e.to_string()));
             }
         }
+        // Mark finished so Drop doesn't send cancellation again
+        guard.finished = true;
         self.active.remove(&key);
 
         res
@@ -488,6 +515,31 @@ impl JsonSingleflight {
             };
         }
 
+        // Leader cleanup guard on cancellation/timeouts
+        struct LeaderGuard<'a> {
+            active: &'a DashMap<CallKey, broadcast::Sender<JsonBroadcastResult>>,
+            key: CallKey,
+            sender: broadcast::Sender<JsonBroadcastResult>,
+            finished: bool,
+        }
+        impl<'a> Drop for LeaderGuard<'a> {
+            fn drop(&mut self) {
+                if !self.finished {
+                    let _ = self.sender.send(JsonBroadcastResult::Err(
+                        "singleflight leader cancelled".to_string(),
+                    ));
+                    self.active.remove(&self.key);
+                }
+            }
+        }
+
+        let mut guard = LeaderGuard {
+            active: &self.active,
+            key: key.clone(),
+            sender: sender.clone(),
+            finished: false,
+        };
+
         let res = op().await;
         match &res {
             Ok(v) => {
@@ -497,13 +549,97 @@ impl JsonSingleflight {
                 let _ = sender.send(JsonBroadcastResult::Err(e.to_string()));
             }
         }
+        guard.finished = true;
         self.active.remove(&key);
         res
     }
 }
 
 /// Manages single server instances per language with multi-workspace support
-#[derive(Debug, Clone)]
+#[derive(Debug, Default)]
+struct RequestStats {
+    // Per-minute buckets: (unix_minute, count)
+    buckets: std::collections::VecDeque<(u64, u32)>,
+    // Per-minute failure buckets
+    fail_buckets: std::collections::VecDeque<(u64, u32)>,
+    // Total failures since start
+    failures_total: u64,
+}
+
+impl RequestStats {
+    fn record(&mut self, now_secs: u64) {
+        let m = now_secs / 60;
+        if let Some((last_m, c)) = self.buckets.back_mut() {
+            if *last_m == m {
+                *c = c.saturating_add(1);
+                self.trim();
+                return;
+            }
+        }
+        self.buckets.push_back((m, 1));
+        self.trim();
+    }
+    fn record_failure(&mut self, now_secs: u64) {
+        let m = now_secs / 60;
+        if let Some((last_m, c)) = self.fail_buckets.back_mut() {
+            if *last_m == m {
+                *c = c.saturating_add(1);
+                self.failures_total = self.failures_total.saturating_add(1);
+                self.trim();
+                return;
+            }
+        }
+        self.fail_buckets.push_back((m, 1));
+        self.failures_total = self.failures_total.saturating_add(1);
+        self.trim();
+    }
+    fn trim(&mut self) {
+        // Keep at most 180 minutes (~3 hours)
+        while self.buckets.len() > 180 {
+            self.buckets.pop_front();
+        }
+        while self.fail_buckets.len() > 180 {
+            self.fail_buckets.pop_front();
+        }
+    }
+    fn rpm_last_minute(&self, now_secs: u64) -> u32 {
+        let m = now_secs / 60;
+        self.buckets
+            .iter()
+            .rev()
+            .find(|(mm, _)| *mm == m)
+            .map(|(_, c)| *c)
+            .unwrap_or(0)
+    }
+    fn rph_last_hour(&self, now_secs: u64) -> u32 {
+        let m = now_secs / 60;
+        let start = m.saturating_sub(59);
+        self.buckets
+            .iter()
+            .filter(|(mm, _)| *mm >= start && *mm <= m)
+            .map(|(_, c)| *c as u32)
+            .sum()
+    }
+    fn frpm_last_minute(&self, now_secs: u64) -> u32 {
+        let m = now_secs / 60;
+        self.fail_buckets
+            .iter()
+            .rev()
+            .find(|(mm, _)| *mm == m)
+            .map(|(_, c)| *c)
+            .unwrap_or(0)
+    }
+    fn frph_last_hour(&self, now_secs: u64) -> u32 {
+        let m = now_secs / 60;
+        let start = m.saturating_sub(59);
+        self.fail_buckets
+            .iter()
+            .filter(|(mm, _)| *mm >= start && *mm <= m)
+            .map(|(_, c)| *c as u32)
+            .sum()
+    }
+}
+
 pub struct SingleServerManager {
     servers: Arc<DashMap<Language, Arc<Mutex<ServerInstance>>>>,
     registry: Arc<crate::lsp_registry::LspRegistry>,
@@ -525,9 +661,21 @@ pub struct SingleServerManager {
     impls_singleflight: Arc<JsonSingleflight>,
     /// Total in-flight LSP requests across all languages (best-effort)
     total_inflight: Arc<AtomicUsize>,
+    /// Per-language request meters for simple rpm/rph snapshots
+    request_meters: DashMap<Language, Arc<Mutex<RequestStats>>>,
+    /// Requests currently waiting on a permit (best-effort)
+    pending_waiters: DashMap<Language, Arc<AtomicUsize>>,
+    // Track per-language oldest in-flight start time.
+    inflight_counts: DashMap<Language, Arc<AtomicUsize>>,
+    inflight_oldest_started: DashMap<Language, Arc<std::sync::atomic::AtomicU64>>, // unix secs
 }
 
 impl SingleServerManager {
+    /// Quick check whether an LSP server binary is available for the language
+    pub fn is_lsp_available(&self, language: Language) -> bool {
+        self.registry.is_lsp_available(language)
+    }
+
     pub fn new(registry: Arc<crate::lsp_registry::LspRegistry>) -> Self {
         Self::new_with_tracker(registry, Arc::new(tokio::sync::Mutex::new(Vec::new())))
     }
@@ -552,6 +700,10 @@ impl SingleServerManager {
             refs_singleflight: Arc::new(JsonSingleflight::new()),
             impls_singleflight: Arc::new(JsonSingleflight::new()),
             total_inflight: Arc::new(AtomicUsize::new(0)),
+            request_meters: DashMap::new(),
+            pending_waiters: DashMap::new(),
+            inflight_counts: DashMap::new(),
+            inflight_oldest_started: DashMap::new(),
         }
     }
 
@@ -621,14 +773,43 @@ impl SingleServerManager {
         let semaphore = self.get_language_semaphore(language);
         let health = self.get_language_health(language);
 
-        // Acquire semaphore permit
-        let _permit = semaphore.acquire().await.map_err(|e| {
-            anyhow!(
-                "Failed to acquire semaphore permit for {:?}: {}",
+        // Acquire semaphore permit (log long waits at info level)
+        let wait_start = Instant::now();
+        let pending = if let Some(w) = self.pending_waiters.get(&language) {
+            w.clone()
+        } else {
+            let w = Arc::new(AtomicUsize::new(0));
+            self.pending_waiters.insert(language, w.clone());
+            w
+        };
+        pending.fetch_add(1, Ordering::Relaxed);
+        let _permit = match semaphore.acquire().await {
+            Ok(p) => p,
+            Err(e) => {
+                pending.fetch_sub(1, Ordering::Relaxed);
+                return Err(anyhow!(
+                    "Failed to acquire semaphore permit for {:?}: {}",
+                    language,
+                    e
+                ));
+            }
+        };
+        pending.fetch_sub(1, Ordering::Relaxed);
+        let waited = wait_start.elapsed();
+        let thresh_ms: u64 = std::env::var("PROBE_LSP_SEM_WAIT_MS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100);
+        if waited >= Duration::from_millis(thresh_ms) {
+            info!(
+                target: "lsp_daemon::server_manager",
+                "[wait] semaphore {:?} for {:?}; inflight={} pending={}",
+                waited,
                 language,
-                e
-            )
-        })?;
+                self.total_inflight(),
+                pending.load(Ordering::Relaxed)
+            );
+        }
 
         debug!(
             "Acquired semaphore permit for {:?} ({} permits remaining)",
@@ -636,8 +817,59 @@ impl SingleServerManager {
             semaphore.available_permits()
         );
 
-        // Execute the operation (track in-flight counter)
+        // Execute the operation (track in-flight counter) with guards to avoid leaks on
+        // cancellation or panic.
         self.total_inflight.fetch_add(1, Ordering::Relaxed);
+        // Per-language oldest in-flight start time
+        let cnt = self
+            .inflight_counts
+            .entry(language)
+            .or_insert_with(|| Arc::new(AtomicUsize::new(0)))
+            .clone();
+        let started = self
+            .inflight_oldest_started
+            .entry(language)
+            .or_insert_with(|| Arc::new(std::sync::atomic::AtomicU64::new(0)))
+            .clone();
+        let prev = cnt.fetch_add(1, Ordering::Relaxed);
+        if prev == 0 {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            started.store(now_secs, std::sync::atomic::Ordering::Relaxed);
+        }
+        // Global in-flight guard (always decrements on scope drop)
+        struct GlobalInflightGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl<'a> Drop for GlobalInflightGuard<'a> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let _global_inflight_guard = GlobalInflightGuard(&self.total_inflight);
+
+        // Per-language in-flight guard. Ensures counters/time are reset even if the
+        // future is cancelled (e.g., outer timeout) before reaching the normal
+        // post-await decrement path.
+        struct PerLangInflightGuard<'a> {
+            cnt: &'a std::sync::atomic::AtomicUsize,
+            started: &'a std::sync::atomic::AtomicU64,
+        }
+        impl<'a> Drop for PerLangInflightGuard<'a> {
+            fn drop(&mut self) {
+                let left = self
+                    .cnt
+                    .fetch_sub(1, std::sync::atomic::Ordering::Relaxed)
+                    .saturating_sub(1);
+                if left == 0 {
+                    self.started.store(0, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+        }
+        let _per_lang_inflight_guard = PerLangInflightGuard {
+            cnt: &*cnt,
+            started: &*started,
+        };
         let result = match operation.await {
             Ok(result) => {
                 health.record_success();
@@ -662,10 +894,49 @@ impl SingleServerManager {
                     );
                 }
 
+                // Record failure in per-language meter
+                let now_secs = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                let meter_f = self
+                    .request_meters
+                    .entry(language)
+                    .or_insert_with(|| Arc::new(Mutex::new(RequestStats::default())))
+                    .clone();
+                if let Ok(mut m) = meter_f.try_lock() {
+                    m.record_failure(now_secs);
+                } else {
+                    let meter2 = meter_f.clone();
+                    tokio::spawn(async move {
+                        let mut m = meter2.lock().await;
+                        m.record_failure(now_secs);
+                    });
+                }
+
                 Err(err)
             }
         };
-        self.total_inflight.fetch_sub(1, Ordering::Relaxed);
+        // Record completion for rpm/rph accounting (success or error)
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let meter = self
+            .request_meters
+            .entry(language)
+            .or_insert_with(|| Arc::new(Mutex::new(RequestStats::default())))
+            .clone();
+        if let Ok(mut m) = meter.try_lock() {
+            m.record(now_secs);
+        } else {
+            let meter2 = meter.clone();
+            tokio::spawn(async move {
+                let mut m = meter2.lock().await;
+                m.record(now_secs);
+            });
+        }
+        // Per-language and global guards handle decrements on all paths
         result
         // Semaphore permit is automatically released when _permit is dropped
     }
@@ -673,6 +944,115 @@ impl SingleServerManager {
     /// Return a best-effort count of total in-flight LSP requests.
     pub fn total_inflight(&self) -> usize {
         self.total_inflight.load(Ordering::Relaxed)
+    }
+
+    /// Snapshot per-language inflight and recent rates for index-status
+    pub async fn get_load_snapshot(&self) -> Vec<crate::protocol::LspServerLoad> {
+        let mut langs: std::collections::HashSet<Language> = std::collections::HashSet::new();
+        for entry in self.language_semaphores.iter() {
+            langs.insert(*entry.key());
+        }
+        for entry in self.request_meters.iter() {
+            langs.insert(*entry.key());
+        }
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut out = Vec::new();
+        for lang in langs {
+            let (avail, maxc) = if let Some(sem) = self.language_semaphores.get(&lang) {
+                let maxc = self.concurrency_config.max_concurrent_requests_per_server as u64;
+                (sem.available_permits() as u64, maxc)
+            } else {
+                let maxc = self.concurrency_config.max_concurrent_requests_per_server as u64;
+                (maxc, maxc)
+            };
+            let inflight = maxc.saturating_sub(avail);
+            let oldest_inflight_age_secs = if let (Some(cnt), Some(st)) = (
+                self.inflight_counts.get(&lang),
+                self.inflight_oldest_started.get(&lang),
+            ) {
+                if cnt.load(Ordering::Relaxed) > 0 {
+                    let started = st.load(std::sync::atomic::Ordering::Relaxed);
+                    if started > 0 {
+                        Some(now_secs.saturating_sub(started))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let (rpm, rph) = if let Some(m) = self.request_meters.get(&lang) {
+                let meter_arc = m.clone();
+                let vals = if let Ok(mm) = meter_arc.try_lock() {
+                    (
+                        mm.rpm_last_minute(now_secs) as f64,
+                        mm.rph_last_hour(now_secs) as f64,
+                    )
+                } else {
+                    let mm = meter_arc.lock().await;
+                    (
+                        mm.rpm_last_minute(now_secs) as f64,
+                        mm.rph_last_hour(now_secs) as f64,
+                    )
+                };
+                vals
+            } else {
+                (0.0, 0.0)
+            };
+            out.push(crate::protocol::LspServerLoad {
+                language: lang,
+                inflight_current: inflight,
+                pending_current: self
+                    .pending_waiters
+                    .get(&lang)
+                    .map(|w| w.load(Ordering::Relaxed) as u64)
+                    .unwrap_or(0),
+                max_concurrent: maxc,
+                rpm,
+                rph,
+                oldest_inflight_age_secs,
+                failures_total: if let Some(m) = self.request_meters.get(&lang) {
+                    let mm = m.clone();
+                    let val = if let Ok(g) = mm.try_lock() {
+                        g.failures_total
+                    } else {
+                        mm.lock().await.failures_total
+                    };
+                    val
+                } else {
+                    0
+                },
+                frpm: if let Some(m) = self.request_meters.get(&lang) {
+                    let mm = m.clone();
+                    let val = if let Ok(g) = mm.try_lock() {
+                        g.frpm_last_minute(now_secs) as f64
+                    } else {
+                        mm.lock().await.frpm_last_minute(now_secs) as f64
+                    };
+                    val
+                } else {
+                    0.0
+                },
+                frph: if let Some(m) = self.request_meters.get(&lang) {
+                    let mm = m.clone();
+                    let val = if let Ok(g) = mm.try_lock() {
+                        g.frph_last_hour(now_secs) as f64
+                    } else {
+                        mm.lock().await.frph_last_hour(now_secs) as f64
+                    };
+                    val
+                } else {
+                    0.0
+                },
+            });
+        }
+        out.sort_by_key(|e| e.language.as_str().to_string());
+        out
     }
 
     /// Check and handle unhealthy processes
@@ -877,9 +1257,8 @@ impl SingleServerManager {
         Ok(instance)
     }
 
-    /// Ensure a workspace is registered with the server for the given language
-    /// Uses singleflight to prevent race conditions during initialization
-    pub async fn ensure_workspace_registered(
+    /// Core workspace registration without discovery
+    async fn ensure_workspace_registered_core(
         &self,
         language: Language,
         workspace_root: PathBuf,
@@ -907,18 +1286,114 @@ impl SingleServerManager {
                 let workspace_path = workspace_path.clone();
 
                 Box::pin(async move {
-                    Self::ensure_workspace_registered_internal(
-                        servers,
-                        registry,
+                    // Adaptive default: if not set via env, use a server-type specific
+                    // baseline (expected timeout) scaled up to tolerate large workspaces.
+                    let secs: u64 = if let Ok(v) =
+                        std::env::var("PROBE_LSP_WORKSPACE_INIT_TIMEOUT_SECS")
+                    {
+                        v.parse().unwrap_or(15)
+                    } else {
+                        let cmd = registry
+                            .get(language)
+                            .map(|c| c.command.as_str())
+                            .unwrap_or("");
+                        let st = crate::readiness_tracker::ServerType::from_language_and_command(
+                            language, cmd,
+                        );
+                        let base = st.expected_initialization_timeout().as_secs();
+                        // Scale by 8x and clamp to [30, 300] seconds by default
+                        base.saturating_mul(8).clamp(30, 300)
+                    };
+                    let timeout = tokio::time::Duration::from_secs(secs.max(1));
+                    tracing::debug!(
+                        "[workspace-init] starting for {:?} at {:?} with timeout {}s",
                         language,
                         workspace_path,
+                        secs
+                    );
+                    match tokio::time::timeout(
+                        timeout,
+                        Self::ensure_workspace_registered_internal(
+                            servers,
+                            registry,
+                            language,
+                            workspace_path.clone(),
+                        ),
                     )
                     .await
+                    {
+                        Ok(Ok(v)) => {
+                            tracing::debug!(
+                                "[workspace-init] completed for {:?} at {:?}",
+                                language,
+                                workspace_path
+                            );
+                            Ok(v)
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(
+                                "[workspace-init] failed for {:?} at {:?}: {}",
+                                language,
+                                workspace_path,
+                                e
+                            );
+                            Err(e)
+                        }
+                        Err(_) => {
+                            tracing::warn!(
+                                "[workspace-init] timeout {}s for {:?} at {:?}",
+                                secs,
+                                language,
+                                workspace_path
+                            );
+                            Err(anyhow::anyhow!("workspace init timed out after {}s", secs))
+                        }
+                    }
                 })
             })
             .await?;
 
-        Ok(result.server_instance)
+        let si = result.server_instance.clone();
+
+        // Opportunistic discovery of additional per-language roots under this anchor.
+        Ok(si)
+    }
+
+    /// Ensure a workspace is registered with the server for the given language
+    /// Uses singleflight to prevent race conditions during initialization
+    pub async fn ensure_workspace_registered(
+        &self,
+        language: Language,
+        workspace_root: PathBuf,
+    ) -> Result<Arc<Mutex<ServerInstance>>> {
+        let normalized_workspace = ServerInstance::normalize_workspace_path(&workspace_root);
+        let si = self
+            .ensure_workspace_registered_core(language, normalized_workspace.clone())
+            .await?;
+
+        if std::env::var("PROBE_LSP_DISCOVER_ROOTS")
+            .ok()
+            .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+            .unwrap_or(true)
+        {
+            let max_depth = std::env::var("PROBE_LSP_DISCOVER_MAX_DEPTH")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3);
+            let max_roots = std::env::var("PROBE_LSP_DISCOVER_MAX_ROOTS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(25);
+            let roots =
+                discover_language_roots(&normalized_workspace, language, max_depth, max_roots);
+            for r in roots {
+                if r != normalized_workspace {
+                    let _ = self.ensure_workspace_registered_core(language, r).await;
+                }
+            }
+        }
+
+        Ok(si)
     }
 
     async fn ensure_workspace_for_file(
@@ -1688,7 +2163,30 @@ impl SingleServerManager {
             // Get or create server for this language and workspace
             let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
 
-            let server = server_instance.lock().await;
+            let lock_secs: u64 = std::env::var("PROBE_LSP_SERVER_LOCK_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10);
+            let server = match tokio::time::timeout(
+                Duration::from_secs(lock_secs.max(1)),
+                server_instance.lock(),
+            )
+            .await
+            {
+                Ok(guard) => guard,
+                Err(_) => {
+                    warn!(
+                        "[server-lock] timeout {}s acquiring lock for {:?}; attempting restart",
+                        lock_secs, language
+                    );
+                    let _ = self.restart_server(language).await;
+                    return Err(anyhow!(
+                        "Server lock timeout after {}s for {:?}",
+                        lock_secs,
+                        language
+                    ));
+                }
+            };
 
             // Delegate to the underlying LspServer
             server.server.definition(file_path, line, column).await
@@ -1716,9 +2214,18 @@ impl SingleServerManager {
         );
         let sf = self.refs_singleflight.clone();
         sf.call(key, || async move {
-            self.execute_with_semaphore(language, async {
+            let leader_secs: u64 = std::env::var("PROBE_LSP_LEADER_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+            let fut = self.execute_with_semaphore(language, async {
                 let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
-                let server = server_instance.lock().await;
+                let lock_secs: u64 = std::env::var("PROBE_LSP_SERVER_LOCK_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+                let server = match tokio::time::timeout(Duration::from_secs(lock_secs.max(1)), server_instance.lock()).await {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        warn!("[server-lock] timeout {}s acquiring lock for {:?} in references; attempting restart", lock_secs, language);
+                        let _ = self.restart_server(language).await;
+                        return Err(anyhow!("Server lock timeout after {}s for {:?}", lock_secs, language));
+                    }
+                };
                 if !server.server.supports_references() {
                     return Err(anyhow!(
                         "References not supported by {:?} language server",
@@ -1729,8 +2236,15 @@ impl SingleServerManager {
                     .server
                     .references(file_path, line, column, include_declaration)
                     .await
-            })
-            .await
+            });
+            match tokio::time::timeout(Duration::from_secs(leader_secs.max(1)), fut).await {
+                Ok(res) => res,
+                Err(_) => {
+                    warn!("[leader-timeout] call_hierarchy timed out after {}s for {:?}; restarting server", leader_secs, language);
+                    let _ = self.restart_server(language).await;
+                    Err(anyhow!("call_hierarchy leader timed out after {}s", leader_secs))
+                }
+            }
         })
         .await
     }
@@ -1748,7 +2262,15 @@ impl SingleServerManager {
             // Get or create server for this language and workspace
             let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
 
-            let server = server_instance.lock().await;
+            let lock_secs: u64 = std::env::var("PROBE_LSP_SERVER_LOCK_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+                let server = match tokio::time::timeout(Duration::from_secs(lock_secs.max(1)), server_instance.lock()).await {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        warn!("[server-lock] timeout {}s acquiring lock for {:?} in call_hierarchy; attempting restart", lock_secs, language);
+                        let _ = self.restart_server(language).await;
+                        return Err(anyhow!("Server lock timeout after {}s for {:?}", lock_secs, language));
+                    }
+                };
 
             // Delegate to the underlying LspServer
             server.server.hover(file_path, line, column).await
@@ -1777,7 +2299,15 @@ impl SingleServerManager {
                     .ensure_workspace_for_file(language, file_path)
                     .await?;
 
-                let server = server_instance.lock().await;
+                let lock_secs: u64 = std::env::var("PROBE_LSP_SERVER_LOCK_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+                let server = match tokio::time::timeout(Duration::from_secs(lock_secs.max(1)), server_instance.lock()).await {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        warn!("[server-lock] timeout {}s acquiring lock for {:?} in implementation; attempting restart", lock_secs, language);
+                        let _ = self.restart_server(language).await;
+                        return Err(anyhow!("Server lock timeout after {}s for {:?}", lock_secs, language));
+                    }
+                };
 
                 if !server.server.supports_call_hierarchy() {
                     return Err(anyhow!(
@@ -1817,6 +2347,20 @@ impl SingleServerManager {
     }
 
     /// Execute textDocument/implementation request for the given file and position
+
+    /// Return a snapshot of registered workspace roots for a language (best-effort).
+    pub fn registered_workspaces_for(&self, language: Language) -> Vec<PathBuf> {
+        if let Some(entry) = self.servers.get(&language) {
+            let inst = entry.value().clone();
+            drop(entry);
+            let roots = inst
+                .try_lock()
+                .map(|server| server.registered_workspaces.iter().cloned().collect())
+                .unwrap_or_else(|_| Vec::new());
+            return roots;
+        }
+        Vec::new()
+    }
     pub async fn implementation(
         &self,
         language: Language,
@@ -1827,9 +2371,18 @@ impl SingleServerManager {
         let key = CallKey::new_with_op(language, file_path, line, column, OpKind::Implementations);
         let sf = self.impls_singleflight.clone();
         sf.call(key, || async move {
-            self.execute_with_semaphore(language, async {
+            let leader_secs: u64 = std::env::var("PROBE_LSP_LEADER_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(60);
+            let fut = self.execute_with_semaphore(language, async {
                 let server_instance = self.ensure_workspace_for_file(language, file_path).await?;
-                let server = server_instance.lock().await;
+                let lock_secs: u64 = std::env::var("PROBE_LSP_SERVER_LOCK_TIMEOUT_SECS").ok().and_then(|s| s.parse().ok()).unwrap_or(10);
+            let server = match tokio::time::timeout(Duration::from_secs(lock_secs.max(1)), server_instance.lock()).await {
+                Ok(guard) => guard,
+                Err(_) => {
+                    warn!("[server-lock] timeout {}s acquiring lock for {:?} in type_definition; attempting restart", lock_secs, language);
+                    let _ = self.restart_server(language).await;
+                    return Err(anyhow!("Server lock timeout after {}s for {:?}", lock_secs, language));
+                }
+            };
                 if !server.server.supports_implementations() {
                     return Err(anyhow!(
                         "Implementations not supported by {:?} language server",
@@ -1849,8 +2402,15 @@ impl SingleServerManager {
                             column
                         )
                     })
-            })
-            .await
+            });
+            match tokio::time::timeout(Duration::from_secs(leader_secs.max(1)), fut).await {
+                Ok(res) => res,
+                Err(_) => {
+                    warn!("[leader-timeout] implementation timed out after {}s for {:?}; restarting server", leader_secs, language);
+                    let _ = self.restart_server(language).await;
+                    Err(anyhow!("implementation leader timed out after {}s", leader_secs))
+                }
+            }
         })
         .await
     }

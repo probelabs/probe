@@ -132,6 +132,10 @@ pub enum DaemonRequest {
         #[serde(default)]
         min_level: Option<LogLevel>, // Optional minimum log level filter
     },
+    /// List live IPC connections (diagnostics)
+    Connections {
+        request_id: Uuid,
+    },
     /// Lightweight database writer/lock snapshot for diagnostics
     DbLockSnapshot {
         request_id: Uuid,
@@ -147,6 +151,10 @@ pub enum DaemonRequest {
         force: bool,
     },
     IndexingStatus {
+        request_id: Uuid,
+    },
+    /// Fast, DB-free status snapshot for responsiveness under load
+    IndexingStatusFast {
         request_id: Uuid,
     },
     IndexingConfig {
@@ -416,6 +424,12 @@ pub enum DaemonResponse {
         request_id: Uuid,
         entries: Vec<LogEntry>,
     },
+    /// Live IPC connections snapshot
+    Connections {
+        request_id: Uuid,
+        total: usize,
+        entries: Vec<ConnectionInfo>,
+    },
     /// Lightweight database writer/lock snapshot response
     DbLockSnapshotResponse {
         request_id: Uuid,
@@ -562,6 +576,15 @@ pub enum DaemonResponse {
         request_id: Uuid,
         error: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConnectionInfo {
+    pub client_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    pub connected_for_ms: u64,
+    pub idle_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -936,6 +959,53 @@ pub struct IndexingStatusInfo {
     /// Optional snapshot of the in-memory empty-result cache (counts by relation)
     #[serde(default)]
     pub empty_cache: Option<EmptyCacheInfo>,
+    // Snapshot timing (control-plane)
+    #[serde(default)]
+    pub snapshot_updated_at: Option<u64>, // unix seconds when snapshot was produced
+    #[serde(default)]
+    pub snapshot_age_secs: Option<u64>, // age computed at response time
+}
+
+impl IndexingStatusInfo {
+    /// Minimal idle snapshot for control-plane fast path
+    pub fn idle() -> Self {
+        use crate::protocol::{IndexingProgressInfo, IndexingQueueInfo};
+        Self {
+            manager_status: "Idle".to_string(),
+            progress: IndexingProgressInfo {
+                total_files: 0,
+                processed_files: 0,
+                failed_files: 0,
+                active_files: 0,
+                skipped_files: 0,
+                processed_bytes: 0,
+                symbols_extracted: 0,
+                progress_ratio: 0.0,
+                files_per_second: 0.0,
+                bytes_per_second: 0.0,
+            },
+            queue: IndexingQueueInfo {
+                total_items: 0,
+                pending_items: 0,
+                high_priority_items: 0,
+                medium_priority_items: 0,
+                low_priority_items: 0,
+                is_paused: false,
+                memory_pressure: false,
+            },
+            workers: vec![],
+            session_id: None,
+            started_at: None,
+            elapsed_seconds: 0,
+            lsp_enrichment: None,
+            lsp_indexing: None,
+            database: None,
+            sync: None,
+            empty_cache: None,
+            snapshot_updated_at: None,
+            snapshot_age_secs: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1032,6 +1102,9 @@ pub struct LspEnrichmentInfo {
     pub reader_last_ms: u64,
     /// Total call hierarchy edges persisted by workers
     pub edges_created: u64,
+    /// Total edges attempted by workers (before DB write)
+    #[serde(default)]
+    pub edges_attempted: u64,
     /// Total reference edges persisted by workers
     #[serde(default)]
     pub reference_edges_created: u64,
@@ -1069,6 +1142,19 @@ pub struct LspEnrichmentInfo {
     /// Implementation ops skipped (JS/TS builtins)
     #[serde(default)]
     pub impls_skipped_core_js_ts: u64,
+    /// Per-LSP-server load snapshot (current inflight and recent rates)
+    #[serde(default)]
+    pub server_load: Vec<LspServerLoad>,
+    /// Global in-flight LSP requests across all languages (atomic snapshot)
+    #[serde(default)]
+    pub inflight_total: u64,
+    /// Per-language queue head and oldest pending age (seconds)
+    #[serde(default)]
+    pub queue_heads: Vec<QueueHeadInfo>,
+
+    /// Symbols we skipped because required LSP server is not installed/available
+    #[serde(default)]
+    pub missing_lsp: Vec<MissingLspStat>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1085,6 +1171,51 @@ pub struct LspEnrichmentQueueInfo {
     pub implementations_operations: usize,
     #[serde(default)]
     pub call_hierarchy_operations: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueueHeadInfo {
+    pub language: Language,
+    pub head_uid: String,
+    pub head_file: String,
+    pub head_line: u32,
+    #[serde(default)]
+    pub head_kind: String,
+    #[serde(default)]
+    pub head_ops: usize,
+    /// Age (seconds) of the oldest pending item for this language
+    pub oldest_pending_age_secs: u64,
+}
+
+/// Per-server load metrics for index-status
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LspServerLoad {
+    pub language: Language,
+    /// Current in-flight requests for this server
+    pub inflight_current: u64,
+    /// Requests waiting on permit or dedupe (best-effort)
+    #[serde(default)]
+    pub pending_current: u64,
+    /// Configured maximum concurrent requests per server
+    pub max_concurrent: u64,
+    /// Requests per minute over the last minute window
+    #[serde(default)]
+    pub rpm: f64,
+    /// Requests per hour over the last hour window
+    #[serde(default)]
+    pub rph: f64,
+    /// Oldest age (seconds) among currently in-flight requests for this server
+    #[serde(default)]
+    pub oldest_inflight_age_secs: Option<u64>,
+    /// Total failed requests observed since daemon start
+    #[serde(default)]
+    pub failures_total: u64,
+    /// Failed requests per minute (last minute)
+    #[serde(default)]
+    pub frpm: f64,
+    /// Failed requests per hour (last 60 minutes)
+    #[serde(default)]
+    pub frph: f64,
 }
 
 /// Counts of in-memory empty-result cache entries by relation
@@ -1164,6 +1295,19 @@ pub struct EdgeAuditInfo {
     pub eid011_orphan_source: u64,
     pub eid012_orphan_target: u64,
     pub eid013_line_mismatch: u64,
+
+    // Policy-level resolution counters (non-error), persisted as edges with 'none'
+    #[serde(default)]
+    pub policy_skip_references: u64,
+    #[serde(default)]
+    pub policy_skip_impls: u64,
+    #[serde(default)]
+    pub policy_skip_impls_not_candidate: u64,
+    // Extended / application-level counters
+    #[serde(default)]
+    pub ea011_external_source: u64,
+    #[serde(default)]
+    pub pm001_path_map_failed: u64,
 }
 
 /// Synchronization status snapshot for the current workspace database.
@@ -2311,4 +2455,12 @@ mod tests {
         assert!(result.incoming.is_empty());
         assert!(result.outgoing.is_empty());
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissingLspStat {
+    pub language: Language,
+    pub symbols: u64,
+    #[serde(default)]
+    pub operations: u64,
 }

@@ -160,11 +160,16 @@ impl DatabaseCacheAdapter {
 
             info!("🏗️ DATABASE_CACHE_ADAPTER: Creating workspace cache database for '{}' at path: {:?}", workspace_id, sqlite_config.path);
 
-            let db = match SQLiteBackend::with_sqlite_config(database_config, sqlite_config).await {
+            let db = match SQLiteBackend::with_sqlite_config(
+                database_config.clone(),
+                sqlite_config.clone(),
+            )
+            .await
+            {
                 Ok(backend) => {
                     info!("✅ DATABASE_CACHE_ADAPTER: Successfully created SQLite backend for workspace '{}'", workspace_id);
 
-                    let backend_arc = Arc::new(backend);
+                    let backend_arc: std::sync::Arc<SQLiteBackend> = Arc::new(backend);
 
                     // Periodic checkpoint: enabled by default every 10s, override with PROBE_LSP_AUTO_WAL_INTERVAL
                     let interval = std::env::var("PROBE_LSP_AUTO_WAL_INTERVAL")

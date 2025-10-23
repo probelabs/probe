@@ -137,6 +137,15 @@ pub use database::{
     DatabaseTree, DatabaseTreeExt,
 };
 
+/// Offline database export helper (MVCC-aware): open the workspace DB at `db_path`
+/// and clone it into `out_path` as a single-file SQLite database.
+pub async fn offline_export_clone(
+    db_path: &std::path::Path,
+    out_path: &std::path::Path,
+) -> Result<usize, database::DatabaseError> {
+    database::sqlite_backend::SQLiteBackend::export_file_to_path(db_path, out_path).await
+}
+
 // Re-export pipeline-specific types
 pub use indexing::pipelines::SymbolInfo as IndexingSymbolInfo;
 

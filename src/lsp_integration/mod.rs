@@ -89,7 +89,18 @@ pub enum LspSubcommands {
         /// Minimum log level to display (trace, debug, info, warn, error)
         #[clap(long = "level", value_parser = ["trace","debug","info","warn","error"], default_value = "info")]
         level: String,
+
+        /// Analyze recent logs to detect repeated LSP request patterns (method, uri, position)
+        #[clap(long = "analyze", action = clap::ArgAction::SetTrue)]
+        analyze: bool,
+
+        /// Number of top repeated patterns to show (with --analyze)
+        #[clap(long = "top", default_value = "20")]
+        top: usize,
     },
+
+    /// Diagnose and fix common daemon issues, then restart and verify status
+    Doctor,
 
     /// View LSP daemon crash logs with stack traces
     CrashLogs {
@@ -311,6 +322,13 @@ pub enum LspSubcommands {
 
         /// Output format (terminal, json)
         #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"]) ]
+        format: String,
+    },
+
+    /// Show live IPC connections (pid, age, idle)
+    Connections {
+        /// Output format (terminal, json)
+        #[clap(short = 'o', long = "format", default_value = "terminal", value_parser = ["terminal", "json"])]
         format: String,
     },
 }

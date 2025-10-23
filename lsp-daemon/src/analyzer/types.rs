@@ -257,8 +257,11 @@ impl AnalysisResult {
     /// Convert to database storage format
     pub fn to_database_symbols(&self, context: &AnalysisContext) -> Vec<SymbolState> {
         let path_resolver = PathResolver::new();
-        let relative_file_path =
-            path_resolver.get_relative_path(&context.file_path, &context.workspace_path);
+        // Store repo-root relative paths (e.g., "npm/index.js") to disambiguate multi-root layouts.
+        let repo_root = path_resolver
+            .find_git_root(&context.file_path)
+            .unwrap_or_else(|| context.workspace_path.clone());
+        let relative_file_path = path_resolver.get_relative_path(&context.file_path, &repo_root);
 
         self.symbols
             .iter()

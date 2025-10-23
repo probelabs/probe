@@ -226,7 +226,7 @@ impl PositionAnalyzer {
     pub async fn save_patterns(&self, _config_path: &Path) -> Result<()> {
         // Implementation would serialize self.patterns to JSON/TOML
         // For now, just log the patterns we've discovered
-        info!("Discovered {} position patterns", self.patterns.len());
+        debug!("Discovered {} position patterns", self.patterns.len());
         for pattern in self.patterns.values() {
             if pattern.is_reliable() {
                 info!(
@@ -284,7 +284,7 @@ impl PositionAnalyzer {
         };
         self.patterns.insert(python_function.key(), python_function);
 
-        info!("Loaded {} built-in position patterns", self.patterns.len());
+        debug!("Loaded {} built-in position patterns", self.patterns.len());
     }
 
     /// Analyze a specific symbol and discover the best position offset
