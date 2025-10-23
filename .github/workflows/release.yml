@@ -77,19 +77,21 @@ jobs:
       - name: Build Release
         timeout-minutes: 45
         shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
-          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" ]]; then
+          if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
             # For Windows, use static linking of the C++ runtime
             mkdir -p .cargo
             echo '[target.x86_64-pc-windows-msvc]' > .cargo/config.toml
             echo 'rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/DEBUG:NONE", "-C", "link-args=/NOLOGO"]' >> .cargo/config.toml
-            cargo build --release --target ${{ matrix.target }}
-          elif [[ "${{ matrix.target }}" == *unknown-linux-musl ]]; then
+            cargo build --release --target "$TARGET"
+          elif [[ "$TARGET" == *unknown-linux-musl ]]; then
             # Build static MUSL binaries using cross to ensure toolchains are available
-            cross build --release --target ${{ matrix.target }}
+            cross build --release --target "$TARGET"
           else
             # For other platforms, use the default build
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --target "$TARGET"
           fi
 
       # Package the binary into an archive
