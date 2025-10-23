@@ -131,3 +131,6 @@ examples/reranker/cross_encoder_test_results.json
 
 # Vow - AI accountability files
 .vow*
+
+# PID files (daemon/tests)
+*.pid
