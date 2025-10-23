@@ -147,6 +147,20 @@ jobs:
           cd npm
           npm install
 
+      - name: Build Rust binary for tests and place in npm/bin
+        shell: bash
+        run: |
+          # Ensure a local binary exists to avoid network downloads during tests
+          rustup show
+          cargo build --release
+          mkdir -p npm/bin
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            cp target/release/probe.exe npm/bin/probe.exe
+          else
+            cp target/release/probe npm/bin/probe-binary
+            chmod +x npm/bin/probe-binary
+          fi
+
       - name: Build npm package
         run: |
           cd npm
