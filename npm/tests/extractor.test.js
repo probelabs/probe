@@ -38,26 +38,52 @@ describe('extractBundledBinary', () => {
 		await fs.remove(tempDir);
 	});
 
-	describe('Platform Detection', () => {
-		test('should detect platform correctly', async () => {
-			const platform = os.platform();
-			const arch = os.arch();
+    describe('Platform Detection', () => {
+        test('should look for correct platform-specific archive', async () => {
+            const platform = os.platform();
+            const arch = os.arch();
+            const version = '1.0.0';
 
-			// Based on current platform, we should get expected values
-			if (platform === 'darwin' && arch === 'arm64') {
-				// The function should look for aarch64-apple-darwin
-				expect(true).toBe(true); // Placeholder - actual test below
-            } else if (platform === 'linux' && arch === 'x64') {
-                // Should look for x86_64-unknown-linux-musl
-                expect(true).toBe(true);
+            // Determine expected artifact naming from current platform
+            let platformString;
+            let ext;
+            if (platform === 'linux' && arch === 'x64') {
+                platformString = 'x86_64-unknown-linux-musl';
+                ext = 'tar.gz';
+            } else if (platform === 'linux' && arch === 'arm64') {
+                platformString = 'aarch64-unknown-linux-musl';
+                ext = 'tar.gz';
+            } else if (platform === 'darwin' && arch === 'x64') {
+                platformString = 'x86_64-apple-darwin';
+                ext = 'tar.gz';
+            } else if (platform === 'darwin' && arch === 'arm64') {
+                platformString = 'aarch64-apple-darwin';
+                ext = 'tar.gz';
+            } else if (platform === 'win32' && arch === 'x64') {
+                platformString = 'x86_64-pc-windows-msvc';
+                ext = 'zip';
+            } else {
+                // Skip on unsupported combos for this repository
+                return;
             }
-			// This verifies the function doesn't crash
-		});
 
-		test('should throw error for unsupported platform', async () => {
-			// Mock os.platform to return unsupported value
-			const originalPlatform = os.platform;
-			jest.spyOn(os, 'platform').mockReturnValue('unsupported');
+            const binariesDirOnDisk = path.resolve(__dirname, '..', 'bin', 'binaries');
+            const expectedArchive = `probe-v${version}-${platformString}.${ext}`;
+            const expectedPath = path.join(binariesDirOnDisk, expectedArchive);
+
+            // Spy and force negative existence to avoid relying on real files
+            const pathExistsSpy = jest.spyOn(fs, 'pathExists').mockResolvedValue(false);
+
+            await expect(extractBundledBinary(version)).rejects.toThrow('Bundled binary not found');
+
+            expect(pathExistsSpy).toHaveBeenCalledWith(expectedPath);
+            pathExistsSpy.mockRestore();
+        });
+        
+        test('should throw error for unsupported platform', async () => {
+            // Mock os.platform to return unsupported value
+            const originalPlatform = os.platform;
+            jest.spyOn(os, 'platform').mockReturnValue('unsupported');
 
 			await expect(extractBundledBinary('1.0.0')).rejects.toThrow('Unsupported operating system');
 
