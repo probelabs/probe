@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      - uses: probelabs/visor@4234d7b1dc416c58582f44cafa47419f4f94d79f
+      - uses: probelabs/visor@44f44175b3b004260a9df627184ca25075be2d82
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
