@@ -20,7 +20,8 @@ export const querySchema = z.object({
 
 export const extractSchema = z.object({
 	targets: z.string().optional().describe('File paths or symbols to extract from. Formats: "file.js" (whole file), "file.js:42" (line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (symbol). Multiple targets separated by spaces.'),
-	input_content: z.string().optional().describe('Text content to extract file paths from (alternative to targets)')
+	input_content: z.string().optional().describe('Text content to extract file paths from (alternative to targets)'),
+	allow_tests: z.boolean().optional().default(true).describe('Include test files in extraction results')
 });
 
 export const delegateSchema = z.object({
@@ -189,6 +190,7 @@ Full file extraction should be the LAST RESORT! Always prefer search.
 Parameters:
 - targets: (required) File paths or symbols to extract from. Formats: "file.js" (whole file), "file.js:42" (code block at line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (specific symbol). Multiple targets separated by spaces.
 - input_content: (optional) Text content to extract file paths from (alternative to targets for processing diffs/logs).
+- allow_tests: (optional, default: true) Include test files in extraction results.
 
 Usage Example:
 
