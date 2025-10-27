@@ -164,7 +164,7 @@ Parameters:
 - pattern: (required) AST pattern to search for. Use $NAME for variable names, $$$PARAMS for parameter lists, etc.
 - path: (optional, default: '.') Path to search in.
 - language: (optional, default: 'rust') Programming language to use for parsing.
-- allow_tests: (optional, default: false) Allow test files in search results (true/false).
+- allow_tests: (optional, default: true) Allow test files in search results (true/false).
 Usage Example:
 
 <examples>

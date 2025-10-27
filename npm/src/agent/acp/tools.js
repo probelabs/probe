@@ -286,7 +286,7 @@ export class ACPToolManager {
             },
             allow_tests: {
               type: 'boolean',
-              description: 'Include test files in results (default: false)'
+              description: 'Include test files in results (default: true)'
             }
           },
           required: ['query']
