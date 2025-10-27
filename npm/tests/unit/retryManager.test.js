@@ -183,6 +183,7 @@ describe('RetryManager', () => {
         initialDelay: 1000,
         maxDelay: 2000,
         backoffFactor: 10,
+        jitter: false, // Disable jitter for predictable timing
         debug: false
       });
 
@@ -201,7 +202,8 @@ describe('RetryManager', () => {
 
       // With backoffFactor of 10, delay should be capped at maxDelay (2000ms)
       const delay2 = timestamps[2] - timestamps[1];
-      expect(delay2).toBeLessThan(2500); // Should not exceed maxDelay significantly
+      expect(delay2).toBeGreaterThanOrEqual(2000); // Should be at least maxDelay
+      expect(delay2).toBeLessThan(2100); // Should not exceed maxDelay significantly
     });
 
     test('should track statistics correctly', async () => {
