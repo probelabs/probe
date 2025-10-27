@@ -15,7 +15,7 @@ export const querySchema = z.object({
 	pattern: z.string().describe('AST pattern to search for. Use $NAME for variable names, $$$PARAMS for parameter lists, etc.'),
 	path: z.string().optional().default('.').describe('Path to search in'),
 	language: z.string().optional().default('rust').describe('Programming language to use for parsing'),
-	allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results')
+	allow_tests: z.boolean().optional().default(true).describe('Allow test files in search results')
 });
 
 export const extractSchema = z.object({

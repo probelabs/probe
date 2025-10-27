@@ -314,6 +314,10 @@ export class ACPToolManager {
             max_results: {
               type: 'number',
               description: 'Maximum number of results to return (default: 10)'
+            },
+            allow_tests: {
+              type: 'boolean',
+              description: 'Allow test files in search results (default: true)'
             }
           },
           required: ['pattern']
