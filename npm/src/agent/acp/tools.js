@@ -286,7 +286,7 @@ export class ACPToolManager {
             },
             allow_tests: {
               type: 'boolean',
-              description: 'Include test files in results (default: false)'
+              description: 'Include test files in results (default: true)'
             }
           },
           required: ['query']
@@ -314,6 +314,10 @@ export class ACPToolManager {
             max_results: {
               type: 'number',
               description: 'Maximum number of results to return (default: 10)'
+            },
+            allow_tests: {
+              type: 'boolean',
+              description: 'Allow test files in search results (default: true)'
             }
           },
           required: ['pattern']
@@ -337,7 +341,7 @@ export class ACPToolManager {
             },
             allow_tests: {
               type: 'boolean',
-              description: 'Allow test files in results (default: false)'
+              description: 'Allow test files in results (default: true)'
             },
             format: {
               type: 'string',

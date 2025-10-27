@@ -15,12 +15,13 @@ export const querySchema = z.object({
 	pattern: z.string().describe('AST pattern to search for. Use $NAME for variable names, $$$PARAMS for parameter lists, etc.'),
 	path: z.string().optional().default('.').describe('Path to search in'),
 	language: z.string().optional().default('rust').describe('Programming language to use for parsing'),
-	allow_tests: z.boolean().optional().default(false).describe('Allow test files in search results')
+	allow_tests: z.boolean().optional().default(true).describe('Allow test files in search results')
 });
 
 export const extractSchema = z.object({
 	targets: z.string().optional().describe('File paths or symbols to extract from. Formats: "file.js" (whole file), "file.js:42" (line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (symbol). Multiple targets separated by spaces.'),
-	input_content: z.string().optional().describe('Text content to extract file paths from (alternative to targets)')
+	input_content: z.string().optional().describe('Text content to extract file paths from (alternative to targets)'),
+	allow_tests: z.boolean().optional().default(true).describe('Include test files in extraction results')
 });
 
 export const delegateSchema = z.object({
@@ -163,7 +164,7 @@ Parameters:
 - pattern: (required) AST pattern to search for. Use $NAME for variable names, $$$PARAMS for parameter lists, etc.
 - path: (optional, default: '.') Path to search in.
 - language: (optional, default: 'rust') Programming language to use for parsing.
-- allow_tests: (optional, default: false) Allow test files in search results (true/false).
+- allow_tests: (optional, default: true) Allow test files in search results (true/false).
 Usage Example:
 
 <examples>
@@ -189,6 +190,7 @@ Full file extraction should be the LAST RESORT! Always prefer search.
 Parameters:
 - targets: (required) File paths or symbols to extract from. Formats: "file.js" (whole file), "file.js:42" (code block at line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (specific symbol). Multiple targets separated by spaces.
 - input_content: (optional) Text content to extract file paths from (alternative to targets for processing diffs/logs).
+- allow_tests: (optional, default: true) Include test files in extraction results.
 
 Usage Example:
 
