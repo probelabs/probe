@@ -337,7 +337,7 @@ export class ACPToolManager {
             },
             allow_tests: {
               type: 'boolean',
-              description: 'Allow test files in results (default: false)'
+              description: 'Allow test files in results (default: true)'
             },
             format: {
               type: 'string',
