@@ -131,10 +131,89 @@ export MODEL_NAME=claude-3-5-sonnet-20241022
 **ProbeAgent Features:**
 - **Multi-turn conversations** with automatic history management
 - **Code search integration** - Uses probe's search capabilities transparently
-- **Multiple AI providers** - Supports Anthropic Claude, OpenAI GPT, Google Gemini
+- **Multiple AI providers** - Supports Anthropic Claude, OpenAI GPT, Google Gemini, AWS Bedrock
+- **Automatic retry with exponential backoff** - Handles transient API failures gracefully
+- **Provider fallback** - Seamlessly switch between providers if one fails (e.g., Azure Claude → Bedrock Claude → OpenAI)
 - **Session management** - Maintain conversation context across calls
 - **Token tracking** - Monitor usage and costs
 - **Configurable personas** - Engineer, architect, code-review, and more
+
+### Retry and Fallback Support
+
+ProbeAgent includes comprehensive retry and fallback capabilities for maximum reliability:
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+const agent = new ProbeAgent({
+  path: '/path/to/your/project',
+
+  // Configure retry behavior
+  retry: {
+    maxRetries: 5,           // Retry up to 5 times per provider
+    initialDelay: 1000,      // Start with 1 second delay
+    maxDelay: 30000,         // Cap delays at 30 seconds
+    backoffFactor: 2         // Double the delay each time
+  },
+
+  // Configure provider fallback
+  fallback: {
+    strategy: 'custom',
+    providers: [
+      {
+        provider: 'anthropic',
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        model: 'claude-3-7-sonnet-20250219',
+        maxRetries: 5  // Can override retry config per provider
+      },
+      {
+        provider: 'bedrock',
+        region: 'us-west-2',
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+        model: 'anthropic.claude-sonnet-4-20250514-v1:0'
+      },
+      {
+        provider: 'openai',
+        apiKey: process.env.OPENAI_API_KEY,
+        model: 'gpt-4o'
+      }
+    ],
+    maxTotalAttempts: 15  // Maximum attempts across all providers
+  }
+});
+
+// API calls automatically retry on failures and fallback to other providers
+const answer = await agent.answer("Explain this codebase");
+```
+
+**Retry & Fallback Features:**
+- **Exponential backoff** - Intelligently delays retries to avoid overwhelming APIs
+- **Automatic error detection** - Retries on transient errors (Overloaded, 429, 503, timeouts, network errors)
+- **Multi-provider support** - Fallback across Anthropic, OpenAI, Google, and AWS Bedrock
+- **Cross-cloud failover** - Use Azure Claude → Bedrock Claude → OpenAI as fallback chain
+- **Statistics tracking** - Monitor retry attempts and provider usage
+- **Environment variable support** - Configure via env vars for easy deployment
+
+**Quick Setup with Auto-Fallback:**
+```bash
+# Set all your API keys
+export ANTHROPIC_API_KEY=sk-ant-xxx
+export OPENAI_API_KEY=sk-xxx
+export GOOGLE_API_KEY=xxx
+export AUTO_FALLBACK=1  # Enable automatic fallback
+export MAX_RETRIES=5    # Configure retry limit
+```
+
+```javascript
+// No configuration needed - uses all available providers automatically!
+const agent = new ProbeAgent({
+  path: '/path/to/your/project',
+  fallback: { auto: true }
+});
+```
+
+See [docs/RETRY_AND_FALLBACK.md](./docs/RETRY_AND_FALLBACK.md) for complete documentation and examples.
 
 ### Using as an MCP Server
 

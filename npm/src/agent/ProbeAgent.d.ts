@@ -1,5 +1,7 @@
 // TypeScript definitions for ProbeAgent class
 import { EventEmitter } from 'events';
+import type { RetryOptions } from './RetryManager';
+import type { FallbackOptions } from './FallbackManager';
 
 /**
  * Configuration options for creating a ProbeAgent instance
@@ -18,7 +20,7 @@ export interface ProbeAgentOptions {
   /** Search directory path */
   path?: string;
   /** Force specific AI provider */
-  provider?: 'anthropic' | 'openai' | 'google';
+  provider?: 'anthropic' | 'openai' | 'google' | 'bedrock';
   /** Override model name */
   model?: string;
   /** Enable debug mode */
@@ -33,6 +35,10 @@ export interface ProbeAgentOptions {
   mcpConfig?: any;
   /** @deprecated Use mcpConfig instead */
   mcpServers?: any[];
+  /** Retry configuration for handling transient API failures */
+  retry?: RetryOptions;
+  /** Fallback configuration for multi-provider support */
+  fallback?: FallbackOptions | { auto: boolean };
 }
 
 /**

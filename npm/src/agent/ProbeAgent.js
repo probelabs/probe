@@ -55,9 +55,18 @@ import {
   parseHybridXmlToolCall,
   loadMCPConfigurationFromPath
 } from './mcp/index.js';
+import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
+import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
-const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
+const MAX_TOOL_ITERATIONS = (() => {
+  const val = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
+  if (isNaN(val) || val < 1 || val > 200) {
+    console.warn('[ProbeAgent] MAX_TOOL_ITERATIONS must be between 1 and 200, using default: 30');
+    return 30;
+  }
+  return val;
+})();
 const MAX_HISTORY_MESSAGES = 100;
 
 // Supported image file extensions (imported from shared config)
@@ -92,6 +101,18 @@ export class ProbeAgent {
    * @param {Array} [options.mcpServers] - Deprecated, use mcpConfig instead
    * @param {Object} [options.storageAdapter] - Custom storage adapter for history management
    * @param {Object} [options.hooks] - Hook callbacks for events (e.g., {'tool:start': callback})
+   * @param {Object} [options.retry] - Retry configuration
+   * @param {number} [options.retry.maxRetries=3] - Maximum retry attempts per provider
+   * @param {number} [options.retry.initialDelay=1000] - Initial delay in ms
+   * @param {number} [options.retry.maxDelay=30000] - Maximum delay in ms
+   * @param {number} [options.retry.backoffFactor=2] - Exponential backoff multiplier
+   * @param {Array<string>} [options.retry.retryableErrors] - List of retryable error patterns
+   * @param {Object} [options.fallback] - Fallback configuration
+   * @param {string} [options.fallback.strategy] - Fallback strategy: 'same-model', 'same-provider', 'any', 'custom'
+   * @param {Array<string>} [options.fallback.models] - List of models for same-provider fallback
+   * @param {Array<Object>} [options.fallback.providers] - List of provider configurations for custom fallback
+   * @param {boolean} [options.fallback.stopOnSuccess=true] - Stop on first success
+   * @param {number} [options.fallback.maxTotalAttempts=10] - Maximum total attempts across all providers
    */
   constructor(options = {}) {
     // Basic configuration
@@ -104,7 +125,13 @@ export class ProbeAgent {
     this.cancelled = false;
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
-    this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
+    this.maxResponseTokens = options.maxResponseTokens || (() => {
+      const val = parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10);
+      if (isNaN(val) || val < 0 || val > 200000) {
+        return null;
+      }
+      return val || null;
+    })();
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
     this.disableJsonValidation = !!options.disableJsonValidation;
@@ -170,6 +197,14 @@ export class ProbeAgent {
     this.mcpServers = options.mcpServers || null; // Deprecated, keep for backward compatibility
     this.mcpBridge = null;
     this._mcpInitialized = false; // Track if MCP initialization has been attempted
+
+    // Retry configuration
+    this.retryConfig = options.retry || {};
+    this.retryManager = null; // Will be initialized lazily when needed
+
+    // Fallback configuration
+    this.fallbackConfig = options.fallback || null;
+    this.fallbackManager = null; // Will be initialized in initializeModel
 
     // Initialize the AI model
     this.initializeModel();
@@ -352,15 +387,19 @@ export class ProbeAgent {
     if (forceProvider) {
       if (forceProvider === 'anthropic' && anthropicApiKey) {
         this.initializeAnthropicModel(anthropicApiKey, anthropicApiUrl, modelName);
+        this.initializeFallbackManager(forceProvider, modelName);
         return;
       } else if (forceProvider === 'openai' && openaiApiKey) {
         this.initializeOpenAIModel(openaiApiKey, openaiApiUrl, modelName);
+        this.initializeFallbackManager(forceProvider, modelName);
         return;
       } else if (forceProvider === 'google' && googleApiKey) {
         this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
+        this.initializeFallbackManager(forceProvider, modelName);
         return;
       } else if (forceProvider === 'bedrock' && ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey)) {
         this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
+        this.initializeFallbackManager(forceProvider, modelName);
         return;
       }
       console.warn(`WARNING: Forced provider "${forceProvider}" selected but required API key is missing or invalid! Falling back to auto-detection.`);
@@ -369,15 +408,144 @@ export class ProbeAgent {
     // If no provider is forced or forced provider failed, use the first available API key
     if (anthropicApiKey) {
       this.initializeAnthropicModel(anthropicApiKey, anthropicApiUrl, modelName);
+      this.initializeFallbackManager('anthropic', modelName);
     } else if (openaiApiKey) {
       this.initializeOpenAIModel(openaiApiKey, openaiApiUrl, modelName);
+      this.initializeFallbackManager('openai', modelName);
     } else if (googleApiKey) {
       this.initializeGoogleModel(googleApiKey, googleApiUrl, modelName);
+      this.initializeFallbackManager('google', modelName);
     } else if ((awsAccessKeyId && awsSecretAccessKey && awsRegion) || awsApiKey) {
       this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
+      this.initializeFallbackManager('bedrock', modelName);
     } else {
       throw new Error('No API key provided. Please set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN), OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY (or GOOGLE_API_KEY), AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
     }
+  }
+
+  /**
+   * Initialize fallback manager based on configuration
+   * @param {string} primaryProvider - The primary provider being used
+   * @param {string} primaryModel - The primary model being used
+   * @private
+   */
+  initializeFallbackManager(primaryProvider, primaryModel) {
+    // Skip fallback initialization if explicitly disabled or in test mode
+    if (this.fallbackConfig === false || process.env.DISABLE_FALLBACK === '1') {
+      return;
+    }
+
+    // If fallback config is provided explicitly, use it
+    if (this.fallbackConfig && this.fallbackConfig.providers) {
+      try {
+        this.fallbackManager = new FallbackManager({
+          ...this.fallbackConfig,
+          debug: this.debug
+        });
+
+        if (this.debug) {
+          console.log(`[DEBUG] Fallback manager initialized with ${this.fallbackManager.providers.length} providers`);
+        }
+      } catch (error) {
+        console.error('[WARNING] Failed to initialize fallback manager:', error.message);
+      }
+      return;
+    }
+
+    // Try to load from environment variables
+    const envFallbackManager = createFallbackManagerFromEnv(this.debug);
+    if (envFallbackManager) {
+      this.fallbackManager = envFallbackManager;
+      if (this.debug) {
+        console.log(`[DEBUG] Fallback manager initialized from environment variables`);
+      }
+      return;
+    }
+
+    // Auto-build fallback from available providers if enabled
+    if (process.env.AUTO_FALLBACK === '1' || this.fallbackConfig?.auto) {
+      const providers = buildFallbackProvidersFromEnv({
+        primaryProvider,
+        primaryModel
+      });
+
+      if (providers.length > 1) {
+        try {
+          this.fallbackManager = new FallbackManager({
+            strategy: 'custom',
+            providers,
+            debug: this.debug
+          });
+
+          if (this.debug) {
+            console.log(`[DEBUG] Auto-fallback enabled with ${providers.length} providers`);
+          }
+        } catch (error) {
+          console.error('[WARNING] Failed to initialize auto-fallback:', error.message);
+        }
+      }
+    }
+  }
+
+  /**
+   * Execute streamText with retry and fallback support
+   * @param {Object} options - streamText options
+   * @returns {Promise<Object>} - streamText result
+   * @private
+   */
+  async streamTextWithRetryAndFallback(options) {
+    // Initialize retry manager if not already created
+    if (!this.retryManager) {
+      this.retryManager = new RetryManager({
+        maxRetries: this.retryConfig.maxRetries ?? 3,
+        initialDelay: this.retryConfig.initialDelay ?? 1000,
+        maxDelay: this.retryConfig.maxDelay ?? 30000,
+        backoffFactor: this.retryConfig.backoffFactor ?? 2,
+        retryableErrors: this.retryConfig.retryableErrors,
+        debug: this.debug
+      });
+    }
+
+    // If no fallback manager, just use retry with current provider
+    if (!this.fallbackManager) {
+      return await this.retryManager.executeWithRetry(
+        () => streamText(options),
+        {
+          provider: this.apiType,
+          model: this.model
+        }
+      );
+    }
+
+    // Use fallback manager with retry for each provider
+    return await this.fallbackManager.executeWithFallback(
+      async (provider, model, config) => {
+        // Create options with the fallback provider
+        const fallbackOptions = {
+          ...options,
+          model: provider(model)
+        };
+
+        // Create a retry manager for this specific provider
+        const providerRetryManager = new RetryManager({
+          maxRetries: config.maxRetries ?? this.retryConfig.maxRetries ?? 3,
+          initialDelay: this.retryConfig.initialDelay ?? 1000,
+          maxDelay: this.retryConfig.maxDelay ?? 30000,
+          backoffFactor: this.retryConfig.backoffFactor ?? 2,
+          retryableErrors: this.retryConfig.retryableErrors,
+          debug: this.debug
+        });
+
+        // Execute with retry for this provider
+        return await providerRetryManager.executeWithRetry(
+          () => streamText(fallbackOptions),
+          {
+            provider: config.provider,
+            model: model
+          }
+        );
+      }
+    );
   }
 
   /**
@@ -1263,8 +1431,8 @@ When troubleshooting:
           const executeAIRequest = async () => {
             // Prepare messages with potential image content
             const messagesForAI = this.prepareMessagesWithImages(currentMessages);
-            
-            const result = await streamText({
+
+            const result = await this.streamTextWithRetryAndFallback({
               model: this.provider(this.model),
               messages: messagesForAI,
               maxTokens: maxResponseTokens,
