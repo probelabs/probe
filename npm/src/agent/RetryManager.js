@@ -289,37 +289,37 @@ export function createRetryManagerFromEnv(debug = false) {
   // Parse and validate environment variables
   if (process.env.MAX_RETRIES) {
     const parsed = parseInt(process.env.MAX_RETRIES, 10);
-    if (!isNaN(parsed)) {
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 50) {
       options.maxRetries = parsed;
     } else {
-      console.warn(`[RetryManager] Invalid MAX_RETRIES value: ${process.env.MAX_RETRIES}, using default`);
+      console.warn(`[RetryManager] MAX_RETRIES must be between 0 and 50, using default`);
     }
   }
 
   if (process.env.RETRY_INITIAL_DELAY) {
     const parsed = parseInt(process.env.RETRY_INITIAL_DELAY, 10);
-    if (!isNaN(parsed)) {
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 60000) {
       options.initialDelay = parsed;
     } else {
-      console.warn(`[RetryManager] Invalid RETRY_INITIAL_DELAY value: ${process.env.RETRY_INITIAL_DELAY}, using default`);
+      console.warn(`[RetryManager] RETRY_INITIAL_DELAY must be between 0 and 60000ms, using default`);
     }
   }
 
   if (process.env.RETRY_MAX_DELAY) {
     const parsed = parseInt(process.env.RETRY_MAX_DELAY, 10);
-    if (!isNaN(parsed)) {
+    if (!isNaN(parsed) && parsed >= 0 && parsed <= 300000) {
       options.maxDelay = parsed;
     } else {
-      console.warn(`[RetryManager] Invalid RETRY_MAX_DELAY value: ${process.env.RETRY_MAX_DELAY}, using default`);
+      console.warn(`[RetryManager] RETRY_MAX_DELAY must be between 0 and 300000ms, using default`);
     }
   }
 
   if (process.env.RETRY_BACKOFF_FACTOR) {
     const parsed = parseFloat(process.env.RETRY_BACKOFF_FACTOR);
-    if (!isNaN(parsed)) {
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= 10) {
       options.backoffFactor = parsed;
     } else {
-      console.warn(`[RetryManager] Invalid RETRY_BACKOFF_FACTOR value: ${process.env.RETRY_BACKOFF_FACTOR}, using default`);
+      console.warn(`[RetryManager] RETRY_BACKOFF_FACTOR must be between 1 and 10, using default`);
     }
   }
 

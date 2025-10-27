@@ -58,7 +58,14 @@ import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
-const MAX_TOOL_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
+const MAX_TOOL_ITERATIONS = (() => {
+  const val = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
+  if (isNaN(val) || val < 1 || val > 200) {
+    console.warn('[ProbeAgent] MAX_TOOL_ITERATIONS must be between 1 and 200, using default: 30');
+    return 30;
+  }
+  return val;
+})();
 const MAX_HISTORY_MESSAGES = 100;
 
 // Supported image file extensions (imported from shared config)
@@ -115,7 +122,13 @@ export class ProbeAgent {
     this.cancelled = false;
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
-    this.maxResponseTokens = options.maxResponseTokens || parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10) || null;
+    this.maxResponseTokens = options.maxResponseTokens || (() => {
+      const val = parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10);
+      if (isNaN(val) || val < 0 || val > 200000) {
+        return null;
+      }
+      return val || null;
+    })();
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
     this.disableJsonValidation = !!options.disableJsonValidation;

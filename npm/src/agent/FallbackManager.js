@@ -358,7 +358,21 @@ export function createFallbackManagerFromEnv(debug = false) {
   // Parse providers configuration
   if (fallbackProvidersEnv) {
     try {
-      providers = JSON.parse(fallbackProvidersEnv);
+      // Validate input is a string and not suspiciously long
+      if (typeof fallbackProvidersEnv !== 'string' || fallbackProvidersEnv.length > 10000) {
+        console.error('[FallbackManager] FALLBACK_PROVIDERS must be a valid JSON string under 10KB');
+        return null;
+      }
+
+      const parsed = JSON.parse(fallbackProvidersEnv);
+
+      // Validate parsed result is an array
+      if (!Array.isArray(parsed)) {
+        console.error('[FallbackManager] FALLBACK_PROVIDERS must be a JSON array');
+        return null;
+      }
+
+      providers = parsed;
       strategy = FALLBACK_STRATEGIES.CUSTOM;
     } catch (error) {
       console.error('[FallbackManager] Failed to parse FALLBACK_PROVIDERS:', error.message);
@@ -369,7 +383,21 @@ export function createFallbackManagerFromEnv(debug = false) {
   // Parse models configuration
   if (fallbackModelsEnv) {
     try {
-      models = JSON.parse(fallbackModelsEnv);
+      // Validate input is a string and not suspiciously long
+      if (typeof fallbackModelsEnv !== 'string' || fallbackModelsEnv.length > 10000) {
+        console.error('[FallbackManager] FALLBACK_MODELS must be a valid JSON string under 10KB');
+        return null;
+      }
+
+      const parsed = JSON.parse(fallbackModelsEnv);
+
+      // Validate parsed result is an array
+      if (!Array.isArray(parsed)) {
+        console.error('[FallbackManager] FALLBACK_MODELS must be a JSON array');
+        return null;
+      }
+
+      models = parsed;
       strategy = FALLBACK_STRATEGIES.SAME_PROVIDER;
     } catch (error) {
       console.error('[FallbackManager] Failed to parse FALLBACK_MODELS:', error.message);
@@ -378,7 +406,14 @@ export function createFallbackManagerFromEnv(debug = false) {
   }
 
   const maxTotalAttempts = process.env.FALLBACK_MAX_TOTAL_ATTEMPTS
-    ? parseInt(process.env.FALLBACK_MAX_TOTAL_ATTEMPTS, 10)
+    ? (() => {
+        const val = parseInt(process.env.FALLBACK_MAX_TOTAL_ATTEMPTS, 10);
+        if (isNaN(val) || val < 1 || val > 100) {
+          console.warn('[FallbackManager] FALLBACK_MAX_TOTAL_ATTEMPTS must be between 1 and 100, using default: 10');
+          return 10;
+        }
+        return val;
+      })()
     : 10;
 
   return new FallbackManager({
