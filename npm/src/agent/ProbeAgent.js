@@ -1513,7 +1513,10 @@ When troubleshooting:
           'search', 'query', 'extract', 'listFiles', 'searchFiles', 'attempt_completion'
         ];
         if (this.allowEdit) {
-          validTools.push('implement');
+          validTools.push('implement', 'edit', 'create');
+        }
+        if (this.enableBash) {
+          validTools.push('bash');
         }
         if (this.enableDelegate) {
           validTools.push('delegate');

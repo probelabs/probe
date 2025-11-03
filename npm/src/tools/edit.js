@@ -5,7 +5,7 @@
 
 import { tool } from 'ai';
 import { promises as fs } from 'fs';
-import { dirname, resolve, isAbsolute } from 'path';
+import { dirname, resolve, isAbsolute, sep } from 'path';
 import { existsSync } from 'fs';
 
 /**
@@ -18,15 +18,30 @@ function isPathAllowed(filePath, allowedFolders) {
   if (!allowedFolders || allowedFolders.length === 0) {
     // If no restrictions, allow current directory and below
     const resolvedPath = resolve(filePath);
-    const cwd = process.cwd();
-    return resolvedPath.startsWith(cwd);
+    const cwd = resolve(process.cwd());
+    // Ensure proper path separator to prevent path traversal
+    return resolvedPath === cwd || resolvedPath.startsWith(cwd + sep);
   }
 
   const resolvedPath = resolve(filePath);
   return allowedFolders.some(folder => {
     const allowedPath = resolve(folder);
-    return resolvedPath.startsWith(allowedPath);
+    // Ensure proper path separator to prevent path traversal
+    return resolvedPath === allowedPath || resolvedPath.startsWith(allowedPath + sep);
   });
+}
+
+/**
+ * Common configuration for file tools
+ * @param {Object} options - Configuration options
+ * @returns {Object} Parsed configuration
+ */
+function parseFileToolOptions(options = {}) {
+  return {
+    debug: options.debug || false,
+    allowedFolders: options.allowedFolders || [],
+    defaultPath: options.defaultPath
+  };
 }
 
 /**
@@ -39,7 +54,7 @@ function isPathAllowed(filePath, allowedFolders) {
  * @returns {Object} Configured edit tool
  */
 export const editTool = (options = {}) => {
-  const { debug = false, allowedFolders = [], defaultPath } = options;
+  const { debug, allowedFolders, defaultPath } = parseFileToolOptions(options);
 
   return tool({
     name: 'edit',
@@ -182,7 +197,7 @@ Important:
  * @returns {Object} Configured create tool
  */
 export const createTool = (options = {}) => {
-  const { debug = false, allowedFolders = [], defaultPath } = options;
+  const { debug, allowedFolders, defaultPath } = parseFileToolOptions(options);
 
   return tool({
     name: 'create',
