@@ -99,6 +99,17 @@ Important:
 
     execute: async ({ file_path, old_string, new_string, replace_all = false }) => {
       try {
+        // Validate input parameters
+        if (!file_path || typeof file_path !== 'string' || file_path.trim() === '') {
+          return `Error editing file: Invalid file_path - must be a non-empty string`;
+        }
+        if (old_string === undefined || old_string === null || typeof old_string !== 'string') {
+          return `Error editing file: Invalid old_string - must be a string`;
+        }
+        if (new_string === undefined || new_string === null || typeof new_string !== 'string') {
+          return `Error editing file: Invalid new_string - must be a string`;
+        }
+
         // Resolve the file path
         const resolvedPath = isAbsolute(file_path) ? file_path : resolve(defaultPath || process.cwd(), file_path);
 
@@ -108,18 +119,12 @@ Important:
 
         // Check if path is allowed
         if (!isPathAllowed(resolvedPath, allowedFolders)) {
-          return {
-            success: false,
-            error: `Permission denied: File ${file_path} is outside allowed directories`
-          };
+          return `Error editing file: Permission denied - ${file_path} is outside allowed directories`;
         }
 
         // Check if file exists
         if (!existsSync(resolvedPath)) {
-          return {
-            success: false,
-            error: `File not found: ${file_path}`
-          };
+          return `Error editing file: File not found - ${file_path}`;
         }
 
         // Read the file
@@ -127,10 +132,7 @@ Important:
 
         // Check if old_string exists in the file
         if (!content.includes(old_string)) {
-          return {
-            success: false,
-            error: `String not found in file: The specified old_string was not found in ${file_path}`
-          };
+          return `Error editing file: String not found - the specified old_string was not found in ${file_path}`;
         }
 
         // Count occurrences
@@ -138,10 +140,7 @@ Important:
 
         // Check uniqueness if not replacing all
         if (!replace_all && occurrences > 1) {
-          return {
-            success: false,
-            error: `Multiple occurrences found: The old_string appears ${occurrences} times in the file. Use replace_all: true to replace all occurrences, or provide more context to make the string unique.`
-          };
+          return `Error editing file: Multiple occurrences found - the old_string appears ${occurrences} times. Use replace_all: true to replace all occurrences, or provide more context to make the string unique.`;
         }
 
         // Perform the replacement
@@ -154,10 +153,7 @@ Important:
 
         // Check if replacement was made
         if (newContent === content) {
-          return {
-            success: false,
-            error: 'No changes made: old_string and new_string might be the same'
-          };
+          return `Error editing file: No changes made - old_string and new_string might be the same`;
         }
 
         // Write the file back
@@ -169,19 +165,12 @@ Important:
           console.error(`[Edit] Successfully edited ${resolvedPath}, replaced ${replacedCount} occurrence(s)`);
         }
 
-        return {
-          success: true,
-          message: `Successfully edited ${file_path}`,
-          replacements: replacedCount,
-          file_path: resolvedPath
-        };
+        // Return success message as a string (matching other tools pattern)
+        return `Successfully edited ${file_path} (${replacedCount} replacement${replacedCount !== 1 ? 's' : ''})`;
 
       } catch (error) {
         console.error('[Edit] Error:', error);
-        return {
-          success: false,
-          error: `Failed to edit file: ${error.message}`
-        };
+        return `Error editing file: ${error.message}`;
       }
     }
   });
@@ -237,6 +226,14 @@ Important:
 
     execute: async ({ file_path, content, overwrite = false }) => {
       try {
+        // Validate input parameters
+        if (!file_path || typeof file_path !== 'string' || file_path.trim() === '') {
+          return `Error creating file: Invalid file_path - must be a non-empty string`;
+        }
+        if (content === undefined || content === null || typeof content !== 'string') {
+          return `Error creating file: Invalid content - must be a string`;
+        }
+
         // Resolve the file path
         const resolvedPath = isAbsolute(file_path) ? file_path : resolve(defaultPath || process.cwd(), file_path);
 
@@ -246,18 +243,12 @@ Important:
 
         // Check if path is allowed
         if (!isPathAllowed(resolvedPath, allowedFolders)) {
-          return {
-            success: false,
-            error: `Permission denied: File ${file_path} is outside allowed directories`
-          };
+          return `Error creating file: Permission denied - ${file_path} is outside allowed directories`;
         }
 
         // Check if file exists
         if (existsSync(resolvedPath) && !overwrite) {
-          return {
-            success: false,
-            error: `File already exists: ${file_path}. Use overwrite: true to replace it.`
-          };
+          return `Error creating file: File already exists - ${file_path}. Use overwrite: true to replace it.`;
         }
 
         // Ensure parent directory exists
@@ -268,24 +259,18 @@ Important:
         await fs.writeFile(resolvedPath, content, 'utf-8');
 
         const action = existsSync(resolvedPath) && overwrite ? 'overwrote' : 'created';
+        const bytes = Buffer.byteLength(content, 'utf-8');
 
         if (debug) {
           console.error(`[Create] Successfully ${action} ${resolvedPath}`);
         }
 
-        return {
-          success: true,
-          message: `Successfully ${action} ${file_path}`,
-          file_path: resolvedPath,
-          bytes_written: Buffer.byteLength(content, 'utf-8')
-        };
+        // Return success message as a string (matching other tools pattern)
+        return `Successfully ${action} ${file_path} (${bytes} bytes)`;
 
       } catch (error) {
         console.error('[Create] Error:', error);
-        return {
-          success: false,
-          error: `Failed to create file: ${error.message}`
-        };
+        return `Error creating file: ${error.message}`;
       }
     }
   });

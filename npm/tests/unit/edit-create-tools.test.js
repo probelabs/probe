@@ -47,8 +47,7 @@ describe('Edit and Create Tools', () => {
         new_string: 'This is an edited file.'
       });
 
-      expect(result.success).toBe(true);
-      expect(result.replacements).toBe(1);
+      expect(result).toBe('Successfully edited ' + testFile + ' (1 replacement)');
 
       // Verify the file was edited
       const newContent = await fs.readFile(testFile, 'utf-8');
@@ -73,8 +72,7 @@ describe('Edit and Create Tools', () => {
         replace_all: true
       });
 
-      expect(result.success).toBe(true);
-      expect(result.replacements).toBe(3);
+      expect(result).toBe('Successfully edited ' + testFile + ' (3 replacements)');
 
       // Verify all occurrences were replaced
       const newContent = await fs.readFile(testFile, 'utf-8');
@@ -99,9 +97,8 @@ describe('Edit and Create Tools', () => {
         replace_all: false
       });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Multiple occurrences found');
-      expect(result.error).toContain('2 times');
+      expect(result).toContain('Error editing file: Multiple occurrences found');
+      expect(result).toContain('2 times');
     });
 
     test('should fail when old_string is not found', async () => {
@@ -121,8 +118,7 @@ describe('Edit and Create Tools', () => {
         new_string: 'replacement'
       });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('String not found in file');
+      expect(result).toContain('Error editing file: String not found');
     });
 
     test('should fail when file does not exist', async () => {
@@ -138,8 +134,7 @@ describe('Edit and Create Tools', () => {
         new_string: 'bar'
       });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('File not found');
+      expect(result).toContain('Error editing file: File not found');
     });
 
     test('should respect allowed folders restriction', async () => {
@@ -158,8 +153,7 @@ describe('Edit and Create Tools', () => {
         new_string: 'new content'
       });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Permission denied');
+      expect(result).toContain('Error editing file: Permission denied');
     });
 
     test('should handle whitespace in strings correctly', async () => {
@@ -182,7 +176,7 @@ describe('Edit and Create Tools', () => {
         new_string: '  const message = "Goodbye";'
       });
 
-      expect(result.success).toBe(true);
+      expect(result).toBe('Successfully edited ' + testFile + ' (1 replacement)');
 
       // Verify the edit
       const newContent = await fs.readFile(testFile, 'utf-8');
@@ -207,9 +201,8 @@ describe('Edit and Create Tools', () => {
         content: content
       });
 
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('Successfully created');
-      expect(result.bytes_written).toBe(Buffer.byteLength(content));
+      expect(result).toContain('Successfully created');
+      expect(result).toContain(`(${Buffer.byteLength(content)} bytes)`);
 
       // Verify the file was created
       expect(existsSync(newFile)).toBe(true);
@@ -232,7 +225,7 @@ describe('Edit and Create Tools', () => {
         content: content
       });
 
-      expect(result.success).toBe(true);
+      expect(result).toContain('Successfully created');
 
       // Verify the file and directories were created
       expect(existsSync(newFile)).toBe(true);
@@ -256,8 +249,7 @@ describe('Edit and Create Tools', () => {
         overwrite: false
       });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('File already exists');
+      expect(result).toContain('Error creating file: File already exists');
 
       // Verify original content is preserved
       const content = await fs.readFile(testFile, 'utf-8');
@@ -280,8 +272,7 @@ describe('Edit and Create Tools', () => {
         overwrite: true
       });
 
-      expect(result.success).toBe(true);
-      expect(result.message).toContain('overwrote');
+      expect(result).toContain('Successfully overwrote');
 
       // Verify file was overwritten
       const content = await fs.readFile(testFile, 'utf-8');
@@ -300,8 +291,7 @@ describe('Edit and Create Tools', () => {
         content: 'content'
       });
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('Permission denied');
+      expect(result).toContain('Error creating file: Permission denied');
     });
 
     test('should handle multi-line content correctly', async () => {
@@ -325,7 +315,7 @@ export default hello;`;
         content: content
       });
 
-      expect(result.success).toBe(true);
+      expect(result).toContain('Successfully created');
 
       // Verify the content
       const fileContent = await fs.readFile(newFile, 'utf-8');
@@ -352,7 +342,7 @@ export default hello;`;
         new_string: 'modified'
       });
 
-      expect(result.success).toBe(true);
+      expect(result).toBe('Successfully edited test.txt (1 replacement)');
 
       // Verify the edit
       const content = await fs.readFile(testFile, 'utf-8');
@@ -374,8 +364,246 @@ export default hello;`;
         content: 'absolute path content'
       });
 
-      expect(result.success).toBe(true);
+      expect(result).toContain('Successfully created');
+      expect(result).toContain('bytes)');
       expect(existsSync(absolutePath)).toBe(true);
+    });
+  });
+
+  describe('Input Validation', () => {
+    describe('editTool validation', () => {
+      test('should handle invalid file_path', async () => {
+        const edit = editTool({ allowedFolders: [testDir] });
+
+        // Empty string
+        let result = await edit.execute({
+          file_path: '',
+          old_string: 'foo',
+          new_string: 'bar'
+        });
+        expect(result).toContain('Error editing file: Invalid file_path');
+
+        // Null
+        result = await edit.execute({
+          file_path: null,
+          old_string: 'foo',
+          new_string: 'bar'
+        });
+        expect(result).toContain('Error editing file: Invalid file_path');
+
+        // Whitespace only
+        result = await edit.execute({
+          file_path: '   ',
+          old_string: 'foo',
+          new_string: 'bar'
+        });
+        expect(result).toContain('Error editing file: Invalid file_path');
+      });
+
+      test('should handle invalid old_string', async () => {
+        const edit = editTool({ allowedFolders: [testDir] });
+        await fs.writeFile(testFile, 'test content');
+
+        // Undefined
+        let result = await edit.execute({
+          file_path: testFile,
+          old_string: undefined,
+          new_string: 'bar'
+        });
+        expect(result).toContain('Error editing file: Invalid old_string');
+
+        // Null
+        result = await edit.execute({
+          file_path: testFile,
+          old_string: null,
+          new_string: 'bar'
+        });
+        expect(result).toContain('Error editing file: Invalid old_string');
+      });
+
+      test('should handle invalid new_string', async () => {
+        const edit = editTool({ allowedFolders: [testDir] });
+        await fs.writeFile(testFile, 'test content');
+
+        // Undefined
+        let result = await edit.execute({
+          file_path: testFile,
+          old_string: 'test',
+          new_string: undefined
+        });
+        expect(result).toContain('Error editing file: Invalid new_string');
+
+        // Null
+        result = await edit.execute({
+          file_path: testFile,
+          old_string: 'test',
+          new_string: null
+        });
+        expect(result).toContain('Error editing file: Invalid new_string');
+      });
+
+      test('should handle empty strings in old_string and new_string', async () => {
+        const edit = editTool({ allowedFolders: [testDir] });
+        await fs.writeFile(testFile, 'test  content'); // Double space
+
+        // Empty old_string matches everywhere, so it will find multiple occurrences
+        let result = await edit.execute({
+          file_path: testFile,
+          old_string: '',
+          new_string: 'inserted'
+        });
+        // Empty string will match at every position, causing multiple occurrences error
+        expect(result).toContain('Error editing file: Multiple occurrences found');
+
+        // Empty new_string (valid - can replace with empty)
+        await fs.writeFile(testFile, 'test content');
+        result = await edit.execute({
+          file_path: testFile,
+          old_string: ' ',
+          new_string: ''
+        });
+        expect(result).toContain('Successfully edited');
+      });
+    });
+
+    describe('createTool validation', () => {
+      test('should handle invalid file_path', async () => {
+        const create = createTool({ allowedFolders: [testDir] });
+
+        // Empty string
+        let result = await create.execute({
+          file_path: '',
+          content: 'test'
+        });
+        expect(result).toContain('Error creating file: Invalid file_path');
+
+        // Null
+        result = await create.execute({
+          file_path: null,
+          content: 'test'
+        });
+        expect(result).toContain('Error creating file: Invalid file_path');
+      });
+
+      test('should handle invalid content', async () => {
+        const create = createTool({ allowedFolders: [testDir] });
+
+        // Undefined
+        let result = await create.execute({
+          file_path: join(testDir, 'test.txt'),
+          content: undefined
+        });
+        expect(result).toContain('Error creating file: Invalid content');
+
+        // Null
+        result = await create.execute({
+          file_path: join(testDir, 'test.txt'),
+          content: null
+        });
+        expect(result).toContain('Error creating file: Invalid content');
+      });
+
+      test('should handle empty content', async () => {
+        const create = createTool({ allowedFolders: [testDir] });
+
+        // Empty string content is valid (creates empty file)
+        const result = await create.execute({
+          file_path: join(testDir, 'empty.txt'),
+          content: ''
+        });
+        expect(result).toContain('Successfully created');
+        expect(result).toContain('(0 bytes)');
+
+        const content = await fs.readFile(join(testDir, 'empty.txt'), 'utf-8');
+        expect(content).toBe('');
+      });
+    });
+  });
+
+  describe('Edge Cases', () => {
+    test('should handle very large files', async () => {
+      // Create a large file (1MB)
+      const largeContent = 'x'.repeat(1024 * 1024);
+      const largeFile = join(testDir, 'large.txt');
+      await fs.writeFile(largeFile, largeContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+      const result = await edit.execute({
+        file_path: largeFile,
+        old_string: 'x'.repeat(100),
+        new_string: 'y'.repeat(100),
+        replace_all: true  // Need replace_all since pattern repeats many times
+      });
+
+      expect(result).toContain('Successfully edited');
+    });
+
+    test('should handle files with special characters in path', async () => {
+      const specialFile = join(testDir, 'file with spaces & special.txt');
+
+      const create = createTool({ allowedFolders: [testDir] });
+      let result = await create.execute({
+        file_path: specialFile,
+        content: 'content'
+      });
+      expect(result).toContain('Successfully created');
+
+      const edit = editTool({ allowedFolders: [testDir] });
+      result = await edit.execute({
+        file_path: specialFile,
+        old_string: 'content',
+        new_string: 'new content'
+      });
+      expect(result).toContain('Successfully edited');
+    });
+
+    test('should handle Unicode content correctly', async () => {
+      const unicodeFile = join(testDir, 'unicode.txt');
+      const unicodeContent = '你好世界 🌍 émojis ñ';
+
+      const create = createTool({ allowedFolders: [testDir] });
+      const createResult = await create.execute({
+        file_path: unicodeFile,
+        content: unicodeContent
+      });
+      expect(createResult).toContain('Successfully created');
+
+      const edit = editTool({ allowedFolders: [testDir] });
+      const editResult = await edit.execute({
+        file_path: unicodeFile,
+        old_string: '你好世界',
+        new_string: '再见世界'
+      });
+      expect(editResult).toContain('Successfully edited');
+
+      const content = await fs.readFile(unicodeFile, 'utf-8');
+      expect(content).toContain('再见世界');
+      expect(content).toContain('🌍');
+    });
+
+    test('should handle line endings correctly', async () => {
+      const lineEndingFile = join(testDir, 'lineending.txt');
+
+      // Test with different line endings
+      const windowsContent = 'line1\r\nline2\r\nline3';
+      const unixContent = 'line1\nline2\nline3';
+
+      const create = createTool({ allowedFolders: [testDir] });
+      await create.execute({
+        file_path: lineEndingFile,
+        content: windowsContent
+      });
+
+      const edit = editTool({ allowedFolders: [testDir] });
+      const result = await edit.execute({
+        file_path: lineEndingFile,
+        old_string: 'line2',
+        new_string: 'modified'
+      });
+      expect(result).toContain('Successfully edited');
+
+      const content = await fs.readFile(lineEndingFile, 'utf-8');
+      expect(content).toContain('modified');
     });
   });
 });
