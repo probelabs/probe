@@ -45,7 +45,7 @@ jobs:
 
       # Install Rust toolchain
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@1.85.0
+        uses: dtolnay/rust-toolchain@1.88.0
         with:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
@@ -71,7 +71,7 @@ jobs:
       - name: Install cross (for musl targets)
         if: contains(matrix.target, 'unknown-linux-musl')
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross || true
+          cargo install cross --git https://github.com/cross-rs/cross
 
       # Build the Rust project
       - name: Build Release
@@ -161,7 +161,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
 

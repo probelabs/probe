@@ -2,6 +2,7 @@
 name = "probe-code"
 version = "0.6.0"
 edition = "2021"
+rust-version = "1.88.0"
 authors = ["Leonid Bugaev <leonsbox@gmail.com>"]
 description = "AI-friendly, fully local, semantic code search tool for large codebases"
 license = "MIT"
