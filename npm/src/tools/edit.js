@@ -328,11 +328,27 @@ export const editToolDefinition = `
 ## edit
 Description: ${editDescription}
 
+When to use:
+- For precise, surgical edits to existing files
+- When you need to change specific lines or blocks of code
+- For renaming functions, variables, or updating configuration values
+- When the exact text to replace is known and unique (or use replace_all for multiple occurrences)
+
+When NOT to use:
+- For creating new files (use 'create' tool instead)
+- For major rewrites or complex multi-file changes (use 'implement' tool instead)
+- When you cannot determine the exact text to replace
+
 Parameters:
 - file_path: (required) Path to the file to edit
-- old_string: (required) Exact text to find and replace (must match including whitespace)
+- old_string: (required) Exact text to find and replace (must match including whitespace, newlines, and indentation)
 - new_string: (required) Text to replace with
-- replace_all: (optional, default: false) Replace all occurrences
+- replace_all: (optional, default: false) Replace all occurrences if the string appears multiple times
+
+Important notes:
+- The old_string MUST match EXACTLY, including all whitespace, indentation, and line breaks
+- If old_string appears multiple times and replace_all is false, the tool will fail
+- Always verify the exact formatting of the text you want to replace
 
 Examples:
 <edit>
@@ -356,10 +372,26 @@ export const createToolDefinition = `
 ## create
 Description: ${createDescription}
 
+When to use:
+- For creating brand new files from scratch
+- When you need to add configuration files, documentation, or new modules
+- For generating boilerplate code or templates
+- When you have the complete content ready to write
+
+When NOT to use:
+- For editing existing files (use 'edit' tool instead)
+- For complex implementations requiring multiple file changes (use 'implement' tool instead)
+- When a file already exists unless you explicitly want to overwrite it
+
 Parameters:
 - file_path: (required) Path where the file should be created
-- content: (required) Content to write to the file
-- overwrite: (optional, default: false) Whether to overwrite if file exists
+- content: (required) Complete content to write to the file
+- overwrite: (optional, default: false) Whether to overwrite if file already exists
+
+Important notes:
+- Parent directories will be created automatically if they don't exist
+- The tool will fail if the file already exists and overwrite is false
+- Be careful with the overwrite option as it completely replaces existing files
 
 Examples:
 <create>

@@ -1144,7 +1144,7 @@ Available Tools:
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
-${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}
+${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n- edit: Edit files using exact string replacement.\n- create: Create new files with specified content.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}${this.enableBash ? '- bash: Execute bash commands for system operations.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 - attempt_complete: Quick completion using previous response (shorthand).
 `;
@@ -1160,7 +1160,11 @@ Follow these instructions carefully:
 6. You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
 7. Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
 8. Once the task is fully completed, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
-9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.
+9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
+10. When modifying files, choose the appropriate tool:
+    - Use 'edit' for precise changes to existing files (requires exact string match)
+    - Use 'create' for new files or complete file rewrites
+    - Use 'implement' for complex multi-file changes or when you need AI assistance` : ''}
 </instructions>
 `;
 
