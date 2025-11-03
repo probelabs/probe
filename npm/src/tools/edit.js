@@ -336,8 +336,8 @@ When to use:
 
 When NOT to use:
 - For creating new files (use 'create' tool instead)
-- For major rewrites or complex multi-file changes (use 'implement' tool instead)
 - When you cannot determine the exact text to replace
+- When changes span multiple locations that would be better handled together
 
 Parameters:
 - file_path: (required) Path to the file to edit
@@ -380,7 +380,6 @@ When to use:
 
 When NOT to use:
 - For editing existing files (use 'edit' tool instead)
-- For complex implementations requiring multiple file changes (use 'implement' tool instead)
 - When a file already exists unless you explicitly want to overwrite it
 
 Parameters:

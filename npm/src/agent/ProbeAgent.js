@@ -1163,8 +1163,7 @@ Follow these instructions carefully:
 9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
 10. When modifying files, choose the appropriate tool:
     - Use 'edit' for precise changes to existing files (requires exact string match)
-    - Use 'create' for new files or complete file rewrites
-    - Use 'implement' for complex multi-file changes or when you need AI assistance` : ''}
+    - Use 'create' for new files or complete file rewrites` : ''}
 </instructions>
 `;
 
