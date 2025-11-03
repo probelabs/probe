@@ -323,7 +323,7 @@ export class ProbeAgent {
     }
 
     // Add edit and create tools if enabled
-    if (this.config.allowEdit) {
+    if (this.allowEdit) {
       if (wrappedTools.editToolInstance) {
         this.toolImplementations.edit = wrappedTools.editToolInstance;
       }
