@@ -204,9 +204,27 @@ export function createWrappedTools(baseTools) {
   // Wrap bash tool
   if (baseTools.bashTool) {
     wrappedTools.bashToolInstance = wrapToolWithEmitter(
-      baseTools.bashTool, 
-      'bash', 
+      baseTools.bashTool,
+      'bash',
       baseTools.bashTool.execute
+    );
+  }
+
+  // Wrap edit tool
+  if (baseTools.editTool) {
+    wrappedTools.editToolInstance = wrapToolWithEmitter(
+      baseTools.editTool,
+      'edit',
+      baseTools.editTool.execute
+    );
+  }
+
+  // Wrap create tool
+  if (baseTools.createTool) {
+    wrappedTools.createToolInstance = wrapToolWithEmitter(
+      baseTools.createTool,
+      'create',
+      baseTools.createTool.execute
     );
   }
 

@@ -5,6 +5,8 @@ import {
   extractTool,
   delegateTool,
   bashTool,
+  editTool,
+  createTool,
   DEFAULT_SYSTEM_MESSAGE,
   attemptCompletionSchema,
   attemptCompletionToolDefinition,
@@ -13,11 +15,15 @@ import {
   extractSchema,
   delegateSchema,
   bashSchema,
+  editSchema,
+  createSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
   bashToolDefinition,
+  editToolDefinition,
+  createToolDefinition,
   parseXmlToolCall
 } from '../index.js';
 import { randomUUID } from 'crypto';
@@ -37,6 +43,12 @@ export function createTools(configOptions) {
     tools.bashTool = bashTool(configOptions);
   }
 
+  // Add edit and create tools if enabled
+  if (configOptions.allowEdit) {
+    tools.editTool = editTool(configOptions);
+    tools.createTool = createTool(configOptions);
+  }
+
   return tools;
 }
 
@@ -48,12 +60,16 @@ export {
   extractSchema,
   delegateSchema,
   bashSchema,
+  editSchema,
+  createSchema,
   attemptCompletionSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
   bashToolDefinition,
+  editToolDefinition,
+  createToolDefinition,
   attemptCompletionToolDefinition,
   parseXmlToolCall
 };

@@ -24,10 +24,13 @@ import {
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  bashToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
   attemptCompletionToolDefinition,
   implementToolDefinition,
+  editToolDefinition,
+  createToolDefinition,
   attemptCompletionSchema,
   parseXmlToolCallWithThinking
 } from './tools.js';
@@ -317,6 +320,16 @@ export class ProbeAgent {
     // Add bash tool if enabled
     if (this.enableBash && wrappedTools.bashToolInstance) {
       this.toolImplementations.bash = wrappedTools.bashToolInstance;
+    }
+
+    // Add edit and create tools if enabled
+    if (this.config.allowEdit) {
+      if (wrappedTools.editToolInstance) {
+        this.toolImplementations.edit = wrappedTools.editToolInstance;
+      }
+      if (wrappedTools.createToolInstance) {
+        this.toolImplementations.create = wrappedTools.createToolInstance;
+      }
     }
 
     // Store wrapped tools for ACP system
@@ -1059,6 +1072,11 @@ ${attemptCompletionToolDefinition}
 `;
     if (this.allowEdit) {
       toolDefinitions += `${implementToolDefinition}\n`;
+      toolDefinitions += `${editToolDefinition}\n`;
+      toolDefinitions += `${createToolDefinition}\n`;
+    }
+    if (this.enableBash) {
+      toolDefinitions += `${bashToolDefinition}\n`;
     }
     if (this.enableDelegate) {
       toolDefinitions += `${delegateToolDefinition}\n`;
