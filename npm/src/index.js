@@ -35,8 +35,15 @@ import {
 	bashToolDefinition,
 	parseXmlToolCall
 } from './tools/common.js';
+import {
+	editSchema,
+	createSchema,
+	editToolDefinition,
+	createToolDefinition
+} from './tools/edit.js';
 import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel.js';
 import { bashTool } from './tools/bash.js';
+import { editTool, createTool } from './tools/edit.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
 import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
@@ -72,6 +79,8 @@ export {
 	extractTool,
 	delegateTool,
 	bashTool,
+	editTool,
+	createTool,
 	// Export tool instances
 	listFilesToolInstance,
 	searchFilesToolInstance,
@@ -82,6 +91,8 @@ export {
 	delegateSchema,
 	attemptCompletionSchema,
 	bashSchema,
+	editSchema,
+	createSchema,
 	// Export tool definitions
 	searchToolDefinition,
 	queryToolDefinition,
@@ -89,6 +100,8 @@ export {
 	delegateToolDefinition,
 	attemptCompletionToolDefinition,
 	bashToolDefinition,
+	editToolDefinition,
+	createToolDefinition,
 	// Export parser function
 	parseXmlToolCall
 };
