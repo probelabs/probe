@@ -217,11 +217,34 @@ Test coverage includes:
 
 ## Technical Details
 
+### Architecture
+
+Context compaction uses a **two-layer error handling strategy**:
+
+1. **Transient Errors** (handled by `RetryManager`/`FallbackManager`)
+   - Rate limits (429)
+   - Network issues (ECONNRESET, timeouts)
+   - Server errors (500, 502, 503, 504)
+   - Retries with exponential backoff
+   - Falls back to alternative providers
+
+2. **Context Limit Errors** (handled by compaction)
+   - Context window exceeded
+   - Token limit reached
+   - Compacts once per iteration
+   - Retries with reduced message set
+   - Separate from transient retry loop
+
+This separation ensures:
+- Transient errors get multiple retries
+- Context errors trigger structural changes (compaction)
+- No interference between retry strategies
+
 ### Files
 
 - **`src/agent/contextCompactor.js`** - Core compaction logic
 - **`src/agent/ProbeAgent.js`** - Integration with error handling and API
-  - Lines 1498-1542: Automatic error handling
+  - Lines 1453-1553: Automatic compaction retry loop
   - Lines 2421-2482: Manual compaction method
 - **`tests/contextCompactor.test.js`** - Core compaction test suite
 - **`tests/agent-compact-history.test.js`** - Manual API test suite

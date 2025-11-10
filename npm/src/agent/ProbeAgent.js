@@ -1448,97 +1448,108 @@ When troubleshooting:
 
         // Make AI request
         let assistantResponseContent = '';
-        try {
-          // Wrap AI request with tracing if available
-          const executeAIRequest = async () => {
-            // Prepare messages with potential image content
-            const messagesForAI = this.prepareMessagesWithImages(currentMessages);
+        let compactionAttempted = false;
 
-            const result = await this.streamTextWithRetryAndFallback({
-              model: this.provider(this.model),
-              messages: messagesForAI,
-              maxTokens: maxResponseTokens,
-              temperature: 0.3,
-            });
+        // Retry loop for context compaction - separate from streamTextWithRetryAndFallback
+        // which handles transient errors (rate limits, network issues, etc.)
+        while (true) {
+          try {
+            // Wrap AI request with tracing if available
+            const executeAIRequest = async () => {
+              // Prepare messages with potential image content
+              const messagesForAI = this.prepareMessagesWithImages(currentMessages);
 
-            // Get the promise reference BEFORE consuming stream (doesn't lock it)
-            const usagePromise = result.usage;
+              const result = await this.streamTextWithRetryAndFallback({
+                model: this.provider(this.model),
+                messages: messagesForAI,
+                maxTokens: maxResponseTokens,
+                temperature: 0.3,
+              });
 
-            // Collect the streamed response - stream all content for now
-            for await (const delta of result.textStream) {
-              assistantResponseContent += delta;
-              // For now, stream everything - we'll handle segmentation after tools execute
-              if (options.onStream) {
-                options.onStream(delta);
+              // Get the promise reference BEFORE consuming stream (doesn't lock it)
+              const usagePromise = result.usage;
+
+              // Collect the streamed response - stream all content for now
+              for await (const delta of result.textStream) {
+                assistantResponseContent += delta;
+                // For now, stream everything - we'll handle segmentation after tools execute
+                if (options.onStream) {
+                  options.onStream(delta);
+                }
+              }
+
+              // Record token usage - await the promise AFTER stream is consumed
+              const usage = await usagePromise;
+              if (usage) {
+                this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+              }
+
+              return result;
+            };
+
+            if (this.tracer) {
+              await this.tracer.withSpan('ai.request', executeAIRequest, {
+                'ai.model': this.model,
+                'ai.provider': this.clientApiProvider || 'auto',
+                'iteration': currentIteration,
+                'max_tokens': maxResponseTokens,
+                'temperature': 0.3,
+                'message_count': currentMessages.length
+              });
+            } else {
+              await executeAIRequest();
+            }
+
+            // Success - break out of compaction retry loop
+            break;
+
+          } catch (error) {
+            // Check if this is a context limit error (only try compaction once per iteration)
+            if (!compactionAttempted && handleContextLimitError) {
+              const compactionResult = handleContextLimitError(error, currentMessages, {
+                keepLastSegment: true,
+                minSegmentsToKeep: 1
+              });
+
+              if (compactionResult) {
+                // Context limit error detected - compact and retry once
+                const { messages: compactedMessages, stats } = compactionResult;
+                compactionAttempted = true;
+
+                console.log(`[INFO] Context window limit exceeded. Compacting conversation...`);
+                console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
+                console.log(`[INFO] Estimated token savings: ${stats.tokensSaved} tokens`);
+
+                if (this.debug) {
+                  console.log(`[DEBUG] Compaction stats:`, stats);
+                  console.log(`[DEBUG] Original message count: ${stats.originalCount}`);
+                  console.log(`[DEBUG] Compacted message count: ${stats.compactedCount}`);
+                }
+
+                // Update currentMessages with compacted version and retry
+                currentMessages = compactedMessages;
+
+                // Log compaction event if tracer is available
+                if (this.tracer) {
+                  this.tracer.addEvent('context.compacted', {
+                    'iteration': currentIteration,
+                    'original_count': stats.originalCount,
+                    'compacted_count': stats.compactedCount,
+                    'reduction_percent': stats.reductionPercent,
+                    'tokens_saved': stats.tokensSaved
+                  });
+                }
+
+                // Continue to retry with compacted messages
+                continue;
               }
             }
 
-            // Record token usage - await the promise AFTER stream is consumed
-            const usage = await usagePromise;
-            if (usage) {
-              this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
-            }
-
-            return result;
-          };
-
-          if (this.tracer) {
-            await this.tracer.withSpan('ai.request', executeAIRequest, {
-              'ai.model': this.model,
-              'ai.provider': this.clientApiProvider || 'auto',
-              'iteration': currentIteration,
-              'max_tokens': maxResponseTokens,
-              'temperature': 0.3,
-              'message_count': currentMessages.length
-            });
-          } else {
-            await executeAIRequest();
+            // Not a context limit error, compaction already attempted, or compaction not available
+            console.error(`Error during streamText (Iter ${currentIteration}):`, error);
+            finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
+            throw new Error(finalResult);
           }
-
-        } catch (error) {
-          console.error(`Error during streamText (Iter ${currentIteration}):`, error);
-
-          // Check if this is a context limit error and attempt compaction
-          const compactionResult = handleContextLimitError(error, currentMessages, {
-            keepLastSegment: true,
-            minSegmentsToKeep: 1
-          });
-
-          if (compactionResult) {
-            // Context limit error detected - compact and retry
-            const { messages: compactedMessages, stats } = compactionResult;
-
-            console.log(`[INFO] Context window limit exceeded. Compacting conversation...`);
-            console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
-            console.log(`[INFO] Estimated token savings: ${stats.tokensSaved} tokens`);
-
-            if (this.debug) {
-              console.log(`[DEBUG] Compaction stats:`, stats);
-              console.log(`[DEBUG] Original message count: ${stats.originalCount}`);
-              console.log(`[DEBUG] Compacted message count: ${stats.compactedCount}`);
-            }
-
-            // Update currentMessages with compacted version and retry this iteration
-            currentMessages = compactedMessages;
-            currentIteration--; // Retry the same iteration with compacted messages
-
-            // Log compaction event if tracer is available
-            if (this.tracer) {
-              this.tracer.addEvent('context.compacted', {
-                'iteration': currentIteration + 1,
-                'original_count': stats.originalCount,
-                'compacted_count': stats.compactedCount,
-                'reduction_percent': stats.reductionPercent,
-                'tokens_saved': stats.tokensSaved
-              });
-            }
-
-            continue; // Retry with compacted messages
-          }
-
-          // Not a context limit error or compaction failed - throw error
-          finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
-          throw new Error(finalResult);
         }
 
         // Log preview of assistant response for debugging loops
