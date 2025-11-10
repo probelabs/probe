@@ -7,27 +7,55 @@
  */
 
 /**
- * Regex pattern to detect context window limit errors from various AI providers
- * Matches patterns like:
- * - "context length exceeded"
- * - "input token count exceeds limit"
- * - "maximum context window"
- * - "tokens exceed limit"
- * - "maximum context length is X tokens"
- * etc.
- *
- * Flags: i = case insensitive, s = dot matches newlines
+ * Context limit error patterns to detect from various AI providers
+ * Simple substring matching similar to RetryManager's approach
  */
-const CONTEXT_LIMIT_ERROR_REGEX = /(context(?:\s+(?:length|window))|input\s+token|(?:number|total)\s+of\s+tokens|tokens?|prompt|maximum\s+context\s+length).{0,100}?(context_length_exceeded|exceeds?|exceeded|exceeding|too\s+(?:long|large)|over(?:\s+the)?\s+limit|maximum|allowed|tokens)/is;
+const CONTEXT_LIMIT_ERROR_PATTERNS = [
+  // Anthropic
+  'context_length_exceeded',
+  'prompt is too long',
+
+  // OpenAI
+  'maximum context length',
+  'context length is',
+
+  // Google/Gemini
+  'input token count exceeds',
+  'token limit exceeded',
+
+  // Generic patterns
+  'context window',
+  'too many tokens',
+  'token limit',
+  'context limit',
+  'exceed',  // Catches "exceeds", "exceed maximum", etc.
+  'over the limit',
+  'maximum tokens'
+];
 
 /**
  * Check if an error message indicates a context window limit was exceeded
+ * Uses simple substring matching for reliability and maintainability
+ *
  * @param {Error|string} error - The error object or error message
  * @returns {boolean} - True if the error indicates context limit exceeded
  */
 export function isContextLimitError(error) {
-  const errorMessage = typeof error === 'string' ? error : (error?.message || '');
-  return CONTEXT_LIMIT_ERROR_REGEX.test(errorMessage);
+  if (!error) return false;
+
+  // Get error message in various forms
+  const errorMessage = (typeof error === 'string' ? error : (error?.message || '')).toLowerCase();
+  const errorString = error.toString().toLowerCase();
+
+  // Check if any pattern matches
+  for (const pattern of CONTEXT_LIMIT_ERROR_PATTERNS) {
+    const lowerPattern = pattern.toLowerCase();
+    if (errorMessage.includes(lowerPattern) || errorString.includes(lowerPattern)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /**
