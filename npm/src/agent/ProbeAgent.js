@@ -2419,6 +2419,69 @@ Convert your previous response content into actual JSON data that follows this s
   }
 
   /**
+   * Manually compact conversation history
+   * Removes intermediate monologues from older segments while preserving
+   * user messages, final answers, and the most recent segment
+   *
+   * @param {Object} options - Compaction options
+   * @param {boolean} [options.keepLastSegment=true] - Keep the most recent segment intact
+   * @param {number} [options.minSegmentsToKeep=1] - Number of recent segments to preserve fully
+   * @returns {Object} Compaction statistics
+   */
+  async compactHistory(options = {}) {
+    const { compactMessages, calculateCompactionStats } = await import('./contextCompactor.js');
+
+    if (this.history.length === 0) {
+      if (this.debug) {
+        console.log(`[DEBUG] No history to compact for session ${this.sessionId}`);
+      }
+      return {
+        originalCount: 0,
+        compactedCount: 0,
+        removed: 0,
+        reductionPercent: 0,
+        originalTokens: 0,
+        compactedTokens: 0,
+        tokensSaved: 0
+      };
+    }
+
+    // Perform compaction
+    const compactedMessages = compactMessages(this.history, options);
+    const stats = calculateCompactionStats(this.history, compactedMessages);
+
+    // Update history
+    this.history = compactedMessages;
+
+    // Save to storage
+    try {
+      for (const message of compactedMessages) {
+        await this.storageAdapter.saveMessage(this.sessionId, message);
+      }
+    } catch (error) {
+      console.error(`[ERROR] Failed to save compacted messages to storage:`, error);
+    }
+
+    // Log results
+    console.log(`[INFO] Manually compacted conversation history`);
+    console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
+    console.log(`[INFO] Estimated token savings: ${stats.tokensSaved} tokens`);
+
+    if (this.debug) {
+      console.log(`[DEBUG] Compaction stats:`, stats);
+    }
+
+    // Emit hook
+    await this.hooks.emit(HOOK_TYPES.STORAGE_SAVE, {
+      sessionId: this.sessionId,
+      compacted: true,
+      stats
+    });
+
+    return stats;
+  }
+
+  /**
    * Clone this agent's session to create a new agent with shared conversation history
    * @param {Object} options - Clone options
    * @param {string} [options.sessionId] - Session ID for the cloned agent (defaults to new UUID)

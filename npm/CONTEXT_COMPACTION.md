@@ -55,15 +55,48 @@ The compactor automatically detects context limit errors from various AI provide
 - **Google/Gemini**: "input token count exceeds limit"
 - **Generic patterns**: "tokens exceed", "too long", "over limit", etc.
 
-## Configuration
+## Manual Compaction
 
-Context compaction is enabled by default and requires no configuration. However, you can control behavior through options:
+You can manually compact conversation history at any time using the `compactHistory()` method:
 
 ```javascript
-// In ProbeAgent.js error handling (advanced use)
-const compactionResult = handleContextLimitError(error, currentMessages, {
+const agent = new ProbeAgent({
+  sessionId: 'my-session',
+  path: './my-project'
+});
+
+// ... have some conversations ...
+
+// Manually compact history
+const stats = await agent.compactHistory();
+
+console.log(`Removed ${stats.removed} messages`);
+console.log(`Token savings: ${stats.tokensSaved}`);
+
+// Compact with custom options
+const stats2 = await agent.compactHistory({
+  keepLastSegment: true,
+  minSegmentsToKeep: 2  // Keep last 2 segments fully
+});
+```
+
+This is useful when:
+- You want to proactively reduce context before hitting limits
+- You're monitoring token usage and want to optimize
+- You want to clean up history at specific checkpoints
+- Testing or debugging compaction behavior
+
+## Configuration
+
+Context compaction is enabled **automatically** when context limits are exceeded. No configuration required!
+
+For manual compaction or advanced use:
+
+```javascript
+// Manual compaction
+await agent.compactHistory({
   keepLastSegment: true,    // Keep the most recent segment intact
-  minSegmentsToKeep: 2      // Minimum recent segments to preserve fully
+  minSegmentsToKeep: 1      // Number of recent segments to preserve fully
 });
 ```
 
@@ -135,12 +168,43 @@ You'll see detailed compaction information:
 }
 ```
 
+## API Reference
+
+### `agent.compactHistory(options)`
+
+Manually compact conversation history.
+
+**Parameters:**
+- `options` (Object, optional)
+  - `keepLastSegment` (boolean, default: `true`) - Preserve active segment
+  - `minSegmentsToKeep` (number, default: `1`) - Number of recent segments to keep fully
+
+**Returns:** Promise<Object> - Compaction statistics
+```javascript
+{
+  originalCount: 63,          // Original message count
+  compactedCount: 21,         // Compacted message count
+  removed: 42,                // Messages removed
+  reductionPercent: 66.7,     // Percentage reduction
+  originalTokens: 12800,      // Estimated original tokens
+  compactedTokens: 4350,      // Estimated compacted tokens
+  tokensSaved: 8450           // Estimated tokens saved
+}
+```
+
+**Example:**
+```javascript
+const stats = await agent.compactHistory();
+console.log(`Saved ${stats.tokensSaved} tokens`);
+```
+
 ## Testing
 
 The context compaction functionality is fully tested. Run tests with:
 
 ```bash
 npm test -- contextCompactor.test.js
+npm test -- agent-compact-history.test.js
 ```
 
 Test coverage includes:
@@ -149,14 +213,18 @@ Test coverage includes:
 - Compaction logic with various configurations
 - Token estimation and statistics
 - Real-world conversation scenarios
+- Manual compaction API
 
 ## Technical Details
 
 ### Files
 
 - **`src/agent/contextCompactor.js`** - Core compaction logic
-- **`src/agent/ProbeAgent.js`** - Integration with error handling (lines 1498-1542)
-- **`tests/contextCompactor.test.js`** - Comprehensive test suite
+- **`src/agent/ProbeAgent.js`** - Integration with error handling and API
+  - Lines 1498-1542: Automatic error handling
+  - Lines 2421-2482: Manual compaction method
+- **`tests/contextCompactor.test.js`** - Core compaction test suite
+- **`tests/agent-compact-history.test.js`** - Manual API test suite
 
 ### Functions
 
@@ -174,6 +242,9 @@ Computes reduction statistics and token savings.
 
 #### `handleContextLimitError(error, messages, options)`
 Main handler that orchestrates detection and compaction.
+
+#### `agent.compactHistory(options)`
+Public API method for manual history compaction.
 
 ## Limitations
 
