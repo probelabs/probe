@@ -234,17 +234,19 @@ Context compaction uses a **two-layer error handling strategy**:
    - Compacts once per iteration
    - Retries with reduced message set
    - Separate from transient retry loop
+   - Fails immediately if no messages can be removed
 
 This separation ensures:
 - Transient errors get multiple retries
 - Context errors trigger structural changes (compaction)
 - No interference between retry strategies
+- No infinite loops (compaction attempted only once per iteration)
 
 ### Files
 
 - **`src/agent/contextCompactor.js`** - Core compaction logic
 - **`src/agent/ProbeAgent.js`** - Integration with error handling and API
-  - Lines 1453-1553: Automatic compaction retry loop
+  - Lines 1453-1565: Automatic compaction retry loop with infinite loop protection
   - Lines 2421-2482: Manual compaction method
 - **`tests/contextCompactor.test.js`** - Core compaction test suite
 - **`tests/agent-compact-history.test.js`** - Manual API test suite
@@ -271,10 +273,11 @@ Public API method for manual history compaction.
 
 ## Limitations
 
-1. **Minimum context**: Compaction cannot help if even the compacted history exceeds limits
+1. **Minimum context**: Compaction cannot help if even the compacted history exceeds limits. The system will fail with a clear error message if no messages can be removed.
 2. **System message**: System messages are never removed (contain critical instructions)
 3. **Token estimation**: Token counts are approximations (1 token ≈ 4 characters)
 4. **Recent segments**: Always preserves configured minimum segments to maintain context quality
+5. **Single retry**: Compaction is attempted only once per iteration to prevent infinite loops
 
 ## Best Practices
 

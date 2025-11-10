@@ -1514,6 +1514,16 @@ When troubleshooting:
               if (compactionResult) {
                 // Context limit error detected - compact and retry once
                 const { messages: compactedMessages, stats } = compactionResult;
+
+                // Check if compaction actually reduced message count
+                if (stats.removed === 0) {
+                  // No messages removed - compaction won't help, fail immediately
+                  console.error(`[ERROR] Context window exceeded but no messages can be compacted.`);
+                  console.error(`[ERROR] The conversation history is already minimal (${stats.originalCount} messages).`);
+                  finalResult = `Error: Context window limit exceeded and conversation cannot be compacted further. Consider starting a new session or reducing system message size.`;
+                  throw new Error(finalResult);
+                }
+
                 compactionAttempted = true;
 
                 console.log(`[INFO] Context window limit exceeded. Compacting conversation...`);
@@ -1526,8 +1536,9 @@ When troubleshooting:
                   console.log(`[DEBUG] Compacted message count: ${stats.compactedCount}`);
                 }
 
-                // Update currentMessages with compacted version and retry
-                currentMessages = compactedMessages;
+                // Replace currentMessages with compacted version (creates new array reference)
+                // This ensures we don't mutate the original history array
+                currentMessages = [...compactedMessages];
 
                 // Log compaction event if tracer is available
                 if (this.tracer) {
@@ -1546,6 +1557,7 @@ When troubleshooting:
             }
 
             // Not a context limit error, compaction already attempted, or compaction not available
+            // IMPORTANT: This break prevents infinite loop if compacted messages still exceed limit
             console.error(`Error during streamText (Iter ${currentIteration}):`, error);
             finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
             throw new Error(finalResult);
