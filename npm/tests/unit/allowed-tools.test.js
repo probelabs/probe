@@ -271,6 +271,62 @@ describe('ProbeAgent allowedTools option', () => {
     });
   });
 
+  describe('CLI parsing compatibility', () => {
+    test('should support CLI exclusion syntax: "*,!bash,!implement"', () => {
+      // Simulate CLI parsing: --allowed-tools "*,!bash,!implement"
+      const toolsArg = '*,!bash,!implement';
+      const allowedTools = toolsArg.split(',').map(t => t.trim()).filter(t => t.length > 0);
+
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: allowedTools
+      });
+
+      expect(allowedTools).toEqual(['*', '!bash', '!implement']);
+      expect(agent.allowedTools.mode).toBe('all');
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('query')).toBe(true);
+      expect(agent.allowedTools.isEnabled('bash')).toBe(false);
+      expect(agent.allowedTools.isEnabled('implement')).toBe(false);
+    });
+
+    test('should support CLI whitelist syntax: "search,query,extract"', () => {
+      // Simulate CLI parsing: --allowed-tools "search,query,extract"
+      const toolsArg = 'search,query,extract';
+      const allowedTools = toolsArg.split(',').map(t => t.trim()).filter(t => t.length > 0);
+
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: allowedTools
+      });
+
+      expect(allowedTools).toEqual(['search', 'query', 'extract']);
+      expect(agent.allowedTools.mode).toBe('whitelist');
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('query')).toBe(true);
+      expect(agent.allowedTools.isEnabled('extract')).toBe(true);
+      expect(agent.allowedTools.isEnabled('bash')).toBe(false);
+    });
+
+    test('should support CLI MCP wildcard syntax: "mcp__filesystem__*,search"', () => {
+      // Simulate CLI parsing: --allowed-tools "mcp__filesystem__*,search"
+      const toolsArg = 'mcp__filesystem__*,search';
+      const allowedTools = toolsArg.split(',').map(t => t.trim()).filter(t => t.length > 0);
+
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: allowedTools
+      });
+
+      expect(allowedTools).toEqual(['mcp__filesystem__*', 'search']);
+      expect(agent.allowedTools.mode).toBe('whitelist');
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__read_file')).toBe(true);
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__write_file')).toBe(true);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('mcp__github__list_issues')).toBe(false);
+    });
+  });
+
   describe('MCP tool filtering with mcp__ prefix', () => {
     test('should allow MCP tools with mcp__ prefix', () => {
       const agent = new ProbeAgent({
