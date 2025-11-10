@@ -59,10 +59,30 @@ export function extractThinkingContent(xmlString) {
 export function checkAttemptCompleteRecovery(cleanedXmlString, validTools = []) {
   // Check for <attempt_completion> with content (with or without closing tag)
   // This handles: "<attempt_completion>content" or "<attempt_completion>content</attempt_completion>"
-  const attemptCompletionMatch = cleanedXmlString.match(/<attempt_completion>([\s\S]*?)(?:<\/attempt_completion>|$)/);
-  if (attemptCompletionMatch) {
-    const content = attemptCompletionMatch[1].trim();
-    const hasClosingTag = cleanedXmlString.includes('</attempt_completion>');
+
+  // IMPORTANT: Use greedy match ([\s\S]*) instead of non-greedy ([\s\S]*?) to handle cases
+  // where the content contains the string "</attempt_completion>" (e.g., in regex patterns or code examples).
+  // We want to find the LAST occurrence of </attempt_completion>, not the first one.
+  const openTagIndex = cleanedXmlString.indexOf('<attempt_completion>');
+  if (openTagIndex !== -1) {
+    const afterOpenTag = cleanedXmlString.substring(openTagIndex + '<attempt_completion>'.length);
+    const closeTagIndex = cleanedXmlString.lastIndexOf('</attempt_completion>');
+
+    let content;
+    let hasClosingTag = false;
+
+    if (closeTagIndex !== -1 && closeTagIndex >= openTagIndex + '<attempt_completion>'.length) {
+      // Found a closing tag at or after the opening tag - extract content between them
+      content = cleanedXmlString.substring(
+        openTagIndex + '<attempt_completion>'.length,
+        closeTagIndex
+      ).trim();
+      hasClosingTag = true;
+    } else {
+      // No closing tag - use content from opening tag to end of string
+      content = afterOpenTag.trim();
+      hasClosingTag = false;
+    }
 
     if (content) {
       // If there's content after the tag, use it as the result
