@@ -2476,8 +2476,14 @@ Convert your previous response content into actual JSON data that follows this s
     // Update history
     this.history = compactedMessages;
 
-    // Save to storage
+    // Save to storage (clear old history first, then save compacted messages)
     try {
+      // Clear existing history to avoid duplicates
+      await this.storageAdapter.clearHistory(this.sessionId);
+
+      // Save compacted messages
+      // Note: Using sequential saves as storage adapter interface doesn't support batch operations
+      // For large histories, consider implementing a batch save method in your custom adapter
       for (const message of compactedMessages) {
         await this.storageAdapter.saveMessage(this.sessionId, message);
       }
