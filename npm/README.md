@@ -29,6 +29,7 @@ During installation, the package will automatically download the appropriate pro
 - **Automatic Binary Management**: Automatically downloads and manages the probe binary
 - **Direct CLI Access**: Use the probe binary directly from the command line when installed globally
 - **MCP Server**: Built-in Model Context Protocol server for AI assistant integration
+- **Context Window Compaction**: Automatic conversation history compression when approaching token limits
 
 ## Usage
 
@@ -690,6 +691,13 @@ probe mcp --timeout 60
   }
 }
 ```
+
+## Additional Documentation
+
+- [Context Window Compaction](./CONTEXT_COMPACTION.md) - Automatic conversation history compression
+- [MCP Integration](./MCP_INTEGRATION_SUMMARY.md) - Model Context Protocol support details
+- [Delegate Tool](./DELEGATE_TOOL_README.md) - Task distribution to subagents
+- [Maid Integration](./MAID_INTEGRATION.md) - Integration with Maid LLM framework
 
 ## Related Projects
 

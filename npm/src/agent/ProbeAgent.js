@@ -60,6 +60,7 @@ import {
 } from './mcp/index.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
+import { handleContextLimitError } from './contextCompactor.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -1447,57 +1448,120 @@ When troubleshooting:
 
         // Make AI request
         let assistantResponseContent = '';
-        try {
-          // Wrap AI request with tracing if available
-          const executeAIRequest = async () => {
-            // Prepare messages with potential image content
-            const messagesForAI = this.prepareMessagesWithImages(currentMessages);
+        let compactionAttempted = false;
 
-            const result = await this.streamTextWithRetryAndFallback({
-              model: this.provider(this.model),
-              messages: messagesForAI,
-              maxTokens: maxResponseTokens,
-              temperature: 0.3,
-            });
+        // Retry loop for context compaction - separate from streamTextWithRetryAndFallback
+        // which handles transient errors (rate limits, network issues, etc.)
+        while (true) {
+          try {
+            // Wrap AI request with tracing if available
+            const executeAIRequest = async () => {
+              // Prepare messages with potential image content
+              const messagesForAI = this.prepareMessagesWithImages(currentMessages);
 
-            // Get the promise reference BEFORE consuming stream (doesn't lock it)
-            const usagePromise = result.usage;
+              const result = await this.streamTextWithRetryAndFallback({
+                model: this.provider(this.model),
+                messages: messagesForAI,
+                maxTokens: maxResponseTokens,
+                temperature: 0.3,
+              });
 
-            // Collect the streamed response - stream all content for now
-            for await (const delta of result.textStream) {
-              assistantResponseContent += delta;
-              // For now, stream everything - we'll handle segmentation after tools execute
-              if (options.onStream) {
-                options.onStream(delta);
+              // Get the promise reference BEFORE consuming stream (doesn't lock it)
+              const usagePromise = result.usage;
+
+              // Collect the streamed response - stream all content for now
+              for await (const delta of result.textStream) {
+                assistantResponseContent += delta;
+                // For now, stream everything - we'll handle segmentation after tools execute
+                if (options.onStream) {
+                  options.onStream(delta);
+                }
+              }
+
+              // Record token usage - await the promise AFTER stream is consumed
+              const usage = await usagePromise;
+              if (usage) {
+                this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+              }
+
+              return result;
+            };
+
+            if (this.tracer) {
+              await this.tracer.withSpan('ai.request', executeAIRequest, {
+                'ai.model': this.model,
+                'ai.provider': this.clientApiProvider || 'auto',
+                'iteration': currentIteration,
+                'max_tokens': maxResponseTokens,
+                'temperature': 0.3,
+                'message_count': currentMessages.length
+              });
+            } else {
+              await executeAIRequest();
+            }
+
+            // Success - break out of compaction retry loop
+            break;
+
+          } catch (error) {
+            // Check if this is a context limit error (only try compaction once per iteration)
+            if (!compactionAttempted && handleContextLimitError) {
+              const compactionResult = handleContextLimitError(error, currentMessages, {
+                keepLastSegment: true,
+                minSegmentsToKeep: 1
+              });
+
+              if (compactionResult) {
+                // Context limit error detected - compact and retry once
+                const { messages: compactedMessages, stats } = compactionResult;
+
+                // Check if compaction actually reduced message count
+                if (stats.removed === 0) {
+                  // No messages removed - compaction won't help, fail immediately
+                  console.error(`[ERROR] Context window exceeded but no messages can be compacted.`);
+                  console.error(`[ERROR] The conversation history is already minimal (${stats.originalCount} messages).`);
+                  finalResult = `Error: Context window limit exceeded and conversation cannot be compacted further. Consider starting a new session or reducing system message size.`;
+                  throw new Error(finalResult);
+                }
+
+                compactionAttempted = true;
+
+                console.log(`[INFO] Context window limit exceeded. Compacting conversation...`);
+                console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
+                console.log(`[INFO] Estimated token savings: ${stats.tokensSaved} tokens`);
+
+                if (this.debug) {
+                  console.log(`[DEBUG] Compaction stats:`, stats);
+                  console.log(`[DEBUG] Original message count: ${stats.originalCount}`);
+                  console.log(`[DEBUG] Compacted message count: ${stats.compactedCount}`);
+                }
+
+                // Replace currentMessages with compacted version (creates new array reference)
+                // This ensures we don't mutate the original history array
+                currentMessages = [...compactedMessages];
+
+                // Log compaction event if tracer is available
+                if (this.tracer) {
+                  this.tracer.addEvent('context.compacted', {
+                    'iteration': currentIteration,
+                    'original_count': stats.originalCount,
+                    'compacted_count': stats.compactedCount,
+                    'reduction_percent': stats.reductionPercent,
+                    'tokens_saved': stats.tokensSaved
+                  });
+                }
+
+                // Continue to retry with compacted messages
+                continue;
               }
             }
 
-            // Record token usage - await the promise AFTER stream is consumed
-            const usage = await usagePromise;
-            if (usage) {
-              this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
-            }
-
-            return result;
-          };
-
-          if (this.tracer) {
-            await this.tracer.withSpan('ai.request', executeAIRequest, {
-              'ai.model': this.model,
-              'ai.provider': this.clientApiProvider || 'auto',
-              'iteration': currentIteration,
-              'max_tokens': maxResponseTokens,
-              'temperature': 0.3,
-              'message_count': currentMessages.length
-            });
-          } else {
-            await executeAIRequest();
+            // Not a context limit error, compaction already attempted, or compaction not available
+            // IMPORTANT: This break prevents infinite loop if compacted messages still exceed limit
+            console.error(`Error during streamText (Iter ${currentIteration}):`, error);
+            finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
+            throw new Error(finalResult);
           }
-
-        } catch (error) {
-          console.error(`Error during streamText (Iter ${currentIteration}):`, error);
-          finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
-          throw new Error(finalResult);
         }
 
         // Log preview of assistant response for debugging loops
@@ -2375,6 +2439,75 @@ Convert your previous response content into actual JSON data that follows this s
     if (this.debug) {
       console.log(`[DEBUG] Cleared conversation history and reset counters for session ${this.sessionId}`);
     }
+  }
+
+  /**
+   * Manually compact conversation history
+   * Removes intermediate monologues from older segments while preserving
+   * user messages, final answers, and the most recent segment
+   *
+   * @param {Object} options - Compaction options
+   * @param {boolean} [options.keepLastSegment=true] - Keep the most recent segment intact
+   * @param {number} [options.minSegmentsToKeep=1] - Number of recent segments to preserve fully
+   * @returns {Object} Compaction statistics
+   */
+  async compactHistory(options = {}) {
+    const { compactMessages, calculateCompactionStats } = await import('./contextCompactor.js');
+
+    if (this.history.length === 0) {
+      if (this.debug) {
+        console.log(`[DEBUG] No history to compact for session ${this.sessionId}`);
+      }
+      return {
+        originalCount: 0,
+        compactedCount: 0,
+        removed: 0,
+        reductionPercent: 0,
+        originalTokens: 0,
+        compactedTokens: 0,
+        tokensSaved: 0
+      };
+    }
+
+    // Perform compaction
+    const compactedMessages = compactMessages(this.history, options);
+    const stats = calculateCompactionStats(this.history, compactedMessages);
+
+    // Update history
+    this.history = compactedMessages;
+
+    // Save to storage (clear old history first, then save compacted messages)
+    try {
+      // Clear existing history to avoid duplicates
+      await this.storageAdapter.clearHistory(this.sessionId);
+
+      // Save compacted messages
+      // Note: Using sequential saves as storage adapter interface doesn't support batch operations
+      // For large histories, consider implementing a batch save method in your custom adapter
+      for (const message of compactedMessages) {
+        await this.storageAdapter.saveMessage(this.sessionId, message);
+      }
+    } catch (error) {
+      console.error(`[ERROR] Failed to save compacted messages to storage:`, error);
+    }
+
+    // Log results
+    console.log(`[INFO] Manually compacted conversation history`);
+    console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
+    console.log(`[INFO] Estimated token savings: ${stats.tokensSaved} tokens`);
+
+    if (this.debug) {
+      console.log(`[DEBUG] Compaction stats:`, stats);
+    }
+
+    // Emit hook
+    await this.hooks.emit(HOOK_TYPES.STORAGE_SAVE, {
+      sessionId: this.sessionId,
+      compacted: true,
+      stats
+    });
+
+    return stats;
   }
 
   /**
