@@ -1937,15 +1937,13 @@ NOT: {"type": "object", "properties": {"name": {"type": "string"}}}
 Convert your previous response content into actual JSON data that follows this schema structure.`;
           
           // Call answer recursively with _schemaFormatted flag to prevent infinite loop
-          finalResult = await this.answer(schemaPrompt, [], { 
-            ...options, 
-            _schemaFormatted: true 
+          finalResult = await this.answer(schemaPrompt, [], {
+            ...options,
+            _schemaFormatted: true
           });
-          
-          // Step 2: Clean the response (remove code blocks)
-          finalResult = cleanSchemaResponse(finalResult);
-          
-          // Step 3: Validate and fix Mermaid diagrams if present
+
+          // Step 2: Validate and fix Mermaid diagrams if present (BEFORE cleaning schema)
+          // This ensures mermaid validation sees the full response before JSON extraction strips content
           if (!this.disableMermaidValidation) {
             try {
               if (this.debug) {
@@ -2007,19 +2005,16 @@ Convert your previous response content into actual JSON data that follows this s
           } else if (this.debug) {
             console.log(`[DEBUG] Mermaid validation: Skipped due to disableMermaidValidation option`);
           }
-          
+
+          // Step 3: Clean the response (remove code blocks, extract JSON)
+          // This happens AFTER mermaid validation to preserve full content for validation
+          finalResult = cleanSchemaResponse(finalResult);
+
           // Step 4: Validate and potentially correct JSON responses
           if (isJsonSchema(options.schema)) {
             if (this.debug) {
               console.log(`[DEBUG] JSON validation: Starting validation process for schema response`);
-              console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
-            }
-
-            // Clean the response first to extract JSON from markdown/code blocks
-            finalResult = cleanSchemaResponse(finalResult);
-
-            if (this.debug) {
-              console.log(`[DEBUG] JSON validation: After cleaning, length: ${finalResult.length} chars`);
+              console.log(`[DEBUG] JSON validation: Cleaned response length: ${finalResult.length} chars`);
             }
 
             // Record JSON validation start in telemetry
@@ -2131,17 +2126,16 @@ Convert your previous response content into actual JSON data that follows this s
       } else if (reachedMaxIterations && options.schema && this.debug) {
         console.log('[DEBUG] Skipping schema formatting due to max iterations reached without completion');
       } else if (completionAttempted && options.schema && !options._schemaFormatted && !options._skipValidation) {
-        // For attempt_completion results with schema, still clean markdown if needed
+        // For attempt_completion results with schema, validate mermaid diagrams BEFORE cleaning schema
+        // This ensures mermaid validation sees the full response before JSON extraction strips content
         // Skip this validation if we're in a recursive correction call (_skipValidation flag)
         try {
-          finalResult = cleanSchemaResponse(finalResult);
-          
-          // Validate and fix Mermaid diagrams if present
+          // Validate and fix Mermaid diagrams if present (BEFORE schema cleaning)
           if (!this.disableMermaidValidation) {
             if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result...`);
+              console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result BEFORE schema cleaning...`);
             }
-            
+
             const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
               debug: this.debug,
               path: this.allowedFolders[0],
@@ -2149,7 +2143,7 @@ Convert your previous response content into actual JSON data that follows this s
               model: this.model,
               tracer: this.tracer
             });
-            
+
             if (mermaidValidation.wasFixed) {
               finalResult = mermaidValidation.fixedResponse;
               if (this.debug) {
@@ -2164,6 +2158,9 @@ Convert your previous response content into actual JSON data that follows this s
           } else if (this.debug) {
             console.log(`[DEBUG] Mermaid validation: Skipped for attempt_completion result due to disableMermaidValidation option`);
           }
+
+          // Now clean the schema response (may extract JSON and discard other content)
+          finalResult = cleanSchemaResponse(finalResult);
           
           // Validate and potentially correct JSON for attempt_completion results
           if (isJsonSchema(options.schema)) {
