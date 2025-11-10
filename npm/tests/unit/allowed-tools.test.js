@@ -232,4 +232,42 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.isEnabled('query')).toBe(false);
     });
   });
+
+  describe('disableTools convenience flag', () => {
+    test('should disable all tools when disableTools is true', () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        disableTools: true
+      });
+
+      expect(agent.allowedTools.mode).toBe('none');
+      expect(agent.allowedTools.isEnabled('search')).toBe(false);
+      expect(agent.allowedTools.isEnabled('query')).toBe(false);
+      expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
+    });
+
+    test('should take precedence over allowedTools when both are set', () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['search', 'query', 'extract'],
+        disableTools: true  // This should win
+      });
+
+      expect(agent.allowedTools.mode).toBe('none');
+      expect(agent.allowedTools.isEnabled('search')).toBe(false);
+      expect(agent.allowedTools.isEnabled('query')).toBe(false);
+    });
+
+    test('should not affect allowedTools when disableTools is false', () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['search', 'query'],
+        disableTools: false
+      });
+
+      expect(agent.allowedTools.mode).toBe('whitelist');
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('query')).toBe(true);
+    });
+  });
 });

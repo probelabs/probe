@@ -135,6 +135,7 @@ function parseArgs() {
     outline: false, // New flag to enable outline format
     noMermaidValidation: false, // New flag to disable mermaid validation
     allowedTools: null, // Tool filtering: ['*'] = all, [] = none, ['tool1', 'tool2'] = specific
+    disableTools: false, // Convenience flag to disable all tools
     // Bash tool configuration
     enableBash: false,
     bashAllow: null,
@@ -200,6 +201,9 @@ function parseArgs() {
       } else {
         config.allowedTools = toolsArg.split(',').map(t => t.trim()).filter(t => t.length > 0);
       }
+    } else if (arg === '--disable-tools') {
+      // Convenience flag to disable all tools (raw AI mode)
+      config.disableTools = true;
     } else if (arg === '--enable-bash') {
       config.enableBash = true;
     } else if (arg === '--bash-allow' && i + 1 < args.length) {
@@ -259,6 +263,8 @@ Options:
                                    Use 'none' or '' for no tools (raw AI mode)
                                    Specific tools: search,query,extract,listFiles,searchFiles
                                    Supports exclusion: '*,!bash' (all except bash)
+  --disable-tools                  Disable all tools (raw AI mode, no code analysis)
+                                   Convenience flag equivalent to --allowed-tools none
   --verbose                        Enable verbose output
   --outline                        Use outline-xml format for code search results
   --mcp                           Run as MCP server
@@ -302,6 +308,7 @@ Examples:
   probe agent "Analyze code" --trace-remote http://localhost:4318/v1/traces
   probe agent "Explain this code" --allowed-tools search,extract  # Only search and extract
   probe agent "What is this project about?" --allowed-tools none  # Raw AI mode (no tools)
+  probe agent "Tell me about this project" --disable-tools        # Raw AI mode (convenience flag)
   probe agent --mcp               # Start MCP server mode
   probe agent --acp               # Start ACP server mode
 
@@ -453,7 +460,8 @@ class ProbeAgentMcpServer {
             debug: process.env.DEBUG === '1',
             maxResponseTokens: args.max_response_tokens,
             disableMermaidValidation: !!args.no_mermaid_validation,
-            allowedTools: args.allowed_tools
+            allowedTools: args.allowed_tools,
+            disableTools: args.disable_tools
           };
 
           this.agent = new ProbeAgent(agentConfig);
@@ -746,6 +754,7 @@ async function main() {
       maxResponseTokens: config.maxResponseTokens,
       disableMermaidValidation: config.noMermaidValidation,
       allowedTools: config.allowedTools,
+      disableTools: config.disableTools,
       enableBash: config.enableBash,
       bashConfig: bashConfig
     };

@@ -105,6 +105,7 @@ export class ProbeAgent {
    * @param {Object} [options.storageAdapter] - Custom storage adapter for history management
    * @param {Object} [options.hooks] - Hook callbacks for events (e.g., {'tool:start': callback})
    * @param {Array<string>|null} [options.allowedTools] - List of allowed tool names. Use ['*'] for all tools (default), [] or null for no tools (raw AI mode), or specific tool names like ['search', 'query', 'extract']. Supports exclusion with '!' prefix (e.g., ['*', '!bash'])
+   * @param {boolean} [options.disableTools=false] - Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set.
    * @param {Object} [options.retry] - Retry configuration
    * @param {number} [options.retry.maxRetries=3] - Maximum retry attempts per provider
    * @param {number} [options.retry.initialDelay=1000] - Initial delay in ms
@@ -143,7 +144,9 @@ export class ProbeAgent {
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
     // Supports exclusion with '!' prefix: ['*', '!bash'] = all tools except bash
-    this.allowedTools = this._parseAllowedTools(options.allowedTools);
+    // disableTools is a convenience flag that overrides allowedTools to []
+    const effectiveAllowedTools = options.disableTools ? [] : options.allowedTools;
+    this.allowedTools = this._parseAllowedTools(effectiveAllowedTools);
 
     // Storage adapter (defaults to in-memory)
     this.storageAdapter = options.storageAdapter || new InMemoryStorageAdapter();

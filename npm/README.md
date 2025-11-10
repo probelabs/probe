@@ -244,7 +244,13 @@ const agent3 = new ProbeAgent({
 // Raw AI mode - no tools at all
 const agent4 = new ProbeAgent({
   path: '/path/to/project',
-  allowedTools: []  // or 'none'
+  allowedTools: []  // or use disableTools: true
+});
+
+// Convenience flag for raw AI mode (better DX)
+const agent5 = new ProbeAgent({
+  path: '/path/to/project',
+  disableTools: true  // Clearer than allowedTools: []
 });
 ```
 
@@ -266,8 +272,11 @@ const agent4 = new ProbeAgent({
 # Allow only search and extract tools
 probe agent "Explain this code" --allowed-tools search,extract
 
-# Raw AI mode (no tools)
+# Raw AI mode (no tools) - option 1
 probe agent "What is this project about?" --allowed-tools none
+
+# Raw AI mode (no tools) - option 2 (better DX)
+probe agent "Tell me about this project" --disable-tools
 
 # All tools (default)
 probe agent "Analyze the architecture" --allowed-tools all
