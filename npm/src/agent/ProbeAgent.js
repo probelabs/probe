@@ -60,6 +60,7 @@ import {
 } from './mcp/index.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
+import { handleContextLimitError } from './contextCompactor.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -1496,6 +1497,46 @@ When troubleshooting:
 
         } catch (error) {
           console.error(`Error during streamText (Iter ${currentIteration}):`, error);
+
+          // Check if this is a context limit error and attempt compaction
+          const compactionResult = handleContextLimitError(error, currentMessages, {
+            keepLastSegment: true,
+            minSegmentsToKeep: 1
+          });
+
+          if (compactionResult) {
+            // Context limit error detected - compact and retry
+            const { messages: compactedMessages, stats } = compactionResult;
+
+            console.log(`[INFO] Context window limit exceeded. Compacting conversation...`);
+            console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
+            console.log(`[INFO] Estimated token savings: ${stats.tokensSaved} tokens`);
+
+            if (this.debug) {
+              console.log(`[DEBUG] Compaction stats:`, stats);
+              console.log(`[DEBUG] Original message count: ${stats.originalCount}`);
+              console.log(`[DEBUG] Compacted message count: ${stats.compactedCount}`);
+            }
+
+            // Update currentMessages with compacted version and retry this iteration
+            currentMessages = compactedMessages;
+            currentIteration--; // Retry the same iteration with compacted messages
+
+            // Log compaction event if tracer is available
+            if (this.tracer) {
+              this.tracer.addEvent('context.compacted', {
+                'iteration': currentIteration + 1,
+                'original_count': stats.originalCount,
+                'compacted_count': stats.compactedCount,
+                'reduction_percent': stats.reductionPercent,
+                'tokens_saved': stats.tokensSaved
+              });
+            }
+
+            continue; // Retry with compacted messages
+          }
+
+          // Not a context limit error or compaction failed - throw error
           finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
           throw new Error(finalResult);
         }
