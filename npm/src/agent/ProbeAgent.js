@@ -232,6 +232,15 @@ export class ProbeAgent {
    * @private
    */
   _parseAllowedTools(allowedTools) {
+    // Helper to check if tool matches a pattern (supports * wildcard)
+    const matchesPattern = (toolName, pattern) => {
+      if (!pattern.includes('*')) {
+        return toolName === pattern;
+      }
+      const regexPattern = pattern.replace(/\*/g, '.*');
+      return new RegExp(`^${regexPattern}$`).test(toolName);
+    };
+
     // Default: all tools allowed
     if (!allowedTools || (Array.isArray(allowedTools) && allowedTools.includes('*'))) {
       const exclusions = Array.isArray(allowedTools)
@@ -240,8 +249,8 @@ export class ProbeAgent {
 
       return {
         mode: 'all',
-        exclusions: new Set(exclusions),
-        isEnabled: (toolName) => !exclusions.includes(toolName)
+        exclusions,
+        isEnabled: (toolName) => !exclusions.some(pattern => matchesPattern(toolName, pattern))
       };
     }
 
@@ -253,12 +262,12 @@ export class ProbeAgent {
       };
     }
 
-    // Specific tools allowed
-    const allowed = new Set(allowedTools.filter(t => !t.startsWith('!')));
+    // Specific tools allowed (with wildcard support)
+    const allowedPatterns = allowedTools.filter(t => !t.startsWith('!'));
     return {
       mode: 'whitelist',
-      allowed,
-      isEnabled: (toolName) => allowed.has(toolName)
+      allowed: allowedPatterns,
+      isEnabled: (toolName) => allowedPatterns.some(pattern => matchesPattern(toolName, pattern))
     };
   }
 
@@ -294,10 +303,17 @@ export class ProbeAgent {
         await this.initializeMCP();
 
         // Merge MCP tools into toolImplementations for unified access
+        // Apply allowedTools filtering using mcp__ prefix (like Claude Code)
         if (this.mcpBridge) {
           const mcpTools = this.mcpBridge.mcpTools || {};
           for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
-            this.toolImplementations[toolName] = toolImpl;
+            // Check if MCP tool is allowed using mcp__ prefix
+            const mcpToolName = `mcp__${toolName}`;
+            if (this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName)) {
+              this.toolImplementations[toolName] = toolImpl;
+            } else if (this.debug) {
+              console.error(`[DEBUG] MCP tool '${toolName}' filtered out by allowedTools`);
+            }
           }
         }
 
@@ -1093,10 +1109,17 @@ export class ProbeAgent {
         await this.initializeMCP();
 
         // Merge MCP tools into toolImplementations for unified access
+        // Apply allowedTools filtering using mcp__ prefix (like Claude Code)
         if (this.mcpBridge) {
           const mcpTools = this.mcpBridge.mcpTools || {};
           for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
-            this.toolImplementations[toolName] = toolImpl;
+            // Check if MCP tool is allowed using mcp__ prefix
+            const mcpToolName = `mcp__${toolName}`;
+            if (this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName)) {
+              this.toolImplementations[toolName] = toolImpl;
+            } else if (this.debug) {
+              console.error(`[DEBUG] MCP tool '${toolName}' filtered out by allowedTools`);
+            }
           }
         }
       } catch (error) {
@@ -1332,11 +1355,20 @@ When troubleshooting:
     // Add Tool Definitions
     systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
 
-    // Add MCP tools if available
+    // Add MCP tools if available (filtered by allowedTools)
     if (this.mcpBridge && this.mcpBridge.getToolNames().length > 0) {
-      systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
-      systemMessage += this.mcpBridge.getXmlToolDefinitions();
-      systemMessage += `\n\nFor MCP tools, use JSON format within the params tag, e.g.:\n<mcp_tool>\n<params>\n{"key": "value"}\n</params>\n</mcp_tool>\n`;
+      const allMcpTools = this.mcpBridge.getToolNames();
+      const allowedMcpTools = allMcpTools.filter(toolName => {
+        const mcpToolName = `mcp__${toolName}`;
+        return this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName);
+      });
+
+      if (allowedMcpTools.length > 0) {
+        systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
+        // Get only allowed MCP tool definitions
+        systemMessage += this.mcpBridge.getXmlToolDefinitions(allowedMcpTools);
+        systemMessage += `\n\nFor MCP tools, use JSON format within the params tag, e.g.:\n<mcp_tool>\n<params>\n{"key": "value"}\n</params>\n</mcp_tool>\n`;
+      }
     }
 
     // Add folder information

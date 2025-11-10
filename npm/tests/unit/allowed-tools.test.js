@@ -270,4 +270,53 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.isEnabled('query')).toBe(true);
     });
   });
+
+  describe('MCP tool filtering with mcp__ prefix', () => {
+    test('should allow MCP tools with mcp__ prefix', () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['mcp__filesystem__read_file', 'search']
+      });
+
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__read_file')).toBe(true);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('query')).toBe(false);
+    });
+
+    test('should support wildcard patterns for MCP tools', () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['mcp__filesystem__*', 'search']
+      });
+
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__read_file')).toBe(true);
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__write_file')).toBe(true);
+      expect(agent.allowedTools.isEnabled('mcp__github__list_issues')).toBe(false);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+    });
+
+    test('should block MCP tools with exclusion patterns', () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['*', '!mcp__*']
+      });
+
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('query')).toBe(true);
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__read_file')).toBe(false);
+      expect(agent.allowedTools.isEnabled('mcp__github__list_issues')).toBe(false);
+    });
+
+    test('should support specific MCP server exclusions', () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['*', '!mcp__filesystem__*']
+      });
+
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('mcp__github__list_issues')).toBe(true);
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__read_file')).toBe(false);
+      expect(agent.allowedTools.isEnabled('mcp__filesystem__write_file')).toBe(false);
+    });
+  });
 });

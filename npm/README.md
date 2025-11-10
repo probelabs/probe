@@ -266,6 +266,14 @@ const agent5 = new ProbeAgent({
 - `create` - Create new files (requires `allowEdit: true`)
 - `delegate` - Delegate tasks to subagents (requires `enableDelegate: true`)
 - `attempt_completion` - Signal task completion
+- `mcp__*` - MCP tools use the `mcp__` prefix (e.g., `mcp__filesystem__read_file`)
+
+**MCP Tool Filtering:**
+MCP tools follow the `mcp__toolname` naming convention. You can:
+- Allow all MCP tools: `allowedTools: ['*']`
+- Allow specific MCP tool: `allowedTools: ['mcp__filesystem__read_file']`
+- Allow all from a server: `allowedTools: ['mcp__filesystem__*']` (using pattern matching)
+- Block MCP tools: `allowedTools: ['*', '!mcp__*']`
 
 **CLI Usage:**
 ```bash
