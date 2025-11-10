@@ -1447,48 +1447,6 @@ When troubleshooting:
       let completionAttempted = false;
       let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
 
-      // Check if we're in raw AI mode (no tools allowed)
-      const isRawAIMode = this.allowedTools.mode === 'none';
-
-      if (isRawAIMode) {
-        if (this.debug) {
-          console.log('[DEBUG] Running in raw AI mode (no tools)');
-        }
-
-        // Direct AI call without tool loop
-        try {
-          const messagesForAI = this.prepareMessagesWithImages(currentMessages);
-
-          let responseText = '';
-          const result = await this.streamTextWithRetryAndFallback({
-            model: this.provider(this.model),
-            messages: messagesForAI,
-            maxTokens: this.maxResponseTokens || 8192,
-            temperature: 0.7,
-            onChunk: (chunk) => {
-              responseText += chunk;
-              if (options.onStream) {
-                options.onStream(chunk);
-              }
-            }
-          });
-
-          finalResult = result.text || responseText;
-
-          // Add to history
-          this.history.push({ role: 'user', content: message });
-          this.history.push({ role: 'assistant', content: finalResult });
-
-          // Save history
-          await this.storageAdapter.saveHistory(this.sessionId, this.history);
-
-          return finalResult;
-        } catch (error) {
-          console.error('[ERROR] Raw AI mode request failed:', error);
-          throw error;
-        }
-      }
-
       // Adjust max iterations if schema is provided
       // +1 for schema formatting
       // +2 for potential Mermaid validation retries (can be multiple diagrams)
@@ -1695,19 +1653,6 @@ When troubleshooting:
             }
             break;
           } else {
-            // Check if tool is allowed by allowedTools configuration
-            if (!this.allowedTools.isEnabled(toolName)) {
-              const errorMessage = `Tool '${toolName}' is not allowed. Please use only the tools listed in the system message.`;
-              if (this.debug) {
-                console.error(`[DEBUG] Tool '${toolName}' blocked by allowedTools filter`);
-              }
-              currentMessages.push({
-                role: 'user',
-                content: `<tool_result>\nError: ${errorMessage}\n</tool_result>`
-              });
-              continue; // Skip to next iteration
-            }
-
             // Check tool type and execute accordingly
             const { type } = parsedTool;
 
