@@ -92,6 +92,7 @@ const agent = new ProbeAgent({
   model: 'claude-3-5-sonnet-20241022',  // Optional: override model
   allowEdit: false,        // Optional: enable code modification
   debug: true,            // Optional: enable debug logging
+  allowedTools: ['*'],    // Optional: filter available tools (see Tool Filtering below)
   enableMcp: true,        // Optional: enable MCP tool integration
   mcpConfig: {           // Optional: MCP configuration (see MCP section below)
     mcpServers: {...}
@@ -214,6 +215,69 @@ const agent = new ProbeAgent({
 ```
 
 See [docs/RETRY_AND_FALLBACK.md](./docs/RETRY_AND_FALLBACK.md) for complete documentation and examples.
+
+### Tool Filtering
+
+ProbeAgent supports filtering available tools to control what operations the AI can perform. This is useful for security, cost control, or limiting functionality to specific use cases.
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+// Allow all tools (default behavior)
+const agent1 = new ProbeAgent({
+  path: '/path/to/project',
+  allowedTools: ['*']  // or undefined
+});
+
+// Allow only specific tools (whitelist mode)
+const agent2 = new ProbeAgent({
+  path: '/path/to/project',
+  allowedTools: ['search', 'query', 'extract']
+});
+
+// Allow all except specific tools (exclusion mode)
+const agent3 = new ProbeAgent({
+  path: '/path/to/project',
+  allowedTools: ['*', '!bash', '!implement']
+});
+
+// Raw AI mode - no tools at all
+const agent4 = new ProbeAgent({
+  path: '/path/to/project',
+  allowedTools: []  // or 'none'
+});
+```
+
+**Available Tools:**
+- `search` - Semantic code search
+- `query` - Tree-sitter pattern matching
+- `extract` - Extract code blocks
+- `listFiles` - List files and directories
+- `searchFiles` - Find files by glob pattern
+- `bash` - Execute bash commands (requires `enableBash: true`)
+- `implement` - Implement features with aider (requires `allowEdit: true`)
+- `edit` - Edit files with exact string replacement (requires `allowEdit: true`)
+- `create` - Create new files (requires `allowEdit: true`)
+- `delegate` - Delegate tasks to subagents (requires `enableDelegate: true`)
+- `attempt_completion` - Signal task completion
+
+**CLI Usage:**
+```bash
+# Allow only search and extract tools
+probe agent "Explain this code" --allowed-tools search,extract
+
+# Raw AI mode (no tools)
+probe agent "What is this project about?" --allowed-tools none
+
+# All tools (default)
+probe agent "Analyze the architecture" --allowed-tools all
+```
+
+**Notes:**
+- Tool filtering works in conjunction with feature flags (`allowEdit`, `enableBash`, `enableDelegate`)
+- Both the feature flag AND `allowedTools` must permit a tool for it to be available
+- Blocked tools will not appear in the system message and cannot be executed
+- Use `allowedTools: []` for pure conversational AI without code analysis tools
 
 ### Using as an MCP Server
 

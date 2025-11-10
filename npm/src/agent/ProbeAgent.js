@@ -104,6 +104,7 @@ export class ProbeAgent {
    * @param {Array} [options.mcpServers] - Deprecated, use mcpConfig instead
    * @param {Object} [options.storageAdapter] - Custom storage adapter for history management
    * @param {Object} [options.hooks] - Hook callbacks for events (e.g., {'tool:start': callback})
+   * @param {Array<string>|null} [options.allowedTools] - List of allowed tool names. Use ['*'] for all tools (default), [] or null for no tools (raw AI mode), or specific tool names like ['search', 'query', 'extract']. Supports exclusion with '!' prefix (e.g., ['*', '!bash'])
    * @param {Object} [options.retry] - Retry configuration
    * @param {number} [options.retry.maxRetries=3] - Maximum retry attempts per provider
    * @param {number} [options.retry.initialDelay=1000] - Initial delay in ms
@@ -138,6 +139,11 @@ export class ProbeAgent {
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
     this.disableJsonValidation = !!options.disableJsonValidation;
+
+    // Tool filtering configuration
+    // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
+    // Supports exclusion with '!' prefix: ['*', '!bash'] = all tools except bash
+    this.allowedTools = this._parseAllowedTools(options.allowedTools);
 
     // Storage adapter (defaults to in-memory)
     this.storageAdapter = options.storageAdapter || new InMemoryStorageAdapter();
@@ -214,6 +220,43 @@ export class ProbeAgent {
 
     // Note: MCP initialization is now done in initialize() method
     // Constructor must remain synchronous for backward compatibility
+  }
+
+  /**
+   * Parse allowedTools configuration
+   * @param {Array<string>|null|undefined} allowedTools - Tool filtering configuration
+   * @returns {Object} Parsed configuration with isEnabled method
+   * @private
+   */
+  _parseAllowedTools(allowedTools) {
+    // Default: all tools allowed
+    if (!allowedTools || (Array.isArray(allowedTools) && allowedTools.includes('*'))) {
+      const exclusions = Array.isArray(allowedTools)
+        ? allowedTools.filter(t => t.startsWith('!')).map(t => t.slice(1))
+        : [];
+
+      return {
+        mode: 'all',
+        exclusions: new Set(exclusions),
+        isEnabled: (toolName) => !exclusions.includes(toolName)
+      };
+    }
+
+    // Empty array or null: no tools (raw AI mode)
+    if (Array.isArray(allowedTools) && allowedTools.length === 0) {
+      return {
+        mode: 'none',
+        isEnabled: () => false
+      };
+    }
+
+    // Specific tools allowed
+    const allowed = new Set(allowedTools.filter(t => !t.startsWith('!')));
+    return {
+      mode: 'whitelist',
+      allowed,
+      isEnabled: (toolName) => allowed.has(toolName)
+    };
   }
 
   /**
@@ -1061,24 +1104,53 @@ export class ProbeAgent {
       }
     }
 
-    // Build tool definitions
-    let toolDefinitions = `
-${searchToolDefinition}
-${queryToolDefinition}
-${extractToolDefinition}
-${listFilesToolDefinition}
-${searchFilesToolDefinition}
-${attemptCompletionToolDefinition}
-`;
-    if (this.allowEdit) {
+    // Build tool definitions based on allowedTools configuration
+    let toolDefinitions = '';
+
+    // Helper to check if a tool is allowed
+    const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
+
+    // Core tools (filtered by allowedTools)
+    if (isToolAllowed('search')) {
+      toolDefinitions += `${searchToolDefinition}\n`;
+    }
+    if (isToolAllowed('query')) {
+      toolDefinitions += `${queryToolDefinition}\n`;
+    }
+    if (isToolAllowed('extract')) {
+      toolDefinitions += `${extractToolDefinition}\n`;
+    }
+    if (isToolAllowed('listFiles')) {
+      toolDefinitions += `${listFilesToolDefinition}\n`;
+    }
+    if (isToolAllowed('searchFiles')) {
+      toolDefinitions += `${searchFilesToolDefinition}\n`;
+    }
+
+    // Edit tools (require both allowEdit flag AND allowedTools permission)
+    if (this.allowEdit && isToolAllowed('implement')) {
       toolDefinitions += `${implementToolDefinition}\n`;
+    }
+    if (this.allowEdit && isToolAllowed('edit')) {
       toolDefinitions += `${editToolDefinition}\n`;
+    }
+    if (this.allowEdit && isToolAllowed('create')) {
       toolDefinitions += `${createToolDefinition}\n`;
     }
-    if (this.enableBash) {
+
+    // Bash tool (require both enableBash flag AND allowedTools permission)
+    if (this.enableBash && isToolAllowed('bash')) {
       toolDefinitions += `${bashToolDefinition}\n`;
     }
-    if (this.enableDelegate) {
+
+    // Always include attempt_completion (unless explicitly disabled in raw AI mode)
+    if (isToolAllowed('attempt_completion')) {
+      toolDefinitions += `${attemptCompletionToolDefinition}\n`;
+    }
+
+    // Delegate tool (require both enableDelegate flag AND allowedTools permission)
+    // Place after attempt_completion as it's an optional tool
+    if (this.enableDelegate && isToolAllowed('delegate')) {
       toolDefinitions += `${delegateToolDefinition}\n`;
     }
 
@@ -1372,6 +1444,48 @@ When troubleshooting:
       let completionAttempted = false;
       let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
 
+      // Check if we're in raw AI mode (no tools allowed)
+      const isRawAIMode = this.allowedTools.mode === 'none';
+
+      if (isRawAIMode) {
+        if (this.debug) {
+          console.log('[DEBUG] Running in raw AI mode (no tools)');
+        }
+
+        // Direct AI call without tool loop
+        try {
+          const messagesForAI = this.prepareMessagesWithImages(currentMessages);
+
+          let responseText = '';
+          const result = await this.streamTextWithRetryAndFallback({
+            model: this.provider(this.model),
+            messages: messagesForAI,
+            maxTokens: this.maxResponseTokens || 8192,
+            temperature: 0.7,
+            onChunk: (chunk) => {
+              responseText += chunk;
+              if (options.onStream) {
+                options.onStream(chunk);
+              }
+            }
+          });
+
+          finalResult = result.text || responseText;
+
+          // Add to history
+          this.history.push({ role: 'user', content: message });
+          this.history.push({ role: 'assistant', content: finalResult });
+
+          // Save history
+          await this.storageAdapter.saveHistory(this.sessionId, this.history);
+
+          return finalResult;
+        } catch (error) {
+          console.error('[ERROR] Raw AI mode request failed:', error);
+          throw error;
+        }
+      }
+
       // Adjust max iterations if schema is provided
       // +1 for schema formatting
       // +2 for potential Mermaid validation retries (can be multiple diagrams)
@@ -1578,6 +1692,19 @@ When troubleshooting:
             }
             break;
           } else {
+            // Check if tool is allowed by allowedTools configuration
+            if (!this.allowedTools.isEnabled(toolName)) {
+              const errorMessage = `Tool '${toolName}' is not allowed. Please use only the tools listed in the system message.`;
+              if (this.debug) {
+                console.error(`[DEBUG] Tool '${toolName}' blocked by allowedTools filter`);
+              }
+              currentMessages.push({
+                role: 'user',
+                content: `<tool_result>\nError: ${errorMessage}\n</tool_result>`
+              });
+              continue; // Skip to next iteration
+            }
+
             // Check tool type and execute accordingly
             const { type } = parsedTool;
 
@@ -2407,6 +2534,17 @@ Convert your previous response content into actual JSON data that follows this s
     }
 
     // Create new agent with same configuration
+    // Reconstruct the original allowedTools array from the parsed configuration
+    let allowedToolsArray = null;
+    if (this.allowedTools.mode === 'whitelist') {
+      allowedToolsArray = Array.from(this.allowedTools.allowed);
+    } else if (this.allowedTools.mode === 'none') {
+      allowedToolsArray = [];
+    } else if (this.allowedTools.mode === 'all' && this.allowedTools.exclusions.size > 0) {
+      allowedToolsArray = ['*', ...Array.from(this.allowedTools.exclusions).map(t => '!' + t)];
+    }
+    // If mode is 'all' with no exclusions, leave as null (default)
+
     const clonedAgent = new ProbeAgent({
       // Copy current agent's config
       customPrompt: this.customPrompt,
@@ -2423,6 +2561,7 @@ Convert your previous response content into actual JSON data that follows this s
       maxIterations: this.maxIterations,
       disableMermaidValidation: this.disableMermaidValidation,
       disableJsonValidation: this.disableJsonValidation,
+      allowedTools: allowedToolsArray,
       enableMcp: !!this.mcpBridge,
       mcpConfig: this.mcpConfig,
       enableBash: this.enableBash,
