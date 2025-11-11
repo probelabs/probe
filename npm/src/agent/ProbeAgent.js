@@ -2009,21 +2009,8 @@ When troubleshooting:
           // Add assistant response and ask for tool usage
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
 
-          // Build appropriate reminder message based on whether schema is provided
-          let reminderContent;
-          if (options.schema) {  // Apply for ANY schema, not just JSON schemas
-            // When schema is provided, use the same instructions as initial message
-            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
-
-Remember: Use proper XML format with BOTH opening and closing tags:
-
-<tool_name>
-<parameter>value</parameter>
-</tool_name>
-` + generateSchemaInstructions(options.schema, { debug: this.debug }).trim();
-          } else {
-            // Standard reminder without schema
-            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
+          // Standard reminder - schema was already provided in initial message
+          const reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
 Remember: Use proper XML format with BOTH opening and closing tags:
 
@@ -2035,7 +2022,6 @@ Or for quick completion if your previous response was already correct and comple
 <attempt_complete>
 
 IMPORTANT: When using <attempt_complete>, this must be the ONLY content in your response. No additional text, explanations, or other content should be included. This tag signals to reuse your previous response as the final answer.`;
-          }
 
           currentMessages.push({
             role: 'user',
