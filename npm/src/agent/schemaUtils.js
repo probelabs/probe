@@ -8,6 +8,40 @@ import { validate, fixText, extractMermaidBlocks } from '@probelabs/maid';
 import Ajv from 'ajv';
 
 /**
+ * Generate an example JSON object from a JSON schema
+ * @param {Object} schema - JSON schema object
+ * @returns {Object|null} - Example object, or null if schema cannot be processed
+ */
+export function generateExampleFromSchema(schema) {
+  try {
+    const parsedSchema = typeof schema === 'string' ? JSON.parse(schema) : schema;
+
+    if (parsedSchema.type !== 'object' || !parsedSchema.properties) {
+      return null;
+    }
+
+    const exampleObj = {};
+    for (const [key, value] of Object.entries(parsedSchema.properties)) {
+      if (value.type === 'boolean') {
+        exampleObj[key] = false;
+      } else if (value.type === 'number') {
+        exampleObj[key] = 0;
+      } else if (value.type === 'string') {
+        exampleObj[key] = value.description || 'your answer here';
+      } else if (value.type === 'array') {
+        exampleObj[key] = [];
+      } else {
+        exampleObj[key] = {};
+      }
+    }
+
+    return exampleObj;
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
  * Recursively apply additionalProperties: false to all object schemas
  * This ensures strict validation at all nesting levels
  * @param {Object} schema - JSON schema object
