@@ -105,6 +105,8 @@ export class ProbeAgent {
    * @param {Array} [options.mcpServers] - Deprecated, use mcpConfig instead
    * @param {Object} [options.storageAdapter] - Custom storage adapter for history management
    * @param {Object} [options.hooks] - Hook callbacks for events (e.g., {'tool:start': callback})
+   * @param {Array<string>|null} [options.allowedTools] - List of allowed tool names. Use ['*'] for all tools (default), [] or null for no tools (raw AI mode), or specific tool names like ['search', 'query', 'extract']. Supports exclusion with '!' prefix (e.g., ['*', '!bash'])
+   * @param {boolean} [options.disableTools=false] - Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set.
    * @param {Object} [options.retry] - Retry configuration
    * @param {number} [options.retry.maxRetries=3] - Maximum retry attempts per provider
    * @param {number} [options.retry.initialDelay=1000] - Initial delay in ms
@@ -139,6 +141,13 @@ export class ProbeAgent {
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
     this.disableJsonValidation = !!options.disableJsonValidation;
+
+    // Tool filtering configuration
+    // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
+    // Supports exclusion with '!' prefix: ['*', '!bash'] = all tools except bash
+    // disableTools is a convenience flag that overrides allowedTools to []
+    const effectiveAllowedTools = options.disableTools ? [] : options.allowedTools;
+    this.allowedTools = this._parseAllowedTools(effectiveAllowedTools);
 
     // Storage adapter (defaults to in-memory)
     this.storageAdapter = options.storageAdapter || new InMemoryStorageAdapter();
@@ -218,6 +227,74 @@ export class ProbeAgent {
   }
 
   /**
+   * Parse allowedTools configuration
+   * @param {Array<string>|null|undefined} allowedTools - Tool filtering configuration
+   * @returns {Object} Parsed configuration with isEnabled method
+   * @private
+   */
+  _parseAllowedTools(allowedTools) {
+    // Helper to check if tool matches a pattern (supports * wildcard)
+    const matchesPattern = (toolName, pattern) => {
+      if (!pattern.includes('*')) {
+        return toolName === pattern;
+      }
+      const regexPattern = pattern.replace(/\*/g, '.*');
+      return new RegExp(`^${regexPattern}$`).test(toolName);
+    };
+
+    // Default: all tools allowed
+    if (!allowedTools || (Array.isArray(allowedTools) && allowedTools.includes('*'))) {
+      const exclusions = Array.isArray(allowedTools)
+        ? allowedTools.filter(t => t.startsWith('!')).map(t => t.slice(1))
+        : [];
+
+      return {
+        mode: 'all',
+        exclusions,
+        isEnabled: (toolName) => !exclusions.some(pattern => matchesPattern(toolName, pattern))
+      };
+    }
+
+    // Empty array or null: no tools (raw AI mode)
+    if (Array.isArray(allowedTools) && allowedTools.length === 0) {
+      return {
+        mode: 'none',
+        isEnabled: () => false
+      };
+    }
+
+    // Specific tools allowed (with wildcard support)
+    const allowedPatterns = allowedTools.filter(t => !t.startsWith('!'));
+    return {
+      mode: 'whitelist',
+      allowed: allowedPatterns,
+      isEnabled: (toolName) => allowedPatterns.some(pattern => matchesPattern(toolName, pattern))
+    };
+  }
+
+  /**
+   * Check if an MCP tool is allowed based on allowedTools configuration
+   * Uses mcp__ prefix convention (like Claude Code)
+   * @param {string} toolName - The MCP tool name (without mcp__ prefix)
+   * @returns {boolean} - Whether the tool is allowed
+   * @private
+   */
+  _isMcpToolAllowed(toolName) {
+    const mcpToolName = `mcp__${toolName}`;
+    return this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName);
+  }
+
+  /**
+   * Filter MCP tools based on allowedTools configuration
+   * @param {string[]} mcpToolNames - Array of MCP tool names
+   * @returns {string[]} - Filtered array of allowed MCP tool names
+   * @private
+   */
+  _filterMcpTools(mcpToolNames) {
+    return mcpToolNames.filter(toolName => this._isMcpToolAllowed(toolName));
+  }
+
+  /**
    * Initialize the agent asynchronously (must be called after constructor)
    * This method initializes MCP and merges MCP tools into the tool list, and loads history from storage
    */
@@ -249,10 +326,15 @@ export class ProbeAgent {
         await this.initializeMCP();
 
         // Merge MCP tools into toolImplementations for unified access
+        // Apply allowedTools filtering using mcp__ prefix (like Claude Code)
         if (this.mcpBridge) {
           const mcpTools = this.mcpBridge.mcpTools || {};
           for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
-            this.toolImplementations[toolName] = toolImpl;
+            if (this._isMcpToolAllowed(toolName)) {
+              this.toolImplementations[toolName] = toolImpl;
+            } else if (this.debug) {
+              console.error(`[DEBUG] MCP tool '${toolName}' filtered out by allowedTools`);
+            }
           }
         }
 
@@ -1048,10 +1130,15 @@ export class ProbeAgent {
         await this.initializeMCP();
 
         // Merge MCP tools into toolImplementations for unified access
+        // Apply allowedTools filtering using mcp__ prefix (like Claude Code)
         if (this.mcpBridge) {
           const mcpTools = this.mcpBridge.mcpTools || {};
           for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
-            this.toolImplementations[toolName] = toolImpl;
+            if (this._isMcpToolAllowed(toolName)) {
+              this.toolImplementations[toolName] = toolImpl;
+            } else if (this.debug) {
+              console.error(`[DEBUG] MCP tool '${toolName}' filtered out by allowedTools`);
+            }
           }
         }
       } catch (error) {
@@ -1062,24 +1149,53 @@ export class ProbeAgent {
       }
     }
 
-    // Build tool definitions
-    let toolDefinitions = `
-${searchToolDefinition}
-${queryToolDefinition}
-${extractToolDefinition}
-${listFilesToolDefinition}
-${searchFilesToolDefinition}
-${attemptCompletionToolDefinition}
-`;
-    if (this.allowEdit) {
+    // Build tool definitions based on allowedTools configuration
+    let toolDefinitions = '';
+
+    // Helper to check if a tool is allowed
+    const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
+
+    // Core tools (filtered by allowedTools)
+    if (isToolAllowed('search')) {
+      toolDefinitions += `${searchToolDefinition}\n`;
+    }
+    if (isToolAllowed('query')) {
+      toolDefinitions += `${queryToolDefinition}\n`;
+    }
+    if (isToolAllowed('extract')) {
+      toolDefinitions += `${extractToolDefinition}\n`;
+    }
+    if (isToolAllowed('listFiles')) {
+      toolDefinitions += `${listFilesToolDefinition}\n`;
+    }
+    if (isToolAllowed('searchFiles')) {
+      toolDefinitions += `${searchFilesToolDefinition}\n`;
+    }
+
+    // Edit tools (require both allowEdit flag AND allowedTools permission)
+    if (this.allowEdit && isToolAllowed('implement')) {
       toolDefinitions += `${implementToolDefinition}\n`;
+    }
+    if (this.allowEdit && isToolAllowed('edit')) {
       toolDefinitions += `${editToolDefinition}\n`;
+    }
+    if (this.allowEdit && isToolAllowed('create')) {
       toolDefinitions += `${createToolDefinition}\n`;
     }
-    if (this.enableBash) {
+
+    // Bash tool (require both enableBash flag AND allowedTools permission)
+    if (this.enableBash && isToolAllowed('bash')) {
       toolDefinitions += `${bashToolDefinition}\n`;
     }
-    if (this.enableDelegate) {
+
+    // Always include attempt_completion (unless explicitly disabled in raw AI mode)
+    if (isToolAllowed('attempt_completion')) {
+      toolDefinitions += `${attemptCompletionToolDefinition}\n`;
+    }
+
+    // Delegate tool (require both enableDelegate flag AND allowedTools permission)
+    // Place after attempt_completion as it's an optional tool
+    if (this.enableDelegate && isToolAllowed('delegate')) {
       toolDefinitions += `${delegateToolDefinition}\n`;
     }
 
@@ -1258,11 +1374,17 @@ When troubleshooting:
     // Add Tool Definitions
     systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
 
-    // Add MCP tools if available
+    // Add MCP tools if available (filtered by allowedTools)
     if (this.mcpBridge && this.mcpBridge.getToolNames().length > 0) {
-      systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
-      systemMessage += this.mcpBridge.getXmlToolDefinitions();
-      systemMessage += `\n\nFor MCP tools, use JSON format within the params tag, e.g.:\n<mcp_tool>\n<params>\n{"key": "value"}\n</params>\n</mcp_tool>\n`;
+      const allMcpTools = this.mcpBridge.getToolNames();
+      const allowedMcpTools = this._filterMcpTools(allMcpTools);
+
+      if (allowedMcpTools.length > 0) {
+        systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
+        // Get only allowed MCP tool definitions
+        systemMessage += this.mcpBridge.getXmlToolDefinitions(allowedMcpTools);
+        systemMessage += `\n\nFor MCP tools, use JSON format within the params tag, e.g.:\n<mcp_tool>\n<params>\n{"key": "value"}\n</params>\n</mcp_tool>\n`;
+      }
     }
 
     // Add folder information
@@ -2537,6 +2659,17 @@ Convert your previous response content into actual JSON data that follows this s
     }
 
     // Create new agent with same configuration
+    // Reconstruct the original allowedTools array from the parsed configuration
+    let allowedToolsArray = null;
+    if (this.allowedTools.mode === 'whitelist') {
+      allowedToolsArray = [...this.allowedTools.allowed];
+    } else if (this.allowedTools.mode === 'none') {
+      allowedToolsArray = [];
+    } else if (this.allowedTools.mode === 'all' && this.allowedTools.exclusions.length > 0) {
+      allowedToolsArray = ['*', ...this.allowedTools.exclusions.map(t => '!' + t)];
+    }
+    // If mode is 'all' with no exclusions, leave as null (default)
+
     const clonedAgent = new ProbeAgent({
       // Copy current agent's config
       customPrompt: this.customPrompt,
@@ -2553,6 +2686,7 @@ Convert your previous response content into actual JSON data that follows this s
       maxIterations: this.maxIterations,
       disableMermaidValidation: this.disableMermaidValidation,
       disableJsonValidation: this.disableJsonValidation,
+      allowedTools: allowedToolsArray,
       enableMcp: !!this.mcpBridge,
       mcpConfig: this.mcpConfig,
       enableBash: this.enableBash,

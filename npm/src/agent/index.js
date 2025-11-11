@@ -134,6 +134,8 @@ function parseArgs() {
     useStdin: false, // New flag to indicate stdin should be used
     outline: false, // New flag to enable outline format
     noMermaidValidation: false, // New flag to disable mermaid validation
+    allowedTools: null, // Tool filtering: ['*'] = all, [] = none, ['tool1', 'tool2'] = specific
+    disableTools: false, // Convenience flag to disable all tools
     // Bash tool configuration
     enableBash: false,
     bashAllow: null,
@@ -189,6 +191,19 @@ function parseArgs() {
       config.outline = true;
     } else if (arg === '--no-mermaid-validation') {
       config.noMermaidValidation = true;
+    } else if (arg === '--allowed-tools' && i + 1 < args.length) {
+      // Parse allowed tools: comma-separated list or special values
+      const toolsArg = args[++i];
+      if (toolsArg === '*' || toolsArg === 'all') {
+        config.allowedTools = ['*'];
+      } else if (toolsArg === 'none' || toolsArg === '') {
+        config.allowedTools = [];
+      } else {
+        config.allowedTools = toolsArg.split(',').map(t => t.trim()).filter(t => t.length > 0);
+      }
+    } else if (arg === '--disable-tools') {
+      // Convenience flag to disable all tools (raw AI mode)
+      config.disableTools = true;
     } else if (arg === '--enable-bash') {
       config.enableBash = true;
     } else if (arg === '--bash-allow' && i + 1 < args.length) {
@@ -243,6 +258,13 @@ Options:
   --model <name>                   Override model name
   --allow-edit                     Enable code modification capabilities
   --enable-delegate                Enable delegate tool for task distribution to subagents
+  --allowed-tools <tools>          Filter available tools (comma-separated list)
+                                   Use '*' or 'all' for all tools (default)
+                                   Use 'none' or '' for no tools (raw AI mode)
+                                   Specific tools: search,query,extract,listFiles,searchFiles
+                                   Supports exclusion: '*,!bash' (all except bash)
+  --disable-tools                  Disable all tools (raw AI mode, no code analysis)
+                                   Convenience flag equivalent to --allowed-tools none
   --verbose                        Enable verbose output
   --outline                        Use outline-xml format for code search results
   --mcp                           Run as MCP server
@@ -284,6 +306,9 @@ Examples:
   probe agent "Analyze codebase" --schema schema.json  # Schema from file
   probe agent "Debug issue" --trace-file ./debug.jsonl --verbose
   probe agent "Analyze code" --trace-remote http://localhost:4318/v1/traces
+  probe agent "Explain this code" --allowed-tools search,extract  # Only search and extract
+  probe agent "What is this project about?" --allowed-tools none  # Raw AI mode (no tools)
+  probe agent "Tell me about this project" --disable-tools        # Raw AI mode (convenience flag)
   probe agent --mcp               # Start MCP server mode
   probe agent --acp               # Start ACP server mode
 
@@ -434,7 +459,9 @@ class ProbeAgentMcpServer {
             allowEdit: !!args.allow_edit,
             debug: process.env.DEBUG === '1',
             maxResponseTokens: args.max_response_tokens,
-            disableMermaidValidation: !!args.no_mermaid_validation
+            disableMermaidValidation: !!args.no_mermaid_validation,
+            allowedTools: args.allowed_tools,
+            disableTools: args.disable_tools
           };
 
           this.agent = new ProbeAgent(agentConfig);
@@ -726,6 +753,8 @@ async function main() {
       outline: config.outline,
       maxResponseTokens: config.maxResponseTokens,
       disableMermaidValidation: config.noMermaidValidation,
+      allowedTools: config.allowedTools,
+      disableTools: config.disableTools,
       enableBash: config.enableBash,
       bashConfig: bashConfig
     };
