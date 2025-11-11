@@ -48,7 +48,7 @@ import {
   isJsonSchema,
   validateJsonResponse,
   createJsonCorrectionPrompt,
-  generateExampleFromSchema,
+  generateSchemaInstructions,
   isJsonSchemaDefinition,
   createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse
@@ -1459,23 +1459,7 @@ When troubleshooting:
 
       // If schema is provided, prepend JSON format requirement to user message
       if (options.schema && !options._schemaFormatted) {
-        let schemaInstructions = '\n\nIMPORTANT: When you provide your final answer using attempt_completion, you MUST format it as valid JSON matching this schema:\n\n';
-
-        try {
-          const parsedSchema = typeof options.schema === 'string' ? JSON.parse(options.schema) : options.schema;
-          schemaInstructions += `${JSON.stringify(parsedSchema, null, 2)}\n\n`;
-
-          // Generate example using helper function
-          const exampleObj = generateExampleFromSchema(parsedSchema);
-          if (exampleObj) {
-            schemaInstructions += `Example:\n<attempt_completion>\n${JSON.stringify(exampleObj, null, 2)}\n</attempt_completion>\n\n`;
-          }
-        } catch (e) {
-          schemaInstructions += `${options.schema}\n\n`;
-        }
-
-        schemaInstructions += 'Your response inside attempt_completion must be ONLY valid JSON - no plain text, no explanations, no markdown.';
-
+        const schemaInstructions = generateSchemaInstructions(options.schema, { debug: this.debug });
         userMessage.content = message.trim() + schemaInstructions;
       }
 
@@ -2028,23 +2012,7 @@ When troubleshooting:
           // Build appropriate reminder message based on whether schema is provided
           let reminderContent;
           if (options.schema) {  // Apply for ANY schema, not just JSON schemas
-            // When schema is provided, AI must use attempt_completion to trigger schema formatting
-            // Parse schema to show example if it's JSON
-            let schemaExample = '';
-            try {
-              const exampleObj = generateExampleFromSchema(options.schema);
-              if (exampleObj) {
-                schemaExample = `
-
-Example format:
-<attempt_completion>
-${JSON.stringify(exampleObj, null, 2)}
-</attempt_completion>`;
-              }
-            } catch (e) {
-              // If schema parsing fails, don't show example
-            }
-
+            // When schema is provided, use the same instructions as initial message
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
 Remember: Use proper XML format with BOTH opening and closing tags:
@@ -2052,17 +2020,7 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <tool_name>
 <parameter>value</parameter>
 </tool_name>
-
-CRITICAL: A JSON schema was provided. You MUST respond with valid JSON inside attempt_completion.
-
-Required format:
-<attempt_completion>
-{"key": "value"}  ← Must be valid JSON matching the schema
-</attempt_completion>
-
-DO NOT provide plain text.
-DO NOT provide explanations outside the JSON.
-DO NOT use markdown code blocks.${schemaExample}`;
+` + generateSchemaInstructions(options.schema, { debug: this.debug }).trim();
           } else {
             // Standard reminder without schema
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
