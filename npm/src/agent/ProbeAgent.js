@@ -48,6 +48,7 @@ import {
   isJsonSchema,
   validateJsonResponse,
   createJsonCorrectionPrompt,
+  generateSchemaInstructions,
   isJsonSchemaDefinition,
   createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse
@@ -1455,11 +1456,18 @@ When troubleshooting:
 
       // Create user message with optional image support
       let userMessage = { role: 'user', content: message.trim() };
-      
+
+      // If schema is provided, prepend JSON format requirement to user message
+      if (options.schema && !options._schemaFormatted) {
+        const schemaInstructions = generateSchemaInstructions(options.schema, { debug: this.debug });
+        userMessage.content = message.trim() + schemaInstructions;
+      }
+
       // If images are provided, use multi-modal message format
       if (images && images.length > 0) {
+        const textContent = userMessage.content;
         userMessage.content = [
-          { type: 'text', text: message.trim() },
+          { type: 'text', text: textContent },
           ...images.map(image => ({
             type: 'image',
             image: image
@@ -2004,7 +2012,7 @@ When troubleshooting:
           // Build appropriate reminder message based on whether schema is provided
           let reminderContent;
           if (options.schema) {  // Apply for ANY schema, not just JSON schemas
-            // When schema is provided, AI must use attempt_completion to trigger schema formatting
+            // When schema is provided, use the same instructions as initial message
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
 Remember: Use proper XML format with BOTH opening and closing tags:
@@ -2012,15 +2020,7 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <tool_name>
 <parameter>value</parameter>
 </tool_name>
-
-IMPORTANT: A schema was provided for the final output format.
-
-You MUST use attempt_completion to provide your answer:
-<attempt_completion>
-[Your complete answer here - provide in natural language, it will be automatically formatted to match the schema]
-</attempt_completion>
-
-Your response will be automatically formatted to JSON. You can provide your answer in natural language or as JSON - either will work.`;
+` + generateSchemaInstructions(options.schema, { debug: this.debug }).trim();
           } else {
             // Standard reminder without schema
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.

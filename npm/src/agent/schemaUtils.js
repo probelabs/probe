@@ -8,6 +8,80 @@ import { validate, fixText, extractMermaidBlocks } from '@probelabs/maid';
 import Ajv from 'ajv';
 
 /**
+ * Generate an example JSON object from a JSON schema
+ * @param {Object|string} schema - JSON schema object or string
+ * @param {Object} options - Options for generation
+ * @param {boolean} [options.debug=false] - Enable debug logging
+ * @returns {Object|null} - Example object, or null if schema cannot be processed
+ */
+export function generateExampleFromSchema(schema, options = {}) {
+  const { debug = false } = options;
+
+  try {
+    const parsedSchema = typeof schema === 'string' ? JSON.parse(schema) : schema;
+
+    if (parsedSchema.type !== 'object' || !parsedSchema.properties) {
+      return null;
+    }
+
+    const exampleObj = {};
+    for (const [key, value] of Object.entries(parsedSchema.properties)) {
+      if (value.type === 'boolean') {
+        exampleObj[key] = false;
+      } else if (value.type === 'number') {
+        exampleObj[key] = 0;
+      } else if (value.type === 'string') {
+        exampleObj[key] = value.description || 'your answer here';
+      } else if (value.type === 'array') {
+        exampleObj[key] = [];
+      } else {
+        exampleObj[key] = {};
+      }
+    }
+
+    return exampleObj;
+  } catch (e) {
+    if (debug) {
+      console.error('[DEBUG] generateExampleFromSchema: Failed to parse schema:', e.message);
+    }
+    return null;
+  }
+}
+
+/**
+ * Generate schema instructions for AI to follow
+ * @param {Object|string} schema - JSON schema object or string
+ * @param {Object} options - Options for generation
+ * @param {boolean} [options.debug=false] - Enable debug logging
+ * @returns {string} - Formatted schema instructions
+ */
+export function generateSchemaInstructions(schema, options = {}) {
+  const { debug = false } = options;
+
+  let instructions = '\n\nIMPORTANT: When you provide your final answer using attempt_completion, you MUST format it as valid JSON matching this schema:\n\n';
+
+  try {
+    const parsedSchema = typeof schema === 'string' ? JSON.parse(schema) : schema;
+    instructions += `${JSON.stringify(parsedSchema, null, 2)}\n\n`;
+
+    // Generate example using helper function
+    const exampleObj = generateExampleFromSchema(parsedSchema, { debug });
+    if (exampleObj) {
+      instructions += `Example:\n<attempt_completion>\n${JSON.stringify(exampleObj, null, 2)}\n</attempt_completion>\n\n`;
+    }
+  } catch (e) {
+    if (debug) {
+      console.error('[DEBUG] generateSchemaInstructions: Failed to parse schema:', e.message);
+    }
+    instructions += `${schema}\n\n`;
+  }
+
+  instructions += 'Your response inside attempt_completion must be ONLY valid JSON - no plain text, no explanations, no markdown.';
+
+  return instructions;
+}
+
+/**
  * Recursively apply additionalProperties: false to all object schemas
  * This ensures strict validation at all nesting levels
  * @param {Object} schema - JSON schema object

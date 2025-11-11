@@ -15,7 +15,8 @@ import {
   extractMermaidFromMarkdown,
   validateMermaidDiagram,
   validateMermaidResponse,
-  createMermaidCorrectionPrompt
+  createMermaidCorrectionPrompt,
+  generateExampleFromSchema
 } from '../../src/agent/schemaUtils.js';
 
 describe('Schema Utilities', () => {
@@ -1107,9 +1108,161 @@ describe('Schema Utilities', () => {
     test('should validate XML when requested', () => {
       const input = '<root>test</root>';
       const result = processSchemaResponse(input, '<schema/>', { validateXml: true });
-      
+
       expect(result.xmlValidation).toBeDefined();
       expect(result.xmlValidation.isValid).toBe(true);
+    });
+  });
+
+  describe('generateExampleFromSchema', () => {
+    test('should generate example from object schema with basic types', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'User name' },
+          age: { type: 'number' },
+          active: { type: 'boolean' },
+          tags: { type: 'array' }
+        }
+      };
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toEqual({
+        name: 'User name',
+        age: 0,
+        active: false,
+        tags: []
+      });
+    });
+
+    test('should use description for string fields', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'Hello world' },
+          noDescription: { type: 'string' }
+        }
+      };
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result.message).toBe('Hello world');
+      expect(result.noDescription).toBe('your answer here');
+    });
+
+    test('should handle nested objects', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          user: { type: 'object' },
+          settings: { type: 'object' }
+        }
+      };
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toEqual({
+        user: {},
+        settings: {}
+      });
+    });
+
+    test('should parse schema from JSON string', () => {
+      const schema = JSON.stringify({
+        type: 'object',
+        properties: {
+          refined: { type: 'boolean' },
+          text: { type: 'string' }
+        }
+      });
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toEqual({
+        refined: false,
+        text: 'your answer here'
+      });
+    });
+
+    test('should return null for non-object schema', () => {
+      const schema = {
+        type: 'string'
+      };
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toBeNull();
+    });
+
+    test('should return null for schema without properties', () => {
+      const schema = {
+        type: 'object'
+      };
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toBeNull();
+    });
+
+    test('should return null for invalid schema', () => {
+      const schema = 'not valid json {';
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toBeNull();
+    });
+
+    test('should handle schema with multiple field types', () => {
+      const schema = {
+        type: 'object',
+        properties: {
+          id: { type: 'number' },
+          name: { type: 'string', description: 'Product name' },
+          inStock: { type: 'boolean' },
+          categories: { type: 'array' },
+          metadata: { type: 'object' }
+        }
+      };
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toEqual({
+        id: 0,
+        name: 'Product name',
+        inStock: false,
+        categories: [],
+        metadata: {}
+      });
+    });
+
+    test('should match the exact schema used in Visor refine check', () => {
+      // This is the actual schema from the bug report
+      const schema = {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          refined: {
+            type: 'boolean',
+            description: 'true if the task description is clear and actionable, false if clarification is needed'
+          },
+          text: {
+            type: 'string',
+            description: 'If refined=true, confirmation message. If refined=false, specific questions to ask.'
+          }
+        },
+        required: ['refined', 'text']
+      };
+
+      const result = generateExampleFromSchema(schema);
+
+      expect(result).toEqual({
+        refined: false,
+        text: 'If refined=true, confirmation message. If refined=false, specific questions to ask.'
+      });
+
+      // Verify it's valid JSON when stringified
+      expect(() => JSON.parse(JSON.stringify(result))).not.toThrow();
     });
   });
 });
