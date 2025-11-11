@@ -100,6 +100,13 @@ export function decodeHtmlEntities(text) {
 /**
  * Clean AI response by extracting JSON content when response contains JSON
  * Only processes responses that contain JSON structures { or [
+ *
+ * NOTE: This function handles both JSON extraction AND content stripping.
+ * Future improvement: Consider splitting into separate functions for better separation of concerns:
+ * - extractJsonContent() - Find and extract JSON from response
+ * - stripNonJsonContent() - Remove explanatory text while preserving validation-relevant content
+ * This would allow validation to run on full responses before content is discarded.
+ *
  * @param {string} response - Raw AI response
  * @returns {string} - Cleaned response with JSON boundaries extracted if applicable
  */

@@ -390,4 +390,82 @@ invalid syntax
       expect(decodeHtmlEntities(input)).toBe(expected);
     });
   });
+
+  describe('Validation order with schema cleaning', () => {
+    test('should extract mermaid diagrams from mixed JSON+Mermaid responses', () => {
+      // Regression test: Verify diagrams are found even when mixed with JSON
+      // This ensures validation runs BEFORE cleanSchemaResponse strips content
+      const mixedResponse = `Here is the data:
+
+\`\`\`json
+{"name": "Test", "value": 42}
+\`\`\`
+
+And here is a diagram:
+
+\`\`\`mermaid
+graph TD
+  A[Start] --> B{Decision}
+  B -->|Yes| C[Result]
+  B -->|No| D[End]
+\`\`\``;
+
+      const result = extractMermaidFromMarkdown(mixedResponse);
+
+      // Must find the diagram even though JSON is present
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[0].content).toContain('A[Start] --> B{Decision}');
+    });
+
+    test('should extract multiple diagrams from schema responses with explanatory text', () => {
+      // Regression test: Verify all diagrams are found in complex responses
+      const complexResponse = `Based on your schema:
+
+\`\`\`json
+{"count": 2}
+\`\`\`
+
+First diagram:
+\`\`\`mermaid
+graph TD
+  A --> B
+\`\`\`
+
+Explanation text that would be stripped by cleanSchemaResponse.
+
+Second diagram:
+\`\`\`mermaid
+sequenceDiagram
+  Alice->>Bob: Hello
+\`\`\`
+
+More text here.`;
+
+      const result = extractMermaidFromMarkdown(complexResponse);
+
+      // Must find both diagrams
+      expect(result.diagrams).toHaveLength(2);
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[1].content).toContain('sequenceDiagram');
+    });
+
+    test('should not skip diagrams that appear after JSON blocks', () => {
+      // Regression test for the bug: diagrams after JSON should not be ignored
+      const responseWithTrailingDiagram = `\`\`\`json
+{"result": "success"}
+\`\`\`
+
+\`\`\`mermaid
+graph LR
+  A --> B
+\`\`\``;
+
+      const result = extractMermaidFromMarkdown(responseWithTrailingDiagram);
+
+      // The diagram after JSON must be found
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('graph LR');
+    });
+  });
 });
