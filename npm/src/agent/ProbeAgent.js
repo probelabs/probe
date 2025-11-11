@@ -272,6 +272,28 @@ export class ProbeAgent {
   }
 
   /**
+   * Check if an MCP tool is allowed based on allowedTools configuration
+   * Uses mcp__ prefix convention (like Claude Code)
+   * @param {string} toolName - The MCP tool name (without mcp__ prefix)
+   * @returns {boolean} - Whether the tool is allowed
+   * @private
+   */
+  _isMcpToolAllowed(toolName) {
+    const mcpToolName = `mcp__${toolName}`;
+    return this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName);
+  }
+
+  /**
+   * Filter MCP tools based on allowedTools configuration
+   * @param {string[]} mcpToolNames - Array of MCP tool names
+   * @returns {string[]} - Filtered array of allowed MCP tool names
+   * @private
+   */
+  _filterMcpTools(mcpToolNames) {
+    return mcpToolNames.filter(toolName => this._isMcpToolAllowed(toolName));
+  }
+
+  /**
    * Initialize the agent asynchronously (must be called after constructor)
    * This method initializes MCP and merges MCP tools into the tool list, and loads history from storage
    */
@@ -307,9 +329,7 @@ export class ProbeAgent {
         if (this.mcpBridge) {
           const mcpTools = this.mcpBridge.mcpTools || {};
           for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
-            // Check if MCP tool is allowed using mcp__ prefix
-            const mcpToolName = `mcp__${toolName}`;
-            if (this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName)) {
+            if (this._isMcpToolAllowed(toolName)) {
               this.toolImplementations[toolName] = toolImpl;
             } else if (this.debug) {
               console.error(`[DEBUG] MCP tool '${toolName}' filtered out by allowedTools`);
@@ -1113,9 +1133,7 @@ export class ProbeAgent {
         if (this.mcpBridge) {
           const mcpTools = this.mcpBridge.mcpTools || {};
           for (const [toolName, toolImpl] of Object.entries(mcpTools)) {
-            // Check if MCP tool is allowed using mcp__ prefix
-            const mcpToolName = `mcp__${toolName}`;
-            if (this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName)) {
+            if (this._isMcpToolAllowed(toolName)) {
               this.toolImplementations[toolName] = toolImpl;
             } else if (this.debug) {
               console.error(`[DEBUG] MCP tool '${toolName}' filtered out by allowedTools`);
@@ -1358,10 +1376,7 @@ When troubleshooting:
     // Add MCP tools if available (filtered by allowedTools)
     if (this.mcpBridge && this.mcpBridge.getToolNames().length > 0) {
       const allMcpTools = this.mcpBridge.getToolNames();
-      const allowedMcpTools = allMcpTools.filter(toolName => {
-        const mcpToolName = `mcp__${toolName}`;
-        return this.allowedTools.isEnabled(mcpToolName) || this.allowedTools.isEnabled(toolName);
-      });
+      const allowedMcpTools = this._filterMcpTools(allMcpTools);
 
       if (allowedMcpTools.length > 0) {
         systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
