@@ -26,24 +26,25 @@ Modified `generateSchemaInstructions()` in `npm/src/agent/schemaUtils.js`:
 
 ### Before
 ```javascript
-instructions += `Example:\n<attempt_completion>\n${JSON.stringify(exampleObj, null, 2)}\n</attempt_completion>\n\n`;
+// Generated example with placeholder values like {"issues": []}
+const exampleObj = generateExampleFromSchema(parsedSchema, { debug });
+if (exampleObj) {
+  instructions += `Example:\n<attempt_completion>\n${JSON.stringify(exampleObj, null, 2)}\n</attempt_completion>\n\n`;
+}
 ```
 
 ### After
 ```javascript
-instructions += `Example format (populate with actual data after completing your analysis):\n<attempt_completion>\n${JSON.stringify(exampleObj, null, 2)}\n</attempt_completion>\n\n`;
-```
-
-And added clarification:
-```javascript
-instructions += 'Your response inside attempt_completion must be ONLY valid JSON - no plain text, no explanations, no markdown.\n\nIMPORTANT: You should still perform the requested analysis/task thoroughly before providing the final JSON response. The schema defines the format for your answer, not a shortcut to return immediately.';
+// Removed example entirely - schema definition is sufficient
+// Just show the schema and clear instructions
+instructions += 'Your response inside attempt_completion must be ONLY valid JSON - no plain text, no explanations, no markdown.\n\nIMPORTANT: First complete the requested analysis/task thoroughly, then provide your final answer in the JSON format above.';
 ```
 
 ## Key Changes
 
-1. **Example label changed**: "Example:" → "Example format (populate with actual data after completing your analysis):"
-2. **Added work-first instruction**: Explicitly states the AI should complete the analysis before returning JSON
-3. **Clarified purpose**: Makes it clear the schema defines the **format**, not the **content**
+1. **Removed example JSON entirely**: The schema definition itself is sufficient to show the structure
+2. **Added work-first instruction**: "First complete the requested analysis/task thoroughly, then provide your final answer"
+3. **Simplified approach**: Less confusion, fewer tokens, clearer intent
 
 ## Expected Behavior After Fix
 
