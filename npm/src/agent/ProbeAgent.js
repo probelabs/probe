@@ -2532,11 +2532,11 @@ Convert your previous response content into actual JSON data that follows this s
     // Reconstruct the original allowedTools array from the parsed configuration
     let allowedToolsArray = null;
     if (this.allowedTools.mode === 'whitelist') {
-      allowedToolsArray = Array.from(this.allowedTools.allowed);
+      allowedToolsArray = [...this.allowedTools.allowed];
     } else if (this.allowedTools.mode === 'none') {
       allowedToolsArray = [];
-    } else if (this.allowedTools.mode === 'all' && this.allowedTools.exclusions.size > 0) {
-      allowedToolsArray = ['*', ...Array.from(this.allowedTools.exclusions).map(t => '!' + t)];
+    } else if (this.allowedTools.mode === 'all' && this.allowedTools.exclusions.length > 0) {
+      allowedToolsArray = ['*', ...this.allowedTools.exclusions.map(t => '!' + t)];
     }
     // If mode is 'all' with no exclusions, leave as null (default)
 

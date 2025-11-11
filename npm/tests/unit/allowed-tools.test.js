@@ -184,6 +184,21 @@ describe('ProbeAgent allowedTools option', () => {
       expect(cloned.allowedTools.isEnabled('bash')).toBe(false);
     });
 
+    test('should preserve exclusions in clone', () => {
+      const baseAgent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['*', '!bash', '!implement']
+      });
+
+      const cloned = baseAgent.clone();
+
+      expect(cloned.allowedTools.mode).toBe('all');
+      expect(cloned.allowedTools.isEnabled('search')).toBe(true);
+      expect(cloned.allowedTools.isEnabled('query')).toBe(true);
+      expect(cloned.allowedTools.isEnabled('bash')).toBe(false);
+      expect(cloned.allowedTools.isEnabled('implement')).toBe(false);
+    });
+
     test('should allow override of allowedTools in clone', () => {
       const baseAgent = new ProbeAgent({
         path: process.cwd(),
