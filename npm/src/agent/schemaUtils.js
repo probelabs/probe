@@ -64,10 +64,10 @@ export function generateSchemaInstructions(schema, options = {}) {
     const parsedSchema = typeof schema === 'string' ? JSON.parse(schema) : schema;
     instructions += `${JSON.stringify(parsedSchema, null, 2)}\n\n`;
 
-    // Generate example using helper function
+    // Generate example using helper function - but don't show it as an immediate requirement
     const exampleObj = generateExampleFromSchema(parsedSchema, { debug });
     if (exampleObj) {
-      instructions += `Example:\n<attempt_completion>\n${JSON.stringify(exampleObj, null, 2)}\n</attempt_completion>\n\n`;
+      instructions += `Example format (populate with actual data after completing your analysis):\n<attempt_completion>\n${JSON.stringify(exampleObj, null, 2)}\n</attempt_completion>\n\n`;
     }
   } catch (e) {
     if (debug) {
@@ -76,7 +76,7 @@ export function generateSchemaInstructions(schema, options = {}) {
     instructions += `${schema}\n\n`;
   }
 
-  instructions += 'Your response inside attempt_completion must be ONLY valid JSON - no plain text, no explanations, no markdown.';
+  instructions += 'Your response inside attempt_completion must be ONLY valid JSON - no plain text, no explanations, no markdown.\n\nIMPORTANT: You should still perform the requested analysis/task thoroughly before providing the final JSON response. The schema defines the format for your answer, not a shortcut to return immediately.';
 
   return instructions;
 }
