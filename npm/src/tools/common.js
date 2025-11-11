@@ -384,7 +384,22 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			continue; // Tool not found, try next tool
 		}
 
-		let closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
+		// For attempt_completion, use lastIndexOf to find the LAST occurrence of closing tag
+		// This prevents issues where the content contains the closing tag string (e.g., in regex patterns)
+		// For other tools, use indexOf from the opening tag position
+		let closeIndex;
+		if (toolName === 'attempt_completion') {
+			// Find the last occurrence of the closing tag in the entire string
+			// This assumes attempt_completion doesn't have nested tags of the same name
+			closeIndex = xmlString.lastIndexOf(closeTag);
+			// Make sure the closing tag is after the opening tag
+			if (closeIndex !== -1 && closeIndex <= openIndex + openTag.length) {
+				closeIndex = -1; // Invalid, treat as no closing tag
+			}
+		} else {
+			closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
+		}
+
 		let hasClosingTag = closeIndex !== -1;
 
 		// If no closing tag found, use content until end of string
