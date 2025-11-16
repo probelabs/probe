@@ -166,6 +166,74 @@ export function decodeHtmlEntities(text) {
 }
 
 /**
+ * Normalize JavaScript syntax to valid JSON syntax
+ * Converts single quotes to double quotes for strings in JSON-like structures
+ *
+ * @param {string} str - String that might contain JavaScript array/object syntax
+ * @returns {string} - String with single quotes normalized to double quotes
+ */
+function normalizeJsonQuotes(str) {
+  if (!str || typeof str !== 'string') {
+    return str;
+  }
+
+  // Quick check: if there are no single quotes, no need to normalize
+  if (!str.includes("'")) {
+    return str;
+  }
+
+  let result = '';
+  let inDoubleQuote = false;
+  let inSingleQuote = false;
+  let escaped = false;
+
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i];
+    const prevChar = i > 0 ? str[i - 1] : '';
+
+    // Handle escape sequences
+    if (escaped) {
+      result += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaped = true;
+      result += char;
+      continue;
+    }
+
+    // Track when we're inside double-quoted strings
+    if (char === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      result += char;
+      continue;
+    }
+
+    // Convert single quotes to double quotes (when not inside double quotes)
+    if (char === "'" && !inDoubleQuote) {
+      // Check if this is a single quote inside a string value (like "It's")
+      // If we're already in a single-quoted string, toggle the state
+      if (inSingleQuote) {
+        // Closing single quote - convert to double quote
+        result += '"';
+        inSingleQuote = false;
+      } else {
+        // Opening single quote - convert to double quote
+        result += '"';
+        inSingleQuote = true;
+      }
+      continue;
+    }
+
+    result += char;
+  }
+
+  return result;
+}
+
+/**
  * Clean AI response by extracting JSON content when response contains JSON
  * Only processes responses that contain JSON structures { or [
  *
@@ -189,27 +257,34 @@ export function cleanSchemaResponse(response) {
   // Try with json language specifier
   const jsonBlockMatch = trimmed.match(/```json\s*\n([\s\S]*?)\n```/);
   if (jsonBlockMatch) {
-    return jsonBlockMatch[1].trim();
+    return normalizeJsonQuotes(jsonBlockMatch[1].trim());
   }
 
   // Try any code block with JSON content
   const anyBlockMatch = trimmed.match(/```\s*\n([{\[][\s\S]*?[}\]])\s*```/);
   if (anyBlockMatch) {
-    return anyBlockMatch[1].trim();
+    return normalizeJsonQuotes(anyBlockMatch[1].trim());
   }
 
   // Legacy patterns for more specific matching
   const codeBlockPatterns = [
     /```json\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
-    /```\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/,
-    /`([{\[][\s\S]*?[}\]])`/
+    /```\s*\n?([{\[][\s\S]*?[}\]])\s*\n?```/
   ];
 
   for (const pattern of codeBlockPatterns) {
     const match = trimmed.match(pattern);
     if (match) {
-      return match[1].trim();
+      return normalizeJsonQuotes(match[1].trim());
     }
+  }
+
+  // Single backtick pattern - ONLY if the entire input is just the code block
+  // This prevents extracting inline code from within JSON objects (e.g., `['*']` from markdown text)
+  const singleBacktickPattern = /^`([{\[][\s\S]*?[}\]])`$/;
+  const singleBacktickMatch = trimmed.match(singleBacktickPattern);
+  if (singleBacktickMatch) {
+    return normalizeJsonQuotes(singleBacktickMatch[1].trim());
   }
 
   // Look for code block start followed immediately by JSON
@@ -236,7 +311,7 @@ export function cleanSchemaResponse(response) {
     }
 
     if (bracketCount === 0) {
-      return trimmed.substring(startIndex, endIndex);
+      return normalizeJsonQuotes(trimmed.substring(startIndex, endIndex));
     }
   }
 
@@ -261,7 +336,8 @@ export function cleanSchemaResponse(response) {
   const isJsonArray = firstChar === '[' && lastChar === ']';
 
   if (isJsonObject || isJsonArray) {
-    return cleaned;
+    // Normalize JavaScript syntax (single quotes) to valid JSON syntax (double quotes)
+    return normalizeJsonQuotes(cleaned);
   }
 
   return response; // Return original if no extractable JSON found
