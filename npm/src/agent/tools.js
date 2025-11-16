@@ -154,6 +154,31 @@ User: Find all markdown files in the docs directory, but only at the top level.
 </examples>
 `;
 
+// Define the readImage tool XML definition
+export const readImageToolDefinition = `
+## readImage
+Description: Read and load an image file so it can be viewed by the AI. Use this when you need to analyze, describe, or work with image content. Images from user messages are automatically loaded, but use this tool to explicitly read images mentioned in tool outputs or when you need to examine specific image files.
+
+Parameters:
+- path: (required) The path to the image file to read. Supports png, jpg, jpeg, webp, bmp, and svg formats.
+
+Usage Example:
+
+<examples>
+
+User: Can you describe what's in screenshot.png?
+<readImage>
+<path>screenshot.png</path>
+</readImage>
+
+User: Analyze the diagram in docs/architecture.svg
+<readImage>
+<path>docs/architecture.svg</path>
+</readImage>
+
+</examples>
+`;
+
 /**
  * Enhanced XML parser that handles thinking tags and attempt_complete shorthand
  * This function removes any <thinking></thinking> tags from the input string

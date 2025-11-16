@@ -27,6 +27,7 @@ import {
   bashToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
+  readImageToolDefinition,
   attemptCompletionToolDefinition,
   implementToolDefinition,
   editToolDefinition,
@@ -399,6 +400,23 @@ export class ProbeAgent {
       delegate: wrappedTools.delegateToolInstance,
       listFiles: listFilesToolInstance,
       searchFiles: searchFilesToolInstance,
+      readImage: {
+        execute: async (params) => {
+          const imagePath = params.path;
+          if (!imagePath) {
+            throw new Error('Image path is required');
+          }
+
+          // Load the image using the existing loadImageIfValid method
+          const loaded = await this.loadImageIfValid(imagePath);
+
+          if (!loaded) {
+            throw new Error(`Failed to load image: ${imagePath}. The file may not exist, be too large, have an unsupported format, or be outside allowed directories.`);
+          }
+
+          return `Image loaded successfully: ${imagePath}. The image is now available for analysis in the conversation.`;
+        }
+      }
     };
 
     // Add bash tool if enabled
@@ -1172,6 +1190,9 @@ export class ProbeAgent {
     if (isToolAllowed('searchFiles')) {
       toolDefinitions += `${searchFilesToolDefinition}\n`;
     }
+    if (isToolAllowed('readImage')) {
+      toolDefinitions += `${readImageToolDefinition}\n`;
+    }
 
     // Edit tools (require both allowEdit flag AND allowedTools permission)
     if (this.allowEdit && isToolAllowed('implement')) {
@@ -1262,6 +1283,7 @@ Available Tools:
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
+- readImage: Read and load an image file for AI analysis.
 ${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n- edit: Edit files using exact string replacement.\n- create: Create new files with specified content.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}${this.enableBash ? '- bash: Execute bash commands for system operations.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 - attempt_complete: Quick completion using previous response (shorthand).
@@ -1700,10 +1722,8 @@ When troubleshooting:
           console.log(`[DEBUG] Assistant response (${assistantResponseContent.length} chars): ${assistantPreview}`);
         }
 
-        // Process image references in assistant response for next iteration
-        if (assistantResponseContent) {
-          await this.processImageReferences(assistantResponseContent);
-        }
+        // Images in assistant responses are not automatically processed
+        // AI can use the readImage tool to explicitly request reading an image
 
         // Parse tool call from response with valid tools list
         // Build validTools based on allowedTools configuration (same pattern as getSystemMessage)
@@ -1713,6 +1733,7 @@ When troubleshooting:
         if (this.allowedTools.isEnabled('extract')) validTools.push('extract');
         if (this.allowedTools.isEnabled('listFiles')) validTools.push('listFiles');
         if (this.allowedTools.isEnabled('searchFiles')) validTools.push('searchFiles');
+        if (this.allowedTools.isEnabled('readImage')) validTools.push('readImage');
         if (this.allowedTools.isEnabled('attempt_completion')) validTools.push('attempt_completion');
 
         // Edit tools (require both allowEdit flag AND allowedTools permission)
