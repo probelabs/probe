@@ -6,10 +6,12 @@ import { describe, test, expect } from '@jest/globals';
 import {
   isMermaidSchema,
   extractMermaidFromMarkdown,
+  extractMermaidFromJson,
   validateMermaidDiagram,
   validateMermaidResponse,
   createMermaidCorrectionPrompt,
-  decodeHtmlEntities
+  decodeHtmlEntities,
+  replaceMermaidDiagramsInJson
 } from '../../src/agent/schemaUtils.js';
 
 describe('Mermaid Validation', () => {
@@ -466,6 +468,256 @@ graph LR
       // The diagram after JSON must be found
       expect(result.diagrams).toHaveLength(1);
       expect(result.diagrams[0].content).toContain('graph LR');
+    });
+  });
+
+  describe('extractMermaidFromJson', () => {
+    test('should extract mermaid diagram from JSON string value', () => {
+      const jsonResponse = `{
+  "text": "\`\`\`mermaid\\ngraph TD\\n  A[Start] --> B[End]\\n\`\`\`",
+  "tags": {
+    "label": "diagram"
+  }
+}`;
+
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[0].content).toContain('A[Start] --> B[End]');
+      expect(result.diagrams[0].isInJson).toBe(true);
+      expect(result.diagrams[0].jsonPath).toBe('text');
+    });
+
+    test('should extract mermaid diagram from JSON in code block', () => {
+      const jsonResponse = `\`\`\`json
+{
+  "diagram": "\`\`\`mermaid\\nsequenceDiagram\\n  Alice->>Bob: Hello\\n\`\`\`"
+}
+\`\`\``;
+
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('sequenceDiagram');
+      expect(result.diagrams[0].content).toContain('Alice->>Bob: Hello');
+      expect(result.diagrams[0].isInJson).toBe(true);
+    });
+
+    test('should extract multiple mermaid diagrams from JSON', () => {
+      const jsonResponse = `{
+  "overview": "\`\`\`mermaid\\ngraph TD\\n  A --> B\\n\`\`\`",
+  "details": "\`\`\`mermaid\\nsequenceDiagram\\n  User->>System: Request\\n\`\`\`"
+}`;
+
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(2);
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[1].content).toContain('sequenceDiagram');
+      expect(result.diagrams[0].jsonPath).toBe('overview');
+      expect(result.diagrams[1].jsonPath).toBe('details');
+    });
+
+    test('should extract mermaid from nested JSON objects', () => {
+      const jsonResponse = `{
+  "data": {
+    "visualization": "\`\`\`mermaid\\ngraph LR\\n  X --> Y\\n\`\`\`"
+  }
+}`;
+
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('graph LR');
+      expect(result.diagrams[0].jsonPath).toBe('data.visualization');
+    });
+
+    test('should extract mermaid from JSON arrays', () => {
+      const jsonResponse = `{
+  "diagrams": [
+    "\`\`\`mermaid\\ngraph TD\\n  A --> B\\n\`\`\`",
+    "\`\`\`mermaid\\npie title Distribution\\n  \\"A\\": 30\\n  \\"B\\": 70\\n\`\`\`"
+  ]
+}`;
+
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(2);
+      expect(result.diagrams[0].jsonPath).toBe('diagrams.[0]');
+      expect(result.diagrams[1].jsonPath).toBe('diagrams.[1]');
+    });
+
+    test('should handle both escaped and literal newlines mixed in pattern', () => {
+      // This tests the regex pattern can handle \\n (escaped) which is the JSON format
+      const jsonResponse = `{
+  "text": "\`\`\`mermaid\\ngraph TD\\n  A --> B\\n\`\`\`"
+}`;
+
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[0].content).toContain('A --> B');
+    });
+
+    test('should return empty array for non-JSON input', () => {
+      const nonJsonResponse = 'This is not JSON';
+      const result = extractMermaidFromJson(nonJsonResponse);
+
+      expect(result.diagrams).toHaveLength(0);
+      expect(result.parsedJson).toBeNull();
+    });
+
+    test('should return empty array for JSON without mermaid', () => {
+      const jsonResponse = '{"text": "No diagrams here", "value": 42}';
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(0);
+      expect(result.parsedJson).not.toBeNull();
+    });
+
+    test('should unescape newlines in diagram content', () => {
+      const jsonResponse = `{
+  "diagram": "\`\`\`mermaid\\ngraph TD\\n  A[Start]\\n  B[Middle]\\n  A --> B\\n\`\`\`"
+}`;
+
+      const result = extractMermaidFromJson(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(1);
+      // Content should have actual newlines, not \\n
+      expect(result.diagrams[0].content).toContain('\n');
+      expect(result.diagrams[0].content).not.toContain('\\n');
+      expect(result.diagrams[0].content.split('\n').length).toBeGreaterThan(1);
+    });
+  });
+
+  describe('replaceMermaidDiagramsInJson', () => {
+    test('should replace mermaid diagram in JSON string value', () => {
+      const originalResponse = `{
+  "text": "\`\`\`mermaid\\ngraph TD\\n  A --> B\\n\`\`\`"
+}`;
+
+      // fullMatch should have actual newlines since it comes from the parsed JSON value
+      const correctedDiagrams = [{
+        content: 'graph TD\n  A --> B\n  B --> C',
+        fullMatch: '```mermaid\ngraph TD\n  A --> B\n```',
+        isInJson: true,
+        jsonPath: 'text',
+        attributes: ''
+      }];
+
+      const result = replaceMermaidDiagramsInJson(originalResponse, correctedDiagrams);
+
+      expect(result).toContain('graph TD');
+      expect(result).toContain('B --> C');
+      // Should be valid JSON
+      expect(() => JSON.parse(result)).not.toThrow();
+      const parsed = JSON.parse(result);
+      expect(parsed.text).toContain('B --> C');
+    });
+
+    test('should preserve JSON structure and formatting', () => {
+      const originalResponse = `{
+  "text": "Some diagram: \`\`\`mermaid\\ngraph TD\\n  A --> B\\n\`\`\`",
+  "tags": {
+    "label": "bug"
+  }
+}`;
+
+      const correctedDiagrams = [{
+        content: 'graph TD\n  A --> B --> C',
+        fullMatch: '```mermaid\ngraph TD\n  A --> B\n```',
+        isInJson: true,
+        jsonPath: 'text',
+        attributes: ''
+      }];
+
+      const result = replaceMermaidDiagramsInJson(originalResponse, correctedDiagrams);
+
+      const parsed = JSON.parse(result);
+      expect(parsed.tags.label).toBe('bug');
+      expect(parsed.text).toContain('A --> B --> C');
+    });
+
+    test('should handle code block wrapped JSON', () => {
+      const originalResponse = `\`\`\`json
+{
+  "diagram": "\`\`\`mermaid\\ngraph LR\\n  X --> Y\\n\`\`\`"
+}
+\`\`\``;
+
+      const correctedDiagrams = [{
+        content: 'graph LR\n  X --> Y --> Z',
+        fullMatch: '```mermaid\ngraph LR\n  X --> Y\n```',
+        isInJson: true,
+        jsonPath: 'diagram',
+        attributes: ''
+      }];
+
+      const result = replaceMermaidDiagramsInJson(originalResponse, correctedDiagrams);
+
+      expect(result).toContain('```json');
+      expect(result).toContain('X --> Y --> Z');
+      // Extract JSON from code block and verify it's valid
+      const jsonMatch = result.match(/```json\s*\n([\s\S]*?)\n```/);
+      expect(jsonMatch).not.toBeNull();
+      expect(() => JSON.parse(jsonMatch[1])).not.toThrow();
+    });
+
+    test('should return original response if no JSON found', () => {
+      const originalResponse = 'Not JSON';
+      const correctedDiagrams = [{
+        content: 'graph TD\n  A --> B',
+        isInJson: true
+      }];
+
+      const result = replaceMermaidDiagramsInJson(originalResponse, correctedDiagrams);
+
+      expect(result).toBe(originalResponse);
+    });
+  });
+
+  describe('extractMermaidFromMarkdown with JSON support', () => {
+    test('should detect and extract mermaid from JSON responses', () => {
+      const jsonResponse = `{
+  "text": "Here's a diagram: \`\`\`mermaid\\ngraph TD\\n  A --> B\\n\`\`\`"
+}`;
+
+      const result = extractMermaidFromMarkdown(jsonResponse);
+
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[0].isInJson).toBe(true);
+    });
+
+    test('should fallback to markdown extraction for non-JSON', () => {
+      const markdownResponse = `Here's a diagram:
+
+\`\`\`mermaid
+graph TD
+  A --> B
+\`\`\``;
+
+      const result = extractMermaidFromMarkdown(markdownResponse);
+
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('graph TD');
+      expect(result.diagrams[0].isInJson).toBe(false);
+    });
+
+    test('should extract from JSON code blocks', () => {
+      const jsonCodeBlock = `\`\`\`json
+{
+  "diagram": "\`\`\`mermaid\\nsequenceDiagram\\n  Alice->>Bob: Test\\n\`\`\`"
+}
+\`\`\``;
+
+      const result = extractMermaidFromMarkdown(jsonCodeBlock);
+
+      expect(result.diagrams).toHaveLength(1);
+      expect(result.diagrams[0].content).toContain('sequenceDiagram');
+      expect(result.diagrams[0].isInJson).toBe(true);
     });
   });
 });

@@ -827,6 +827,76 @@ export function isMermaidSchema(schema) {
 }
 
 /**
+ * Extract Mermaid diagrams from JSON string values
+ * Handles escaped newlines and backticks within JSON strings
+ * @param {string} response - Response that may contain JSON with mermaid blocks in string values
+ * @returns {Object} - {diagrams: Array, jsonPaths: Array, parsedJson: Object|null}
+ */
+export function extractMermaidFromJson(response) {
+  if (!response || typeof response !== 'string') {
+    return { diagrams: [], jsonPaths: [], parsedJson: null };
+  }
+
+  // Try to extract JSON from code blocks first
+  let jsonContent = response.trim();
+  const jsonBlockMatch = jsonContent.match(/```json\s*\n([\s\S]*?)\n```/);
+  if (jsonBlockMatch) {
+    jsonContent = jsonBlockMatch[1].trim();
+  } else {
+    const anyBlockMatch = jsonContent.match(/```\s*\n([{\[][\s\S]*?[}\]])\s*```/);
+    if (anyBlockMatch) {
+      jsonContent = anyBlockMatch[1].trim();
+    }
+  }
+
+  // Try to parse as JSON
+  let parsedJson;
+  try {
+    parsedJson = JSON.parse(jsonContent);
+  } catch (e) {
+    return { diagrams: [], jsonPaths: [], parsedJson: null };
+  }
+
+  const diagrams = [];
+  const jsonPaths = [];
+
+  // Recursively search for mermaid diagrams in JSON string values
+  function searchObject(obj, path = []) {
+    if (typeof obj === 'string') {
+      // Look for mermaid code blocks in the string value
+      // Handle both escaped (\n) and literal newlines
+      const mermaidPattern = /```mermaid([^\n`]*?)(?:\n|\\n)([\s\S]*?)```/gi;
+      let match;
+
+      while ((match = mermaidPattern.exec(obj)) !== null) {
+        const attributes = match[1] ? match[1].trim() : '';
+        // Unescape the content (replace \\n with actual newlines)
+        const content = match[2].replace(/\\n/g, '\n');
+
+        diagrams.push({
+          content: content,
+          fullMatch: match[0],
+          startIndex: match.index,
+          endIndex: match.index + match[0].length,
+          attributes: attributes,
+          isInJson: true,
+          jsonPath: path.join('.')
+        });
+        jsonPaths.push(path.join('.'));
+      }
+    } else if (Array.isArray(obj)) {
+      obj.forEach((item, index) => searchObject(item, [...path, `[${index}]`]));
+    } else if (obj && typeof obj === 'object') {
+      Object.entries(obj).forEach(([key, value]) => searchObject(value, [...path, key]));
+    }
+  }
+
+  searchObject(parsedJson);
+
+  return { diagrams, jsonPaths, parsedJson };
+}
+
+/**
  * Extract Mermaid diagrams from markdown code blocks with position tracking
  * @param {string} response - Response that may contain markdown with mermaid blocks
  * @returns {Object} - {diagrams: Array<{content: string, fullMatch: string, startIndex: number, endIndex: number}>, cleanedResponse: string}
@@ -834,6 +904,16 @@ export function isMermaidSchema(schema) {
 export function extractMermaidFromMarkdown(response) {
   if (!response || typeof response !== 'string') {
     return { diagrams: [], cleanedResponse: response };
+  }
+
+  // First check if this looks like a JSON response - if so, use JSON-aware extraction
+  const trimmed = response.trim();
+  if ((trimmed.startsWith('{') || trimmed.startsWith('[')) ||
+      trimmed.includes('```json')) {
+    const jsonResult = extractMermaidFromJson(response);
+    if (jsonResult.diagrams.length > 0) {
+      return { diagrams: jsonResult.diagrams, cleanedResponse: response };
+    }
   }
 
   // Find all mermaid code blocks with enhanced regex to capture more variations
@@ -854,7 +934,8 @@ export function extractMermaidFromMarkdown(response) {
       fullMatch: match[0],
       startIndex: match.index,
       endIndex: match.index + match[0].length,
-      attributes: attributes
+      attributes: attributes,
+      isInJson: false
     });
   }
 
@@ -863,8 +944,83 @@ export function extractMermaidFromMarkdown(response) {
 }
 
 /**
+ * Replace mermaid diagrams in JSON string values with corrected versions
+ * @param {string} originalResponse - Original response with JSON
+ * @param {Array} correctedDiagrams - Array of corrected diagram objects with jsonPath
+ * @returns {string} - Response with corrected diagrams properly escaped in JSON
+ */
+export function replaceMermaidDiagramsInJson(originalResponse, correctedDiagrams) {
+  if (!originalResponse || typeof originalResponse !== 'string') {
+    return originalResponse;
+  }
+
+  if (!correctedDiagrams || correctedDiagrams.length === 0) {
+    return originalResponse;
+  }
+
+  // Extract and parse JSON
+  const jsonResult = extractMermaidFromJson(originalResponse);
+  if (!jsonResult.parsedJson) {
+    return originalResponse;
+  }
+
+  let modifiedJson = jsonResult.parsedJson;
+
+  // Replace diagrams in the JSON object
+  for (const diagram of correctedDiagrams) {
+    if (!diagram.jsonPath || !diagram.isInJson) {
+      continue;
+    }
+
+    // Navigate to the path and replace the content
+    const pathParts = diagram.jsonPath.split('.').filter(p => p);
+    let current = modifiedJson;
+
+    for (let i = 0; i < pathParts.length - 1; i++) {
+      const part = pathParts[i];
+      if (part.startsWith('[') && part.endsWith(']')) {
+        const index = parseInt(part.slice(1, -1), 10);
+        current = current[index];
+      } else {
+        current = current[part];
+      }
+    }
+
+    // Get the last key/index
+    const lastPart = pathParts[pathParts.length - 1];
+    const attributesStr = diagram.attributes ? ` ${diagram.attributes}` : '';
+    const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${diagram.content}\n\`\`\``;
+
+    if (lastPart.startsWith('[') && lastPart.endsWith(']')) {
+      const index = parseInt(lastPart.slice(1, -1), 10);
+      const originalString = current[index];
+      // The fullMatch from extraction has unescaped newlines, so we need to match that
+      current[index] = originalString.replace(diagram.fullMatch, newCodeBlock);
+    } else {
+      const originalString = current[lastPart];
+      // The fullMatch from extraction has unescaped newlines, so we need to match that
+      current[lastPart] = originalString.replace(diagram.fullMatch, newCodeBlock);
+    }
+  }
+
+  // Reconstruct the response with modified JSON
+  const modifiedJsonString = JSON.stringify(modifiedJson, null, 2);
+
+  // Check if original was in a code block
+  const trimmed = originalResponse.trim();
+  if (trimmed.match(/```json\s*\n([\s\S]*?)\n```/)) {
+    return originalResponse.replace(/```json\s*\n([\s\S]*?)\n```/, `\`\`\`json\n${modifiedJsonString}\n\`\`\``);
+  } else if (trimmed.match(/```\s*\n([{\[][\s\S]*?[}\]])\s*```/)) {
+    return originalResponse.replace(/```\s*\n([{\[][\s\S]*?[}\]])\s*```/, `\`\`\`\n${modifiedJsonString}\n\`\`\``);
+  }
+
+  return modifiedJsonString;
+}
+
+/**
  * Replace mermaid diagrams in original markdown with corrected versions
- * @param {string} originalResponse - Original response with markdown
+ * Automatically detects JSON vs markdown format and uses appropriate replacement
+ * @param {string} originalResponse - Original response with markdown or JSON
  * @param {Array} correctedDiagrams - Array of corrected diagram objects
  * @returns {string} - Response with corrected diagrams in original format
  */
@@ -877,22 +1033,28 @@ export function replaceMermaidDiagramsInMarkdown(originalResponse, correctedDiag
     return originalResponse;
   }
 
+  // Check if any diagrams are in JSON format
+  const hasJsonDiagrams = correctedDiagrams.some(d => d.isInJson);
+  if (hasJsonDiagrams) {
+    return replaceMermaidDiagramsInJson(originalResponse, correctedDiagrams);
+  }
+
   let modifiedResponse = originalResponse;
-  
+
   // Sort diagrams by start index in reverse order to preserve indices during replacement
   const sortedDiagrams = [...correctedDiagrams].sort((a, b) => b.startIndex - a.startIndex);
-  
+
   for (const diagram of sortedDiagrams) {
     // Reconstruct the code block with original attributes if they existed
     const attributesStr = diagram.attributes ? ` ${diagram.attributes}` : '';
     const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${diagram.content}\n\`\`\``;
-    
+
     // Replace the original code block
-    modifiedResponse = modifiedResponse.slice(0, diagram.startIndex) + 
-                     newCodeBlock + 
+    modifiedResponse = modifiedResponse.slice(0, diagram.startIndex) +
+                     newCodeBlock +
                      modifiedResponse.slice(diagram.endIndex);
   }
-  
+
   return modifiedResponse;
 }
 
