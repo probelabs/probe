@@ -46,9 +46,12 @@ describe('Validation Flow Integration', () => {
       expect(isMermaidSchema(schema)).toBe(true);
       expect(isJsonSchema(schema)).toBe(true);
 
-      // Test Mermaid validation first - response contains diagram in JSON field, not in markdown blocks
+      // Test Mermaid validation first - with JSON-aware extraction, diagrams in JSON strings are now found
       const mermaidValidation = await validateMermaidResponse(response);
-      expect(mermaidValidation.isValid).toBe(false); // No mermaid code blocks found in this JSON structure
+      expect(mermaidValidation.isValid).toBe(true); // Mermaid diagrams in JSON strings are now detected and validated
+      expect(mermaidValidation.diagrams).toHaveLength(1);
+      expect(mermaidValidation.diagrams[0].isInJson).toBe(true);
+      expect(mermaidValidation.diagrams[0].diagramType).toBe('flowchart');
 
       // Test JSON validation second
       const cleanedResponse = cleanSchemaResponse(response);
