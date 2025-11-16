@@ -248,6 +248,99 @@ describe('ProbeAgent allowedTools option', () => {
     });
   });
 
+  describe('validTools array in agentic loop', () => {
+    test('should respect allowedTools when building validTools array', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['search', 'extract', 'attempt_completion']
+      });
+      await agent.initialize();
+
+      // Verify allowedTools configuration
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('extract')).toBe(true);
+      expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(true);
+      expect(agent.allowedTools.isEnabled('query')).toBe(false);
+      expect(agent.allowedTools.isEnabled('listFiles')).toBe(false);
+    });
+
+    test('should build empty validTools array when disableTools is true', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        disableTools: true
+      });
+      await agent.initialize();
+
+      // Verify that no tools are enabled
+      expect(agent.allowedTools.mode).toBe('none');
+      expect(agent.allowedTools.isEnabled('search')).toBe(false);
+      expect(agent.allowedTools.isEnabled('query')).toBe(false);
+      expect(agent.allowedTools.isEnabled('extract')).toBe(false);
+      expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
+    });
+
+    test('should respect both enableBash flag and allowedTools in validTools', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        enableBash: true,
+        allowedTools: ['search', 'bash', 'attempt_completion']
+      });
+      await agent.initialize();
+
+      // Bash should be enabled because both enableBash=true AND it's in allowedTools
+      expect(agent.allowedTools.isEnabled('bash')).toBe(true);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(true);
+      // Query is not in allowedTools
+      expect(agent.allowedTools.isEnabled('query')).toBe(false);
+    });
+
+    test('should not include bash in validTools when not in allowedTools', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        enableBash: true,
+        allowedTools: ['search', 'query', 'attempt_completion']
+      });
+      await agent.initialize();
+
+      // Bash should NOT be enabled even though enableBash=true
+      // because it's not in the allowedTools list
+      expect(agent.allowedTools.isEnabled('bash')).toBe(false);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('query')).toBe(true);
+    });
+
+    test('should not include edit tools in validTools when not in allowedTools', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowEdit: true,
+        allowedTools: ['search', 'query', 'attempt_completion']
+      });
+      await agent.initialize();
+
+      // Edit tools should NOT be enabled even though allowEdit=true
+      // because they're not in the allowedTools list
+      expect(agent.allowedTools.isEnabled('implement')).toBe(false);
+      expect(agent.allowedTools.isEnabled('edit')).toBe(false);
+      expect(agent.allowedTools.isEnabled('create')).toBe(false);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+    });
+
+    test('should include edit tools in validTools when in allowedTools', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowEdit: true,
+        allowedTools: ['search', 'implement', 'attempt_completion']
+      });
+      await agent.initialize();
+
+      // Implement should be enabled because both allowEdit=true AND it's in allowedTools
+      expect(agent.allowedTools.isEnabled('implement')).toBe(true);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+      expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(true);
+    });
+  });
+
   describe('disableTools convenience flag', () => {
     test('should disable all tools when disableTools is true', () => {
       const agent = new ProbeAgent({

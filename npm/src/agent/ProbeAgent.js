@@ -1706,16 +1706,25 @@ When troubleshooting:
         }
 
         // Parse tool call from response with valid tools list
-        const validTools = [
-          'search', 'query', 'extract', 'listFiles', 'searchFiles', 'attempt_completion'
-        ];
-        if (this.allowEdit) {
+        // Build validTools based on allowedTools configuration (same pattern as getSystemMessage)
+        const validTools = [];
+        if (this.allowedTools.isEnabled('search')) validTools.push('search');
+        if (this.allowedTools.isEnabled('query')) validTools.push('query');
+        if (this.allowedTools.isEnabled('extract')) validTools.push('extract');
+        if (this.allowedTools.isEnabled('listFiles')) validTools.push('listFiles');
+        if (this.allowedTools.isEnabled('searchFiles')) validTools.push('searchFiles');
+        if (this.allowedTools.isEnabled('attempt_completion')) validTools.push('attempt_completion');
+
+        // Edit tools (require both allowEdit flag AND allowedTools permission)
+        if (this.allowEdit && this.allowedTools.isEnabled('implement')) {
           validTools.push('implement', 'edit', 'create');
         }
-        if (this.enableBash) {
+        // Bash tool (require both enableBash flag AND allowedTools permission)
+        if (this.enableBash && this.allowedTools.isEnabled('bash')) {
           validTools.push('bash');
         }
-        if (this.enableDelegate) {
+        // Delegate tool (require both enableDelegate flag AND allowedTools permission)
+        if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
           validTools.push('delegate');
         }
         
