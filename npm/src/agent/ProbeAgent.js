@@ -223,7 +223,6 @@ export class ProbeAgent {
 
     // Engine support - minimal interface for multi-engine compatibility
     this.engine = null; // Will be set in initializeModel or getEngine
-    this.engineType = options.engineType || options.engine || process.env.AI_ENGINE || 'vercel'; // default to vercel for backward compat
 
     // Initialize the AI model
     this.initializeModel();
@@ -719,7 +718,7 @@ export class ProbeAgent {
         }
       } catch (error) {
         if (this.debug) {
-          console.log(`[DEBUG] Failed to use ${this.engineType} engine, falling back to Vercel:`, error.message);
+          console.log(`[DEBUG] Failed to use Claude Code engine, falling back to Vercel:`, error.message);
         }
         // Fall through to use Vercel engine as fallback
       }
