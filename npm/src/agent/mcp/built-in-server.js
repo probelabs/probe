@@ -5,11 +5,70 @@
 
 import { createServer } from 'http';
 import { EventEmitter } from 'events';
+import { randomUUID } from 'crypto';
 import { Server as MCPServer } from '@modelcontextprotocol/sdk/server/index.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   CallToolRequestSchema,
-  ListToolsRequestSchema
+  ListToolsRequestSchema,
+  isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
+
+/**
+ * Simple in-memory event store for resumability
+ */
+class InMemoryEventStore {
+  constructor() {
+    this.events = new Map();
+  }
+
+  generateEventId(streamId) {
+    return `${streamId}_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+  }
+
+  getStreamIdFromEventId(eventId) {
+    const parts = eventId.split('_');
+    return parts.length > 0 ? parts[0] : '';
+  }
+
+  async storeEvent(streamId, message) {
+    const eventId = this.generateEventId(streamId);
+    this.events.set(eventId, { streamId, message });
+    return eventId;
+  }
+
+  async replayEventsAfter(lastEventId, { send }) {
+    if (!lastEventId || !this.events.has(lastEventId)) {
+      return '';
+    }
+
+    const streamId = this.getStreamIdFromEventId(lastEventId);
+    if (!streamId) {
+      return '';
+    }
+
+    let foundLastEvent = false;
+    const sortedEvents = [...this.events.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+    for (const [eventId, { streamId: eventStreamId, message }] of sortedEvents) {
+      if (eventStreamId !== streamId) {
+        continue;
+      }
+
+      if (eventId === lastEventId) {
+        foundLastEvent = true;
+        continue;
+      }
+
+      if (foundLastEvent) {
+        await send(eventId, message);
+      }
+    }
+
+    return streamId;
+  }
+}
 
 /**
  * Built-in MCP Server that runs in-process
@@ -22,6 +81,8 @@ export class BuiltInMCPServer extends EventEmitter {
     this.host = options.host || '127.0.0.1';
     this.httpServer = null;
     this.mcpServer = null;
+    this.sseTransports = new Map();  // Map of sessionId -> SSEServerTransport (deprecated)
+    this.streamableTransports = new Map();  // Map of sessionId -> StreamableHTTPServerTransport
     this.connections = new Set();
     this.debug = options.debug || false;
   }
@@ -53,12 +114,14 @@ export class BuiltInMCPServer extends EventEmitter {
 
     // Start listening on ephemeral port
     return new Promise((resolve, reject) => {
-      this.httpServer.listen(this.port, this.host, () => {
+      this.httpServer.listen(this.port, this.host, async () => {
         const address = this.httpServer.address();
         this.port = address.port;
 
         if (this.debug) {
           console.log(`[MCP] Built-in server started at http://${this.host}:${this.port}`);
+          console.log(`[MCP] SSE endpoint: http://${this.host}:${this.port}/sse`);
+          console.log(`[MCP] Messages endpoint: http://${this.host}:${this.port}/messages`);
         }
 
         this.emit('ready', { host: this.host, port: this.port });
@@ -75,6 +138,10 @@ export class BuiltInMCPServer extends EventEmitter {
   handleRequest(req, res) {
     const { method, url } = req;
 
+    if (this.debug) {
+      console.log(`[MCP] Request: ${method} ${url}`);
+    }
+
     // CORS headers for local development
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -86,9 +153,18 @@ export class BuiltInMCPServer extends EventEmitter {
       return;
     }
 
-    // Handle SSE endpoint
+    // Handle SSE endpoint (GET) - create new transport per connection
     if (url === '/sse' && method === 'GET') {
-      this.handleSSE(req, res);
+      if (this.debug) {
+        console.log('[MCP] Routing to handleSSEConnection');
+      }
+      this.handleSSEConnection(req, res);
+      return;
+    }
+
+    // Handle /messages endpoint (POST) - route to existing transport
+    if (url.startsWith('/messages') && method === 'POST') {
+      this.handleSSEMessage(req, res);
       return;
     }
 
@@ -98,9 +174,9 @@ export class BuiltInMCPServer extends EventEmitter {
       return;
     }
 
-    // Handle stdio-like protocol over HTTP
-    if (url === '/mcp' && method === 'POST') {
-      this.handleMCPProtocol(req, res);
+    // Handle Streamable HTTP protocol (GET/POST/DELETE on /mcp)
+    if (url === '/mcp') {
+      this.handleStreamableHTTP(req, res);
       return;
     }
 
@@ -121,7 +197,227 @@ export class BuiltInMCPServer extends EventEmitter {
   }
 
   /**
-   * Handle Server-Sent Events connection
+   * Handle SSE connection (GET /sse) - creates new transport
+   */
+  async handleSSEConnection(req, res) {
+    if (this.debug) {
+      console.log('[MCP] New SSE connection request');
+    }
+
+    // Create new SSEServerTransport for this connection
+    const transport = new SSEServerTransport('/messages', res);
+
+    // Store transport by sessionId
+    this.sseTransports.set(transport.sessionId, transport);
+
+    // Clean up on connection close
+    res.on('close', () => {
+      if (this.debug) {
+        console.log('[MCP] SSE connection closed, sessionId:', transport.sessionId);
+      }
+      this.sseTransports.delete(transport.sessionId);
+    });
+
+    // Connect MCP server to this transport
+    try {
+      await this.mcpServer.connect(transport);
+      if (this.debug) {
+        console.log('[MCP] MCP server connected to SSE transport, sessionId:', transport.sessionId);
+      }
+    } catch (error) {
+      if (this.debug) {
+        console.error('[MCP] Error connecting MCP server to transport:', error);
+      }
+      this.sseTransports.delete(transport.sessionId);
+    }
+  }
+
+  /**
+   * Handle SSE message (POST /messages?sessionId=...) - routes to existing transport
+   */
+  async handleSSEMessage(req, res) {
+    // Parse URL to get sessionId from query parameter
+    const url = new URL(req.url, `http://${req.headers.host}`);
+    const sessionId = url.searchParams.get('sessionId');
+
+    if (!sessionId) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: 'Bad Request: sessionId query parameter is required'
+        },
+        id: null
+      }));
+      return;
+    }
+
+    // Find transport for this session
+    const transport = this.sseTransports.get(sessionId);
+    if (!transport) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: `Bad Request: No transport found for sessionId: ${sessionId}`
+        },
+        id: null
+      }));
+      return;
+    }
+
+    // Read request body
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+
+    req.on('end', async () => {
+      try {
+        const message = JSON.parse(body);
+        await transport.handlePostMessage(req, res, message);
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal error',
+            data: error.message
+          },
+          id: null
+        }));
+      }
+    });
+  }
+
+  /**
+   * Handle Streamable HTTP protocol (GET/POST/DELETE on /mcp)
+   */
+  async handleStreamableHTTP(req, res) {
+    const { method } = req;
+
+    if (this.debug) {
+      console.log(`[MCP] Streamable HTTP ${method} request`);
+    }
+
+    try {
+      // Parse request body for POST requests
+      let body = null;
+      if (method === 'POST') {
+        body = await this.parseRequestBody(req);
+      }
+
+      // Check for existing session ID in header
+      const sessionId = req.headers['mcp-session-id'];
+      let transport;
+
+      if (sessionId && this.streamableTransports.has(sessionId)) {
+        // Reuse existing transport
+        transport = this.streamableTransports.get(sessionId);
+        if (this.debug) {
+          console.log(`[MCP] Reusing existing transport for session: ${sessionId}`);
+        }
+      } else if (!sessionId && method === 'POST' && body && isInitializeRequest(body)) {
+        // New session - create transport for initialization request
+        if (this.debug) {
+          console.log('[MCP] Creating new Streamable HTTP transport for initialization');
+        }
+
+        const eventStore = new InMemoryEventStore();
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          eventStore, // Enable resumability
+          onsessioninitialized: (newSessionId) => {
+            // Store the transport by session ID
+            if (this.debug) {
+              console.log(`[MCP] Streamable HTTP session initialized: ${newSessionId}`);
+            }
+            this.streamableTransports.set(newSessionId, transport);
+          },
+          onsessionclosed: (closedSessionId) => {
+            // Remove transport when session is closed
+            if (this.debug) {
+              console.log(`[MCP] Streamable HTTP session closed: ${closedSessionId}`);
+            }
+            this.streamableTransports.delete(closedSessionId);
+          }
+        });
+
+        // Set up onclose handler
+        transport.onclose = () => {
+          const sid = transport.sessionId;
+          if (sid && this.streamableTransports.has(sid)) {
+            if (this.debug) {
+              console.log(`[MCP] Transport closed for session ${sid}`);
+            }
+            this.streamableTransports.delete(sid);
+          }
+        };
+
+        // Connect the transport to the MCP server
+        await this.mcpServer.connect(transport);
+      } else {
+        // Invalid request - no session ID or not an initialization request
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: -32000,
+            message: 'Bad Request: No valid session ID provided or not an initialization request'
+          },
+          id: null
+        }));
+        return;
+      }
+
+      // Handle the request with the transport
+      await transport.handleRequest(req, res, body);
+    } catch (error) {
+      if (this.debug) {
+        console.error('[MCP] Error handling Streamable HTTP request:', error);
+      }
+
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          jsonrpc: '2.0',
+          error: {
+            code: -32603,
+            message: 'Internal server error',
+            data: error.message
+          },
+          id: null
+        }));
+      }
+    }
+  }
+
+  /**
+   * Parse request body as JSON
+   */
+  async parseRequestBody(req) {
+    return new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        try {
+          const parsed = body ? JSON.parse(body) : null;
+          resolve(parsed);
+        } catch (error) {
+          reject(error);
+        }
+      });
+      req.on('error', reject);
+    });
+  }
+
+  /**
+   * Handle Server-Sent Events connection (DEPRECATED - use handleSSEConnection instead)
    */
   handleSSE(req, res) {
     res.writeHead(200, {
@@ -430,6 +726,36 @@ export class BuiltInMCPServer extends EventEmitter {
    * Stop the server
    */
   async stop() {
+    // Close all Streamable HTTP transports
+    for (const [sessionId, transport] of this.streamableTransports.entries()) {
+      try {
+        await transport.close();
+        if (this.debug) {
+          console.log(`[MCP] Closed Streamable HTTP transport for session: ${sessionId}`);
+        }
+      } catch (error) {
+        if (this.debug) {
+          console.error(`[MCP] Error closing Streamable HTTP transport ${sessionId}:`, error);
+        }
+      }
+    }
+    this.streamableTransports.clear();
+
+    // Close all SSE transports
+    for (const [sessionId, transport] of this.sseTransports.entries()) {
+      try {
+        await transport.close();
+        if (this.debug) {
+          console.log(`[MCP] Closed SSE transport for session: ${sessionId}`);
+        }
+      } catch (error) {
+        if (this.debug) {
+          console.error(`[MCP] Error closing SSE transport ${sessionId}:`, error);
+        }
+      }
+    }
+    this.sseTransports.clear();
+
     // Close all SSE connections
     for (const connection of this.connections) {
       connection.end();

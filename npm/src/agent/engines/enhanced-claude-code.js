@@ -9,42 +9,7 @@ import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
-
-/**
- * Session manager for Claude Code conversations
- */
-class ClaudeSession {
-  constructor(id, debug = false) {
-    this.id = id;
-    this.conversationId = null;
-    this.messageCount = 0;
-    this.debug = debug;
-  }
-
-  /**
-   * Update session with Claude's conversation ID
-   */
-  setConversationId(convId) {
-    this.conversationId = convId;
-    if (this.debug) {
-      console.log(`[Session ${this.id}] Conversation ID: ${convId}`);
-    }
-  }
-
-  /**
-   * Get resume arguments for continuing conversation
-   */
-  getResumeArgs() {
-    if (this.conversationId && this.messageCount > 0) {
-      return ['--resume', this.conversationId];
-    }
-    return [];
-  }
-
-  incrementMessageCount() {
-    this.messageCount++;
-  }
-}
+import { Session } from '../shared/Session.js';
 
 /**
  * Enhanced Claude Code Engine
@@ -53,7 +18,7 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
   const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools } = options;
 
   // Create or reuse session
-  const session = new ClaudeSession(
+  const session = new Session(
     sessionId || randomBytes(8).toString('hex'),
     debug
   );
@@ -335,11 +300,7 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
      * Get session info
      */
     getSession() {
-      return {
-        id: session.id,
-        conversationId: session.conversationId,
-        messageCount: session.messageCount
-      };
+      return session.getInfo();
     },
 
     /**

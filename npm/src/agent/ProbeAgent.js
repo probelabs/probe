@@ -55,6 +55,7 @@ import {
   validateAndFixMermaidResponse
 } from './schemaUtils.js';
 import { removeThinkingTags } from './xmlParsingUtils.js';
+import { predefinedPrompts } from './shared/prompts.js';
 import {
   MCPXmlBridge,
   parseHybridXmlToolCall,
@@ -304,12 +305,14 @@ export class ProbeAgent {
    * This method initializes MCP and merges MCP tools into the tool list, and loads history from storage
    */
   async initialize() {
-    // Check if we need to auto-detect claude-code provider
+    // Check if we need to auto-detect claude-code or codex provider
     // This happens when no API keys are set and no provider is specified
-    if (!this.provider && !this.clientApiProvider && this.apiType !== 'claude-code') {
+    if (!this.provider && !this.clientApiProvider && this.apiType !== 'claude-code' && this.apiType !== 'codex') {
       // Check if initializeModel marked as uninitialized (no API keys)
       if (this.apiType === 'uninitialized') {
         const claudeAvailable = await this.isClaudeCommandAvailable();
+        const codexAvailable = await this.isCodexCommandAvailable();
+
         if (claudeAvailable) {
           if (this.debug) {
             console.log('[DEBUG] No API keys found, but claude command detected');
@@ -320,11 +323,22 @@ export class ProbeAgent {
           this.provider = null;
           this.model = this.clientApiModel || 'claude-3-5-sonnet-20241022';
           this.apiType = 'claude-code';
+        } else if (codexAvailable) {
+          if (this.debug) {
+            console.log('[DEBUG] No API keys found, but codex command detected');
+            console.log('[DEBUG] Auto-switching to codex provider');
+          }
+          // Set provider to codex
+          this.clientApiProvider = 'codex';
+          this.provider = null;
+          this.model = this.clientApiModel || 'gpt-4o';
+          this.apiType = 'codex';
         } else {
-          // Neither API keys nor claude command available
-          throw new Error('No API key provided and claude command not found. Please either:\n' +
+          // Neither API keys nor CLI commands available
+          throw new Error('No API key provided and neither claude nor codex command found. Please either:\n' +
             '1. Set an API key: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, or AWS credentials\n' +
-            '2. Install claude command from https://docs.claude.com/en/docs/claude-code');
+            '2. Install claude command from https://docs.claude.com/en/docs/claude-code\n' +
+            '3. Install codex command from https://openai.com/codex');
         }
       }
     }
@@ -482,13 +496,34 @@ export class ProbeAgent {
 
   /**
    * Check if claude command is available on the system
+   * Uses execFile instead of exec to avoid shell injection risks
    * @returns {Promise<boolean>} True if claude command is available
    * @private
    */
   async isClaudeCommandAvailable() {
     try {
-      const { execSync } = await import('child_process');
-      execSync('claude --version', { stdio: 'ignore' });
+      const { execFile } = await import('child_process');
+      const { promisify } = await import('util');
+      const execFileAsync = promisify(execFile);
+      await execFileAsync('claude', ['--version'], { timeout: 5000 });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
+   * Check if codex command is available on the system
+   * Uses execFile instead of exec to avoid shell injection risks
+   * @returns {Promise<boolean>} True if codex command is available
+   * @private
+   */
+  async isCodexCommandAvailable() {
+    try {
+      const { execFile } = await import('child_process');
+      const { promisify } = await import('util');
+      const execFileAsync = promisify(execFile);
+      await execFileAsync('codex', ['--version'], { timeout: 5000 });
       return true;
     } catch (error) {
       return false;
@@ -517,6 +552,25 @@ export class ProbeAgent {
       this.apiType = 'claude-code';
       if (this.debug) {
         console.log('[DEBUG] Claude Code engine selected - will use built-in access if available');
+      }
+      return;
+    }
+
+    // Skip API key requirement for Codex CLI (uses built-in access in Codex CLI)
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
+      // Codex CLI engine will be initialized lazily in getEngine()
+      // Set minimal defaults for compatibility
+      this.provider = null;
+      // Only set model if explicitly provided, otherwise let Codex use account default
+      this.model = modelName || null;
+      this.apiType = 'codex';
+      if (this.debug) {
+        console.log('[DEBUG] Codex CLI engine selected - will use built-in access if available');
+        if (this.model) {
+          console.log(`[DEBUG] Using model: ${this.model}`);
+        } else {
+          console.log('[DEBUG] Using Codex account default model');
+        }
       }
       return;
     }
@@ -724,6 +778,60 @@ export class ProbeAgent {
       }
     }
 
+    // Check if we should use Codex engine
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
+      try {
+        const engine = await this.getEngine();
+        if (engine && engine.query) {
+          // Convert Vercel AI SDK format to engine format
+          // Extract the ORIGINAL user message as the main prompt (skip any warning messages)
+          // Look for user messages that are NOT the warning message
+          const userMessages = options.messages.filter(m =>
+            m.role === 'user' &&
+            !m.content.includes('WARNING: You have reached the maximum tool iterations limit')
+          );
+          const lastUserMessage = userMessages[userMessages.length - 1];
+          const prompt = lastUserMessage ? lastUserMessage.content : '';
+
+          // Pass system message and other options
+          const engineOptions = {
+            maxTokens: options.maxTokens,
+            temperature: options.temperature,
+            messages: options.messages,
+            systemPrompt: options.messages.find(m => m.role === 'system')?.content
+          };
+
+          // Get the engine's query result (async generator)
+          const engineStream = engine.query(prompt, engineOptions);
+
+          // Create a text stream that extracts text from engine messages
+          async function* createTextStream() {
+            for await (const message of engineStream) {
+              if (message.type === 'text' && message.content) {
+                yield message.content;
+              } else if (typeof message === 'string') {
+                // If engine returns plain strings, pass them through
+                yield message;
+              }
+              // Ignore other message types for the text stream
+            }
+          }
+
+          // Wrap the engine result to match streamText interface
+          return {
+            textStream: createTextStream(),
+            usage: Promise.resolve({}), // Engine should handle its own usage tracking
+            // Add other streamText-compatible properties as needed
+          };
+        }
+      } catch (error) {
+        if (this.debug) {
+          console.log(`[DEBUG] Failed to use Codex engine, falling back to Vercel:`, error.message);
+        }
+        // Fall through to use Vercel engine as fallback
+      }
+    }
+
     // Initialize retry manager if not already created
     if (!this.retryManager) {
       this.retryManager = new RetryManager({
@@ -908,6 +1016,39 @@ export class ProbeAgent {
         this.clientApiProvider = null;
       }
     }
+
+    // Try Codex CLI engine if requested
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
+      try {
+        const { createCodexEngine } = await import('./engines/codex.js');
+
+        // For Codex CLI, use a cleaner system prompt without XML formatting
+        // since it has native MCP support for tools
+        const systemPrompt = this.customPrompt || this.getCodexNativeSystemPrompt();
+
+        this.engine = await createCodexEngine({
+          agent: this, // Pass reference to ProbeAgent for tool access
+          systemPrompt: systemPrompt,
+          customPrompt: this.customPrompt,
+          sessionId: this.options?.sessionId,
+          debug: this.debug,
+          allowedTools: this.allowedTools,  // Pass tool filtering configuration
+          model: this.model  // Pass model name (e.g., gpt-4o, o3, etc.)
+        });
+        if (this.debug) {
+          console.log('[DEBUG] Using Codex CLI engine with Probe tools');
+          if (this.customPrompt) {
+            console.log('[DEBUG] Using custom prompt/persona');
+          }
+        }
+        return this.engine;
+      } catch (error) {
+        console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
+        console.warn('[WARNING] Falling back to Vercel AI SDK');
+        this.clientApiProvider = null;
+      }
+    }
+
     // Default to enhanced Vercel AI SDK (wraps existing logic)
     const { createEnhancedVercelEngine } = await import('./engines/enhanced-vercel.js');
     this.engine = createEnhancedVercelEngine(this);
@@ -915,6 +1056,35 @@ export class ProbeAgent {
       console.log('[DEBUG] Using Vercel AI SDK engine');
     }
     return this.engine;
+  }
+
+  /**
+   * Get session information including thread ID for resumability
+   * @returns {Object} Session info with sessionId, threadId, messageCount
+   */
+  getSessionInfo() {
+    if (this.engine && this.engine.getSession) {
+      return this.engine.getSession();
+    }
+    return {
+      id: this.sessionId,
+      threadId: null,
+      messageCount: 0
+    };
+  }
+
+  /**
+   * Close the agent and clean up resources (e.g., MCP servers)
+   * @returns {Promise<void>}
+   */
+  async close() {
+    if (this.engine && this.engine.close) {
+      await this.engine.close();
+    }
+    if (this.mcpBridge) {
+      // Clean up MCP bridge if needed
+      this.mcpBridge = null;
+    }
   }
 
   /**
@@ -1311,11 +1481,64 @@ export class ProbeAgent {
     let systemPrompt = '';
 
     // Add persona/role if configured
-    if (this.predefinedPrompt) {
-      const personaPrompt = getPromptByType(this.predefinedPrompt);
-      if (personaPrompt?.system) {
-        systemPrompt += personaPrompt.system + '\n\n';
-      }
+    if (this.customPrompt) {
+      systemPrompt += this.customPrompt + '\n\n';
+    } else if (this.promptType && predefinedPrompts[this.promptType]) {
+      systemPrompt += predefinedPrompts[this.promptType] + '\n\n';
+    } else {
+      // Use default code-explorer prompt
+      systemPrompt += predefinedPrompts['code-explorer'] + '\n\n';
+    }
+
+    // Add high-level instructions about when to use tools
+    systemPrompt += `You have access to powerful code search and analysis tools through MCP:
+- search: Find code patterns using semantic search
+- extract: Extract specific code sections with context
+- query: Use AST patterns for structural code matching
+- listFiles: Browse directory contents
+- searchFiles: Find files by name patterns`;
+
+    if (this.enableBash) {
+      systemPrompt += `\n- bash: Execute bash commands for system operations`;
+    }
+
+    systemPrompt += `\n
+When exploring code:
+1. Start with search to find relevant code patterns
+2. Use extract to get detailed context when needed
+3. Prefer focused, specific searches over broad queries
+4. Combine multiple tools to build complete understanding`;
+
+    // Add workspace context
+    if (this.allowedFolders && this.allowedFolders.length > 0) {
+      systemPrompt += `\n\nWorkspace: ${this.allowedFolders.join(', ')}`;
+    }
+
+    // Add repository structure if available
+    if (this.fileList) {
+      systemPrompt += `\n\n# Repository Structure\n`;
+      systemPrompt += `You are working with a repository located at: ${this.allowedFolders[0]}\n\n`;
+      systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
+      systemPrompt += '```\n' + this.fileList + '\n```\n';
+    }
+
+    return systemPrompt;
+  }
+
+  /**
+   * Get system prompt for Codex CLI (similar to Claude but optimized for Codex)
+   */
+  getCodexNativeSystemPrompt() {
+    let systemPrompt = '';
+
+    // Add persona/role if configured
+    if (this.customPrompt) {
+      systemPrompt += this.customPrompt + '\n\n';
+    } else if (this.promptType && predefinedPrompts[this.promptType]) {
+      systemPrompt += predefinedPrompts[this.promptType] + '\n\n';
+    } else {
+      // Use default code-explorer prompt
+      systemPrompt += predefinedPrompts['code-explorer'] + '\n\n';
     }
 
     // Add high-level instructions about when to use tools
@@ -1747,8 +1970,9 @@ When troubleshooting:
       const baseMaxIterations = this.maxIterations || MAX_TOOL_ITERATIONS;
       const maxIterations = options.schema ? baseMaxIterations + 4 : baseMaxIterations;
 
-      // Check if we're using Claude Code engine which handles its own agentic loop
+      // Check if we're using CLI-based engines which handle their own agentic loop
       const isClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
+      const isCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
 
       if (isClaudeCode) {
         // For Claude Code, bypass the tool loop entirely - it handles its own internal dialogue
@@ -1820,6 +2044,77 @@ When troubleshooting:
         }
       }
 
+      // Handle Codex engine (same pattern as Claude Code)
+      if (isCodex) {
+        // For Codex, bypass the tool loop entirely - it handles its own internal dialogue
+        if (this.debug) {
+          console.log(`[DEBUG] Using Codex engine - bypassing tool loop (black box mode)`);
+          console.log(`[DEBUG] Sending question directly to Codex: ${message.substring(0, 100)}...`);
+        }
+
+        // Send the message directly to Codex and collect the response
+        try {
+          const engine = await this.getEngine();
+          if (engine && engine.query) {
+            let assistantResponseContent = '';
+            let toolBatch = null;
+
+            // Query Codex directly with the message and schema
+            for await (const chunk of engine.query(message, options)) {
+              if (chunk.type === 'text' && chunk.content) {
+                assistantResponseContent += chunk.content;
+                if (options.onStream) {
+                  options.onStream(chunk.content);
+                }
+              } else if (chunk.type === 'toolBatch' && chunk.tools) {
+                // Store tool batch for processing after response
+                toolBatch = chunk.tools;
+                if (this.debug) {
+                  console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
+                }
+              } else if (chunk.type === 'error') {
+                throw chunk.error;
+              }
+            }
+
+            // Emit tool events after response is complete (batch mode)
+            if (toolBatch && toolBatch.length > 0 && this.events) {
+              if (this.debug) {
+                console.log(`[DEBUG] Emitting ${toolBatch.length} tool events from Codex batch`);
+              }
+              for (const toolEvent of toolBatch) {
+                this.events.emit('toolCall', toolEvent);
+              }
+            }
+
+            // Update history with the exchange
+            this.history.push(userMessage);
+            this.history.push({
+              role: 'assistant',
+              content: assistantResponseContent
+            });
+
+            // Store conversation history
+            // TODO: storeConversationHistory is not yet implemented for Codex
+            // await this.storeConversationHistory(this.history, oldHistoryLength);
+
+            // Emit completion hook
+            await this.hooks.emit(HOOK_TYPES.COMPLETION, {
+              sessionId: this.sessionId,
+              prompt: message,
+              response: assistantResponseContent
+            });
+
+            return assistantResponseContent;
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.error('[DEBUG] Codex error:', error);
+          }
+          throw error;
+        }
+      }
+
       if (this.debug) {
         console.log(`[DEBUG] Starting agentic flow for question: ${message.substring(0, 100)}...`);
         if (options.schema) {
@@ -1827,7 +2122,7 @@ When troubleshooting:
         }
       }
 
-      // Tool iteration loop (only for non-Claude Code engines)
+      // Tool iteration loop (only for non-CLI engines like Vercel/Anthropic/OpenAI)
       while (currentIteration < maxIterations && !completionAttempted) {
         currentIteration++;
         if (this.cancelled) throw new Error('Request was cancelled by the user');
