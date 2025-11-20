@@ -496,15 +496,16 @@ export class ProbeAgent {
 
   /**
    * Check if claude command is available on the system
+   * Uses execFile instead of exec to avoid shell injection risks
    * @returns {Promise<boolean>} True if claude command is available
    * @private
    */
   async isClaudeCommandAvailable() {
     try {
-      const { exec } = await import('child_process');
+      const { execFile } = await import('child_process');
       const { promisify } = await import('util');
-      const execAsync = promisify(exec);
-      await execAsync('claude --version', { timeout: 5000 });
+      const execFileAsync = promisify(execFile);
+      await execFileAsync('claude', ['--version'], { timeout: 5000 });
       return true;
     } catch (error) {
       return false;
@@ -513,15 +514,16 @@ export class ProbeAgent {
 
   /**
    * Check if codex command is available on the system
+   * Uses execFile instead of exec to avoid shell injection risks
    * @returns {Promise<boolean>} True if codex command is available
    * @private
    */
   async isCodexCommandAvailable() {
     try {
-      const { exec } = await import('child_process');
+      const { execFile } = await import('child_process');
       const { promisify } = await import('util');
-      const execAsync = promisify(exec);
-      await execAsync('codex --version', { timeout: 5000 });
+      const execFileAsync = promisify(execFile);
+      await execFileAsync('codex', ['--version'], { timeout: 5000 });
       return true;
     } catch (error) {
       return false;
