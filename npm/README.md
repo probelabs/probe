@@ -352,74 +352,44 @@ const agent = new ProbeAgent({
 
 **Note:** MCP tools are automatically initialized when needed (lazy initialization), so you don't need to call `agent.initialize()` when using the SDK.
 
-## AI Engine Support (Experimental)
+## Claude Code Integration
 
-ProbeAgent now supports multiple AI engines for flexibility. By default, it uses the Vercel AI SDK for broad compatibility with multiple providers.
+ProbeAgent now supports Claude Code's `claude` command for zero-configuration usage in Claude Code environments. See the [Claude Code Integration Guide](./docs/CLAUDE_CODE_INTEGRATION.md) for full details.
 
-### Available Engines
-
-1. **Vercel AI SDK** (default)
-   - Supports: Anthropic, OpenAI, Google, AWS Bedrock
-   - Zero configuration required
-   - Full backward compatibility
-
-2. **Claude Agent SDK** (optional)
-   - Native Claude capabilities with built-in MCP support
-   - Larger context window (200k tokens)
-   - Optimized for Claude models
-
-### Using Different Engines
-
-#### Default (Vercel AI SDK)
-```javascript
-// No changes needed - works exactly as before
-const agent = new ProbeAgent({
-  apiKey: process.env.ANTHROPIC_API_KEY
-});
-```
-
-#### Claude Agent SDK
-```bash
-# First, install the optional dependency
-npm install @anthropic-ai/claude-agent-sdk
-```
-
-Then use it in your code:
+### Quick Start
 
 ```javascript
-// Option 1: Explicit engine selection
+import { ProbeAgent } from '@probelabs/probe';
+
+// Works automatically if claude command is installed!
 const agent = new ProbeAgent({
-  engine: 'claude-sdk',
-  apiKey: process.env.ANTHROPIC_API_KEY
+  allowedFolders: ['/path/to/your/code']
 });
 
-// Option 2: Environment variable
-process.env.USE_CLAUDE_SDK = 'true';
-const agent = new ProbeAgent({
-  apiKey: process.env.ANTHROPIC_API_KEY
-});
+await agent.initialize();
+const response = await agent.answer('Explain how this codebase works');
 ```
 
-### Engine Comparison
+### Auto-Fallback
 
-| Feature | Vercel AI SDK | Claude Agent SDK |
-|---------|---------------|------------------|
-| Providers | Multiple (4+) | Claude only |
-| MCP Support | Via adapters | Native |
-| Context Window | 128k | 200k |
-| Setup Required | None | Install package |
-| Streaming | ✅ | ✅ |
-| Tools | ✅ | ✅ |
-| Multi-modal | ✅ | ✅ |
+ProbeAgent automatically detects and uses Claude Code when:
+- No API keys are configured (no ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+- The `claude` command is available on your system
 
-### Why Use Claude Agent SDK?
+Priority order:
+1. Explicit `provider: 'claude-code'`
+2. API keys (Anthropic, OpenAI, Google, AWS)
+3. Claude command (auto-detected)
 
-- **Native MCP Support**: Direct integration with Model Context Protocol servers
-- **Larger Context**: 200k token context window vs 128k
-- **Claude Optimizations**: Tailored for Claude's capabilities
-- **Future Features**: Access to Claude-specific features as they're released
+### Features
 
-The engine system is designed to be minimal and non-breaking. If Claude SDK is not installed or fails to load, ProbeAgent automatically falls back to the Vercel AI SDK.
+- **Zero Configuration**: No API keys needed in Claude Code environments
+- **Black-box Operation**: Claude Code handles its own agentic loop
+- **Tool Event Extraction**: Visibility into internal tool usage
+- **Built-in MCP Server**: Provides Probe's semantic search tools
+- **Auto-fallback**: Seamlessly switches based on environment
+
+For complete documentation, examples, and troubleshooting, see [docs/CLAUDE_CODE_INTEGRATION.md](./docs/CLAUDE_CODE_INTEGRATION.md).
 
 ## API Reference
 

@@ -510,8 +510,7 @@ export class ProbeAgent {
     }
 
     // Skip API key requirement for Claude Code (uses built-in access in Claude Code)
-    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true' ||
-        this.engineType === 'claude-sdk' || process.env.USE_CLAUDE_SDK === 'true') {
+    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
       // Claude Code engine will be initialized lazily in getEngine()
       // Set minimal defaults for compatibility
       this.provider = null;
@@ -673,8 +672,7 @@ export class ProbeAgent {
    */
   async streamTextWithRetryAndFallback(options) {
     // Check if we should use Claude Code engine
-    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true' ||
-        this.engineType === 'claude-sdk' || process.env.USE_CLAUDE_SDK === 'true') {
+    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
       try {
         const engine = await this.getEngine();
         if (engine && engine.query) {
@@ -911,42 +909,6 @@ export class ProbeAgent {
         this.clientApiProvider = null;
       }
     }
-
-    // Try Claude SDK if requested
-    if (this.engineType === 'claude-sdk' || process.env.USE_CLAUDE_SDK === 'true') {
-      try {
-        const { createEnhancedClaudeSDKEngine } = await import('./engines/enhanced-claude-sdk.js');
-
-        // Get the full system message with persona/custom prompt support
-        // If customPrompt is set, use it directly (supports personas)
-        // Otherwise generate the full system message with tools
-        const systemPrompt = this.customPrompt || await this.getSystemMessage();
-
-        this.engine = await createEnhancedClaudeSDKEngine({
-          agent: this, // Pass reference to ProbeAgent for tool access
-          apiKey: this.clientApiKey || process.env.ANTHROPIC_API_KEY,
-          model: this.model,
-          systemPrompt: systemPrompt,
-          customSettings: {
-            maxResponseTokens: this.maxResponseTokens,
-            temperature: this.temperature
-          },
-          debug: this.debug
-        });
-        if (this.debug) {
-          console.log('[DEBUG] Using Claude Agent SDK engine with Probe tools');
-          if (this.customPrompt) {
-            console.log('[DEBUG] Using custom prompt/persona');
-          }
-        }
-        return this.engine;
-      } catch (error) {
-        console.warn('[WARNING] Failed to load Claude SDK engine:', error.message);
-        console.warn('[WARNING] Falling back to Vercel AI SDK');
-        this.engineType = 'vercel';
-      }
-    }
-
     // Default to enhanced Vercel AI SDK (wraps existing logic)
     const { createEnhancedVercelEngine } = await import('./engines/enhanced-vercel.js');
     this.engine = createEnhancedVercelEngine(this);
