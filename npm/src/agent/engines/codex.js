@@ -5,9 +5,6 @@
 
 import { spawn } from 'child_process';
 import { randomBytes } from 'crypto';
-import fs from 'fs/promises';
-import path from 'path';
-import os from 'os';
 import { EventEmitter } from 'events';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
 
@@ -51,7 +48,7 @@ export async function createCodexEngine(options = {}) {
 
   // Start built-in MCP server with ephemeral port
   let mcpServer = null;
-  let mcpWrapperPath = null;
+  let mcpServerUrl = null;
   let mcpServerName = null;
 
   if (agent) {
@@ -62,63 +59,13 @@ export async function createCodexEngine(options = {}) {
     });
 
     const { host, port } = await mcpServer.start();
+    mcpServerUrl = `http://${host}:${port}/sse`;
+    mcpServerName = `probe_${session.id}`;
 
     if (debug) {
       console.log('[DEBUG] Built-in MCP server started');
-      console.log('[DEBUG] MCP URL:', `http://${host}:${port}/mcp`);
-    }
-
-    // Create MCP stdio wrapper that connects to HTTP server
-    mcpServerName = `probe_${session.id}`;
-    mcpWrapperPath = path.join(os.tmpdir(), `probe-mcp-wrapper-${session.id}.js`);
-
-    // Create stdio wrapper for MCP server
-    const mcpWrapper = `#!/usr/bin/env node
-// MCP stdio wrapper for Probe
-const http = require('http');
-
-const MCP_URL = 'http://${host}:${port}/mcp';
-
-let buffer = '';
-
-process.stdin.on('data', async (chunk) => {
-  buffer += chunk.toString();
-
-  const lines = buffer.split('\\n');
-  buffer = lines.pop() || '';
-
-  for (const line of lines) {
-    if (!line.trim()) continue;
-
-    try {
-      const request = JSON.parse(line);
-      const response = await fetch(MCP_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request)
-      });
-      const result = await response.json();
-      process.stdout.write(JSON.stringify(result) + '\\n');
-    } catch (error) {
-      process.stdout.write(JSON.stringify({
-        jsonrpc: '2.0',
-        id: null,
-        error: { code: -32603, message: error.message }
-      }) + '\\n');
-    }
-  }
-});
-
-process.stdin.on('end', () => {
-  process.exit(0);
-});
-`;
-
-    await fs.writeFile(mcpWrapperPath, mcpWrapper, { mode: 0o755 });
-
-    if (debug) {
-      console.log(`[DEBUG] Created MCP wrapper: ${mcpWrapperPath}`);
-      console.log(`[DEBUG] MCP server name: ${mcpServerName}`);
+      console.log('[DEBUG] MCP SSE URL:', mcpServerUrl);
+      console.log('[DEBUG] MCP server name:', mcpServerName);
     }
   }
 
@@ -133,7 +80,7 @@ process.stdin.on('end', () => {
   return {
     sessionId: session.id,
     session,
-    mcpWrapperPath,  // Store for cleanup
+    mcpServerUrl,  // Store for --config
     mcpServerName,
 
     /**
@@ -159,7 +106,7 @@ process.stdin.on('end', () => {
         session,
         debug,
         allowedTools,
-        mcpWrapperPath,
+        mcpServerUrl,
         mcpServerName
       });
 
@@ -328,18 +275,6 @@ process.stdin.on('end', () => {
      */
     async close() {
       try {
-        // Clean up wrapper script
-        if (mcpWrapperPath) {
-          try {
-            await fs.unlink(mcpWrapperPath).catch(() => {});
-            if (debug) {
-              console.log('[DEBUG] Removed MCP wrapper script');
-            }
-          } catch (error) {
-            // Ignore errors
-          }
-        }
-
         // Stop built-in MCP server
         if (mcpServer) {
           await mcpServer.stop();
@@ -459,21 +394,20 @@ function processJsonBuffer(buffer, emitter, session, debug, toolCollector = null
  * Build codex exec command arguments
  * Uses --config to dynamically add MCP server configuration
  */
-function buildCodexArgs({ prompt, session, debug, allowedTools, mcpWrapperPath, mcpServerName }) {
+function buildCodexArgs({ prompt, session, debug, allowedTools, mcpServerUrl, mcpServerName }) {
   const args = [
     '--json',  // Enable JSON output
   ];
 
   // Add MCP server configuration dynamically using --config
-  // Format: -c 'mcp_servers.<name>.command="<command>"'
-  // Format: -c 'mcp_servers.<name>.args=["arg1", "arg2"]'
-  if (mcpWrapperPath && mcpServerName) {
-    // Add MCP server configuration via --config parameter
-    args.push('-c', `mcp_servers.${mcpServerName}.command="node"`);
-    args.push('-c', `mcp_servers.${mcpServerName}.args=["${mcpWrapperPath}"]`);
+  // Codex supports HTTP/SSE MCP servers via URL
+  // Format: -c 'mcp_servers.<name>.url="http://..."'
+  if (mcpServerUrl && mcpServerName) {
+    // Add HTTP MCP server configuration via --config parameter
+    args.push('-c', `mcp_servers.${mcpServerName}.url="${mcpServerUrl}"`);
 
     if (debug) {
-      console.log(`[DEBUG] Configured MCP server via --config: ${mcpServerName}`);
+      console.log(`[DEBUG] Configured HTTP MCP server via --config: ${mcpServerName} -> ${mcpServerUrl}`);
     }
   }
 
