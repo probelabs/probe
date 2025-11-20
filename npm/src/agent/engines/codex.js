@@ -1,6 +1,6 @@
 /**
  * OpenAI Codex Engine with session management and better streaming
- * Based on claude-code engine implementation pattern
+ * Uses the actual Codex CLI command structure
  */
 
 import { spawn } from 'child_process';
@@ -10,36 +10,27 @@ import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
+import { execSync } from 'child_process';
 
 /**
- * Session manager for Codex CLI conversations
+ * Session manager for Codex conversations
  */
 class CodexSession {
   constructor(id, debug = false) {
     this.id = id;
-    this.conversationId = null;
+    this.threadId = null;
     this.messageCount = 0;
     this.debug = debug;
   }
 
   /**
-   * Update session with Codex's conversation ID
+   * Update session with Codex's thread ID
    */
-  setConversationId(convId) {
-    this.conversationId = convId;
+  setThreadId(threadId) {
+    this.threadId = threadId;
     if (this.debug) {
-      console.log(`[Session ${this.id}] Conversation ID: ${convId}`);
+      console.log(`[Session ${this.id}] Thread ID: ${threadId}`);
     }
-  }
-
-  /**
-   * Get resume arguments for continuing conversation
-   */
-  getResumeArgs() {
-    if (this.conversationId && this.messageCount > 0) {
-      return ['--resume', this.conversationId];
-    }
-    return [];
   }
 
   incrementMessageCount() {
@@ -61,7 +52,7 @@ export async function createCodexEngine(options = {}) {
 
   // Start built-in MCP server with ephemeral port
   let mcpServer = null;
-  let mcpConfigPath = null;
+  let mcpServerName = null;
 
   if (agent) {
     mcpServer = new BuiltInMCPServer(agent, {
@@ -77,32 +68,61 @@ export async function createCodexEngine(options = {}) {
       console.log('[DEBUG] MCP URL:', `http://${host}:${port}/mcp`);
     }
 
-    // Create MCP config for Codex CLI to use
-    mcpConfigPath = path.join(os.tmpdir(), `probe-mcp-${session.id}.json`);
-    const mcpConfig = {
-      mcpServers: {
-        probe: {
-          command: 'node',
-          args: [path.join(process.cwd(), 'mcp-probe-server.js')],
-          env: {
-            PROBE_WORKSPACE: process.cwd(),
-            DEBUG: debug ? 'true' : 'false'
-          }
-        }
-      }
-    };
+    // Register MCP server with Codex CLI using 'codex mcp add'
+    mcpServerName = `probe-${session.id}`;
+    try {
+      // Create a simple Node.js wrapper script that acts as MCP stdio server
+      const mcpWrapperPath = path.join(os.tmpdir(), `probe-mcp-wrapper-${session.id}.js`);
+      const mcpWrapper = `#!/usr/bin/env node
+// MCP stdio wrapper for Probe
+const http = require('http');
 
-    await fs.writeFile(mcpConfigPath, JSON.stringify(mcpConfig, null, 2));
+const MCP_URL = 'http://${host}:${port}/mcp';
+
+process.stdin.on('data', async (data) => {
+  try {
+    const request = JSON.parse(data.toString());
+    const response = await fetch(MCP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request)
+    });
+    const result = await response.json();
+    process.stdout.write(JSON.stringify(result) + '\\n');
+  } catch (error) {
+    process.stdout.write(JSON.stringify({
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32603, message: error.message }
+    }) + '\\n');
+  }
+});
+`;
+
+      await fs.writeFile(mcpWrapperPath, mcpWrapper, { mode: 0o755 });
+
+      // Add MCP server to Codex
+      execSync(`codex mcp add ${mcpServerName} -- node ${mcpWrapperPath}`, {
+        stdio: debug ? 'inherit' : 'pipe'
+      });
+
+      if (debug) {
+        console.log(`[DEBUG] Registered MCP server: ${mcpServerName}`);
+      }
+    } catch (error) {
+      if (debug) {
+        console.error('[DEBUG] Failed to register MCP server:', error.message);
+      }
+    }
   }
 
   if (debug) {
-    console.log('[DEBUG] Enhanced Codex CLI Engine');
+    console.log('[DEBUG] Codex Engine initialized');
     console.log('[DEBUG] Session:', session.id);
-    console.log('[DEBUG] MCP Config:', mcpConfigPath);
   }
 
-  // Combine prompts
-  const fullSystemPrompt = combinePrompts(systemPrompt, customPrompt, agent);
+  // Combine prompts with system prompt
+  const fullPrompt = combinePrompts(systemPrompt, customPrompt, agent);
 
   return {
     sessionId: session.id,
@@ -115,78 +135,42 @@ export async function createCodexEngine(options = {}) {
       const emitter = new EventEmitter();
       let buffer = '';
       let processEnded = false;
-      let currentToolCall = null;
-      let isSchemaMode = false;
+      let fullResponse = '';
 
-      // Check if this is a schema reminder or validation request
-      // In these cases, we treat Codex CLI as a black box - just get the response
-      if (opts.schema || prompt.includes('JSON schema') || prompt.includes('mermaid diagram')) {
-        isSchemaMode = true;
-        if (debug) {
-          console.log('[DEBUG] Schema/validation mode - treating as black box');
-        }
-      }
+      // Build final prompt with system instructions
+      let finalPrompt = fullPrompt ? `${fullPrompt}\n\n${prompt}` : prompt;
 
-      // For schema mode, append the schema requirement to the prompt
-      let finalPrompt = prompt;
-      if (opts.schema && isSchemaMode) {
-        finalPrompt = `${prompt}\n\nPlease provide your response in the following JSON format:\n${opts.schema}`;
+      // For schema mode, append schema requirement
+      if (opts.schema) {
+        finalPrompt = `${finalPrompt}\n\nPlease provide your response in the following JSON format:\n${opts.schema}`;
       }
 
       // Build command arguments
       const args = buildCodexArgs({
-        systemPrompt: fullSystemPrompt,
-        mcpConfigPath,
+        prompt: finalPrompt,
         session,
         debug,
-        prompt: finalPrompt,
-        allowedTools: allowedTools || opts.allowedTools
+        allowedTools
       });
 
       if (debug) {
-        console.log('[DEBUG] Executing: codex', args.join(' '));
-      }
-
-      // CRITICAL: Codex CLI requires echo pipe to work when spawned from Node.js
-      // Without it, the process hangs indefinitely waiting for stdin
-      // SECURITY: Shell argument escaping using POSIX single-quote method
-      // Single quotes in POSIX shells protect ALL metacharacters (;|&$`><*?) except single quote itself
-      // The pattern 'text'\''more' correctly handles embedded quotes by:
-      // 1. Closing the current quote with '
-      // 2. Adding an escaped quote \'
-      // 3. Opening a new quote with '
-      // This is the standard POSIX-compliant method and is completely safe against injection
-      const shellCmd = `echo "" | codex ${args.map(arg => {
-        // Validate arg is a string (paranoid check)
-        if (typeof arg !== 'string') {
-          throw new TypeError(`Invalid argument type: expected string, got ${typeof arg}`);
-        }
-        // Escape single quotes using POSIX method: ' -> '\''
-        const escaped = arg.replace(/'/g, "'\\''");
-        // Wrap in single quotes for complete shell metacharacter protection
-        return `'${escaped}'`;
-      }).join(' ')}`;
-
-      if (debug) {
-        console.log('[DEBUG] Shell command length:', shellCmd.length);
-        // Don't log full command if too long (e.g. system prompt)
-        if (shellCmd.length < 500) {
-          console.log('[DEBUG] Shell command:', shellCmd);
-        } else {
-          console.log('[DEBUG] Shell command (truncated):', shellCmd.substring(0, 200) + '...');
-        }
+        console.log('[DEBUG] Executing: codex exec', args.join(' '));
       }
 
       // Initialize tool collector for batch emission
       const toolCollector = [];
 
-      // Spawn using shell wrapper with echo pipe
-      const proc = spawn('sh', ['-c', shellCmd], {
-        env: { ...process.env, FORCE_COLOR: '0' },
-        stdio: ['ignore', 'pipe', 'pipe']  // Ignore stdin since echo handles it
+      // Spawn codex exec
+      const proc = spawn('codex', ['exec', ...args], {
+        env: { ...process.env },
+        stdio: ['pipe', 'pipe', 'pipe']
       });
 
-      // Handle stdout
+      // Send prompt via stdin
+      proc.stdin.write(finalPrompt);
+      proc.stdin.end();
+
+      // Handle stdout - JSON lines
       proc.stdout.on('data', (data) => {
         buffer += data.toString();
         processJsonBuffer(buffer, emitter, session, debug, toolCollector);
@@ -283,24 +267,14 @@ export async function createCodexEngine(options = {}) {
 
           if (msg.type === 'text') {
             yield { type: 'text', content: msg.content };
-          } else if (msg.type === 'tool_use') {
-            // Start tool execution
-            currentToolCall = msg;
-            yield {
-              type: 'text',
-              content: `\n🔧 Using ${msg.name}: ${JSON.stringify(msg.input)}\n`
-            };
-
-            // Execute tool
-            const result = await executeProbleTool(agent, msg.name, msg.input);
-            yield { type: 'text', content: `${result}\n` };
+            fullResponse += msg.content;
           } else if (msg.type === 'toolBatch') {
             // Pass through the tool batch for ProbeAgent to emit
             yield { type: 'toolBatch', tools: msg.tools, timestamp: msg.timestamp };
-          } else if (msg.type === 'session_update') {
-            // Session was updated with conversation ID
+          } else if (msg.type === 'thread_started') {
+            // Thread started event
             if (debug) {
-              console.log('[DEBUG] Session updated:', msg.conversationId);
+              console.log('[DEBUG] Thread started:', msg.threadId);
             }
           } else if (msg.type === 'error') {
             yield { type: 'error', error: msg.error };
@@ -322,7 +296,7 @@ export async function createCodexEngine(options = {}) {
         type: 'metadata',
         data: {
           sessionId: session.id,
-          conversationId: session.conversationId,
+          threadId: session.threadId,
           messageCount: session.messageCount
         }
       };
@@ -334,7 +308,7 @@ export async function createCodexEngine(options = {}) {
     getSession() {
       return {
         id: session.id,
-        conversationId: session.conversationId,
+        threadId: session.threadId,
         messageCount: session.messageCount
       };
     },
@@ -344,19 +318,31 @@ export async function createCodexEngine(options = {}) {
      */
     async close() {
       try {
+        // Remove MCP server from Codex
+        if (mcpServerName) {
+          try {
+            execSync(`codex mcp remove ${mcpServerName}`, { stdio: 'pipe' });
+            if (debug) {
+              console.log(`[DEBUG] Removed MCP server: ${mcpServerName}`);
+            }
+          } catch (error) {
+            // Ignore errors on cleanup
+          }
+
+          // Clean up wrapper script
+          try {
+            const mcpWrapperPath = path.join(os.tmpdir(), `probe-mcp-wrapper-${session.id}.js`);
+            await fs.unlink(mcpWrapperPath).catch(() => {});
+          } catch (error) {
+            // Ignore errors
+          }
+        }
+
         // Stop built-in MCP server
         if (mcpServer) {
           await mcpServer.stop();
           if (debug) {
             console.log('[DEBUG] Built-in MCP server stopped');
-          }
-        }
-
-        // Remove temporary MCP config file
-        if (mcpConfigPath) {
-          await fs.unlink(mcpConfigPath).catch(() => {});
-          if (debug) {
-            console.log('[DEBUG] MCP config file removed');
           }
         }
 
@@ -374,6 +360,12 @@ export async function createCodexEngine(options = {}) {
 
 /**
  * Process JSON buffer and emit messages
+ * Codex CLI emits JSONL events like:
+ * {"type":"thread.started","thread_id":"..."}
+ * {"type":"turn.started"}
+ * {"type":"item.completed","item":{"id":"...","type":"reasoning","text":"..."}}
+ * {"type":"item.completed","item":{"id":"...","type":"agent_message","text":"..."}}
+ * {"type":"turn.completed","usage":{...}}
  */
 function processJsonBuffer(buffer, emitter, session, debug, toolCollector = null) {
   const lines = buffer.split('\n');
@@ -382,199 +374,108 @@ function processJsonBuffer(buffer, emitter, session, debug, toolCollector = null
     if (!line.trim()) continue;
 
     try {
-      const parsed = JSON.parse(line);
+      const event = JSON.parse(line);
 
-      // Codex CLI might return an array of messages
-      const messages = Array.isArray(parsed) ? parsed : [parsed];
+      switch (event.type) {
+        case 'thread.started':
+          session.setThreadId(event.thread_id);
+          emitter.emit('message', { type: 'thread_started', threadId: event.thread_id });
+          break;
 
-      for (const msg of messages) {
-
-      switch (msg.type) {
-        case 'result':
-          // Codex CLI returns a complete result object
-          if (msg.result) {
-            emitter.emit('message', { type: 'text', content: msg.result });
-          }
-          if (msg.session_id) {
-            session.setConversationId(msg.session_id);
-            emitter.emit('message', { type: 'session_update', conversationId: msg.session_id });
+        case 'turn.started':
+          if (debug) {
+            console.log('[DEBUG] Turn started');
           }
           break;
 
-        case 'conversation':
-          session.setConversationId(msg.id);
-          emitter.emit('message', { type: 'session_update', conversationId: msg.id });
-          break;
-
-        case 'text':
-          if (msg.text) {
-            emitter.emit('message', { type: 'text', content: msg.text });
-          }
-          break;
-
-        case 'assistant':
-          // Codex CLI emits assistant messages when using internal agents/tools
-          if (msg.message && msg.message.content) {
-            // Extract text from the content array
-            for (const content of msg.message.content) {
-              if (content.type === 'text' && content.text) {
-                emitter.emit('message', { type: 'text', content: content.text });
-              } else if (content.type === 'tool_use') {
-                // Collect tool call for batch emission
-                if (toolCollector) {
-                  toolCollector.push({
-                    timestamp: new Date().toISOString(),
-                    name: content.name,
-                    args: content.input || {},
-                    id: content.id,
-                    status: 'started'
-                  });
-                }
-                // Internal tool use - already handled by Codex CLI
-                if (debug) {
-                  console.log('[DEBUG] Assistant internal tool use:', content.name);
+        case 'item.completed':
+          if (event.item) {
+            // Handle different item types
+            if (event.item.type === 'agent_message') {
+              // Main agent response
+              emitter.emit('message', { type: 'text', content: event.item.text });
+            } else if (event.item.type === 'reasoning') {
+              // Reasoning step - could extract tool usage here if needed
+              if (debug) {
+                console.log('[DEBUG] Reasoning:', event.item.text?.substring(0, 100));
+              }
+            } else if (event.item.type === 'tool_call') {
+              // Tool call detected
+              if (toolCollector) {
+                toolCollector.push({
+                  timestamp: new Date().toISOString(),
+                  name: event.item.name || 'unknown',
+                  args: event.item.arguments || {},
+                  id: event.item.id,
+                  status: 'started'
+                });
+              }
+            } else if (event.item.type === 'tool_result') {
+              // Tool result
+              if (toolCollector && event.item.call_id) {
+                const toolCall = toolCollector.find(t => t.id === event.item.call_id);
+                if (toolCall) {
+                  toolCall.status = 'completed';
+                  toolCall.resultPreview = event.item.content ?
+                    (typeof event.item.content === 'string' ?
+                      event.item.content.substring(0, 200) :
+                      JSON.stringify(event.item.content).substring(0, 200)) + '...' :
+                    'No Result';
                 }
               }
             }
           }
           break;
 
-        case 'tool_use':
-          // Collect tool call for batch emission
-          if (toolCollector) {
-            toolCollector.push({
-              timestamp: new Date().toISOString(),
-              name: msg.name,
-              args: msg.input || {},
-              id: msg.id,
-              status: 'started'
-            });
+        case 'turn.completed':
+          if (debug && event.usage) {
+            console.log('[DEBUG] Turn completed. Tokens:', event.usage);
           }
-          emitter.emit('message', {
-            type: 'tool_use',
-            id: msg.id,
-            name: msg.name,
-            input: msg.input
-          });
-          break;
-
-        case 'tool_result':
-          // Mark tool as completed in collector
-          if (toolCollector && msg.tool_use_id) {
-            // Find the matching tool call and update its status
-            const toolCall = toolCollector.find(t => t.id === msg.tool_use_id);
-            if (toolCall) {
-              toolCall.status = 'completed';
-              toolCall.resultPreview = msg.content ?
-                (typeof msg.content === 'string' ?
-                  msg.content.substring(0, 200) :
-                  JSON.stringify(msg.content).substring(0, 200)) + '...' :
-                'No Result';
-            }
-          }
-          // Tool results are handled internally
-          if (debug) {
-            console.log('[DEBUG] Tool result:', msg);
-          }
-          break;
-
-        case 'error':
-          emitter.emit('error', new Error(msg.message || 'Unknown error'));
           break;
 
         default:
           if (debug) {
-            console.log('[DEBUG] Unknown message type:', msg.type);
-            console.log('[DEBUG] Full message:', JSON.stringify(msg).substring(0, 200));
+            console.log('[DEBUG] Unknown event type:', event.type);
           }
       }
-      } // Close inner for loop for messages array
     } catch (e) {
       // Not valid JSON, might be partial
       if (debug && line.trim()) {
-        console.log('[DEBUG] Non-JSON output:', line);
+        console.log('[DEBUG] Non-JSON output:', line.substring(0, 100));
       }
     }
   }
 }
 
 /**
- * Build codex command arguments
+ * Build codex exec command arguments
  */
-function buildCodexArgs({ systemPrompt, mcpConfigPath, session, debug, prompt, allowedTools }) {
+function buildCodexArgs({ prompt, session, debug, allowedTools }) {
   const args = [
-    '-p',  // Short form of --print
-    prompt,  // The prompt text goes right after -p
-    '--output-format', 'json'
+    '--json',  // Enable JSON output
+    '-'        // Read prompt from stdin
   ];
 
-  // Add session resume if available
-  const resumeArgs = session.getResumeArgs();
-  if (resumeArgs.length > 0) {
-    args.push(...resumeArgs);
-  }
+  // Add model if specified
+  // (Not adding for now as we'll use default from config)
 
-  // Add system prompt
-  if (systemPrompt) {
-    args.push('--system-prompt', systemPrompt);
-  }
+  // Add debug/verbose flag if needed
+  // Codex doesn't have a verbose flag, so we skip this
 
-  // Add MCP config
-  if (mcpConfigPath) {
-    args.push('--mcp-config', mcpConfigPath);
-  }
-
-  // Add allowed tools filter if specified
-  // If no filter specified, allow all probe tools
-  if (allowedTools && Array.isArray(allowedTools) && allowedTools.length > 0) {
-    // Convert tool names to MCP format: mcp__probe__<toolname>
-    const mcpTools = allowedTools.map(tool =>
-      tool.startsWith('mcp__') ? tool : `mcp__probe__${tool}`
-    ).join(',');
-    args.push('--allowedTools', mcpTools);
-  } else {
-    // Default: allow all probe tools
-    args.push('--allowedTools', 'mcp__probe__*');
-  }
-
-  // Add debug flag
-  if (debug) {
-    args.push('--verbose');
-  }
+  // Note: Codex doesn't have --system-prompt, --mcp-config, or --allowedTools flags
+  // System prompt is prepended to the user prompt instead
+  // MCP tools are registered globally via 'codex mcp add'
+  // Tool filtering would need to be handled differently
 
   return args;
-}
-
-/**
- * Execute Probe tool through agent
- */
-async function executeProbleTool(agent, toolName, params) {
-  if (!agent || !agent.toolImplementations) {
-    return 'Tool execution not available';
-  }
-
-  // Remove MCP prefix: mcp__probe__<toolname> -> <toolname>
-  const name = toolName.replace(/^mcp__probe__/, '');
-  const tool = agent.toolImplementations[name];
-
-  if (!tool) {
-    return `Unknown tool: ${name}`;
-  }
-
-  try {
-    const result = await tool.execute(params);
-    return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-  } catch (error) {
-    return `Tool error: ${error.message}`;
-  }
 }
 
 /**
  * Combine prompts intelligently
  */
 function combinePrompts(systemPrompt, customPrompt, agent) {
-  // For Codex CLI, the systemPrompt already contains all necessary instructions
-  // from getCodexNativeSystemPrompt(), so we don't need to add a base prompt
+  // For Codex, system instructions are prepended to the user message
+  // since there's no separate --system-prompt flag
 
   // If only customPrompt is provided (no systemPrompt), use it as the main prompt
   if (!systemPrompt && customPrompt) {
