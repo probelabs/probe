@@ -45,7 +45,8 @@ async function demonstrateEngine(engineType, persona, question) {
   try {
     // Configure ProbeAgent with engine and persona
     const agent = new ProbeAgent({
-      engine: engineType,
+      provider: engineType === "claude-code" ? "claude-code" : undefined,
+      engineType: engineType !== "claude-code" ? engineType : undefined,
       customPrompt: persona,
       maxIterations: 3,
       debug: false
@@ -127,10 +128,10 @@ async function main() {
   console.log(chalk.blue('\n\n3️⃣ CLAUDE SDK ENGINE WITH DOCUMENTATION PERSONA'));
   console.log(chalk.gray('─'.repeat(60)));
 
-  // Test Claude SDK with custom persona
-  process.env.USE_CLAUDE_SDK = 'true';
+  // Test Claude Code with custom persona
+  process.env.USE_CLAUDE_CODE = 'true';
   await demonstrateEngine(
-    'claude-sdk',
+    'claude-code',
     docWriterPersona,
     'Document the public API methods of ProbeAgent'
   );
@@ -140,19 +141,19 @@ async function main() {
 
   // Summary
   console.log(chalk.cyan('Key Features Demonstrated:'));
-  console.log(chalk.gray('  • Multiple AI engine support (Vercel, Claude SDK)'));
+  console.log(chalk.gray('  • Multiple AI engine support (Vercel, Claude Code)'));
   console.log(chalk.gray('  • Custom system prompts and personas'));
   console.log(chalk.gray('  • Seamless tool integration across engines'));
   console.log(chalk.gray('  • Backward compatible with existing code'));
   console.log(chalk.gray('  • No direct dependencies (peer deps only)'));
 
   console.log(chalk.cyan('\nUsage Examples:'));
-  console.log(chalk.gray('  # Use Claude SDK engine'));
-  console.log(chalk.gray('  USE_CLAUDE_SDK=true node probe-agent-cli.js "your question"'));
+  console.log(chalk.gray('  # Use Claude Code engine'));
+  console.log(chalk.gray('  USE_CLAUDE_CODE=true node probe-agent-cli.js "your question"'));
   console.log(chalk.gray('\n  # Use specific engine'));
-  console.log(chalk.gray('  node probe-agent-cli.js --engine claude-sdk "your question"'));
+  console.log(chalk.gray('  node probe-agent-cli.js --engine claude-code "your question"'));
   console.log(chalk.gray('\n  # In code'));
-  console.log(chalk.gray('  const agent = new ProbeAgent({ engine: "claude-sdk", customPrompt: persona })'));
+  console.log(chalk.gray('  const agent = new ProbeAgent({ provider: "claude-code", customPrompt: persona })'));
 }
 
 // Handle errors gracefully
