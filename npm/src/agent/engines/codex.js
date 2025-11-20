@@ -1,6 +1,6 @@
 /**
  * OpenAI Codex Engine with session management and better streaming
- * Uses the actual Codex CLI command structure
+ * Uses the actual Codex CLI command structure with --config for MCP
  */
 
 import { spawn } from 'child_process';
@@ -10,7 +10,6 @@ import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
-import { execSync } from 'child_process';
 
 /**
  * Session manager for Codex conversations
@@ -52,6 +51,7 @@ export async function createCodexEngine(options = {}) {
 
   // Start built-in MCP server with ephemeral port
   let mcpServer = null;
+  let mcpWrapperPath = null;
   let mcpServerName = null;
 
   if (agent) {
@@ -68,51 +68,57 @@ export async function createCodexEngine(options = {}) {
       console.log('[DEBUG] MCP URL:', `http://${host}:${port}/mcp`);
     }
 
-    // Register MCP server with Codex CLI using 'codex mcp add'
-    mcpServerName = `probe-${session.id}`;
-    try {
-      // Create a simple Node.js wrapper script that acts as MCP stdio server
-      const mcpWrapperPath = path.join(os.tmpdir(), `probe-mcp-wrapper-${session.id}.js`);
-      const mcpWrapper = `#!/usr/bin/env node
+    // Create MCP stdio wrapper that connects to HTTP server
+    mcpServerName = `probe_${session.id}`;
+    mcpWrapperPath = path.join(os.tmpdir(), `probe-mcp-wrapper-${session.id}.js`);
+
+    // Create stdio wrapper for MCP server
+    const mcpWrapper = `#!/usr/bin/env node
 // MCP stdio wrapper for Probe
 const http = require('http');
 
 const MCP_URL = 'http://${host}:${port}/mcp';
 
-process.stdin.on('data', async (data) => {
-  try {
-    const request = JSON.parse(data.toString());
-    const response = await fetch(MCP_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(request)
-    });
-    const result = await response.json();
-    process.stdout.write(JSON.stringify(result) + '\\n');
-  } catch (error) {
-    process.stdout.write(JSON.stringify({
-      jsonrpc: '2.0',
-      id: null,
-      error: { code: -32603, message: error.message }
-    }) + '\\n');
+let buffer = '';
+
+process.stdin.on('data', async (chunk) => {
+  buffer += chunk.toString();
+
+  const lines = buffer.split('\\n');
+  buffer = lines.pop() || '';
+
+  for (const line of lines) {
+    if (!line.trim()) continue;
+
+    try {
+      const request = JSON.parse(line);
+      const response = await fetch(MCP_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      });
+      const result = await response.json();
+      process.stdout.write(JSON.stringify(result) + '\\n');
+    } catch (error) {
+      process.stdout.write(JSON.stringify({
+        jsonrpc: '2.0',
+        id: null,
+        error: { code: -32603, message: error.message }
+      }) + '\\n');
+    }
   }
+});
+
+process.stdin.on('end', () => {
+  process.exit(0);
 });
 `;
 
-      await fs.writeFile(mcpWrapperPath, mcpWrapper, { mode: 0o755 });
+    await fs.writeFile(mcpWrapperPath, mcpWrapper, { mode: 0o755 });
 
-      // Add MCP server to Codex
-      execSync(`codex mcp add ${mcpServerName} -- node ${mcpWrapperPath}`, {
-        stdio: debug ? 'inherit' : 'pipe'
-      });
-
-      if (debug) {
-        console.log(`[DEBUG] Registered MCP server: ${mcpServerName}`);
-      }
-    } catch (error) {
-      if (debug) {
-        console.error('[DEBUG] Failed to register MCP server:', error.message);
-      }
+    if (debug) {
+      console.log(`[DEBUG] Created MCP wrapper: ${mcpWrapperPath}`);
+      console.log(`[DEBUG] MCP server name: ${mcpServerName}`);
     }
   }
 
@@ -127,6 +133,8 @@ process.stdin.on('data', async (data) => {
   return {
     sessionId: session.id,
     session,
+    mcpWrapperPath,  // Store for cleanup
+    mcpServerName,
 
     /**
      * Query Codex with advanced streaming
@@ -145,16 +153,18 @@ process.stdin.on('data', async (data) => {
         finalPrompt = `${finalPrompt}\n\nPlease provide your response in the following JSON format:\n${opts.schema}`;
       }
 
-      // Build command arguments
+      // Build command arguments with MCP configuration
       const args = buildCodexArgs({
         prompt: finalPrompt,
         session,
         debug,
-        allowedTools
+        allowedTools,
+        mcpWrapperPath,
+        mcpServerName
       });
 
       if (debug) {
-        console.log('[DEBUG] Executing: codex exec', args.join(' '));
+        console.log('[DEBUG] Executing: codex exec', args.slice(0, 10).join(' '), '...');
       }
 
       // Initialize tool collector for batch emission
@@ -318,21 +328,13 @@ process.stdin.on('data', async (data) => {
      */
     async close() {
       try {
-        // Remove MCP server from Codex
-        if (mcpServerName) {
+        // Clean up wrapper script
+        if (mcpWrapperPath) {
           try {
-            execSync(`codex mcp remove ${mcpServerName}`, { stdio: 'pipe' });
-            if (debug) {
-              console.log(`[DEBUG] Removed MCP server: ${mcpServerName}`);
-            }
-          } catch (error) {
-            // Ignore errors on cleanup
-          }
-
-          // Clean up wrapper script
-          try {
-            const mcpWrapperPath = path.join(os.tmpdir(), `probe-mcp-wrapper-${session.id}.js`);
             await fs.unlink(mcpWrapperPath).catch(() => {});
+            if (debug) {
+              console.log('[DEBUG] Removed MCP wrapper script');
+            }
           } catch (error) {
             // Ignore errors
           }
@@ -410,6 +412,9 @@ function processJsonBuffer(buffer, emitter, session, debug, toolCollector = null
                   status: 'started'
                 });
               }
+              if (debug) {
+                console.log('[DEBUG] Tool call:', event.item.name);
+              }
             } else if (event.item.type === 'tool_result') {
               // Tool result
               if (toolCollector && event.item.call_id) {
@@ -422,6 +427,9 @@ function processJsonBuffer(buffer, emitter, session, debug, toolCollector = null
                       JSON.stringify(event.item.content).substring(0, 200)) + '...' :
                     'No Result';
                 }
+              }
+              if (debug) {
+                console.log('[DEBUG] Tool result for:', event.item.call_id);
               }
             }
           }
@@ -449,23 +457,28 @@ function processJsonBuffer(buffer, emitter, session, debug, toolCollector = null
 
 /**
  * Build codex exec command arguments
+ * Uses --config to dynamically add MCP server configuration
  */
-function buildCodexArgs({ prompt, session, debug, allowedTools }) {
+function buildCodexArgs({ prompt, session, debug, allowedTools, mcpWrapperPath, mcpServerName }) {
   const args = [
     '--json',  // Enable JSON output
-    '-'        // Read prompt from stdin
   ];
 
-  // Add model if specified
-  // (Not adding for now as we'll use default from config)
+  // Add MCP server configuration dynamically using --config
+  // Format: -c 'mcp_servers.<name>.command="<command>"'
+  // Format: -c 'mcp_servers.<name>.args=["arg1", "arg2"]'
+  if (mcpWrapperPath && mcpServerName) {
+    // Add MCP server configuration via --config parameter
+    args.push('-c', `mcp_servers.${mcpServerName}.command="node"`);
+    args.push('-c', `mcp_servers.${mcpServerName}.args=["${mcpWrapperPath}"]`);
 
-  // Add debug/verbose flag if needed
-  // Codex doesn't have a verbose flag, so we skip this
+    if (debug) {
+      console.log(`[DEBUG] Configured MCP server via --config: ${mcpServerName}`);
+    }
+  }
 
-  // Note: Codex doesn't have --system-prompt, --mcp-config, or --allowedTools flags
-  // System prompt is prepended to the user prompt instead
-  // MCP tools are registered globally via 'codex mcp add'
-  // Tool filtering would need to be handled differently
+  // Read prompt from stdin
+  args.push('-');
 
   return args;
 }
