@@ -4,7 +4,7 @@
  * Test that Claude Code tool events are properly extracted and emitted
  */
 
-import { ProbeAgent } from './src/agent/ProbeAgent.js';
+import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 async function testToolEvents() {
   console.log('Testing Tool Event Extraction from Claude Code\n');

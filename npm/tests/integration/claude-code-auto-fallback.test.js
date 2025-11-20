@@ -5,7 +5,7 @@
  * when no API keys are present but claude command is available
  */
 
-import { ProbeAgent } from './src/agent/ProbeAgent.js';
+import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 async function testAutoFallback() {
   console.log('🧪 Testing Auto-Fallback to Claude Code Provider\n');

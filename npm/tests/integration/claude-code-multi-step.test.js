@@ -5,7 +5,7 @@
  * Tests that we properly handle responses when Claude Code uses internal agents/tools
  */
 
-import { ProbeAgent } from './src/agent/ProbeAgent.js';
+import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 async function testMultiStepQuery() {
   console.log('Testing Multi-Step Claude Code Query (with internal tool use)\n');
