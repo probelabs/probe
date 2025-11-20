@@ -7,29 +7,7 @@ import { spawn } from 'child_process';
 import { randomBytes } from 'crypto';
 import { createInterface } from 'readline';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
-
-/**
- * Session manager for Codex conversations
- */
-class CodexSession {
-  constructor(id, debug = false) {
-    this.id = id;
-    this.conversationId = null;  // Codex session_id for resumption
-    this.messageCount = 0;
-    this.debug = debug;
-  }
-
-  setConversationId(conversationId) {
-    this.conversationId = conversationId;
-    if (this.debug) {
-      console.log(`[Session ${this.id}] Codex Conversation ID: ${conversationId}`);
-    }
-  }
-
-  incrementMessageCount() {
-    this.messageCount++;
-  }
-}
+import { Session } from '../shared/Session.js';
 
 /**
  * Codex Engine using MCP Server with event streaming
@@ -37,7 +15,7 @@ class CodexSession {
 export async function createCodexEngine(options = {}) {
   const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools, model } = options;
 
-  const session = new CodexSession(
+  const session = new Session(
     sessionId || randomBytes(8).toString('hex'),
     debug
   );
@@ -305,11 +283,7 @@ export async function createCodexEngine(options = {}) {
      * Get session info
      */
     getSession() {
-      return {
-        id: session.id,
-        conversationId: session.conversationId,
-        messageCount: session.messageCount
-      };
+      return session.getInfo();
     },
 
     /**
