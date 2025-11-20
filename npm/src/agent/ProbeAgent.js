@@ -304,12 +304,14 @@ export class ProbeAgent {
    * This method initializes MCP and merges MCP tools into the tool list, and loads history from storage
    */
   async initialize() {
-    // Check if we need to auto-detect claude-code provider
+    // Check if we need to auto-detect claude-code or codex provider
     // This happens when no API keys are set and no provider is specified
-    if (!this.provider && !this.clientApiProvider && this.apiType !== 'claude-code') {
+    if (!this.provider && !this.clientApiProvider && this.apiType !== 'claude-code' && this.apiType !== 'codex') {
       // Check if initializeModel marked as uninitialized (no API keys)
       if (this.apiType === 'uninitialized') {
         const claudeAvailable = await this.isClaudeCommandAvailable();
+        const codexAvailable = await this.isCodexCommandAvailable();
+
         if (claudeAvailable) {
           if (this.debug) {
             console.log('[DEBUG] No API keys found, but claude command detected');
@@ -320,11 +322,22 @@ export class ProbeAgent {
           this.provider = null;
           this.model = this.clientApiModel || 'claude-3-5-sonnet-20241022';
           this.apiType = 'claude-code';
+        } else if (codexAvailable) {
+          if (this.debug) {
+            console.log('[DEBUG] No API keys found, but codex command detected');
+            console.log('[DEBUG] Auto-switching to codex provider');
+          }
+          // Set provider to codex
+          this.clientApiProvider = 'codex';
+          this.provider = null;
+          this.model = this.clientApiModel || 'gpt-4o';
+          this.apiType = 'codex';
         } else {
-          // Neither API keys nor claude command available
-          throw new Error('No API key provided and claude command not found. Please either:\n' +
+          // Neither API keys nor CLI commands available
+          throw new Error('No API key provided and neither claude nor codex command found. Please either:\n' +
             '1. Set an API key: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, or AWS credentials\n' +
-            '2. Install claude command from https://docs.claude.com/en/docs/claude-code');
+            '2. Install claude command from https://docs.claude.com/en/docs/claude-code\n' +
+            '3. Install codex command from https://openai.com/codex');
         }
       }
     }
@@ -496,6 +509,21 @@ export class ProbeAgent {
   }
 
   /**
+   * Check if codex command is available on the system
+   * @returns {Promise<boolean>} True if codex command is available
+   * @private
+   */
+  async isCodexCommandAvailable() {
+    try {
+      const { execSync } = await import('child_process');
+      execSync('codex --version', { stdio: 'ignore' });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Initialize the AI model based on available API keys and forced provider setting
    */
   initializeModel() {
@@ -517,6 +545,19 @@ export class ProbeAgent {
       this.apiType = 'claude-code';
       if (this.debug) {
         console.log('[DEBUG] Claude Code engine selected - will use built-in access if available');
+      }
+      return;
+    }
+
+    // Skip API key requirement for Codex CLI (uses built-in access in Codex CLI)
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX_CLI === 'true') {
+      // Codex CLI engine will be initialized lazily in getEngine()
+      // Set minimal defaults for compatibility
+      this.provider = null;
+      this.model = modelName || 'gpt-4o';
+      this.apiType = 'codex';
+      if (this.debug) {
+        console.log('[DEBUG] Codex CLI engine selected - will use built-in access if available');
       }
       return;
     }
@@ -908,6 +949,38 @@ export class ProbeAgent {
         this.clientApiProvider = null;
       }
     }
+
+    // Try Codex CLI engine if requested
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX_CLI === 'true') {
+      try {
+        const { createCodexEngine } = await import('./engines/codex.js');
+
+        // For Codex CLI, use a cleaner system prompt without XML formatting
+        // since it has native MCP support for tools
+        const systemPrompt = this.customPrompt || this.getCodexNativeSystemPrompt();
+
+        this.engine = await createCodexEngine({
+          agent: this, // Pass reference to ProbeAgent for tool access
+          systemPrompt: systemPrompt,
+          customPrompt: this.customPrompt,
+          sessionId: this.options?.sessionId,
+          debug: this.debug,
+          allowedTools: this.allowedTools  // Pass tool filtering configuration
+        });
+        if (this.debug) {
+          console.log('[DEBUG] Using Codex CLI engine with Probe tools');
+          if (this.customPrompt) {
+            console.log('[DEBUG] Using custom prompt/persona');
+          }
+        }
+        return this.engine;
+      } catch (error) {
+        console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
+        console.warn('[WARNING] Falling back to Vercel AI SDK');
+        this.clientApiProvider = null;
+      }
+    }
+
     // Default to enhanced Vercel AI SDK (wraps existing logic)
     const { createEnhancedVercelEngine } = await import('./engines/enhanced-vercel.js');
     this.engine = createEnhancedVercelEngine(this);
@@ -1308,6 +1381,55 @@ export class ProbeAgent {
    * These engines have native MCP support and don't need XML instructions
    */
   getClaudeNativeSystemPrompt() {
+    let systemPrompt = '';
+
+    // Add persona/role if configured
+    if (this.predefinedPrompt) {
+      const personaPrompt = getPromptByType(this.predefinedPrompt);
+      if (personaPrompt?.system) {
+        systemPrompt += personaPrompt.system + '\n\n';
+      }
+    }
+
+    // Add high-level instructions about when to use tools
+    systemPrompt += `You have access to powerful code search and analysis tools through MCP:
+- search: Find code patterns using semantic search
+- extract: Extract specific code sections with context
+- query: Use AST patterns for structural code matching
+- listFiles: Browse directory contents
+- searchFiles: Find files by name patterns`;
+
+    if (this.enableBash) {
+      systemPrompt += `\n- bash: Execute bash commands for system operations`;
+    }
+
+    systemPrompt += `\n
+When exploring code:
+1. Start with search to find relevant code patterns
+2. Use extract to get detailed context when needed
+3. Prefer focused, specific searches over broad queries
+4. Combine multiple tools to build complete understanding`;
+
+    // Add workspace context
+    if (this.allowedFolders && this.allowedFolders.length > 0) {
+      systemPrompt += `\n\nWorkspace: ${this.allowedFolders.join(', ')}`;
+    }
+
+    // Add repository structure if available
+    if (this.fileList) {
+      systemPrompt += `\n\n# Repository Structure\n`;
+      systemPrompt += `You are working with a repository located at: ${this.allowedFolders[0]}\n\n`;
+      systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
+      systemPrompt += '```\n' + this.fileList + '\n```\n';
+    }
+
+    return systemPrompt;
+  }
+
+  /**
+   * Get system prompt for Codex CLI (similar to Claude but optimized for Codex)
+   */
+  getCodexNativeSystemPrompt() {
     let systemPrompt = '';
 
     // Add persona/role if configured
