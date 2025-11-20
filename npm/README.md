@@ -352,6 +352,45 @@ const agent = new ProbeAgent({
 
 **Note:** MCP tools are automatically initialized when needed (lazy initialization), so you don't need to call `agent.initialize()` when using the SDK.
 
+## Claude Code Integration
+
+ProbeAgent now supports Claude Code's `claude` command for zero-configuration usage in Claude Code environments. See the [Claude Code Integration Guide](./docs/CLAUDE_CODE_INTEGRATION.md) for full details.
+
+### Quick Start
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+// Works automatically if claude command is installed!
+const agent = new ProbeAgent({
+  allowedFolders: ['/path/to/your/code']
+});
+
+await agent.initialize();
+const response = await agent.answer('Explain how this codebase works');
+```
+
+### Auto-Fallback
+
+ProbeAgent automatically detects and uses Claude Code when:
+- No API keys are configured (no ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+- The `claude` command is available on your system
+
+Priority order:
+1. Explicit `provider: 'claude-code'`
+2. API keys (Anthropic, OpenAI, Google, AWS)
+3. Claude command (auto-detected)
+
+### Features
+
+- **Zero Configuration**: No API keys needed in Claude Code environments
+- **Black-box Operation**: Claude Code handles its own agentic loop
+- **Tool Event Extraction**: Visibility into internal tool usage
+- **Built-in MCP Server**: Provides Probe's semantic search tools
+- **Auto-fallback**: Seamlessly switches based on environment
+
+For complete documentation, examples, and troubleshooting, see [docs/CLAUDE_CODE_INTEGRATION.md](./docs/CLAUDE_CODE_INTEGRATION.md).
+
 ## API Reference
 
 ### Search

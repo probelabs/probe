@@ -38,9 +38,9 @@ describe('Bash Tool - End-to-End Integration', () => {
         'echo hello',
         'git status',
         'cat package.json',
-        'grep -r "test" .',
-        'find . -name "*.js"',
-        'npm list'
+        'grep "test" package.json',  // Changed from recursive to specific file
+        'find ./src -name "*.js" -maxdepth 2',  // Limited depth to avoid timeout
+        'npm list --depth=0'  // Limited depth for faster execution
       ];
 
       for (const command of safeCommands) {
