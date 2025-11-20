@@ -352,6 +352,75 @@ const agent = new ProbeAgent({
 
 **Note:** MCP tools are automatically initialized when needed (lazy initialization), so you don't need to call `agent.initialize()` when using the SDK.
 
+## AI Engine Support (Experimental)
+
+ProbeAgent now supports multiple AI engines for flexibility. By default, it uses the Vercel AI SDK for broad compatibility with multiple providers.
+
+### Available Engines
+
+1. **Vercel AI SDK** (default)
+   - Supports: Anthropic, OpenAI, Google, AWS Bedrock
+   - Zero configuration required
+   - Full backward compatibility
+
+2. **Claude Agent SDK** (optional)
+   - Native Claude capabilities with built-in MCP support
+   - Larger context window (200k tokens)
+   - Optimized for Claude models
+
+### Using Different Engines
+
+#### Default (Vercel AI SDK)
+```javascript
+// No changes needed - works exactly as before
+const agent = new ProbeAgent({
+  apiKey: process.env.ANTHROPIC_API_KEY
+});
+```
+
+#### Claude Agent SDK
+```bash
+# First, install the optional dependency
+npm install @anthropic-ai/claude-agent-sdk
+```
+
+Then use it in your code:
+
+```javascript
+// Option 1: Explicit engine selection
+const agent = new ProbeAgent({
+  engine: 'claude-sdk',
+  apiKey: process.env.ANTHROPIC_API_KEY
+});
+
+// Option 2: Environment variable
+process.env.USE_CLAUDE_SDK = 'true';
+const agent = new ProbeAgent({
+  apiKey: process.env.ANTHROPIC_API_KEY
+});
+```
+
+### Engine Comparison
+
+| Feature | Vercel AI SDK | Claude Agent SDK |
+|---------|---------------|------------------|
+| Providers | Multiple (4+) | Claude only |
+| MCP Support | Via adapters | Native |
+| Context Window | 128k | 200k |
+| Setup Required | None | Install package |
+| Streaming | ✅ | ✅ |
+| Tools | ✅ | ✅ |
+| Multi-modal | ✅ | ✅ |
+
+### Why Use Claude Agent SDK?
+
+- **Native MCP Support**: Direct integration with Model Context Protocol servers
+- **Larger Context**: 200k token context window vs 128k
+- **Claude Optimizations**: Tailored for Claude's capabilities
+- **Future Features**: Access to Claude-specific features as they're released
+
+The engine system is designed to be minimal and non-breaking. If Claude SDK is not installed or fails to load, ProbeAgent automatically falls back to the Vercel AI SDK.
+
 ## API Reference
 
 ### Search

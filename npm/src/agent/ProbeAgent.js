@@ -221,6 +221,10 @@ export class ProbeAgent {
     this.fallbackConfig = options.fallback || null;
     this.fallbackManager = null; // Will be initialized in initializeModel
 
+    // Engine support - minimal interface for multi-engine compatibility
+    this.engine = null; // Will be set in initializeModel or getEngine
+    this.engineType = options.engineType || options.engine || process.env.AI_ENGINE || 'vercel'; // default to vercel for backward compat
+
     // Initialize the AI model
     this.initializeModel();
 
@@ -301,6 +305,31 @@ export class ProbeAgent {
    * This method initializes MCP and merges MCP tools into the tool list, and loads history from storage
    */
   async initialize() {
+    // Check if we need to auto-detect claude-code provider
+    // This happens when no API keys are set and no provider is specified
+    if (!this.provider && !this.clientApiProvider && this.apiType !== 'claude-code') {
+      // Check if initializeModel marked as uninitialized (no API keys)
+      if (this.apiType === 'uninitialized') {
+        const claudeAvailable = await this.isClaudeCommandAvailable();
+        if (claudeAvailable) {
+          if (this.debug) {
+            console.log('[DEBUG] No API keys found, but claude command detected');
+            console.log('[DEBUG] Auto-switching to claude-code provider');
+          }
+          // Set provider to claude-code
+          this.clientApiProvider = 'claude-code';
+          this.provider = null;
+          this.model = this.clientApiModel || 'claude-3-5-sonnet-20241022';
+          this.apiType = 'claude-code';
+        } else {
+          // Neither API keys nor claude command available
+          throw new Error('No API key provided and claude command not found. Please either:\n' +
+            '1. Set an API key: ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY, or AWS credentials\n' +
+            '2. Install claude command from https://docs.claude.com/en/docs/claude-code');
+        }
+      }
+    }
+
     // Load history from storage adapter
     try {
       const history = await this.storageAdapter.loadHistory(this.sessionId);
@@ -453,6 +482,21 @@ export class ProbeAgent {
   }
 
   /**
+   * Check if claude command is available on the system
+   * @returns {Promise<boolean>} True if claude command is available
+   * @private
+   */
+  async isClaudeCommandAvailable() {
+    try {
+      const { execSync } = await import('child_process');
+      execSync('claude --version', { stdio: 'ignore' });
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Initialize the AI model based on available API keys and forced provider setting
    */
   initializeModel() {
@@ -462,6 +506,20 @@ export class ProbeAgent {
     // Check if we're in test mode and should use mock provider
     if (process.env.NODE_ENV === 'test' || process.env.USE_MOCK_AI === 'true') {
       this.initializeMockModel(modelName);
+      return;
+    }
+
+    // Skip API key requirement for Claude Code (uses built-in access in Claude Code)
+    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true' ||
+        this.engineType === 'claude-sdk' || process.env.USE_CLAUDE_SDK === 'true') {
+      // Claude Code engine will be initialized lazily in getEngine()
+      // Set minimal defaults for compatibility
+      this.provider = null;
+      this.model = modelName || 'claude-3-5-sonnet-20241022';
+      this.apiType = 'claude-code';
+      if (this.debug) {
+        console.log('[DEBUG] Claude Code engine selected - will use built-in access if available');
+      }
       return;
     }
 
@@ -534,7 +592,12 @@ export class ProbeAgent {
       this.initializeBedrockModel(awsAccessKeyId, awsSecretAccessKey, awsRegion, awsSessionToken, awsApiKey, awsBedrockBaseUrl, modelName);
       this.initializeFallbackManager('bedrock', modelName);
     } else {
-      throw new Error('No API key provided. Please set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN), OPENAI_API_KEY, GOOGLE_GENERATIVE_AI_API_KEY (or GOOGLE_API_KEY), AWS credentials (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION), or AWS_BEDROCK_API_KEY environment variables.');
+      // No API keys found - mark for potential claude-code auto-detection in initialize()
+      this.apiType = 'uninitialized';
+      if (this.debug) {
+        console.log('[DEBUG] No API keys found - will check for claude command in initialize()');
+      }
+      // Don't throw error yet - will be checked in initialize() method
     }
   }
 
@@ -609,6 +672,61 @@ export class ProbeAgent {
    * @private
    */
   async streamTextWithRetryAndFallback(options) {
+    // Check if we should use Claude Code engine
+    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true' ||
+        this.engineType === 'claude-sdk' || process.env.USE_CLAUDE_SDK === 'true') {
+      try {
+        const engine = await this.getEngine();
+        if (engine && engine.query) {
+          // Convert Vercel AI SDK format to engine format
+          // Extract the ORIGINAL user message as the main prompt (skip any warning messages)
+          // Look for user messages that are NOT the warning message
+          const userMessages = options.messages.filter(m =>
+            m.role === 'user' &&
+            !m.content.includes('WARNING: You have reached the maximum tool iterations limit')
+          );
+          const lastUserMessage = userMessages[userMessages.length - 1];
+          const prompt = lastUserMessage ? lastUserMessage.content : '';
+
+          // Pass system message and other options
+          const engineOptions = {
+            maxTokens: options.maxTokens,
+            temperature: options.temperature,
+            messages: options.messages,
+            systemPrompt: options.messages.find(m => m.role === 'system')?.content
+          };
+
+          // Get the engine's query result (async generator)
+          const engineStream = engine.query(prompt, engineOptions);
+
+          // Create a text stream that extracts text from engine messages
+          async function* createTextStream() {
+            for await (const message of engineStream) {
+              if (message.type === 'text' && message.content) {
+                yield message.content;
+              } else if (typeof message === 'string') {
+                // If engine returns plain strings, pass them through
+                yield message;
+              }
+              // Ignore other message types for the text stream
+            }
+          }
+
+          // Wrap the engine result to match streamText interface
+          return {
+            textStream: createTextStream(),
+            usage: Promise.resolve({}), // Engine should handle its own usage tracking
+            // Add other streamText-compatible properties as needed
+          };
+        }
+      } catch (error) {
+        if (this.debug) {
+          console.log(`[DEBUG] Failed to use ${this.engineType} engine, falling back to Vercel:`, error.message);
+        }
+        // Fall through to use Vercel engine as fallback
+      }
+    }
+
     // Initialize retry manager if not already created
     if (!this.retryManager) {
       this.retryManager = new RetryManager({
@@ -750,6 +868,92 @@ export class ProbeAgent {
       const baseUrlInfo = baseURL ? ` (Base URL: ${baseURL})` : '';
       console.log(`Using AWS Bedrock API with model: ${this.model}${regionInfo} [Auth: ${authMethod}]${baseUrlInfo}`);
     }
+  }
+
+  /**
+   * Get or create the AI engine based on configuration
+   * @returns {Promise<Object>} Engine interface
+   * @private
+   */
+  async getEngine() {
+    // If engine already created, return it
+    if (this.engine) {
+      return this.engine;
+    }
+
+    // Try Claude Code engine if requested
+    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
+      try {
+        const { createEnhancedClaudeCLIEngine } = await import('./engines/enhanced-claude-code.js');
+
+        // For Claude Code, use a cleaner system prompt without XML formatting
+        // since it has native MCP support for tools
+        const systemPrompt = this.customPrompt || this.getClaudeNativeSystemPrompt();
+
+        this.engine = await createEnhancedClaudeCLIEngine({
+          agent: this, // Pass reference to ProbeAgent for tool access
+          systemPrompt: systemPrompt,
+          customPrompt: this.customPrompt,
+          sessionId: this.options?.sessionId,
+          debug: this.debug,
+          allowedTools: this.allowedTools  // Pass tool filtering configuration
+        });
+        if (this.debug) {
+          console.log('[DEBUG] Using Claude Code engine with Probe tools');
+          if (this.customPrompt) {
+            console.log('[DEBUG] Using custom prompt/persona');
+          }
+        }
+        return this.engine;
+      } catch (error) {
+        console.warn('[WARNING] Failed to load Claude Code engine:', error.message);
+        console.warn('[WARNING] Falling back to Vercel AI SDK');
+        this.clientApiProvider = null;
+      }
+    }
+
+    // Try Claude SDK if requested
+    if (this.engineType === 'claude-sdk' || process.env.USE_CLAUDE_SDK === 'true') {
+      try {
+        const { createEnhancedClaudeSDKEngine } = await import('./engines/enhanced-claude-sdk.js');
+
+        // Get the full system message with persona/custom prompt support
+        // If customPrompt is set, use it directly (supports personas)
+        // Otherwise generate the full system message with tools
+        const systemPrompt = this.customPrompt || await this.getSystemMessage();
+
+        this.engine = await createEnhancedClaudeSDKEngine({
+          agent: this, // Pass reference to ProbeAgent for tool access
+          apiKey: this.clientApiKey || process.env.ANTHROPIC_API_KEY,
+          model: this.model,
+          systemPrompt: systemPrompt,
+          customSettings: {
+            maxResponseTokens: this.maxResponseTokens,
+            temperature: this.temperature
+          },
+          debug: this.debug
+        });
+        if (this.debug) {
+          console.log('[DEBUG] Using Claude Agent SDK engine with Probe tools');
+          if (this.customPrompt) {
+            console.log('[DEBUG] Using custom prompt/persona');
+          }
+        }
+        return this.engine;
+      } catch (error) {
+        console.warn('[WARNING] Failed to load Claude SDK engine:', error.message);
+        console.warn('[WARNING] Falling back to Vercel AI SDK');
+        this.engineType = 'vercel';
+      }
+    }
+
+    // Default to enhanced Vercel AI SDK (wraps existing logic)
+    const { createEnhancedVercelEngine } = await import('./engines/enhanced-vercel.js');
+    this.engine = createEnhancedVercelEngine(this);
+    if (this.debug) {
+      console.log('[DEBUG] Using Vercel AI SDK engine');
+    }
+    return this.engine;
   }
 
   /**
@@ -1136,6 +1340,56 @@ export class ProbeAgent {
       }
       this.mcpBridge = null;
     }
+  }
+
+  /**
+   * Get system prompt for Claude native engines (CLI/SDK) without XML formatting
+   * These engines have native MCP support and don't need XML instructions
+   */
+  getClaudeNativeSystemPrompt() {
+    let systemPrompt = '';
+
+    // Add persona/role if configured
+    if (this.predefinedPrompt) {
+      const personaPrompt = getPromptByType(this.predefinedPrompt);
+      if (personaPrompt?.system) {
+        systemPrompt += personaPrompt.system + '\n\n';
+      }
+    }
+
+    // Add high-level instructions about when to use tools
+    systemPrompt += `You have access to powerful code search and analysis tools through MCP:
+- search: Find code patterns using semantic search
+- extract: Extract specific code sections with context
+- query: Use AST patterns for structural code matching
+- listFiles: Browse directory contents
+- searchFiles: Find files by name patterns`;
+
+    if (this.enableBash) {
+      systemPrompt += `\n- bash: Execute bash commands for system operations`;
+    }
+
+    systemPrompt += `\n
+When exploring code:
+1. Start with search to find relevant code patterns
+2. Use extract to get detailed context when needed
+3. Prefer focused, specific searches over broad queries
+4. Combine multiple tools to build complete understanding`;
+
+    // Add workspace context
+    if (this.allowedFolders && this.allowedFolders.length > 0) {
+      systemPrompt += `\n\nWorkspace: ${this.allowedFolders.join(', ')}`;
+    }
+
+    // Add repository structure if available
+    if (this.fileList) {
+      systemPrompt += `\n\n# Repository Structure\n`;
+      systemPrompt += `You are working with a repository located at: ${this.allowedFolders[0]}\n\n`;
+      systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
+      systemPrompt += '```\n' + this.fileList + '\n```\n';
+    }
+
+    return systemPrompt;
   }
 
   /**
@@ -1532,6 +1786,79 @@ When troubleshooting:
       const baseMaxIterations = this.maxIterations || MAX_TOOL_ITERATIONS;
       const maxIterations = options.schema ? baseMaxIterations + 4 : baseMaxIterations;
 
+      // Check if we're using Claude Code engine which handles its own agentic loop
+      const isClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
+
+      if (isClaudeCode) {
+        // For Claude Code, bypass the tool loop entirely - it handles its own internal dialogue
+        if (this.debug) {
+          console.log(`[DEBUG] Using Claude Code engine - bypassing tool loop (black box mode)`);
+          console.log(`[DEBUG] Sending question directly to Claude Code: ${message.substring(0, 100)}...`);
+        }
+
+        // Send the message directly to Claude Code and collect the response
+        try {
+          const engine = await this.getEngine();
+          if (engine && engine.query) {
+            let assistantResponseContent = '';
+            let toolBatch = null;
+
+            // Query Claude Code directly with the message and schema
+            for await (const chunk of engine.query(message, options)) {
+              if (chunk.type === 'text' && chunk.content) {
+                assistantResponseContent += chunk.content;
+                if (options.onStream) {
+                  options.onStream(chunk.content);
+                }
+              } else if (chunk.type === 'toolBatch' && chunk.tools) {
+                // Store tool batch for processing after response
+                toolBatch = chunk.tools;
+                if (this.debug) {
+                  console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Claude Code`);
+                }
+              } else if (chunk.type === 'error') {
+                throw chunk.error;
+              }
+            }
+
+            // Emit tool events after response is complete (batch mode)
+            if (toolBatch && toolBatch.length > 0 && this.events) {
+              if (this.debug) {
+                console.log(`[DEBUG] Emitting ${toolBatch.length} tool events from Claude Code batch`);
+              }
+              for (const toolEvent of toolBatch) {
+                this.events.emit('toolCall', toolEvent);
+              }
+            }
+
+            // Update history with the exchange
+            this.history.push(userMessage);
+            this.history.push({
+              role: 'assistant',
+              content: assistantResponseContent
+            });
+
+            // Store conversation history
+            // TODO: storeConversationHistory is not yet implemented for Claude Code
+            // await this.storeConversationHistory(this.history, oldHistoryLength);
+
+            // Emit completion hook
+            await this.hooks.emit(HOOK_TYPES.COMPLETION, {
+              sessionId: this.sessionId,
+              prompt: message,
+              response: assistantResponseContent
+            });
+
+            return assistantResponseContent;
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.error('[DEBUG] Claude Code error:', error);
+          }
+          throw error;
+        }
+      }
+
       if (this.debug) {
         console.log(`[DEBUG] Starting agentic flow for question: ${message.substring(0, 100)}...`);
         if (options.schema) {
@@ -1539,7 +1866,7 @@ When troubleshooting:
         }
       }
 
-      // Tool iteration loop
+      // Tool iteration loop (only for non-Claude Code engines)
       while (currentIteration < maxIterations && !completionAttempted) {
         currentIteration++;
         if (this.cancelled) throw new Error('Request was cancelled by the user');
@@ -1612,7 +1939,7 @@ When troubleshooting:
               const messagesForAI = this.prepareMessagesWithImages(currentMessages);
 
               const result = await this.streamTextWithRetryAndFallback({
-                model: this.provider(this.model),
+                model: this.provider ? this.provider(this.model) : this.model,
                 messages: messagesForAI,
                 maxTokens: maxResponseTokens,
                 temperature: 0.3,
