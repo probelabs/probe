@@ -501,8 +501,10 @@ export class ProbeAgent {
    */
   async isClaudeCommandAvailable() {
     try {
-      const { execSync } = await import('child_process');
-      execSync('claude --version', { stdio: 'ignore' });
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+      await execAsync('claude --version', { timeout: 5000 });
       return true;
     } catch (error) {
       return false;
@@ -516,8 +518,10 @@ export class ProbeAgent {
    */
   async isCodexCommandAvailable() {
     try {
-      const { execSync } = await import('child_process');
-      execSync('codex --version', { stdio: 'ignore' });
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execAsync = promisify(exec);
+      await execAsync('codex --version', { timeout: 5000 });
       return true;
     } catch (error) {
       return false;
