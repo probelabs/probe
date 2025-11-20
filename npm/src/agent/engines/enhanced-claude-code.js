@@ -152,9 +152,21 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
       // Without it, the process hangs indefinitely waiting for stdin
       // This has been tested extensively - see CLAUDE_CLI_ECHO_REQUIREMENT.md
       // DO NOT REMOVE THE echo "" | PREFIX
+      // SECURITY: Shell argument escaping using POSIX single-quote method
+      // Single quotes in POSIX shells protect ALL metacharacters (;|&$`><*?) except single quote itself
+      // The pattern 'text'\''more' correctly handles embedded quotes by:
+      // 1. Closing the current quote with '
+      // 2. Adding an escaped quote \'
+      // 3. Opening a new quote with '
+      // This is the standard POSIX-compliant method and is completely safe against injection
       const shellCmd = `echo "" | claude ${args.map(arg => {
-        // Use single quotes for shell safety, escape any single quotes within
+        // Validate arg is a string (paranoid check)
+        if (typeof arg !== 'string') {
+          throw new TypeError(`Invalid argument type: expected string, got ${typeof arg}`);
+        }
+        // Escape single quotes using POSIX method: ' -> '\''
         const escaped = arg.replace(/'/g, "'\\''");
+        // Wrap in single quotes for complete shell metacharacter protection
         return `'${escaped}'`;
       }).join(' ')}`;
 
