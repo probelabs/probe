@@ -286,23 +286,23 @@ const response = await agent.answer(
 
 Located in `tests/integration/`:
 
-1. **claude-code-auto-fallback.test.js** - Tests automatic provider detection
-2. **claude-code-tool-events.test.js** - Tests tool event extraction
-3. **claude-code-multi-step.test.js** - Tests complex multi-step queries
+1. **claude-code-auto-fallback.spec.js** - Tests automatic provider detection
+2. **claude-code-tool-events.spec.js** - Tests tool event extraction
+3. **claude-code-multi-step.spec.js** - Tests complex multi-step queries
 
-Run tests:
-```bash
-npm test -- tests/integration/claude-code
-```
+These are standalone integration tests designed to work with the actual `claude` command.
 
 ### Manual Testing
 
 ```bash
 # Test auto-fallback
-node tests/integration/claude-code-auto-fallback.test.js
+node tests/integration/claude-code-auto-fallback.spec.js
 
 # Test tool events
-node tests/integration/claude-code-tool-events.test.js
+node tests/integration/claude-code-tool-events.spec.js
+
+# Test multi-step
+node tests/integration/claude-code-multi-step.spec.js
 ```
 
 ## Troubleshooting
