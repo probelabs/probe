@@ -550,14 +550,20 @@ export class ProbeAgent {
     }
 
     // Skip API key requirement for Codex CLI (uses built-in access in Codex CLI)
-    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX_CLI === 'true') {
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
       // Codex CLI engine will be initialized lazily in getEngine()
       // Set minimal defaults for compatibility
       this.provider = null;
-      this.model = modelName || 'gpt-4o';
+      // Only set model if explicitly provided, otherwise let Codex use account default
+      this.model = modelName || null;
       this.apiType = 'codex';
       if (this.debug) {
         console.log('[DEBUG] Codex CLI engine selected - will use built-in access if available');
+        if (this.model) {
+          console.log(`[DEBUG] Using model: ${this.model}`);
+        } else {
+          console.log('[DEBUG] Using Codex account default model');
+        }
       }
       return;
     }
@@ -765,6 +771,60 @@ export class ProbeAgent {
       }
     }
 
+    // Check if we should use Codex engine
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
+      try {
+        const engine = await this.getEngine();
+        if (engine && engine.query) {
+          // Convert Vercel AI SDK format to engine format
+          // Extract the ORIGINAL user message as the main prompt (skip any warning messages)
+          // Look for user messages that are NOT the warning message
+          const userMessages = options.messages.filter(m =>
+            m.role === 'user' &&
+            !m.content.includes('WARNING: You have reached the maximum tool iterations limit')
+          );
+          const lastUserMessage = userMessages[userMessages.length - 1];
+          const prompt = lastUserMessage ? lastUserMessage.content : '';
+
+          // Pass system message and other options
+          const engineOptions = {
+            maxTokens: options.maxTokens,
+            temperature: options.temperature,
+            messages: options.messages,
+            systemPrompt: options.messages.find(m => m.role === 'system')?.content
+          };
+
+          // Get the engine's query result (async generator)
+          const engineStream = engine.query(prompt, engineOptions);
+
+          // Create a text stream that extracts text from engine messages
+          async function* createTextStream() {
+            for await (const message of engineStream) {
+              if (message.type === 'text' && message.content) {
+                yield message.content;
+              } else if (typeof message === 'string') {
+                // If engine returns plain strings, pass them through
+                yield message;
+              }
+              // Ignore other message types for the text stream
+            }
+          }
+
+          // Wrap the engine result to match streamText interface
+          return {
+            textStream: createTextStream(),
+            usage: Promise.resolve({}), // Engine should handle its own usage tracking
+            // Add other streamText-compatible properties as needed
+          };
+        }
+      } catch (error) {
+        if (this.debug) {
+          console.log(`[DEBUG] Failed to use Codex engine, falling back to Vercel:`, error.message);
+        }
+        // Fall through to use Vercel engine as fallback
+      }
+    }
+
     // Initialize retry manager if not already created
     if (!this.retryManager) {
       this.retryManager = new RetryManager({
@@ -951,7 +1011,7 @@ export class ProbeAgent {
     }
 
     // Try Codex CLI engine if requested
-    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX_CLI === 'true') {
+    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
       try {
         const { createCodexEngine } = await import('./engines/codex.js');
 
@@ -965,7 +1025,8 @@ export class ProbeAgent {
           customPrompt: this.customPrompt,
           sessionId: this.options?.sessionId,
           debug: this.debug,
-          allowedTools: this.allowedTools  // Pass tool filtering configuration
+          allowedTools: this.allowedTools,  // Pass tool filtering configuration
+          model: this.model  // Pass model name (e.g., gpt-4o, o3, etc.)
         });
         if (this.debug) {
           console.log('[DEBUG] Using Codex CLI engine with Probe tools');
@@ -988,6 +1049,35 @@ export class ProbeAgent {
       console.log('[DEBUG] Using Vercel AI SDK engine');
     }
     return this.engine;
+  }
+
+  /**
+   * Get session information including thread ID for resumability
+   * @returns {Object} Session info with sessionId, threadId, messageCount
+   */
+  getSessionInfo() {
+    if (this.engine && this.engine.getSession) {
+      return this.engine.getSession();
+    }
+    return {
+      id: this.sessionId,
+      threadId: null,
+      messageCount: 0
+    };
+  }
+
+  /**
+   * Close the agent and clean up resources (e.g., MCP servers)
+   * @returns {Promise<void>}
+   */
+  async close() {
+    if (this.engine && this.engine.close) {
+      await this.engine.close();
+    }
+    if (this.mcpBridge) {
+      // Clean up MCP bridge if needed
+      this.mcpBridge = null;
+    }
   }
 
   /**
@@ -1381,14 +1471,73 @@ export class ProbeAgent {
    * These engines have native MCP support and don't need XML instructions
    */
   getClaudeNativeSystemPrompt() {
+    // Define predefined prompts (same as in getSystemMessage)
+    const predefinedPrompts = {
+      'code-explorer': `You are ProbeChat Code Explorer, a specialized AI assistant focused on helping developers, product managers, and QAs understand and navigate codebases. Your primary function is to answer questions based on code, explain how systems work, and provide insights into code functionality using the provided code analysis tools.
+
+When exploring code:
+- Provide clear, concise explanations based on user request
+- Find and highlight the most relevant code snippets, if required
+- Trace function calls and data flow through the system
+- Try to understand the user's intent and provide relevant information
+- Understand high level picture
+- Balance detail with clarity in your explanations`,
+
+      'architect': `You are ProbeChat Architect, a specialized AI assistant focused on software architecture and design. Your primary function is to help users understand, analyze, and design software systems using the provided code analysis tools.
+
+When analyzing code:
+- Focus on high-level design patterns and system organization
+- Identify architectural patterns and component relationships
+- Evaluate system structure and suggest architectural improvements
+- Consider scalability, maintainability, and extensibility in your analysis`,
+
+      'code-review': `You are ProbeChat Code Reviewer, a specialized AI assistant focused on code quality and best practices. Your primary function is to help users identify issues, suggest improvements, and ensure code follows best practices using the provided code analysis tools.
+
+When reviewing code:
+- Look for bugs, edge cases, and potential issues
+- Identify performance bottlenecks and optimization opportunities
+- Check for security vulnerabilities and best practices
+- Evaluate code style and consistency
+- Provide specific, actionable suggestions with code examples where appropriate`,
+
+      'code-review-template': `You are going to perform code review according to provided user rules. Ensure to review only code provided in diff and latest commit, if provided. However you still need to fully understand how modified code works, and read dependencies if something is not clear.`,
+
+      'engineer': `You are senior engineer focused on software architecture and design.
+Before jumping on the task you first, in details analyse user request, and try to provide elegant and concise solution.
+If solution is clear, you can jump to implementation right away, if not, you can ask user a clarification question, by calling attempt_completion tool, with required details.
+
+Before jumping to implementation:
+- Focus on high-level design patterns and system organization
+- Identify architectural patterns and component relationships
+- Evaluate system structure and suggest architectural improvements
+- Focus on backward compatibility.
+- Consider scalability, maintainability, and extensibility in your analysis
+
+During the implementation:
+- Avoid implementing special cases
+- Do not forget to add the tests`,
+
+      'support': `You are ProbeChat Support, a specialized AI assistant focused on helping developers troubleshoot issues and solve problems. Your primary function is to help users diagnose errors, understand unexpected behaviors, and find solutions using the provided code analysis tools.
+
+When troubleshooting:
+- Focus on finding root causes, not just symptoms
+- Explain concepts clearly with appropriate context
+- Provide step-by-step guidance to solve problems
+- Suggest diagnostic steps to verify solutions
+- Consider edge cases and potential complications
+- Be empathetic and patient in your explanations`
+    };
+
     let systemPrompt = '';
 
     // Add persona/role if configured
-    if (this.predefinedPrompt) {
-      const personaPrompt = getPromptByType(this.predefinedPrompt);
-      if (personaPrompt?.system) {
-        systemPrompt += personaPrompt.system + '\n\n';
-      }
+    if (this.customPrompt) {
+      systemPrompt += this.customPrompt + '\n\n';
+    } else if (this.promptType && predefinedPrompts[this.promptType]) {
+      systemPrompt += predefinedPrompts[this.promptType] + '\n\n';
+    } else {
+      // Use default code-explorer prompt
+      systemPrompt += predefinedPrompts['code-explorer'] + '\n\n';
     }
 
     // Add high-level instructions about when to use tools
@@ -1430,14 +1579,73 @@ When exploring code:
    * Get system prompt for Codex CLI (similar to Claude but optimized for Codex)
    */
   getCodexNativeSystemPrompt() {
+    // Define predefined prompts (same as in getSystemMessage)
+    const predefinedPrompts = {
+      'code-explorer': `You are ProbeChat Code Explorer, a specialized AI assistant focused on helping developers, product managers, and QAs understand and navigate codebases. Your primary function is to answer questions based on code, explain how systems work, and provide insights into code functionality using the provided code analysis tools.
+
+When exploring code:
+- Provide clear, concise explanations based on user request
+- Find and highlight the most relevant code snippets, if required
+- Trace function calls and data flow through the system
+- Try to understand the user's intent and provide relevant information
+- Understand high level picture
+- Balance detail with clarity in your explanations`,
+
+      'architect': `You are ProbeChat Architect, a specialized AI assistant focused on software architecture and design. Your primary function is to help users understand, analyze, and design software systems using the provided code analysis tools.
+
+When analyzing code:
+- Focus on high-level design patterns and system organization
+- Identify architectural patterns and component relationships
+- Evaluate system structure and suggest architectural improvements
+- Consider scalability, maintainability, and extensibility in your analysis`,
+
+      'code-review': `You are ProbeChat Code Reviewer, a specialized AI assistant focused on code quality and best practices. Your primary function is to help users identify issues, suggest improvements, and ensure code follows best practices using the provided code analysis tools.
+
+When reviewing code:
+- Look for bugs, edge cases, and potential issues
+- Identify performance bottlenecks and optimization opportunities
+- Check for security vulnerabilities and best practices
+- Evaluate code style and consistency
+- Provide specific, actionable suggestions with code examples where appropriate`,
+
+      'code-review-template': `You are going to perform code review according to provided user rules. Ensure to review only code provided in diff and latest commit, if provided. However you still need to fully understand how modified code works, and read dependencies if something is not clear.`,
+
+      'engineer': `You are senior engineer focused on software architecture and design.
+Before jumping on the task you first, in details analyse user request, and try to provide elegant and concise solution.
+If solution is clear, you can jump to implementation right away, if not, you can ask user a clarification question, by calling attempt_completion tool, with required details.
+
+Before jumping to implementation:
+- Focus on high-level design patterns and system organization
+- Identify architectural patterns and component relationships
+- Evaluate system structure and suggest architectural improvements
+- Focus on backward compatibility.
+- Consider scalability, maintainability, and extensibility in your analysis
+
+During the implementation:
+- Avoid implementing special cases
+- Do not forget to add the tests`,
+
+      'support': `You are ProbeChat Support, a specialized AI assistant focused on helping developers troubleshoot issues and solve problems. Your primary function is to help users diagnose errors, understand unexpected behaviors, and find solutions using the provided code analysis tools.
+
+When troubleshooting:
+- Focus on finding root causes, not just symptoms
+- Explain concepts clearly with appropriate context
+- Provide step-by-step guidance to solve problems
+- Suggest diagnostic steps to verify solutions
+- Consider edge cases and potential complications
+- Be empathetic and patient in your explanations`
+    };
+
     let systemPrompt = '';
 
     // Add persona/role if configured
-    if (this.predefinedPrompt) {
-      const personaPrompt = getPromptByType(this.predefinedPrompt);
-      if (personaPrompt?.system) {
-        systemPrompt += personaPrompt.system + '\n\n';
-      }
+    if (this.customPrompt) {
+      systemPrompt += this.customPrompt + '\n\n';
+    } else if (this.promptType && predefinedPrompts[this.promptType]) {
+      systemPrompt += predefinedPrompts[this.promptType] + '\n\n';
+    } else {
+      // Use default code-explorer prompt
+      systemPrompt += predefinedPrompts['code-explorer'] + '\n\n';
     }
 
     // Add high-level instructions about when to use tools
@@ -1869,8 +2077,9 @@ When troubleshooting:
       const baseMaxIterations = this.maxIterations || MAX_TOOL_ITERATIONS;
       const maxIterations = options.schema ? baseMaxIterations + 4 : baseMaxIterations;
 
-      // Check if we're using Claude Code engine which handles its own agentic loop
+      // Check if we're using CLI-based engines which handle their own agentic loop
       const isClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
+      const isCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
 
       if (isClaudeCode) {
         // For Claude Code, bypass the tool loop entirely - it handles its own internal dialogue
@@ -1942,6 +2151,77 @@ When troubleshooting:
         }
       }
 
+      // Handle Codex engine (same pattern as Claude Code)
+      if (isCodex) {
+        // For Codex, bypass the tool loop entirely - it handles its own internal dialogue
+        if (this.debug) {
+          console.log(`[DEBUG] Using Codex engine - bypassing tool loop (black box mode)`);
+          console.log(`[DEBUG] Sending question directly to Codex: ${message.substring(0, 100)}...`);
+        }
+
+        // Send the message directly to Codex and collect the response
+        try {
+          const engine = await this.getEngine();
+          if (engine && engine.query) {
+            let assistantResponseContent = '';
+            let toolBatch = null;
+
+            // Query Codex directly with the message and schema
+            for await (const chunk of engine.query(message, options)) {
+              if (chunk.type === 'text' && chunk.content) {
+                assistantResponseContent += chunk.content;
+                if (options.onStream) {
+                  options.onStream(chunk.content);
+                }
+              } else if (chunk.type === 'toolBatch' && chunk.tools) {
+                // Store tool batch for processing after response
+                toolBatch = chunk.tools;
+                if (this.debug) {
+                  console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
+                }
+              } else if (chunk.type === 'error') {
+                throw chunk.error;
+              }
+            }
+
+            // Emit tool events after response is complete (batch mode)
+            if (toolBatch && toolBatch.length > 0 && this.events) {
+              if (this.debug) {
+                console.log(`[DEBUG] Emitting ${toolBatch.length} tool events from Codex batch`);
+              }
+              for (const toolEvent of toolBatch) {
+                this.events.emit('toolCall', toolEvent);
+              }
+            }
+
+            // Update history with the exchange
+            this.history.push(userMessage);
+            this.history.push({
+              role: 'assistant',
+              content: assistantResponseContent
+            });
+
+            // Store conversation history
+            // TODO: storeConversationHistory is not yet implemented for Codex
+            // await this.storeConversationHistory(this.history, oldHistoryLength);
+
+            // Emit completion hook
+            await this.hooks.emit(HOOK_TYPES.COMPLETION, {
+              sessionId: this.sessionId,
+              prompt: message,
+              response: assistantResponseContent
+            });
+
+            return assistantResponseContent;
+          }
+        } catch (error) {
+          if (this.debug) {
+            console.error('[DEBUG] Codex error:', error);
+          }
+          throw error;
+        }
+      }
+
       if (this.debug) {
         console.log(`[DEBUG] Starting agentic flow for question: ${message.substring(0, 100)}...`);
         if (options.schema) {
@@ -1949,7 +2229,7 @@ When troubleshooting:
         }
       }
 
-      // Tool iteration loop (only for non-Claude Code engines)
+      // Tool iteration loop (only for non-CLI engines like Vercel/Anthropic/OpenAI)
       while (currentIteration < maxIterations && !completionAttempted) {
         currentIteration++;
         if (this.cancelled) throw new Error('Request was cancelled by the user');
