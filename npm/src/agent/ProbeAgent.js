@@ -90,6 +90,7 @@ export class ProbeAgent {
    * @param {Object} options - Configuration options
    * @param {string} [options.sessionId] - Optional session ID
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
+   * @param {string} [options.systemPrompt] - Alias for customPrompt; takes precedence when both are provided
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
    * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
@@ -126,7 +127,8 @@ export class ProbeAgent {
   constructor(options = {}) {
     // Basic configuration
     this.sessionId = options.sessionId || randomUUID();
-    this.customPrompt = options.customPrompt || null;
+    // Support systemPrompt alias (overrides customPrompt when both are provided)
+    this.customPrompt = options.systemPrompt || options.customPrompt || null;
     this.promptType = options.promptType || 'code-explorer';
     this.allowEdit = !!options.allowEdit;
     this.enableDelegate = !!options.enableDelegate;
