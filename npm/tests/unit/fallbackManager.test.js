@@ -347,6 +347,25 @@ describe('FallbackManager', () => {
   });
 
   describe('buildFallbackProvidersFromEnv', () => {
+    const envKeys = [
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_API_URL',
+      'OPENAI_API_KEY',
+      'OPENAI_API_URL',
+      'GOOGLE_API_KEY',
+      'AWS_ACCESS_KEY_ID',
+      'AWS_SECRET_ACCESS_KEY',
+      'AWS_REGION',
+      'AWS_BEDROCK_API_KEY'
+    ];
+
+    beforeEach(() => {
+      // Ensure tests in this block start with a predictable environment
+      for (const key of envKeys) {
+        delete process.env[key];
+      }
+    });
+
     test('should build providers from environment variables', () => {
       process.env.ANTHROPIC_API_KEY = 'ant-key';
       process.env.OPENAI_API_KEY = 'openai-key';

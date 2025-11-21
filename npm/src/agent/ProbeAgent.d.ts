@@ -11,6 +11,8 @@ export interface ProbeAgentOptions {
   sessionId?: string;
   /** Custom system prompt to replace the default system message */
   customPrompt?: string;
+  /** Alias for customPrompt. More intuitive naming for system prompts. */
+  systemPrompt?: string;
   /** Predefined prompt type (persona) */
   promptType?: 'code-explorer' | 'engineer' | 'code-review' | 'support' | 'architect';
   /** Allow the use of the 'implement' tool for code editing */
@@ -35,6 +37,10 @@ export interface ProbeAgentOptions {
   mcpConfig?: any;
   /** @deprecated Use mcpConfig instead */
   mcpServers?: any[];
+  /** List of allowed tool names. Use ['*'] for all tools (default), [] or null for no tools (raw AI mode), or specific tool names like ['search', 'query', 'extract']. Supports exclusion with '!' prefix (e.g., ['*', '!bash']). */
+  allowedTools?: string[] | null;
+  /** Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set. */
+  disableTools?: boolean;
   /** Retry configuration for handling transient API failures */
   retry?: RetryOptions;
   /** Fallback configuration for multi-provider support */
