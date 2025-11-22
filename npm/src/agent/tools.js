@@ -33,10 +33,12 @@ import { processXmlWithThinkingAndRecovery } from './xmlParsingUtils.js';
 export function createTools(configOptions) {
   const tools = {};
 
-  const isToolAllowed = (toolName) => {
-    if (!configOptions.allowedTools) return true;
-    return configOptions.allowedTools.isEnabled(toolName);
-  };
+  const isToolAllowed =
+    configOptions.isToolAllowed ||
+    ((toolName) => {
+      if (!configOptions.allowedTools) return true;
+      return configOptions.allowedTools.isEnabled(toolName);
+    });
 
   // Core tools
   if (isToolAllowed('search')) {
