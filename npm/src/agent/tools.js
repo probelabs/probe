@@ -31,21 +31,37 @@ import { processXmlWithThinkingAndRecovery } from './xmlParsingUtils.js';
 
 // Create configured tool instances
 export function createTools(configOptions) {
-  const tools = {
-    searchTool: searchTool(configOptions),
-    queryTool: queryTool(configOptions),
-    extractTool: extractTool(configOptions),
-    delegateTool: delegateTool(configOptions)
+  const tools = {};
+
+  const isToolAllowed = (toolName) => {
+    if (!configOptions.allowedTools) return true;
+    return configOptions.allowedTools.isEnabled(toolName);
   };
 
+  // Core tools
+  if (isToolAllowed('search')) {
+    tools.searchTool = searchTool(configOptions);
+  }
+  if (isToolAllowed('query')) {
+    tools.queryTool = queryTool(configOptions);
+  }
+  if (isToolAllowed('extract')) {
+    tools.extractTool = extractTool(configOptions);
+  }
+  if (configOptions.enableDelegate && isToolAllowed('delegate')) {
+    tools.delegateTool = delegateTool(configOptions);
+  }
+
   // Add bash tool if enabled
-  if (configOptions.enableBash) {
+  if (configOptions.enableBash && isToolAllowed('bash')) {
     tools.bashTool = bashTool(configOptions);
   }
 
   // Add edit and create tools if enabled
-  if (configOptions.allowEdit) {
+  if (configOptions.allowEdit && isToolAllowed('edit')) {
     tools.editTool = editTool(configOptions);
+  }
+  if (configOptions.allowEdit && isToolAllowed('create')) {
     tools.createTool = createTool(configOptions);
   }
 
@@ -199,4 +215,3 @@ export function parseXmlToolCallWithThinking(xmlString, validTools) {
   // Otherwise, use the original parseXmlToolCall function to parse the cleaned XML string
   return parseXmlToolCall(cleanedXmlString, validTools);
 }
-
