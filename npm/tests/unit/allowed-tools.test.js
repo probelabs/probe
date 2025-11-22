@@ -82,6 +82,33 @@ describe('ProbeAgent allowedTools option', () => {
   });
 
   describe('tool filtering behavior', () => {
+    test('should not initialize tools when disableTools is true', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        disableTools: true
+      });
+
+      // initializeTools runs in constructor; initialize() not required for toolImplementations
+      expect(agent.toolImplementations.search).toBeUndefined();
+      expect(agent.toolImplementations.query).toBeUndefined();
+      expect(agent.toolImplementations.extract).toBeUndefined();
+      expect(agent.toolImplementations.listFiles).toBeUndefined();
+      expect(agent.toolImplementations.readImage).toBeUndefined();
+    });
+
+    test('should only initialize allowed tools', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowedTools: ['search', 'query']
+      });
+
+      expect(agent.toolImplementations.search).toBeDefined();
+      expect(agent.toolImplementations.query).toBeDefined();
+      expect(agent.toolImplementations.extract).toBeUndefined();
+      expect(agent.toolImplementations.listFiles).toBeUndefined();
+      expect(agent.toolImplementations.readImage).toBeUndefined();
+    });
+
     test('should filter tools in initialization', async () => {
       const agent = new ProbeAgent({
         path: process.cwd(),

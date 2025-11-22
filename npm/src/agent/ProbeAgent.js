@@ -420,14 +420,20 @@ export class ProbeAgent {
    * Initialize tools with configuration
    */
   initializeTools() {
+    const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
+
     const configOptions = {
       sessionId: this.sessionId,
       debug: this.debug,
       defaultPath: this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd(),
       allowedFolders: this.allowedFolders,
       outline: this.outline,
+      allowEdit: this.allowEdit,
+      enableDelegate: this.enableDelegate,
       enableBash: this.enableBash,
-      bashConfig: this.bashConfig
+      bashConfig: this.bashConfig,
+      allowedTools: this.allowedTools,
+      isToolAllowed
     };
 
     // Create base tools
@@ -436,15 +442,33 @@ export class ProbeAgent {
     // Create wrapped tools with event emission
     const wrappedTools = createWrappedTools(baseTools);
 
-    // Store tool instances for execution
-    this.toolImplementations = {
-      search: wrappedTools.searchToolInstance,
-      query: wrappedTools.queryToolInstance,
-      extract: wrappedTools.extractToolInstance,
-      delegate: wrappedTools.delegateToolInstance,
-      listFiles: listFilesToolInstance,
-      searchFiles: searchFilesToolInstance,
-      readImage: {
+    // Store tool instances for execution (respect allowedTools + feature flags)
+    this.toolImplementations = {};
+
+    if (wrappedTools.searchToolInstance && isToolAllowed('search')) {
+      this.toolImplementations.search = wrappedTools.searchToolInstance;
+    }
+    if (wrappedTools.queryToolInstance && isToolAllowed('query')) {
+      this.toolImplementations.query = wrappedTools.queryToolInstance;
+    }
+    if (wrappedTools.extractToolInstance && isToolAllowed('extract')) {
+      this.toolImplementations.extract = wrappedTools.extractToolInstance;
+    }
+    if (this.enableDelegate && wrappedTools.delegateToolInstance && isToolAllowed('delegate')) {
+      this.toolImplementations.delegate = wrappedTools.delegateToolInstance;
+    }
+
+    // File browsing tools
+    if (isToolAllowed('listFiles')) {
+      this.toolImplementations.listFiles = listFilesToolInstance;
+    }
+    if (isToolAllowed('searchFiles')) {
+      this.toolImplementations.searchFiles = searchFilesToolInstance;
+    }
+
+    // Image loading tool
+    if (isToolAllowed('readImage')) {
+      this.toolImplementations.readImage = {
         execute: async (params) => {
           const imagePath = params.path;
           if (!imagePath) {
@@ -460,20 +484,20 @@ export class ProbeAgent {
 
           return `Image loaded successfully: ${imagePath}. The image is now available for analysis in the conversation.`;
         }
-      }
-    };
+      };
+    }
 
-    // Add bash tool if enabled
-    if (this.enableBash && wrappedTools.bashToolInstance) {
+    // Add bash tool if enabled and allowed
+    if (this.enableBash && wrappedTools.bashToolInstance && isToolAllowed('bash')) {
       this.toolImplementations.bash = wrappedTools.bashToolInstance;
     }
 
-    // Add edit and create tools if enabled
+    // Add edit and create tools if enabled and allowed
     if (this.allowEdit) {
-      if (wrappedTools.editToolInstance) {
+      if (wrappedTools.editToolInstance && isToolAllowed('edit')) {
         this.toolImplementations.edit = wrappedTools.editToolInstance;
       }
-      if (wrappedTools.createToolInstance) {
+      if (wrappedTools.createToolInstance && isToolAllowed('create')) {
         this.toolImplementations.create = wrappedTools.createToolInstance;
       }
     }
