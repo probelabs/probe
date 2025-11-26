@@ -13,11 +13,11 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { readFile, stat } from 'fs/promises';
-import { resolve, isAbsolute, dirname } from 'path';
+import { resolve, isAbsolute, dirname, basename, normalize, sep } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
 import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
-import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES } from './imageConfig.js';
+import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES, isFormatSupportedByProvider } from './imageConfig.js';
 import {
   createTools,
   searchToolDefinition,
@@ -473,6 +473,21 @@ export class ProbeAgent {
           const imagePath = params.path;
           if (!imagePath) {
             throw new Error('Image path is required');
+          }
+
+          // Validate extension before attempting to load
+          // Use basename to prevent path traversal attacks (e.g., 'malicious.jpg/../../../etc/passwd')
+          const filename = basename(imagePath);
+          const extension = filename.toLowerCase().split('.').pop();
+
+          // Always validate extension is in allowed list (defense-in-depth)
+          if (!extension || !SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
+            throw new Error(`Invalid or unsupported image extension: ${extension}. Supported formats: ${SUPPORTED_IMAGE_EXTENSIONS.join(', ')}`);
+          }
+
+          // Check provider-specific format restrictions (e.g., SVG not supported by Google Gemini)
+          if (this.apiType && !isFormatSupportedByProvider(extension, this.apiType)) {
+            throw new Error(`Image format '${extension}' is not supported by the current AI provider (${this.apiType}). Try using a different image format like PNG or JPEG.`);
           }
 
           // Load the image using the existing loadImageIfValid method
@@ -1262,20 +1277,28 @@ export class ProbeAgent {
       }
 
       // Security validation: check if path is within any allowed directory
+      // Use normalize() after resolve() to handle path traversal attempts (e.g., '/allowed/../etc/passwd')
       const allowedDirs = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders : [process.cwd()];
-      
+
       let absolutePath;
       let isPathAllowed = false;
-      
+
       // If absolute path, check if it's within any allowed directory
       if (isAbsolute(imagePath)) {
-        absolutePath = imagePath;
-        isPathAllowed = allowedDirs.some(dir => absolutePath.startsWith(resolve(dir)));
+        // Normalize to resolve any '..' sequences
+        absolutePath = normalize(resolve(imagePath));
+        isPathAllowed = allowedDirs.some(dir => {
+          const normalizedDir = normalize(resolve(dir));
+          // Ensure the path is within the allowed directory (add separator to prevent prefix attacks)
+          return absolutePath === normalizedDir || absolutePath.startsWith(normalizedDir + sep);
+        });
       } else {
         // For relative paths, try resolving against each allowed directory
         for (const dir of allowedDirs) {
-          const resolvedPath = resolve(dir, imagePath);
-          if (resolvedPath.startsWith(resolve(dir))) {
+          const normalizedDir = normalize(resolve(dir));
+          const resolvedPath = normalize(resolve(dir, imagePath));
+          // Ensure the resolved path is within the allowed directory
+          if (resolvedPath === normalizedDir || resolvedPath.startsWith(normalizedDir + sep)) {
             absolutePath = resolvedPath;
             isPathAllowed = true;
             break;
@@ -1318,6 +1341,10 @@ export class ProbeAgent {
         }
         return false;
       }
+
+      // Note: Provider-specific format validation (e.g., SVG not supported by Google Gemini)
+      // is handled by the readImage tool which provides explicit error messages.
+      // loadImageIfValid is a lower-level method that only checks general format support.
 
       // Determine MIME type (from shared config)
       const mimeType = IMAGE_MIME_TYPES[extension];
@@ -2597,10 +2624,10 @@ When troubleshooting:
                   content: toolResultMessage
                 });
 
-                // Process tool result for image references
-                if (toolResultContent) {
-                  await this.processImageReferences(toolResultContent);
-                }
+                // NOTE: Automatic image processing removed (GitHub issue #305)
+                // Images are now only loaded when the AI explicitly calls the readImage tool
+                // This prevents: 1) implicit behavior that users don't expect
+                //                2) crashes with unsupported MIME types (e.g., SVG on Gemini)
 
                 if (this.debug) {
                   console.log(`[DEBUG] Tool ${toolName} executed successfully. Result length: ${typeof toolResult === 'string' ? toolResult.length : JSON.stringify(toolResult).length}`);

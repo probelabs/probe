@@ -213,6 +213,157 @@ describe('ReadImage Tool', () => {
 
       expect(result).toContain('Image loaded successfully');
     });
+
+    test('should prevent path traversal attacks with .. sequences', async () => {
+      const restrictedAgent = new ProbeAgent({
+        debug: false,
+        path: testDir,
+        allowedFolders: [testDir]
+      });
+
+      // Try path traversal attack
+      const traversalPath = join(testDir, '..', '..', 'etc', 'passwd');
+
+      await expect(
+        restrictedAgent.toolImplementations.readImage.execute({
+          path: traversalPath
+        })
+      ).rejects.toThrow();
+    });
+
+    test('should prevent path traversal in extension extraction', async () => {
+      // This tests that basename is used to extract extension safely
+      const restrictedAgent = new ProbeAgent({
+        debug: false,
+        path: testDir,
+        allowedFolders: [testDir]
+      });
+
+      // Path designed to look like valid extension but contains traversal
+      const maliciousPath = 'malicious.png/../../../etc/passwd';
+
+      await expect(
+        restrictedAgent.toolImplementations.readImage.execute({
+          path: maliciousPath
+        })
+      ).rejects.toThrow();
+    });
+
+    test('should handle normalized path prefix attacks', async () => {
+      // Test that /allowed/path doesn't match /allowed/pathsuffix
+      const restrictedAgent = new ProbeAgent({
+        debug: false,
+        path: testDir,
+        allowedFolders: [testDir]
+      });
+
+      // Create a sibling directory name that starts with testDir name
+      const siblingPath = testDir + '-sibling/image.png';
+
+      await expect(
+        restrictedAgent.toolImplementations.readImage.execute({
+          path: siblingPath
+        })
+      ).rejects.toThrow();
+    });
+
+    test('should reject invalid extensions even without apiType set', async () => {
+      // Test that extension validation happens regardless of apiType
+      const agentWithoutApiType = new ProbeAgent({
+        debug: false,
+        path: testDir
+      });
+      // Ensure apiType is not set
+      agentWithoutApiType.apiType = null;
+
+      // Try to load a file with invalid extension
+      await expect(
+        agentWithoutApiType.toolImplementations.readImage.execute({
+          path: join(testDir, 'malicious.exe')
+        })
+      ).rejects.toThrow(/Invalid or unsupported image extension/);
+    });
+
+    test('should reject path traversal disguised as valid extension', async () => {
+      const restrictedAgent = new ProbeAgent({
+        debug: false,
+        path: testDir,
+        allowedFolders: [testDir]
+      });
+
+      // Path that looks like it has a valid extension but is actually traversal
+      // basename('malicious.png/../../../etc/passwd') = 'passwd'
+      // extension of 'passwd' = 'passwd' (not in allowed list)
+      await expect(
+        restrictedAgent.toolImplementations.readImage.execute({
+          path: 'malicious.png/../../../etc/passwd'
+        })
+      ).rejects.toThrow(/Invalid or unsupported image extension/);
+    });
+  });
+
+  describe('Provider-specific format restrictions (GitHub issue #305)', () => {
+    test('should reject SVG files when using Google provider', async () => {
+      // Create an agent with Google provider
+      // Note: We need to manually set apiType since mocks prevent normal initialization
+      const googleAgent = new ProbeAgent({
+        debug: false,
+        path: testDir
+      });
+      googleAgent.apiType = 'google';  // Simulate Google provider
+
+      // Create a simple SVG file
+      const svgContent = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>';
+      const svgPath = join(testDir, 'test.svg');
+      writeFileSync(svgPath, svgContent);
+
+      // Attempting to read SVG should throw error
+      await expect(
+        googleAgent.toolImplementations.readImage.execute({
+          path: svgPath
+        })
+      ).rejects.toThrow(/not supported by the current AI provider/);
+    });
+
+    test('should allow SVG files when using Anthropic provider', async () => {
+      // Create an agent with Anthropic provider
+      // Note: We need to manually set apiType since mocks prevent normal initialization
+      const anthropicAgent = new ProbeAgent({
+        debug: false,
+        path: testDir
+      });
+      anthropicAgent.apiType = 'anthropic';  // Simulate Anthropic provider
+
+      // Create a simple SVG file
+      const svgContent = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>';
+      const svgPath = join(testDir, 'test-anthropic.svg');
+      writeFileSync(svgPath, svgContent);
+
+      // Attempting to read SVG should succeed
+      const result = await anthropicAgent.toolImplementations.readImage.execute({
+        path: svgPath
+      });
+
+      expect(result).toContain('Image loaded successfully');
+    });
+
+    test('loadImageIfValid should load SVG (provider filtering handled by readImage tool)', async () => {
+      // Note: loadImageIfValid is a low-level method that only checks general format support.
+      // Provider-specific filtering (e.g., SVG not supported by Google Gemini) is handled
+      // by the readImage tool which provides explicit error messages.
+      const agent = new ProbeAgent({
+        debug: false,
+        path: testDir
+      });
+
+      const svgContent = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>';
+      const svgPath = join(testDir, 'test-load.svg');
+      writeFileSync(svgPath, svgContent);
+
+      // loadImageIfValid should succeed - it doesn't do provider-specific filtering
+      const result = await agent.loadImageIfValid(svgPath);
+      expect(result).toBe(true);
+    });
   });
 
   describe('Integration with message flow', () => {
@@ -228,17 +379,20 @@ describe('ReadImage Tool', () => {
       expect(images[0]).toMatch(/^data:image\/png;base64,/);
     });
 
-    test('should work alongside automatic image processing from tool results', async () => {
+    test('should work alongside processImageReferences method (for explicit image processing)', async () => {
+      // Note: Automatic image processing after tool results was removed in GitHub issue #305
+      // The processImageReferences method still exists for explicit use when needed
+
       // Clear any existing images
       agent.clearLoadedImages();
 
-      // Simulate tool result that mentions an image
+      // Manually call processImageReferences (this is no longer called automatically)
       const toolResultWithImage = `Found the file at ${testImagePath}`;
       await agent.processImageReferences(toolResultWithImage);
 
-      const imagesFromAutomatic = agent.getCurrentImages().length;
+      const imagesFromProcessing = agent.getCurrentImages().length;
 
-      // Now explicitly read another image
+      // Now explicitly read another image using readImage tool
       const anotherImage = join(testDir, 'another.png');
       const simplePng = Buffer.from([
         0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
@@ -258,7 +412,7 @@ describe('ReadImage Tool', () => {
       });
 
       const totalImages = agent.getCurrentImages().length;
-      expect(totalImages).toBeGreaterThan(imagesFromAutomatic);
+      expect(totalImages).toBeGreaterThan(imagesFromProcessing);
     });
   });
 });
