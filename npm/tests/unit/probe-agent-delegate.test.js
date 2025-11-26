@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 import { delegateTool } from '../../src/tools/vercel.js';
+import { delegate } from '../../src/delegate.js';
 
 describe('ProbeAgent enableDelegate option', () => {
   describe('Constructor and initialization', () => {
@@ -349,10 +350,51 @@ describe('Delegate tool validation', () => {
     // Runtime validation in the execute function ensures provider is a string.
     // This test verifies the validation works by checking invalid types are rejected.
 
-    const delegate = delegateTool();
+    const delegateToolInstance = delegateTool();
 
     // The tool should have a task parameter in its schema
-    expect(delegate).toBeDefined();
-    expect(typeof delegate.execute).toBe('function');
+    expect(delegateToolInstance).toBeDefined();
+    expect(typeof delegateToolInstance.execute).toBe('function');
+  });
+});
+
+describe('Delegate tracer handling', () => {
+  test('should not throw when tracer is missing createDelegationSpan method', async () => {
+    // This test ensures that a tracer object without createDelegationSpan method
+    // doesn't cause "tracer.createDelegationSpan is not a function" error
+    const incompleteTracer = {
+      // tracer object without createDelegationSpan
+      someOtherMethod: () => {}
+    };
+
+    // The delegate should handle this gracefully and not throw
+    // It will fail for other reasons (no task, etc.), but NOT because of tracer
+    await expect(delegate({
+      task: 'Test task',
+      tracer: incompleteTracer
+    })).rejects.not.toThrow('createDelegationSpan is not a function');
+  });
+
+  test('should not throw when tracer is an empty object', async () => {
+    const emptyTracer = {};
+
+    await expect(delegate({
+      task: 'Test task',
+      tracer: emptyTracer
+    })).rejects.not.toThrow('createDelegationSpan is not a function');
+  });
+
+  test('should not throw when tracer is null', async () => {
+    await expect(delegate({
+      task: 'Test task',
+      tracer: null
+    })).rejects.not.toThrow('createDelegationSpan is not a function');
+  });
+
+  test('should not throw when tracer is undefined', async () => {
+    await expect(delegate({
+      task: 'Test task',
+      tracer: undefined
+    })).rejects.not.toThrow('createDelegationSpan is not a function');
   });
 });
