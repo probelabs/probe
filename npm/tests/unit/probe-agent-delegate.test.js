@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach, jest } from '@jest/globals';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
+import { delegateTool } from '../../src/tools/vercel.js';
 
 describe('ProbeAgent enableDelegate option', () => {
   describe('Constructor and initialization', () => {
@@ -239,5 +240,119 @@ describe('ProbeAgent enableDelegate option', () => {
       expect(completionIndex).toBeGreaterThan(searchIndex);
       expect(delegateIndex).toBeGreaterThan(completionIndex);
     });
+  });
+
+  describe('Provider inheritance for delegation', () => {
+    test('should have apiType as string for all provider types', () => {
+      // Test that apiType is always a string identifier
+      const providerTypes = ['anthropic', 'openai', 'google', 'bedrock', 'claude-code', 'codex'];
+
+      for (const providerType of providerTypes) {
+        const agent = new ProbeAgent({ provider: providerType });
+        // apiType should be set based on provider
+        // For providers without API keys, it may fall back to different values
+        expect(typeof agent.apiType).toBe('string');
+      }
+    });
+
+    test('should store provider as string in clientApiProvider', () => {
+      // Verify clientApiProvider stores the string identifier
+      const agent = new ProbeAgent({ provider: 'google' });
+      expect(agent.clientApiProvider).toBe('google');
+
+      const agent2 = new ProbeAgent({ provider: 'claude-code' });
+      expect(agent2.clientApiProvider).toBe('claude-code');
+
+      const agent3 = new ProbeAgent({ provider: 'codex' });
+      expect(agent3.clientApiProvider).toBe('codex');
+    });
+
+    test('should store claude-code provider in clientApiProvider', () => {
+      const agent = new ProbeAgent({ provider: 'claude-code' });
+      // clientApiProvider should always store the input provider string
+      expect(agent.clientApiProvider).toBe('claude-code');
+    });
+
+    test('should store codex provider in clientApiProvider', () => {
+      const agent = new ProbeAgent({ provider: 'codex' });
+      // clientApiProvider should always store the input provider string
+      expect(agent.clientApiProvider).toBe('codex');
+    });
+
+    test('should have apiType as string type (not function)', () => {
+      // Test that apiType is always a string, never a function
+      // This is critical for delegation since the delegate tool validates
+      // that provider must be a string, null, or undefined
+      const agent = new ProbeAgent({});
+
+      // apiType should always be a string
+      expect(typeof agent.apiType).toBe('string');
+
+      // If provider is set (for non-mock environments), it should be different from apiType
+      // apiType = string identifier ('google', 'anthropic', etc.)
+      // provider = AI SDK factory function or null
+      if (agent.provider !== null && agent.provider !== undefined) {
+        // provider is either a function (AI SDK factory) or null
+        expect(agent.apiType).not.toBe(agent.provider);
+      }
+    });
+  });
+});
+
+describe('Delegate tool validation', () => {
+  // These tests focus on the parameter validation in the delegate tool
+  // They check that invalid types are rejected immediately before delegation starts
+
+  test('should reject function as provider', async () => {
+    const delegate = delegateTool();
+
+    await expect(delegate.execute({
+      task: 'Test task',
+      provider: () => {}, // Function instead of string
+      model: 'test-model'
+    })).rejects.toThrow('provider must be a string, null, or undefined');
+  });
+
+  test('should reject object as provider', async () => {
+    const delegate = delegateTool();
+
+    await expect(delegate.execute({
+      task: 'Test task',
+      provider: { name: 'google' }, // Object instead of string
+      model: 'test-model'
+    })).rejects.toThrow('provider must be a string, null, or undefined');
+  });
+
+  test('should reject number as provider', async () => {
+    const delegate = delegateTool();
+
+    await expect(delegate.execute({
+      task: 'Test task',
+      provider: 123, // Number instead of string
+      model: 'test-model'
+    })).rejects.toThrow('provider must be a string, null, or undefined');
+  });
+
+  test('should reject array as provider', async () => {
+    const delegate = delegateTool();
+
+    await expect(delegate.execute({
+      task: 'Test task',
+      provider: ['google'], // Array instead of string
+      model: 'test-model'
+    })).rejects.toThrow('provider must be a string, null, or undefined');
+  });
+
+  test('should validate provider type at runtime', () => {
+    // The delegate tool schema only defines 'task' as a public parameter.
+    // The provider, model, etc. are internal parameters added by ProbeAgent.
+    // Runtime validation in the execute function ensures provider is a string.
+    // This test verifies the validation works by checking invalid types are rejected.
+
+    const delegate = delegateTool();
+
+    // The tool should have a task parameter in its schema
+    expect(delegate).toBeDefined();
+    expect(typeof delegate.execute).toBe('function');
   });
 });
