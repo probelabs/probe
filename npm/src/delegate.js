@@ -200,8 +200,10 @@ export async function delegate({
 	// Calculate remaining iterations for subagent
 	const remainingIterations = Math.max(1, maxIterations - currentIteration);
 
-	// Create delegation span for telemetry if tracer is available
-	const delegationSpan = tracer ? tracer.createDelegationSpan(sessionId, task) : null;
+	// Create delegation span for telemetry if tracer is available and has the method
+	const delegationSpan = typeof tracer?.createDelegationSpan === 'function'
+		? tracer.createDelegationSpan(sessionId, task)
+		: null;
 
 	let timeoutId = null;
 	let acquired = false;
