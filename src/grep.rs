@@ -430,6 +430,9 @@ fn build_walker_parallel(
     let mut walker_builder = WalkBuilder::new(path);
     walker_builder
         .hidden(false)
+        // Follow symlinks by default. Loop detection is handled by walkdir internally -
+        // it detects and reports symlink loops as errors, preventing infinite traversal.
+        .follow_links(true)
         .git_ignore(!no_gitignore)
         .git_global(!no_gitignore)
         .git_exclude(!no_gitignore)

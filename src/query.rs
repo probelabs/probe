@@ -259,6 +259,10 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
     // Collect file paths using WalkBuilder to conditionally respect gitignore
     let mut builder = WalkBuilder::new(&resolved_path);
 
+    // Follow symlinks by default. Loop detection is handled by walkdir internally -
+    // it detects and reports symlink loops as errors, preventing infinite traversal.
+    builder.follow_links(true);
+
     // Configure gitignore handling based on the no_gitignore option
     if !options.no_gitignore {
         builder.git_ignore(true);

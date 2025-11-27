@@ -870,6 +870,8 @@ pub fn parse_file_with_line(input: &str, allow_tests: bool) -> Vec<FilePathInfo>
                     // Use WalkBuilder to respect .gitignore
                     let base_dir = std::path::Path::new(".");
                     let mut builder = WalkBuilder::new(base_dir);
+                    // Follow symlinks by default. Loop detection is handled by walkdir internally.
+                    builder.follow_links(true);
                     builder.git_ignore(true);
                     builder.git_global(true);
                     builder.git_exclude(true);
