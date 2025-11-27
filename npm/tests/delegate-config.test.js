@@ -48,13 +48,87 @@ describe('Delegate Tool Configuration', () => {
         currentIteration: 0,
         maxIterations: 30,
         parentSessionId: undefined,
-        path: undefined,
+        path: undefined, // No defaultPath or allowedFolders configured
         provider: undefined,
         model: undefined,
         tracer: undefined
       });
 
       expect(result).toBe('Mock delegate response');
+    });
+
+    it('should use defaultPath when path is not specified in call', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300,
+        defaultPath: '/project/workspace'
+      });
+      const task = 'Analyze code in workspace';
+
+      await tool.execute({ task });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          path: '/project/workspace'
+        })
+      );
+    });
+
+    it('should use allowedFolders[0] when path and defaultPath are not specified', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300,
+        allowedFolders: ['/allowed/folder1', '/allowed/folder2']
+      });
+      const task = 'Search allowed folders';
+
+      await tool.execute({ task });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          path: '/allowed/folder1'
+        })
+      );
+    });
+
+    it('should prioritize explicit path over defaultPath', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300,
+        defaultPath: '/default/path',
+        allowedFolders: ['/allowed/folder']
+      });
+      const task = 'Search specific path';
+
+      await tool.execute({ task, path: '/explicit/path' });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          path: '/explicit/path'
+        })
+      );
+    });
+
+    it('should prioritize defaultPath over allowedFolders', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300,
+        defaultPath: '/default/path',
+        allowedFolders: ['/allowed/folder']
+      });
+      const task = 'Use default path priority';
+
+      await tool.execute({ task });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          path: '/default/path'
+        })
+      );
     });
 
     it('should handle execution errors gracefully', async () => {
