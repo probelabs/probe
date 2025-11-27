@@ -237,14 +237,16 @@ export const extractTool = (options = {}) => {
 
 /**
  * Delegate tool generator
- * 
+ *
  * @param {Object} [options] - Configuration options
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @param {number} [options.timeout=300] - Default timeout in seconds
+ * @param {string} [options.defaultPath] - Default path to use if not specified in call
+ * @param {string[]} [options.allowedFolders] - Allowed folders for workspace isolation
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300 } = options;
+	const { debug = false, timeout = 300, defaultPath, allowedFolders } = options;
 
 	return tool({
 		name: 'delegate',
@@ -286,10 +288,17 @@ export const delegateTool = (options = {}) => {
 				throw new TypeError('model must be a string, null, or undefined');
 			}
 
+			// Use inherited path if not specified in AI call
+			// Priority: explicit path > defaultPath > first allowedFolder
+			const effectivePath = path || defaultPath || (allowedFolders && allowedFolders[0]);
+
 			if (debug) {
 				console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
 				if (parentSessionId) {
 					console.error(`Parent session: ${parentSessionId}`);
+				}
+				if (effectivePath && effectivePath !== path) {
+					console.error(`Using inherited path: ${effectivePath}`);
 				}
 			}
 
@@ -301,7 +310,7 @@ export const delegateTool = (options = {}) => {
 				currentIteration: currentIteration || 0,
 				maxIterations: maxIterations || 30,
 				parentSessionId,
-				path,
+				path: effectivePath,
 				provider,
 				model,
 				tracer
