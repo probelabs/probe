@@ -154,6 +154,10 @@ fn build_file_list(
     let builder_start = Instant::now();
     let mut builder = WalkBuilder::new(path);
 
+    // Follow symlinks by default. Loop detection is handled by walkdir internally -
+    // it detects and reports symlink loops as errors, preventing infinite traversal.
+    builder.follow_links(true);
+
     // Configure the builder to conditionally respect gitignore files
     if !no_gitignore {
         builder.git_ignore(true);
