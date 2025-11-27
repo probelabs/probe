@@ -146,7 +146,8 @@ jobs:
           files: |
             ${{ env.ASSET }}
             ${{ env.CHECKSUM }}
-          generate_release_notes: true
+          # Only generate release notes on the first matrix job to avoid duplicates
+          generate_release_notes: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
