@@ -45,6 +45,12 @@ export interface ProbeAgentOptions {
   retry?: RetryOptions;
   /** Fallback configuration for multi-provider support */
   fallback?: FallbackOptions | { auto: boolean };
+  /** Disable automatic mermaid diagram validation and fixing */
+  disableMermaidValidation?: boolean;
+  /** Disable automatic JSON validation and fixing (prevents infinite recursion in JsonFixingAgent) */
+  disableJsonValidation?: boolean;
+  /** Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation) */
+  completionPrompt?: string;
 }
 
 /**

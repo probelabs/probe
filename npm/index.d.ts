@@ -41,6 +41,12 @@ export interface ProbeAgentOptions {
   allowedTools?: string[] | null;
   /** Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set. */
   disableTools?: boolean;
+  /** Disable automatic mermaid diagram validation and fixing */
+  disableMermaidValidation?: boolean;
+  /** Disable automatic JSON validation and fixing (prevents infinite recursion in JsonFixingAgent) */
+  disableJsonValidation?: boolean;
+  /** Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation) */
+  completionPrompt?: string;
 }
 
 /**

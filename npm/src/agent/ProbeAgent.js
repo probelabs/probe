@@ -123,6 +123,7 @@ export class ProbeAgent {
    * @param {Array<Object>} [options.fallback.providers] - List of provider configurations for custom fallback
    * @param {boolean} [options.fallback.stopOnSuccess=true] - Stop on first success
    * @param {number} [options.fallback.maxTotalAttempts=10] - Maximum total attempts across all providers
+   * @param {string} [options.completionPrompt] - Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation)
    */
   constructor(options = {}) {
     // Basic configuration
@@ -146,6 +147,9 @@ export class ProbeAgent {
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
     this.disableJsonValidation = !!options.disableJsonValidation;
+
+    // Completion prompt for post-completion validation/review
+    this.completionPrompt = options.completionPrompt || null;
 
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
@@ -2743,6 +2747,63 @@ IMPORTANT: When using <attempt_complete>, this must be the ONLY content in your 
         // Continue even if storage fails
       }
 
+      // Completion prompt handling - run a follow-up prompt after attempt_completion for validation/review
+      // This runs BEFORE mermaid validation and JSON schema validation
+      // Skip if we're already in a completion prompt follow-up call or if no completion prompt is configured
+      if (completionAttempted && this.completionPrompt && !options._completionPromptProcessed) {
+        if (this.debug) {
+          console.log('[DEBUG] Running completion prompt for post-completion validation/review...');
+        }
+
+        try {
+          // Record completion prompt start in telemetry
+          if (this.tracer) {
+            this.tracer.recordEvent('completion_prompt.started', {
+              'completion_prompt.original_result_length': finalResult?.length || 0
+            });
+          }
+
+          // Create the completion prompt with the current result as context
+          const completionPromptMessage = `${this.completionPrompt}
+
+Here is the result to review:
+<result>
+${finalResult}
+</result>
+
+After reviewing, provide your final answer using attempt_completion.`;
+
+          // Make a follow-up call with the completion prompt
+          // Pass _completionPromptProcessed to prevent infinite loops
+          const completionResult = await this.answer(completionPromptMessage, [], {
+            ...options,
+            _completionPromptProcessed: true
+          });
+
+          // Update finalResult with the result from the completion prompt
+          finalResult = completionResult;
+
+          if (this.debug) {
+            console.log(`[DEBUG] Completion prompt finished. New result length: ${finalResult?.length || 0}`);
+          }
+
+          // Record completion prompt completion in telemetry
+          if (this.tracer) {
+            this.tracer.recordEvent('completion_prompt.completed', {
+              'completion_prompt.final_result_length': finalResult?.length || 0
+            });
+          }
+        } catch (error) {
+          console.error('[ERROR] Completion prompt failed:', error);
+          // Keep the original result if completion prompt fails
+          if (this.tracer) {
+            this.tracer.recordEvent('completion_prompt.error', {
+              'completion_prompt.error': error.message
+            });
+          }
+        }
+      }
+
       // Schema handling - format response according to provided schema
       // Skip schema processing if result came from attempt_completion tool
       // Don't apply schema formatting if we failed due to max iterations
@@ -3338,6 +3399,7 @@ Convert your previous response content into actual JSON data that follows this s
       maxIterations: this.maxIterations,
       disableMermaidValidation: this.disableMermaidValidation,
       disableJsonValidation: this.disableJsonValidation,
+      completionPrompt: this.completionPrompt,
       allowedTools: allowedToolsArray,
       enableMcp: !!this.mcpBridge,
       mcpConfig: this.mcpConfig,
