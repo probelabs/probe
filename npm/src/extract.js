@@ -27,6 +27,7 @@ const EXTRACT_FLAG_MAP = {
  * @param {string[]} [options.files] - Files to extract from (can include line numbers with colon, e.g., "/path/to/file.rs:10")
  * @param {string} [options.inputFile] - Path to a file containing unstructured text to extract file paths from
  * @param {string|Buffer} [options.content] - Content to pipe to stdin (e.g., git diff output). Alternative to inputFile.
+ * @param {string} [options.path] - Base path for resolving relative file paths (sets working directory for the command)
  * @param {boolean} [options.allowTests] - Include test files
  * @param {number} [options.contextLines] - Number of context lines to include
  * @param {string} [options.format] - Output format ('markdown', 'plain', 'json', 'xml', 'color', 'outline-xml', 'outline-diff')
@@ -71,6 +72,9 @@ export async function extract(options) {
 		}
 	}
 
+	// Get the working directory (path option sets cwd for relative file resolution)
+	const cwd = options.path || process.cwd();
+
 	// Create a single log record with all extract parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {
 		let logMessage = `\nExtract:`;
@@ -79,6 +83,7 @@ export async function extract(options) {
 		}
 		if (options.inputFile) logMessage += ` inputFile="${options.inputFile}"`;
 		if (options.content) logMessage += ` content=(${typeof options.content === 'string' ? options.content.length : options.content.byteLength} bytes)`;
+		if (options.path) logMessage += ` path="${options.path}"`;
 		if (options.allowTests) logMessage += " allowTests=true";
 		if (options.contextLines) logMessage += ` contextLines=${options.contextLines}`;
 		if (options.format) logMessage += ` format=${options.format}`;
@@ -88,14 +93,14 @@ export async function extract(options) {
 
 	// If content is provided, use spawn with stdin piping
 	if (hasContent) {
-		return extractWithStdin(binaryPath, cliArgs, options.content, options);
+		return extractWithStdin(binaryPath, cliArgs, options.content, options, cwd);
 	}
 
 	// Otherwise use exec for simple command execution
 	const command = `${binaryPath} extract ${cliArgs.join(' ')}`;
 
 	try {
-		const { stdout, stderr } = await execAsync(command);
+		const { stdout, stderr } = await execAsync(command, { cwd });
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);
@@ -104,7 +109,7 @@ export async function extract(options) {
 		return processExtractOutput(stdout, options);
 	} catch (error) {
 		// Enhance error message with command details
-		const errorMessage = `Error executing extract command: ${error.message}\nCommand: ${command}`;
+		const errorMessage = `Error executing extract command: ${error.message}\nCommand: ${command}\nCwd: ${cwd}`;
 		throw new Error(errorMessage);
 	}
 }
@@ -113,10 +118,11 @@ export async function extract(options) {
  * Extract with content piped to stdin
  * @private
  */
-function extractWithStdin(binaryPath, cliArgs, content, options) {
+function extractWithStdin(binaryPath, cliArgs, content, options, cwd) {
 	return new Promise((resolve, reject) => {
 		const childProcess = spawn(binaryPath, ['extract', ...cliArgs], {
-			stdio: ['pipe', 'pipe', 'pipe']
+			stdio: ['pipe', 'pipe', 'pipe'],
+			cwd
 		});
 
 		let stdout = '';
