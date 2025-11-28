@@ -261,6 +261,7 @@ export class ProbeChat {
    * @param {Array} [options.mcpServers] - MCP server configurations
    * @param {boolean} [options.enableBash=false] - Enable bash command execution
    * @param {Object} [options.bashConfig] - Bash configuration options
+   * @param {string} [options.completionPrompt] - Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation)
    */
   constructor(options = {}) {
     this.isNonInteractive = options.isNonInteractive || process.env.PROBE_NON_INTERACTIVE === '1';

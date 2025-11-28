@@ -78,6 +78,7 @@ export function main() {
     .option('--trace-file [path]', 'Enable tracing to file (default: ./traces.jsonl)')
     .option('--trace-remote [endpoint]', 'Enable tracing to remote endpoint (default: http://localhost:4318/v1/traces)')
     .option('--trace-console', 'Enable tracing to console (for debugging)')
+    .option('--completion-prompt <prompt>', 'Custom prompt to run after attempt_completion for validation/review (can be a string or path to a file)')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
@@ -253,6 +254,27 @@ export function main() {
   }
 
 
+  // Handle completion prompt if provided
+  let completionPrompt = null;
+  if (options.completionPrompt) {
+    // Check if it's a file path
+    try {
+      const completionPromptPath = resolve(options.completionPrompt);
+      if (existsSync(completionPromptPath)) {
+        completionPrompt = readFileSync(completionPromptPath, 'utf8');
+        logInfo(chalk.blue(`Loaded completion prompt from file: ${completionPromptPath}`));
+      } else {
+        // Not an existing file, treat as a direct string prompt
+        completionPrompt = options.completionPrompt;
+        logInfo(chalk.blue(`Using completion prompt string`));
+      }
+    } catch (error) {
+      // If there's an error resolving the path, treat as a direct string prompt
+      completionPrompt = options.completionPrompt;
+      logInfo(chalk.blue(`Using completion prompt string`));
+    }
+  }
+
   // Handle custom prompt if provided
   let customPrompt = null;
   if (options.prompt) {
@@ -420,7 +442,8 @@ export function main() {
         promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
         allowEdit: options.allowEdit,
         enableBash: options.enableBash,
-        bashConfig: bashConfig
+        bashConfig: bashConfig,
+        completionPrompt: completionPrompt
       });
       // Model/Provider info is logged via logInfo above if debug enabled
       logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`)); // Log the actual session ID being used
@@ -531,7 +554,8 @@ export function main() {
       promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
       allowEdit: options.allowEdit,
       enableBash: options.enableBash,
-      bashConfig: bashConfig
+      bashConfig: bashConfig,
+      completionPrompt: completionPrompt
     });
 
     // Log model/provider info using logInfo
