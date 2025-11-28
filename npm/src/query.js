@@ -6,6 +6,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getBinaryPath, buildCliArgs, escapeString } from './utils.js';
+import { validateCwdPath } from './utils/path-validation.js';
 
 const execAsync = promisify(exec);
 
@@ -26,6 +27,7 @@ const QUERY_FLAG_MAP = {
  * 
  * @param {Object} options - Query options
  * @param {string} options.path - Path to search in
+ * @param {string} [options.cwd] - Working directory for resolving relative paths (defaults to process.cwd())
  * @param {string} options.pattern - The ast-grep pattern to search for
  * @param {string} [options.language] - Programming language to search in
  * @param {string[]} [options.ignore] - Patterns to ignore
@@ -62,9 +64,14 @@ export async function query(options) {
 	// Add pattern and path as positional arguments
 	cliArgs.push(escapeString(options.pattern), escapeString(options.path));
 
+	// Get the working directory (cwd option for resolving relative paths)
+	// Validate and normalize the path to prevent path traversal attacks
+	const cwd = await validateCwdPath(options.cwd);
+
 	// Create a single log record with all query parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {
 		let logMessage = `Query: pattern="${options.pattern}" path="${options.path}"`;
+		if (options.cwd) logMessage += ` cwd="${options.cwd}"`;
 		if (options.language) logMessage += ` language=${options.language}`;
 		if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
 		if (options.allowTests) logMessage += " allowTests=true";
@@ -75,7 +82,7 @@ export async function query(options) {
 	const command = `${binaryPath} query ${cliArgs.join(' ')}`;
 
 	try {
-		const { stdout, stderr } = await execAsync(command);
+		const { stdout, stderr } = await execAsync(command, { cwd });
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);
@@ -110,7 +117,7 @@ export async function query(options) {
 		return stdout;
 	} catch (error) {
 		// Enhance error message with command details
-		const errorMessage = `Error executing query command: ${error.message}\nCommand: ${command}`;
+		const errorMessage = `Error executing query command: ${error.message}\nCommand: ${command}\nCwd: ${cwd}`;
 		throw new Error(errorMessage);
 	}
 }

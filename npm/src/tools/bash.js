@@ -22,15 +22,15 @@ import { executeBashCommand, formatExecutionResult, validateExecutionOptions } f
  * @param {Object} [options.bashConfig.env={}] - Default environment variables
  * @param {number} [options.bashConfig.maxBuffer] - Maximum output buffer size
  * @param {boolean} [options.debug=false] - Enable debug logging
- * @param {string} [options.defaultPath] - Default working directory from probe config
+ * @param {string} [options.cwd] - Working directory from probe config
  * @param {string[]} [options.allowedFolders] - Allowed directories for execution
  * @returns {Object} Configured bash tool
  */
 export const bashTool = (options = {}) => {
-  const { 
+  const {
     bashConfig = {},
     debug = false,
-    defaultPath,
+    cwd,
     allowedFolders = []
   } = options;
 
@@ -48,8 +48,8 @@ export const bashTool = (options = {}) => {
     if (bashConfig.workingDirectory) {
       return bashConfig.workingDirectory;
     }
-    if (defaultPath) {
-      return defaultPath;
+    if (cwd) {
+      return cwd;
     }
     if (allowedFolders && allowedFolders.length > 0) {
       return allowedFolders[0];

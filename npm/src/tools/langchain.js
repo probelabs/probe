@@ -9,7 +9,9 @@ import { extract } from '../extract.js';
 import { searchSchema, querySchema, extractSchema, searchDescription, queryDescription, extractDescription, parseTargets } from './common.js';
 
 // LangChain tool for searching code
-export function createSearchTool() {
+export function createSearchTool(options = {}) {
+	const { cwd } = options;
+
 	return {
 		name: 'search',
 		description: searchDescription,
@@ -19,6 +21,7 @@ export function createSearchTool() {
 				const results = await search({
 					query: searchQuery,
 					path,
+					cwd, // Working directory for resolving relative paths
 					allow_tests,
 					exact,
 					json: false,
@@ -37,7 +40,9 @@ export function createSearchTool() {
 }
 
 // LangChain tool for querying code
-export function createQueryTool() {
+export function createQueryTool(options = {}) {
+	const { cwd } = options;
+
 	return {
 		name: 'query',
 		description: queryDescription,
@@ -47,6 +52,7 @@ export function createQueryTool() {
 				const results = await query({
 					pattern,
 					path,
+					cwd, // Working directory for resolving relative paths
 					language,
 					allow_tests,
 					json: false
@@ -62,7 +68,9 @@ export function createQueryTool() {
 }
 
 // LangChain tool for extracting code
-export function createExtractTool() {
+export function createExtractTool(options = {}) {
+	const { cwd } = options;
+
 	return {
 		name: 'extract',
 		description: extractDescription,
@@ -74,6 +82,7 @@ export function createExtractTool() {
 
 				const results = await extract({
 					files,
+					cwd, // Working directory for resolving relative paths
 					allowTests: allow_tests,
 					contextLines: context_lines,
 					format

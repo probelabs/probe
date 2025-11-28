@@ -6,6 +6,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getBinaryPath, buildCliArgs } from './utils.js';
+import { validateCwdPath } from './utils/path-validation.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -38,6 +39,7 @@ const SEARCH_FLAG_MAP = {
  *
  * @param {Object} options - Search options
  * @param {string} options.path - Path to search in
+ * @param {string} [options.cwd] - Working directory for resolving relative paths (defaults to process.cwd())
  * @param {string|string[]} options.query - Search query or queries
  * @param {boolean} [options.filesOnly] - Only output file paths
  * @param {string[]} [options.ignore] - Patterns to ignore
@@ -125,9 +127,14 @@ export async function search(options) {
 	// Add query and path as positional arguments
 	const queries = Array.isArray(options.query) ? options.query : [options.query];
 
+	// Get the working directory (cwd option for resolving relative paths)
+	// Validate and normalize the path to prevent path traversal attacks
+	const cwd = await validateCwdPath(options.cwd);
+
 	// Create a single log record with all search parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {
 		let logMessage = `\nSearch: query="${queries[0]}" path="${options.path}"`;
+		if (options.cwd) logMessage += ` cwd="${options.cwd}"`;
 		if (options.maxResults) logMessage += ` maxResults=${options.maxResults}`;
 		logMessage += ` maxTokens=${options.maxTokens}`;
 		logMessage += ` timeout=${options.timeout}`;
@@ -154,6 +161,7 @@ export async function search(options) {
 	try {
 		// Execute with execFile (no shell, prevents command injection)
 		const { stdout, stderr } = await execFileAsync(binaryPath, args, {
+			cwd,
 			timeout: options.timeout * 1000, // Convert seconds to milliseconds
 			maxBuffer: 50 * 1024 * 1024 // 50MB buffer for large outputs
 		});
@@ -226,13 +234,13 @@ export async function search(options) {
 	} catch (error) {
 		// Check if the error is a timeout
 		if (error.code === 'ETIMEDOUT' || error.killed) {
-			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds.\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}`;
+			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds.\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}\nCwd: ${cwd}`;
 			console.error(timeoutMessage);
 			throw new Error(timeoutMessage);
 		}
 
 		// Enhance error message with command details
-		const errorMessage = `Error executing search command: ${error.message}\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}`;
+		const errorMessage = `Error executing search command: ${error.message}\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}\nCwd: ${cwd}`;
 		throw new Error(errorMessage);
 	}
 }

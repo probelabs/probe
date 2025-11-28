@@ -17,6 +17,8 @@ export interface ProbeAgentOptions {
   allowEdit?: boolean;
   /** Search directory path */
   path?: string;
+  /** Working directory for resolving relative paths (independent of allowedFolders security) */
+  cwd?: string;
   /** Force specific AI provider */
   provider?: 'anthropic' | 'openai' | 'google';
   /** Override model name */
@@ -252,7 +254,10 @@ export declare class ProbeAgent {
   
   /** Allowed search folders */
   readonly allowedFolders: string[];
-  
+
+  /** Working directory for resolving relative paths */
+  readonly cwd: string | null;
+
   /** Debug mode status */
   readonly debug: boolean;
   

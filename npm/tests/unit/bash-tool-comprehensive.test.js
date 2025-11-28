@@ -265,7 +265,7 @@ describe('Bash Tool - End-to-End Integration', () => {
     test('should work with maximal configuration', () => {
       const tool = bashTool({
         debug: true,
-        defaultPath: '/project',
+        cwd: '/project',
         allowedFolders: ['/project', '/tmp'],
         bashConfig: {
           allow: ['docker:*', 'make:*'],
