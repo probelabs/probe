@@ -48,7 +48,7 @@ describe('Delegate Tool Configuration', () => {
         currentIteration: 0,
         maxIterations: 30,
         parentSessionId: undefined,
-        path: undefined, // No defaultPath or allowedFolders configured
+        path: undefined, // No cwd or allowedFolders configured
         provider: undefined,
         model: undefined,
         tracer: undefined
@@ -57,11 +57,11 @@ describe('Delegate Tool Configuration', () => {
       expect(result).toBe('Mock delegate response');
     });
 
-    it('should use defaultPath when path is not specified in call', async () => {
+    it('should use cwd when path is not specified in call', async () => {
       const tool = delegateTool({
         debug: false,
         timeout: 300,
-        defaultPath: '/project/workspace'
+        cwd: '/project/workspace'
       });
       const task = 'Analyze code in workspace';
 
@@ -75,7 +75,7 @@ describe('Delegate Tool Configuration', () => {
       );
     });
 
-    it('should use allowedFolders[0] when path and defaultPath are not specified', async () => {
+    it('should use allowedFolders[0] when path and cwd are not specified', async () => {
       const tool = delegateTool({
         debug: false,
         timeout: 300,
@@ -93,11 +93,11 @@ describe('Delegate Tool Configuration', () => {
       );
     });
 
-    it('should prioritize explicit path over defaultPath', async () => {
+    it('should prioritize explicit path over cwd', async () => {
       const tool = delegateTool({
         debug: false,
         timeout: 300,
-        defaultPath: '/default/path',
+        cwd: '/default/path',
         allowedFolders: ['/allowed/folder']
       });
       const task = 'Search specific path';
@@ -112,14 +112,14 @@ describe('Delegate Tool Configuration', () => {
       );
     });
 
-    it('should prioritize defaultPath over allowedFolders', async () => {
+    it('should prioritize cwd over allowedFolders', async () => {
       const tool = delegateTool({
         debug: false,
         timeout: 300,
-        defaultPath: '/default/path',
+        cwd: '/default/path',
         allowedFolders: ['/allowed/folder']
       });
-      const task = 'Use default path priority';
+      const task = 'Use cwd priority';
 
       await tool.execute({ task });
 

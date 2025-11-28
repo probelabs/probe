@@ -434,7 +434,7 @@ export class ProbeAgent {
       sessionId: this.sessionId,
       debug: this.debug,
       // Use explicit cwd if set, otherwise fall back to first allowed folder
-      defaultPath: this.cwd || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd()),
+      cwd: this.cwd || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd()),
       allowedFolders: this.allowedFolders,
       outline: this.outline,
       allowEdit: this.allowEdit,

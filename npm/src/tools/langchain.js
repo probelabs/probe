@@ -10,7 +10,7 @@ import { searchSchema, querySchema, extractSchema, searchDescription, queryDescr
 
 // LangChain tool for searching code
 export function createSearchTool(options = {}) {
-	const { defaultPath } = options;
+	const { cwd } = options;
 
 	return {
 		name: 'search',
@@ -21,7 +21,7 @@ export function createSearchTool(options = {}) {
 				const results = await search({
 					query: searchQuery,
 					path,
-					cwd: defaultPath, // Working directory for resolving relative paths
+					cwd, // Working directory for resolving relative paths
 					allow_tests,
 					exact,
 					json: false,
@@ -41,7 +41,7 @@ export function createSearchTool(options = {}) {
 
 // LangChain tool for querying code
 export function createQueryTool(options = {}) {
-	const { defaultPath } = options;
+	const { cwd } = options;
 
 	return {
 		name: 'query',
@@ -52,7 +52,7 @@ export function createQueryTool(options = {}) {
 				const results = await query({
 					pattern,
 					path,
-					cwd: defaultPath, // Working directory for resolving relative paths
+					cwd, // Working directory for resolving relative paths
 					language,
 					allow_tests,
 					json: false
@@ -69,7 +69,7 @@ export function createQueryTool(options = {}) {
 
 // LangChain tool for extracting code
 export function createExtractTool(options = {}) {
-	const { defaultPath } = options;
+	const { cwd } = options;
 
 	return {
 		name: 'extract',
@@ -82,7 +82,7 @@ export function createExtractTool(options = {}) {
 
 				const results = await extract({
 					files,
-					cwd: defaultPath, // Working directory for resolving relative paths
+					cwd, // Working directory for resolving relative paths
 					allowTests: allow_tests,
 					contextLines: context_lines,
 					format

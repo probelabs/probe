@@ -40,7 +40,7 @@ function parseFileToolOptions(options = {}) {
   return {
     debug: options.debug || false,
     allowedFolders: options.allowedFolders || [],
-    defaultPath: options.defaultPath
+    cwd: options.cwd
   };
 }
 
@@ -50,11 +50,11 @@ function parseFileToolOptions(options = {}) {
  * @param {Object} [options] - Configuration options
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @param {string[]} [options.allowedFolders] - Allowed directories for file operations
- * @param {string} [options.defaultPath] - Default working directory
+ * @param {string} [options.cwd] - Working directory
  * @returns {Object} Configured edit tool
  */
 export const editTool = (options = {}) => {
-  const { debug, allowedFolders, defaultPath } = parseFileToolOptions(options);
+  const { debug, allowedFolders, cwd } = parseFileToolOptions(options);
 
   return tool({
     name: 'edit',
@@ -111,7 +111,7 @@ Important:
         }
 
         // Resolve the file path
-        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(defaultPath || process.cwd(), file_path);
+        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(cwd || process.cwd(), file_path);
 
         if (debug) {
           console.error(`[Edit] Attempting to edit file: ${resolvedPath}`);
@@ -182,11 +182,11 @@ Important:
  * @param {Object} [options] - Configuration options
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @param {string[]} [options.allowedFolders] - Allowed directories for file operations
- * @param {string} [options.defaultPath] - Default working directory
+ * @param {string} [options.cwd] - Working directory
  * @returns {Object} Configured create tool
  */
 export const createTool = (options = {}) => {
-  const { debug, allowedFolders, defaultPath } = parseFileToolOptions(options);
+  const { debug, allowedFolders, cwd } = parseFileToolOptions(options);
 
   return tool({
     name: 'create',
@@ -235,7 +235,7 @@ Important:
         }
 
         // Resolve the file path
-        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(defaultPath || process.cwd(), file_path);
+        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(cwd || process.cwd(), file_path);
 
         if (debug) {
           console.error(`[Create] Attempting to create file: ${resolvedPath}`);

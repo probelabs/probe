@@ -325,10 +325,10 @@ export default hello;`;
   });
 
   describe('Integration with relative paths', () => {
-    test('should handle relative paths with defaultPath', async () => {
-      // Create the edit tool with a default path
+    test('should handle relative paths with cwd', async () => {
+      // Create the edit tool with a working directory
       const edit = editTool({
-        defaultPath: testDir,
+        cwd: testDir,
         allowedFolders: [testDir]
       });
 
@@ -349,10 +349,10 @@ export default hello;`;
       expect(content).toBe('modified');
     });
 
-    test('should handle absolute paths regardless of defaultPath', async () => {
-      // Create the create tool with a default path
+    test('should handle absolute paths regardless of cwd', async () => {
+      // Create the create tool with a working directory
       const create = createTool({
-        defaultPath: '/some/other/path',
+        cwd: '/some/other/path',
         allowedFolders: [testDir]
       });
 

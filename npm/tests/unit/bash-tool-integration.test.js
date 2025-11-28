@@ -278,7 +278,7 @@ describe('Bash Tool with Different Configurations', () => {
   test('should work with full configuration', () => {
     const fullTool = bashTool({
       debug: true,
-      defaultPath: '/home/test',
+      cwd: '/home/test',
       allowedFolders: ['/home/test', '/tmp'],
       bashConfig: {
         allow: ['docker:*'],

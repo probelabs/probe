@@ -31,15 +31,15 @@ export const searchTool = (options = {}) => {
 				// Use parameter maxTokens if provided, otherwise use the default
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
-				// Use the path from parameters if provided, otherwise use defaultPath from config
-				let searchPath = path || options.defaultPath || '.';
+				// Use the path from parameters if provided, otherwise use cwd from config
+				let searchPath = path || options.cwd || '.';
 
-				// If path is "." or "./", use the defaultPath if available
-				if ((searchPath === "." || searchPath === "./") && options.defaultPath) {
+				// If path is "." or "./", use the cwd if available
+				if ((searchPath === "." || searchPath === "./") && options.cwd) {
 					if (debug) {
-						console.error(`Using default path "${options.defaultPath}" instead of "${searchPath}"`);
+						console.error(`Using cwd "${options.cwd}" instead of "${searchPath}"`);
 					}
-					searchPath = options.defaultPath;
+					searchPath = options.cwd;
 				}
 
 				if (debug) {
@@ -49,7 +49,7 @@ export const searchTool = (options = {}) => {
 				const searchOptions = {
 					query: searchQuery,
 					path: searchPath,
-					cwd: options.defaultPath, // Working directory for resolving relative paths
+					cwd: options.cwd, // Working directory for resolving relative paths
 					allowTests: allow_tests,
 					exact,
 					json: false,
@@ -90,15 +90,15 @@ export const queryTool = (options = {}) => {
 		inputSchema: querySchema,
 		execute: async ({ pattern, path, language, allow_tests }) => {
 			try {
-				// Use the path from parameters if provided, otherwise use defaultPath from config
-				let queryPath = path || options.defaultPath || '.';
+				// Use the path from parameters if provided, otherwise use cwd from config
+				let queryPath = path || options.cwd || '.';
 
-				// If path is "." or "./", use the defaultPath if available
-				if ((queryPath === "." || queryPath === "./") && options.defaultPath) {
+				// If path is "." or "./", use the cwd if available
+				if ((queryPath === "." || queryPath === "./") && options.cwd) {
 					if (debug) {
-						console.error(`Using default path "${options.defaultPath}" instead of "${queryPath}"`);
+						console.error(`Using cwd "${options.cwd}" instead of "${queryPath}"`);
 					}
-					queryPath = options.defaultPath;
+					queryPath = options.cwd;
 				}
 
 				if (debug) {
@@ -108,7 +108,7 @@ export const queryTool = (options = {}) => {
 				const results = await query({
 					pattern,
 					path: queryPath,
-					cwd: options.defaultPath, // Working directory for resolving relative paths
+					cwd: options.cwd, // Working directory for resolving relative paths
 					language,
 					allow_tests,
 					json: false
@@ -139,28 +139,20 @@ export const extractTool = (options = {}) => {
 		inputSchema: extractSchema,
 		execute: async ({ targets, input_content, line, end_line, allow_tests, context_lines, format }) => {
 			try {
-				// Use the defaultPath from config for context
-				let extractPath = options.defaultPath || '.';
-
-				// If path is "." or "./", use the defaultPath if available
-				if ((extractPath === "." || extractPath === "./") && options.defaultPath) {
-					if (debug) {
-						console.error(`Using default path "${options.defaultPath}" instead of "${extractPath}"`);
-					}
-					extractPath = options.defaultPath;
-				}
+				// Use the cwd from config for working directory
+				const effectiveCwd = options.cwd || '.';
 
 				if (debug) {
 					if (targets) {
-						console.error(`Executing extract with targets: "${targets}", path: "${extractPath}", context lines: ${context_lines || 10}`);
+						console.error(`Executing extract with targets: "${targets}", cwd: "${effectiveCwd}", context lines: ${context_lines || 10}`);
 					} else if (input_content) {
-						console.error(`Executing extract with input content, path: "${extractPath}", context lines: ${context_lines || 10}`);
+						console.error(`Executing extract with input content, cwd: "${effectiveCwd}", context lines: ${context_lines || 10}`);
 					}
 				}
 
 				// Create a temporary file for input content if provided
 				let tempFilePath = null;
-				let extractOptions = { cwd: extractPath }; // Use extractPath as cwd for resolving relative paths
+				let extractOptions = { cwd: effectiveCwd };
 
 				if (input_content) {
 					// Import required modules
@@ -186,7 +178,7 @@ export const extractTool = (options = {}) => {
 					// Set up extract options with input file
 					extractOptions = {
 						inputFile: tempFilePath,
-						cwd: extractPath, // Working directory for resolving relative paths
+						cwd: effectiveCwd,
 						allowTests: allow_tests,
 						contextLines: context_lines,
 						format: effectiveFormat
@@ -205,7 +197,7 @@ export const extractTool = (options = {}) => {
 					// Set up extract options with files
 					extractOptions = {
 						files,
-						cwd: extractPath, // Working directory for resolving relative paths
+						cwd: effectiveCwd,
 						allowTests: allow_tests,
 						contextLines: context_lines,
 						format: effectiveFormat
@@ -245,12 +237,12 @@ export const extractTool = (options = {}) => {
  * @param {Object} [options] - Configuration options
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @param {number} [options.timeout=300] - Default timeout in seconds
- * @param {string} [options.defaultPath] - Default path to use if not specified in call
+ * @param {string} [options.cwd] - Working directory to use if not specified in call
  * @param {string[]} [options.allowedFolders] - Allowed folders for workspace isolation
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, defaultPath, allowedFolders } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders } = options;
 
 	return tool({
 		name: 'delegate',
@@ -293,8 +285,8 @@ export const delegateTool = (options = {}) => {
 			}
 
 			// Use inherited path if not specified in AI call
-			// Priority: explicit path > defaultPath > first allowedFolder
-			const effectivePath = path || defaultPath || (allowedFolders && allowedFolders[0]);
+			// Priority: explicit path > cwd > first allowedFolder
+			const effectivePath = path || cwd || (allowedFolders && allowedFolders[0]);
 
 			if (debug) {
 				console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
