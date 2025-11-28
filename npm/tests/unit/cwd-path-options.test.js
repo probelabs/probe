@@ -34,7 +34,7 @@ describe('cwd/path options for workspace isolation', () => {
 
 			const result = await extract({
 				files: [`${absolutePath}:1-10`],
-				cwd: '/tmp', // Different cwd, but absolute paths should still work
+				cwd: os.tmpdir(), // Different cwd, but absolute paths should still work
 				format: 'json'
 			});
 
@@ -95,7 +95,7 @@ index 123..456
 			const result = await search({
 				query: 'function',
 				path: absolutePath,
-				cwd: '/tmp', // Different cwd, but absolute paths should still work
+				cwd: os.tmpdir(), // Different cwd, but absolute paths should still work
 				maxResults: 5,
 				format: 'json'
 			});
@@ -135,7 +135,7 @@ index 123..456
 			const result = await query({
 				pattern: 'function $NAME($$$ARGS) { $$$BODY }',
 				path: absolutePath,
-				cwd: '/tmp', // Different cwd, but absolute paths should still work
+				cwd: os.tmpdir(), // Different cwd, but absolute paths should still work
 				language: 'javascript',
 				maxResults: 5,
 				format: 'json'
@@ -250,8 +250,12 @@ index 123..456
 		});
 
 		test('normalizePath should normalize without requiring existence', () => {
-			const result = normalizePath('/some/path/../normalized');
-			expect(result).toBe(path.normalize('/some/normalized'));
+			// Use a path relative to cwd to avoid platform-specific absolute path issues
+			const testPath = path.join('some', 'path', '..', 'normalized');
+			const result = normalizePath(testPath);
+			// Result should be an absolute path containing 'some/normalized' (or 'some\normalized' on Windows)
+			expect(result).toContain(path.join('some', 'normalized'));
+			expect(path.isAbsolute(result)).toBe(true);
 		});
 
 		test('extract should reject non-existent cwd option', async () => {
