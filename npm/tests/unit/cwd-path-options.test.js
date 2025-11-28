@@ -13,12 +13,12 @@ import os from 'os';
 const projectRoot = path.resolve(process.cwd(), '..');
 
 describe('cwd/path options for workspace isolation', () => {
-	describe('extract() with path option', () => {
-		test('should resolve relative file paths against path option', async () => {
+	describe('extract() with cwd option', () => {
+		test('should resolve relative file paths against cwd option', async () => {
 			// Use the project root as the base path
 			const result = await extract({
 				files: ['npm/src/extract.js:1-10'],
-				path: projectRoot,
+				cwd: projectRoot,
 				format: 'json'
 			});
 
@@ -29,19 +29,19 @@ describe('cwd/path options for workspace isolation', () => {
 			}
 		});
 
-		test('should work with absolute paths regardless of path option', async () => {
+		test('should work with absolute paths regardless of cwd option', async () => {
 			const absolutePath = path.join(projectRoot, 'npm/src/extract.js');
 
 			const result = await extract({
 				files: [`${absolutePath}:1-10`],
-				path: '/tmp', // Different path, but absolute paths should still work
+				cwd: '/tmp', // Different cwd, but absolute paths should still work
 				format: 'json'
 			});
 
 			expect(result).toBeDefined();
 		});
 
-		test('should use process.cwd() when path is not specified', async () => {
+		test('should use process.cwd() when cwd is not specified', async () => {
 			// This test verifies default behavior
 			const result = await extract({
 				files: ['src/extract.js:1-10'],
@@ -51,7 +51,7 @@ describe('cwd/path options for workspace isolation', () => {
 			expect(result).toBeDefined();
 		});
 
-		test('should handle content with path option', async () => {
+		test('should handle content with cwd option', async () => {
 			const diffContent = `diff --git a/npm/src/extract.js b/npm/src/extract.js
 index 123..456
 --- a/npm/src/extract.js
@@ -64,7 +64,7 @@ index 123..456
 
 			const result = await extract({
 				content: diffContent,
-				path: projectRoot,
+				cwd: projectRoot,
 				format: 'outline-xml'
 			});
 
@@ -181,7 +181,7 @@ index 123..456
 			}
 		});
 
-		test('should extract files from workspace using path option', async () => {
+		test('should extract files from workspace using cwd option', async () => {
 			const symlinkPath = path.join(tempWorkspace, 'probe-npm');
 			if (!fs.existsSync(symlinkPath)) {
 				console.warn('Skipping test: symlink not available');
@@ -190,7 +190,7 @@ index 123..456
 
 			const result = await extract({
 				files: ['probe-npm/src/extract.js:1-10'],
-				path: tempWorkspace,
+				cwd: tempWorkspace,
 				format: 'json'
 			});
 
@@ -254,21 +254,12 @@ index 123..456
 			expect(result).toBe(path.normalize('/some/normalized'));
 		});
 
-		test('extract should reject non-existent path option', async () => {
+		test('extract should reject non-existent cwd option', async () => {
 			await expect(extract({
 				files: ['some/file.js'],
-				path: '/this/path/does/not/exist/12345',
+				cwd: '/this/path/does/not/exist/12345',
 				format: 'json'
 			})).rejects.toThrow('Path does not exist');
-		});
-
-		test('extract should accept cwd option (consistent with search/query)', async () => {
-			const result = await extract({
-				files: ['npm/src/extract.js:1-10'],
-				cwd: projectRoot,
-				format: 'json'
-			});
-			expect(result).toBeDefined();
 		});
 
 		test('search should reject non-existent cwd option', async () => {
