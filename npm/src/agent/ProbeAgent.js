@@ -95,6 +95,7 @@ export class ProbeAgent {
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
    * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
    * @param {string} [options.path] - Search directory path
+   * @param {string} [options.cwd] - Working directory for resolving relative paths (independent of allowedFolders)
    * @param {string} [options.provider] - Force specific AI provider
    * @param {string} [options.model] - Override model name
    * @param {boolean} [options.debug] - Enable debug mode
@@ -183,6 +184,9 @@ export class ProbeAgent {
     } else {
       this.allowedFolders = [process.cwd()];
     }
+
+    // Working directory for resolving relative paths (separate from allowedFolders security)
+    this.cwd = options.cwd || null;
 
     // API configuration
     this.clientApiProvider = options.provider || null;
@@ -429,7 +433,8 @@ export class ProbeAgent {
     const configOptions = {
       sessionId: this.sessionId,
       debug: this.debug,
-      defaultPath: this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd(),
+      // Use explicit cwd if set, otherwise fall back to first allowed folder
+      defaultPath: this.cwd || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd()),
       allowedFolders: this.allowedFolders,
       outline: this.outline,
       allowEdit: this.allowEdit,
@@ -3391,6 +3396,7 @@ Convert your previous response content into actual JSON data that follows this s
       enableDelegate: this.enableDelegate,
       path: this.allowedFolders[0], // Use first allowed folder as primary path
       allowedFolders: [...this.allowedFolders],
+      cwd: this.cwd, // Preserve explicit working directory
       provider: this.clientApiProvider,
       model: this.clientApiModel,
       debug: this.debug,
