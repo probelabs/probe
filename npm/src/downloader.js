@@ -14,6 +14,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { ensureBinDirectory } from './utils.js';
 import { getPackageBinDir } from './directory-resolver.js';
+import { getEntryType } from './utils/symlink-utils.js';
 
 const exec = promisify(execCallback);
 
@@ -770,10 +771,13 @@ async function extractBinary(assetPath, outputDir) {
 			for (const entry of entries) {
 				const fullPath = path.join(dir, entry.name);
 
-				if (entry.isDirectory()) {
+				// Use shared utility to follow symlinks and get actual target type
+				const entryType = await getEntryType(entry, fullPath);
+
+				if (entryType.isDirectory) {
 					const result = await findBinary(fullPath);
 					if (result) return result;
-				} else if (entry.isFile()) {
+				} else if (entryType.isFile) {
 					// Check if this is the binary we're looking for
 					if (entry.name === binaryName ||
 						entry.name === BINARY_NAME ||

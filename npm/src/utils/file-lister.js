@@ -7,6 +7,7 @@ import fs from 'fs';
 import path from 'path';
 import { promisify } from 'util';
 import { exec } from 'child_process';
+import { getEntryTypeSync } from './symlink-utils.js';
 
 const execAsync = promisify(exec);
 
@@ -101,7 +102,10 @@ async function listFilesByLevelManually(directory, maxFiles, respectGitignore) {
 			const entries = fs.readdirSync(dir, { withFileTypes: true });
 
 			// Process files first (at current level)
-			const files = entries.filter(entry => entry.isFile());
+			const files = entries.filter(entry => {
+				const fullPath = path.join(dir, entry.name);
+				return getEntryTypeSync(entry, fullPath).isFile;
+			});
 			for (const file of files) {
 				if (result.length >= maxFiles) break;
 
@@ -115,7 +119,10 @@ async function listFilesByLevelManually(directory, maxFiles, respectGitignore) {
 			}
 
 			// Then add directories to queue for next level
-			const dirs = entries.filter(entry => entry.isDirectory());
+			const dirs = entries.filter(entry => {
+				const fullPath = path.join(dir, entry.name);
+				return getEntryTypeSync(entry, fullPath).isDirectory;
+			});
 			for (const subdir of dirs) {
 				const subdirPath = path.join(dir, subdir.name);
 				const relativeSubdirPath = path.relative(directory, subdirPath);

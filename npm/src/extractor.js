@@ -9,6 +9,7 @@ import tar from 'tar';
 import AdmZip from 'adm-zip';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { getEntryType } from './utils/symlink-utils.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -148,10 +149,13 @@ async function findBinary(dir, baseDir, binaryName, isWindows) {
 			continue;
 		}
 
-		if (entry.isDirectory()) {
+		// Use shared utility to follow symlinks and get actual target type
+		const entryType = await getEntryType(entry, fullPath);
+
+		if (entryType.isDirectory) {
 			const result = await findBinary(fullPath, baseDir, binaryName, isWindows);
 			if (result) return result;
-		} else if (entry.isFile()) {
+		} else if (entryType.isFile) {
 			// Check if this is the binary we're looking for
 			if (entry.name === binaryName ||
 				entry.name === BINARY_NAME ||

@@ -8,6 +8,7 @@ import fs from 'fs';
 import { promises as fsPromises } from 'fs';
 import path from 'path';
 import { glob } from 'glob';
+import { getEntryType } from '../utils/symlink-utils.js';
 
 // Create an event emitter for tool calls (simplified for single-shot operations)
 export const toolCallEmitter = new EventEmitter();
@@ -287,23 +288,13 @@ export const listFilesTool = {
 
       // Format the results as ls-style output
       const entries = await Promise.all(files.map(async (file) => {
-        const isDirectory = file.isDirectory();
         const fullPath = path.join(targetDir, file.name);
-
-        let size = 0;
-        try {
-          const stats = await fsPromises.stat(fullPath);
-          size = stats.size;
-        } catch (statError) {
-          if (debug) {
-            console.log(`[DEBUG] Could not stat file ${file.name}:`, statError.message);
-          }
-        }
+        const entryType = await getEntryType(file, fullPath);
 
         return {
           name: file.name,
-          isDirectory,
-          size
+          isDirectory: entryType.isDirectory,
+          size: entryType.size
         };
       }));
 
