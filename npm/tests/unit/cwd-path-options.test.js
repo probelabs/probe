@@ -4,6 +4,7 @@
  */
 
 import { extract, search, query } from '../../src/index.js';
+import { validateCwdPath, normalizePath } from '../../src/utils/path-validation.js';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -212,6 +213,71 @@ index 123..456
 			});
 
 			expect(result).toBeDefined();
+		});
+	});
+
+	describe('path validation security', () => {
+		test('validateCwdPath should normalize paths with .. components', () => {
+			const basePath = process.cwd();
+			const parentPath = path.dirname(basePath);
+
+			// Path with .. should be normalized
+			const result = validateCwdPath(path.join(basePath, '..'));
+			expect(result).toBe(parentPath);
+		});
+
+		test('validateCwdPath should return absolute path', () => {
+			const result = validateCwdPath('.');
+			expect(path.isAbsolute(result)).toBe(true);
+		});
+
+		test('validateCwdPath should use default when path is not provided', () => {
+			const result = validateCwdPath(undefined);
+			expect(result).toBe(path.normalize(process.cwd()));
+		});
+
+		test('validateCwdPath should throw for non-existent path', () => {
+			expect(() => {
+				validateCwdPath('/this/path/definitely/does/not/exist/12345');
+			}).toThrow('Path does not exist');
+		});
+
+		test('validateCwdPath should throw for file path (not directory)', () => {
+			const filePath = path.join(projectRoot, 'npm/package.json');
+			expect(() => {
+				validateCwdPath(filePath);
+			}).toThrow('Path is not a directory');
+		});
+
+		test('normalizePath should normalize without requiring existence', () => {
+			const result = normalizePath('/some/path/../normalized');
+			expect(result).toBe(path.normalize('/some/normalized'));
+		});
+
+		test('extract should reject non-existent path option', async () => {
+			await expect(extract({
+				files: ['some/file.js'],
+				path: '/this/path/does/not/exist/12345',
+				format: 'json'
+			})).rejects.toThrow('Path does not exist');
+		});
+
+		test('search should reject non-existent cwd option', async () => {
+			await expect(search({
+				query: 'test',
+				path: '.',
+				cwd: '/this/path/does/not/exist/12345',
+				format: 'json'
+			})).rejects.toThrow('Path does not exist');
+		});
+
+		test('query should reject non-existent cwd option', async () => {
+			await expect(query({
+				pattern: 'function $NAME() {}',
+				path: '.',
+				cwd: '/this/path/does/not/exist/12345',
+				format: 'json'
+			})).rejects.toThrow('Path does not exist');
 		});
 	});
 });

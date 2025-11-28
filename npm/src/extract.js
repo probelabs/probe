@@ -6,6 +6,7 @@
 import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import { getBinaryPath, buildCliArgs, escapeString } from './utils.js';
+import { validateCwdPath } from './utils/path-validation.js';
 
 const execAsync = promisify(exec);
 
@@ -73,7 +74,8 @@ export async function extract(options) {
 	}
 
 	// Get the working directory (path option sets cwd for relative file resolution)
-	const cwd = options.path || process.cwd();
+	// Validate and normalize the path to prevent path traversal attacks
+	const cwd = validateCwdPath(options.path);
 
 	// Create a single log record with all extract parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {

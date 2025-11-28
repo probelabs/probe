@@ -6,6 +6,7 @@
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getBinaryPath, buildCliArgs, escapeString } from './utils.js';
+import { validateCwdPath } from './utils/path-validation.js';
 
 const execAsync = promisify(exec);
 
@@ -64,7 +65,8 @@ export async function query(options) {
 	cliArgs.push(escapeString(options.pattern), escapeString(options.path));
 
 	// Get the working directory (cwd option for resolving relative paths)
-	const cwd = options.cwd || process.cwd();
+	// Validate and normalize the path to prevent path traversal attacks
+	const cwd = validateCwdPath(options.cwd);
 
 	// Create a single log record with all query parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {
