@@ -4,7 +4,7 @@
  */
 
 import path from 'path';
-import fs from 'fs';
+import { promises as fs } from 'fs';
 
 /**
  * Validates and normalizes a path to be used as working directory (cwd).
@@ -17,10 +17,10 @@ import fs from 'fs';
  *
  * @param {string} inputPath - The path to validate
  * @param {string} [defaultPath] - Default path to use if inputPath is not provided
- * @returns {string} Normalized absolute path
+ * @returns {Promise<string>} Normalized absolute path
  * @throws {Error} If the path is invalid or doesn't exist
  */
-export function validateCwdPath(inputPath, defaultPath = process.cwd()) {
+export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 	// Use default if not provided
 	const targetPath = inputPath || defaultPath;
 
@@ -30,7 +30,7 @@ export function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 
 	// Verify the path exists and is a directory
 	try {
-		const stats = fs.statSync(normalizedPath);
+		const stats = await fs.stat(normalizedPath);
 		if (!stats.isDirectory()) {
 			throw new Error(`Path is not a directory: ${normalizedPath}`);
 		}

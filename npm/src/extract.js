@@ -28,7 +28,8 @@ const EXTRACT_FLAG_MAP = {
  * @param {string[]} [options.files] - Files to extract from (can include line numbers with colon, e.g., "/path/to/file.rs:10")
  * @param {string} [options.inputFile] - Path to a file containing unstructured text to extract file paths from
  * @param {string|Buffer} [options.content] - Content to pipe to stdin (e.g., git diff output). Alternative to inputFile.
- * @param {string} [options.path] - Base path for resolving relative file paths (sets working directory for the command)
+ * @param {string} [options.cwd] - Working directory for resolving relative file paths (preferred)
+ * @param {string} [options.path] - Alias for cwd (for backward compatibility)
  * @param {boolean} [options.allowTests] - Include test files
  * @param {number} [options.contextLines] - Number of context lines to include
  * @param {string} [options.format] - Output format ('markdown', 'plain', 'json', 'xml', 'color', 'outline-xml', 'outline-diff')
@@ -73,9 +74,10 @@ export async function extract(options) {
 		}
 	}
 
-	// Get the working directory (path option sets cwd for relative file resolution)
+	// Get the working directory (cwd or path option sets cwd for relative file resolution)
+	// cwd takes precedence over path for consistency with search/query APIs
 	// Validate and normalize the path to prevent path traversal attacks
-	const cwd = validateCwdPath(options.path);
+	const cwd = await validateCwdPath(options.cwd || options.path);
 
 	// Create a single log record with all extract parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {
@@ -85,7 +87,7 @@ export async function extract(options) {
 		}
 		if (options.inputFile) logMessage += ` inputFile="${options.inputFile}"`;
 		if (options.content) logMessage += ` content=(${typeof options.content === 'string' ? options.content.length : options.content.byteLength} bytes)`;
-		if (options.path) logMessage += ` path="${options.path}"`;
+		if (options.cwd || options.path) logMessage += ` cwd="${cwd}"`;
 		if (options.allowTests) logMessage += " allowTests=true";
 		if (options.contextLines) logMessage += ` contextLines=${options.contextLines}`;
 		if (options.format) logMessage += ` format=${options.format}`;

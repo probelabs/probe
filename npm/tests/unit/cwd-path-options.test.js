@@ -217,36 +217,36 @@ index 123..456
 	});
 
 	describe('path validation security', () => {
-		test('validateCwdPath should normalize paths with .. components', () => {
+		test('validateCwdPath should normalize paths with .. components', async () => {
 			const basePath = process.cwd();
 			const parentPath = path.dirname(basePath);
 
 			// Path with .. should be normalized
-			const result = validateCwdPath(path.join(basePath, '..'));
+			const result = await validateCwdPath(path.join(basePath, '..'));
 			expect(result).toBe(parentPath);
 		});
 
-		test('validateCwdPath should return absolute path', () => {
-			const result = validateCwdPath('.');
+		test('validateCwdPath should return absolute path', async () => {
+			const result = await validateCwdPath('.');
 			expect(path.isAbsolute(result)).toBe(true);
 		});
 
-		test('validateCwdPath should use default when path is not provided', () => {
-			const result = validateCwdPath(undefined);
+		test('validateCwdPath should use default when path is not provided', async () => {
+			const result = await validateCwdPath(undefined);
 			expect(result).toBe(path.normalize(process.cwd()));
 		});
 
-		test('validateCwdPath should throw for non-existent path', () => {
-			expect(() => {
-				validateCwdPath('/this/path/definitely/does/not/exist/12345');
-			}).toThrow('Path does not exist');
+		test('validateCwdPath should throw for non-existent path', async () => {
+			await expect(
+				validateCwdPath('/this/path/definitely/does/not/exist/12345')
+			).rejects.toThrow('Path does not exist');
 		});
 
-		test('validateCwdPath should throw for file path (not directory)', () => {
+		test('validateCwdPath should throw for file path (not directory)', async () => {
 			const filePath = path.join(projectRoot, 'npm/package.json');
-			expect(() => {
-				validateCwdPath(filePath);
-			}).toThrow('Path is not a directory');
+			await expect(
+				validateCwdPath(filePath)
+			).rejects.toThrow('Path is not a directory');
 		});
 
 		test('normalizePath should normalize without requiring existence', () => {
@@ -260,6 +260,15 @@ index 123..456
 				path: '/this/path/does/not/exist/12345',
 				format: 'json'
 			})).rejects.toThrow('Path does not exist');
+		});
+
+		test('extract should accept cwd option (consistent with search/query)', async () => {
+			const result = await extract({
+				files: ['npm/src/extract.js:1-10'],
+				cwd: projectRoot,
+				format: 'json'
+			});
+			expect(result).toBeDefined();
 		});
 
 		test('search should reject non-existent cwd option', async () => {
