@@ -49,6 +49,7 @@ export const searchTool = (options = {}) => {
 				const searchOptions = {
 					query: searchQuery,
 					path: searchPath,
+					cwd: options.defaultPath, // Working directory for resolving relative paths
 					allowTests: allow_tests,
 					exact,
 					json: false,
@@ -107,6 +108,7 @@ export const queryTool = (options = {}) => {
 				const results = await query({
 					pattern,
 					path: queryPath,
+					cwd: options.defaultPath, // Working directory for resolving relative paths
 					language,
 					allow_tests,
 					json: false
@@ -158,7 +160,7 @@ export const extractTool = (options = {}) => {
 
 				// Create a temporary file for input content if provided
 				let tempFilePath = null;
-				let extractOptions = { path: extractPath };
+				let extractOptions = { cwd: extractPath }; // Use extractPath as cwd for resolving relative paths
 
 				if (input_content) {
 					// Import required modules
@@ -184,6 +186,7 @@ export const extractTool = (options = {}) => {
 					// Set up extract options with input file
 					extractOptions = {
 						inputFile: tempFilePath,
+						cwd: extractPath, // Working directory for resolving relative paths
 						allowTests: allow_tests,
 						contextLines: context_lines,
 						format: effectiveFormat
@@ -202,6 +205,7 @@ export const extractTool = (options = {}) => {
 					// Set up extract options with files
 					extractOptions = {
 						files,
+						cwd: extractPath, // Working directory for resolving relative paths
 						allowTests: allow_tests,
 						contextLines: context_lines,
 						format: effectiveFormat
