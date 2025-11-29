@@ -896,6 +896,27 @@ class AppTracer {
   }
 
   /**
+   * Record a generic event (used by completionPrompt and other features)
+   * This provides compatibility with SimpleAppTracer interface
+   * Adds an event to the existing session span rather than creating a new span
+   */
+  // visor-disable: Events are added to existing spans per OpenTelemetry convention - recordEvent semantically means adding an event, not creating a span. Both SimpleAppTracer and AppTracer now consistently add events.
+  recordEvent(name, attributes = {}) {
+    const sessionId = attributes['session.id'] || 'unknown';
+    const sessionSpan = this.sessionSpans.get(sessionId);
+
+    if (sessionSpan) {
+      // Add event to the existing session span
+      sessionSpan.addEvent(name, {
+        'app.event.timestamp': Date.now(),
+        ...attributes
+      });
+    } else if (process.env.DEBUG_CHAT === '1') {
+      console.log(`[DEBUG] AppTracer: recordEvent called but no session span for ${sessionId}`);
+    }
+  }
+
+  /**
    * Clean up any remaining active spans for a session
    */
   cleanup(sessionId) {
