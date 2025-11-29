@@ -22,7 +22,7 @@ export function createSearchTool(options = {}) {
 					query: searchQuery,
 					path,
 					cwd, // Working directory for resolving relative paths
-					allow_tests,
+					allowTests: allow_tests ?? true,
 					exact,
 					json: false,
 					maxResults,
@@ -54,7 +54,7 @@ export function createQueryTool(options = {}) {
 					path,
 					cwd, // Working directory for resolving relative paths
 					language,
-					allow_tests,
+					allowTests: allow_tests ?? true,
 					json: false
 				});
 
@@ -83,7 +83,7 @@ export function createExtractTool(options = {}) {
 				const results = await extract({
 					files,
 					cwd, // Working directory for resolving relative paths
-					allowTests: allow_tests,
+					allowTests: allow_tests ?? true,
 					contextLines: context_lines,
 					format
 				});

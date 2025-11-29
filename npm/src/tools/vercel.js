@@ -50,7 +50,7 @@ export const searchTool = (options = {}) => {
 					query: searchQuery,
 					path: searchPath,
 					cwd: options.cwd, // Working directory for resolving relative paths
-					allowTests: allow_tests,
+					allowTests: allow_tests ?? true,
 					exact,
 					json: false,
 					maxTokens: effectiveMaxTokens,
@@ -110,7 +110,7 @@ export const queryTool = (options = {}) => {
 					path: queryPath,
 					cwd: options.cwd, // Working directory for resolving relative paths
 					language,
-					allow_tests,
+					allowTests: allow_tests ?? true,
 					json: false
 				});
 
@@ -179,7 +179,7 @@ export const extractTool = (options = {}) => {
 					extractOptions = {
 						inputFile: tempFilePath,
 						cwd: effectiveCwd,
-						allowTests: allow_tests,
+						allowTests: allow_tests ?? true,
 						contextLines: context_lines,
 						format: effectiveFormat
 					};
@@ -198,7 +198,7 @@ export const extractTool = (options = {}) => {
 					extractOptions = {
 						files,
 						cwd: effectiveCwd,
-						allowTests: allow_tests,
+						allowTests: allow_tests ?? true,
 						contextLines: context_lines,
 						format: effectiveFormat
 					};
