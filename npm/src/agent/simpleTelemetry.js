@@ -171,6 +171,19 @@ export class SimpleAppTracer {
   }
 
   /**
+   * Record a generic event (used by completionPrompt and other features)
+   */
+  // visor-disable: SimpleAppTracer uses this.sessionId because it's a per-session instance. AppTracer extracts from attributes because it's a singleton managing multiple sessions. Different architectures require different approaches.
+  recordEvent(name, attributes = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(name, {
+      'session.id': this.sessionId,
+      ...attributes
+    });
+  }
+
+  /**
    * Record delegation events
    */
   recordDelegationEvent(eventType, data = {}) {
