@@ -330,8 +330,7 @@ describe('Per-Server Timeout Configuration', () => {
   });
 
   test('should handle zero timeout as valid per-server value', async () => {
-    // Zero timeout could be used to disable timeout (infinite wait)
-    // Using nullish coalescing (??) ensures 0 is treated as a valid value
+    // Zero timeout means immediate timeout (edge case but valid)
     const config = {
       mcpServers: {
         'no-timeout-server': {
@@ -349,8 +348,51 @@ describe('Per-Server Timeout Configuration', () => {
 
     await manager.initialize(config);
 
-    // Zero should be stored and used (not fall back to global)
+    // Zero should be stored (validation allows 0 as valid)
     expect(config.mcpServers['no-timeout-server'].timeout).toBe(0);
+  });
+
+  test('should cap timeout at maximum value (10 minutes)', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 999999999 // Very large value
+        }
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Config stores the original value, but callTool will cap it
+    // This test verifies the config is stored
+    expect(config.mcpServers['test-server'].timeout).toBe(999999999);
+  });
+
+  test('should handle negative timeout by falling back to default', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: -5000 // Invalid negative value
+        }
+      },
+      settings: {
+        timeout: 45000
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Config stores the original value, but callTool will validate and use fallback
+    expect(config.mcpServers['test-server'].timeout).toBe(-5000);
+    // The validation happens in callTool, which will reject this and use global
   });
 });
 

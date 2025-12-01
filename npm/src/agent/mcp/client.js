@@ -275,8 +275,19 @@ export class MCPClientManager {
       }
 
       // Get timeout: per-server timeout takes priority over global timeout (default 30 seconds)
-      const serverTimeout = clientInfo.config?.timeout;
-      const globalTimeout = this.config?.settings?.timeout || 30000;
+      // Validate timeout values to prevent resource exhaustion
+      const DEFAULT_TIMEOUT = 30000;
+      const MAX_TIMEOUT = 600000; // 10 minutes max to prevent resource exhaustion
+
+      const validateTimeout = (value) => {
+        if (value === undefined || value === null) return undefined;
+        const num = Number(value);
+        if (!Number.isFinite(num) || num < 0) return undefined; // Invalid, use fallback
+        return Math.min(num, MAX_TIMEOUT); // Cap at max timeout
+      };
+
+      const serverTimeout = validateTimeout(clientInfo.config?.timeout);
+      const globalTimeout = validateTimeout(this.config?.settings?.timeout) ?? DEFAULT_TIMEOUT;
       const timeout = serverTimeout ?? globalTimeout;
 
       // Create a timeout promise

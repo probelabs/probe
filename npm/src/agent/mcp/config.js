@@ -160,6 +160,16 @@ function mergeWithEnvironment(config) {
             config.mcpServers[normalizedName].env = { [property]: value };
           }
           break;
+        case 'TIMEOUT':
+          // Per-server timeout in milliseconds with validation
+          const timeoutNum = parseInt(value, 10);
+          if (Number.isFinite(timeoutNum) && timeoutNum >= 0) {
+            // Cap at 10 minutes max to prevent resource exhaustion
+            config.mcpServers[normalizedName].timeout = Math.min(timeoutNum, 600000);
+          } else {
+            console.error(`[MCP WARN] Invalid timeout value for ${normalizedName}: ${value}`);
+          }
+          break;
       }
     }
   }
