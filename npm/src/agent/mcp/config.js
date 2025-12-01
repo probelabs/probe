@@ -12,6 +12,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
+ * Timeout configuration constants
+ */
+export const DEFAULT_TIMEOUT = 30000; // 30 seconds
+export const MAX_TIMEOUT = 600000; // 10 minutes max to prevent resource exhaustion
+
+/**
+ * Validate and normalize a timeout value
+ * @param {*} value - The timeout value to validate
+ * @returns {number|undefined} Validated timeout in ms, or undefined if invalid
+ */
+export function validateTimeout(value) {
+  if (value === undefined || value === null) return undefined;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) return undefined; // Invalid, use fallback
+  return Math.min(num, MAX_TIMEOUT); // Cap at max timeout
+}
+
+/**
  * Default MCP configuration structure
  */
 const DEFAULT_CONFIG = {
@@ -162,10 +180,9 @@ function mergeWithEnvironment(config) {
           break;
         case 'TIMEOUT':
           // Per-server timeout in milliseconds with validation
-          const timeoutNum = parseInt(value, 10);
-          if (Number.isFinite(timeoutNum) && timeoutNum >= 0) {
-            // Cap at 10 minutes max to prevent resource exhaustion
-            config.mcpServers[normalizedName].timeout = Math.min(timeoutNum, 600000);
+          const validatedTimeout = validateTimeout(value);
+          if (validatedTimeout !== undefined) {
+            config.mcpServers[normalizedName].timeout = validatedTimeout;
           } else {
             console.error(`[MCP WARN] Invalid timeout value for ${normalizedName}: ${value}`);
           }
@@ -327,5 +344,8 @@ export default {
   loadMCPConfigurationFromPath,
   parseEnabledServers,
   createSampleConfig,
-  saveConfig
+  saveConfig,
+  validateTimeout,
+  DEFAULT_TIMEOUT,
+  MAX_TIMEOUT
 };

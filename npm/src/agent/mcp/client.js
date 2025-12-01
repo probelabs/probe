@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import { loadMCPConfiguration, parseEnabledServers } from './config.js';
+import { loadMCPConfiguration, parseEnabledServers, validateTimeout, DEFAULT_TIMEOUT } from './config.js';
 
 /**
  * Create transport based on configuration
@@ -275,17 +275,6 @@ export class MCPClientManager {
       }
 
       // Get timeout: per-server timeout takes priority over global timeout (default 30 seconds)
-      // Validate timeout values to prevent resource exhaustion
-      const DEFAULT_TIMEOUT = 30000;
-      const MAX_TIMEOUT = 600000; // 10 minutes max to prevent resource exhaustion
-
-      const validateTimeout = (value) => {
-        if (value === undefined || value === null) return undefined;
-        const num = Number(value);
-        if (!Number.isFinite(num) || num < 0) return undefined; // Invalid, use fallback
-        return Math.min(num, MAX_TIMEOUT); // Cap at max timeout
-      };
-
       const serverTimeout = validateTimeout(clientInfo.config?.timeout);
       const globalTimeout = validateTimeout(this.config?.settings?.timeout) ?? DEFAULT_TIMEOUT;
       const timeout = serverTimeout ?? globalTimeout;
