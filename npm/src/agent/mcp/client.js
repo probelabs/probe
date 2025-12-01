@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
-import { loadMCPConfiguration, parseEnabledServers } from './config.js';
+import { loadMCPConfiguration, parseEnabledServers, DEFAULT_TIMEOUT } from './config.js';
 
 /**
  * Create transport based on configuration
@@ -274,8 +274,11 @@ export class MCPClientManager {
         console.error(`[MCP DEBUG] Calling ${toolName} with args:`, JSON.stringify(args, null, 2));
       }
 
-      // Get timeout from config (default 30 seconds)
-      const timeout = this.config?.settings?.timeout || 30000;
+      // Get timeout: per-server timeout takes priority over global timeout (default 30 seconds)
+      // Note: Timeout values are already validated at config load time by parseEnabledServers
+      const serverTimeout = clientInfo.config?.timeout;
+      const globalTimeout = this.config?.settings?.timeout ?? DEFAULT_TIMEOUT;
+      const timeout = serverTimeout ?? globalTimeout;
 
       // Create a timeout promise
       const timeoutPromise = new Promise((_, reject) => {

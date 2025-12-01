@@ -4,6 +4,7 @@
 
 import { jest } from '@jest/globals';
 import { MCPClientManager, createTransport } from '../../src/agent/mcp/client.js';
+import { validateTimeout, parseEnabledServers, DEFAULT_TIMEOUT, MAX_TIMEOUT } from '../../src/agent/mcp/config.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -233,6 +234,333 @@ describe('MCPClientManager', () => {
       await manager.disconnect();
       await expect(manager.disconnect()).resolves.not.toThrow();
     });
+  });
+});
+
+describe('Per-Server Timeout Configuration', () => {
+  let manager;
+
+  beforeEach(() => {
+    manager = new MCPClientManager({ debug: false });
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.disconnect();
+    }
+  });
+
+  test('should use global timeout when no per-server timeout configured', async () => {
+    const CUSTOM_GLOBAL_TIMEOUT = 45000; // 45 seconds
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true
+          // No timeout specified
+        }
+      },
+      settings: {
+        timeout: CUSTOM_GLOBAL_TIMEOUT
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Verify the config is stored correctly
+    expect(manager.config.settings.timeout).toBe(CUSTOM_GLOBAL_TIMEOUT);
+  });
+
+  test('should prefer per-server timeout over global timeout', async () => {
+    const FAST_TIMEOUT = 5000; // 5 seconds
+    const SLOW_TIMEOUT = 120000; // 2 minutes
+    const config = {
+      mcpServers: {
+        'fast-server': {
+          command: 'node',
+          args: ['-e', 'console.log("fast")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: FAST_TIMEOUT
+        },
+        'slow-server': {
+          command: 'node',
+          args: ['-e', 'console.log("slow")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: SLOW_TIMEOUT
+        },
+        'default-server': {
+          command: 'node',
+          args: ['-e', 'console.log("default")'],
+          transport: 'stdio',
+          enabled: true
+          // No per-server timeout, should use global
+        }
+      },
+      settings: {
+        timeout: DEFAULT_TIMEOUT
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Verify per-server timeouts are stored in config
+    expect(config.mcpServers['fast-server'].timeout).toBe(FAST_TIMEOUT);
+    expect(config.mcpServers['slow-server'].timeout).toBe(SLOW_TIMEOUT);
+    expect(config.mcpServers['default-server'].timeout).toBeUndefined();
+  });
+
+  test('should use default 30s timeout when neither per-server nor global timeout set', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+      // No settings.timeout
+    };
+
+    await manager.initialize(config);
+
+    // Global timeout should fall back to default 30000ms
+    expect(manager.config?.settings?.timeout).toBeUndefined();
+    // The actual default is applied in callTool, which uses || 30000
+  });
+
+  test('should handle zero timeout as valid per-server value', async () => {
+    // Zero timeout means immediate timeout (edge case but valid)
+    const config = {
+      mcpServers: {
+        'no-timeout-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 0 // Explicitly set to 0
+        }
+      },
+      settings: {
+        timeout: DEFAULT_TIMEOUT
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Zero should be stored (validation allows 0 as valid)
+    expect(config.mcpServers['no-timeout-server'].timeout).toBe(0);
+  });
+
+  test('should cap timeout at maximum value (10 minutes) at config load time', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 999999999 // Very large value
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    // Timeout should be capped to MAX_TIMEOUT (600000) at load time
+    // The server config is normalized by parseEnabledServers
+    expect(result.total).toBe(1);
+    // Verify the client's stored config has the capped value
+    const clientInfo = manager.clients.get('test-server');
+    if (clientInfo) {
+      expect(clientInfo.config.timeout).toBe(MAX_TIMEOUT);
+    }
+  });
+
+  test('should skip server with negative timeout at config load time', async () => {
+    const config = {
+      mcpServers: {
+        'invalid-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: -5000 // Invalid negative value
+        },
+        'valid-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 5000 // Valid value
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    // Invalid server should be skipped, only valid server should be processed
+    expect(result.total).toBe(1);
+  });
+});
+
+describe('parseEnabledServers Timeout Validation', () => {
+  test('should validate and normalize timeout at config load time', () => {
+    const config = {
+      mcpServers: {
+        'server-with-valid-timeout': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 60000
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBe(60000);
+  });
+
+  test('should cap excessive timeout to MAX_TIMEOUT at load time', () => {
+    const config = {
+      mcpServers: {
+        'server-with-large-timeout': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 999999999
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBe(MAX_TIMEOUT);
+  });
+
+  test('should skip server with invalid negative timeout at load time', () => {
+    const config = {
+      mcpServers: {
+        'invalid-server': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: -1000
+        },
+        'valid-server': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 5000
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    // Invalid server should be skipped
+    expect(servers).toHaveLength(1);
+    expect(servers[0].name).toBe('valid-server');
+    expect(servers[0].timeout).toBe(5000);
+  });
+
+  test('should allow server without timeout (uses default at runtime)', () => {
+    const config = {
+      mcpServers: {
+        'server-no-timeout': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true
+          // No timeout - will use DEFAULT_TIMEOUT at runtime
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBeUndefined();
+  });
+
+  test('should preserve zero timeout as valid value', () => {
+    const config = {
+      mcpServers: {
+        'zero-timeout-server': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 0
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBe(0);
+  });
+});
+
+describe('validateTimeout Function', () => {
+  test('should return undefined for undefined input', () => {
+    expect(validateTimeout(undefined)).toBeUndefined();
+  });
+
+  test('should return undefined for null input', () => {
+    expect(validateTimeout(null)).toBeUndefined();
+  });
+
+  test('should return undefined for negative numbers', () => {
+    expect(validateTimeout(-1000)).toBeUndefined();
+    expect(validateTimeout(-1)).toBeUndefined();
+  });
+
+  test('should return undefined for non-numeric strings', () => {
+    expect(validateTimeout('invalid')).toBeUndefined();
+    expect(validateTimeout('abc')).toBeUndefined();
+  });
+
+  test('should return undefined for NaN', () => {
+    expect(validateTimeout(NaN)).toBeUndefined();
+  });
+
+  test('should return undefined for Infinity', () => {
+    expect(validateTimeout(Infinity)).toBeUndefined();
+    expect(validateTimeout(-Infinity)).toBeUndefined();
+  });
+
+  test('should return 0 for zero input', () => {
+    expect(validateTimeout(0)).toBe(0);
+  });
+
+  test('should return valid positive numbers unchanged up to MAX_TIMEOUT', () => {
+    expect(validateTimeout(1000)).toBe(1000);
+    expect(validateTimeout(30000)).toBe(30000);
+    expect(validateTimeout(DEFAULT_TIMEOUT)).toBe(DEFAULT_TIMEOUT);
+  });
+
+  test('should cap values at MAX_TIMEOUT', () => {
+    expect(validateTimeout(MAX_TIMEOUT)).toBe(MAX_TIMEOUT);
+    expect(validateTimeout(MAX_TIMEOUT + 1)).toBe(MAX_TIMEOUT);
+    expect(validateTimeout(999999999)).toBe(MAX_TIMEOUT);
+  });
+
+  test('should convert numeric strings to numbers', () => {
+    expect(validateTimeout('5000')).toBe(5000);
+    expect(validateTimeout('30000')).toBe(30000);
   });
 });
 

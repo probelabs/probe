@@ -12,6 +12,24 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
+ * Timeout configuration constants
+ */
+export const DEFAULT_TIMEOUT = 30000; // 30 seconds
+export const MAX_TIMEOUT = 600000; // 10 minutes max to prevent resource exhaustion
+
+/**
+ * Validate and normalize a timeout value
+ * @param {*} value - The timeout value to validate
+ * @returns {number|undefined} Validated timeout in ms, or undefined if invalid
+ */
+export function validateTimeout(value) {
+  if (value === undefined || value === null) return undefined;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num < 0) return undefined; // Invalid, use fallback
+  return Math.min(num, MAX_TIMEOUT); // Cap at max timeout
+}
+
+/**
  * Default MCP configuration structure
  */
 const DEFAULT_CONFIG = {
@@ -160,6 +178,15 @@ function mergeWithEnvironment(config) {
             config.mcpServers[normalizedName].env = { [property]: value };
           }
           break;
+        case 'TIMEOUT':
+          // Per-server timeout in milliseconds with validation
+          const validatedTimeout = validateTimeout(value);
+          if (validatedTimeout !== undefined) {
+            config.mcpServers[normalizedName].timeout = validatedTimeout;
+          } else {
+            console.error(`[MCP WARN] Invalid timeout value for ${normalizedName}: ${value}`);
+          }
+          break;
       }
     }
   }
@@ -219,6 +246,16 @@ export function parseEnabledServers(config) {
       }
     }
 
+    // Validate and normalize timeout if present (fail-fast validation)
+    if (server.timeout !== undefined) {
+      const validatedTimeout = validateTimeout(server.timeout);
+      if (validatedTimeout === undefined) {
+        console.error(`[MCP ERROR] Server ${name} has invalid timeout value: ${server.timeout}`);
+        continue;
+      }
+      server.timeout = validatedTimeout;
+    }
+
     servers.push(server);
   }
 
@@ -276,9 +313,17 @@ export function createSampleConfig() {
         transport: 'websocket',
         enabled: false,
         description: 'Custom WebSocket MCP server'
+      },
+      'slow-server-example': {
+        command: 'node',
+        args: ['path/to/slow-server.js'],
+        transport: 'stdio',
+        enabled: false,
+        timeout: 120000,
+        description: 'Example server with custom 2-minute timeout (overrides global setting)'
       }
     },
-    // Global settings
+    // Global settings (apply to all servers unless overridden per-server)
     settings: {
       timeout: 30000,
       retryCount: 3,
@@ -309,5 +354,8 @@ export default {
   loadMCPConfigurationFromPath,
   parseEnabledServers,
   createSampleConfig,
-  saveConfig
+  saveConfig,
+  validateTimeout,
+  DEFAULT_TIMEOUT,
+  MAX_TIMEOUT
 };
