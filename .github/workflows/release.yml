@@ -293,6 +293,24 @@ jobs:
       - name: Install dependencies
         run: cd examples/chat && npm install
 
+      - name: Run tests
+        run: cd examples/chat && npm test
+
+      - name: Verify package contents
+        run: |
+          cd examples/chat
+          echo "Verifying package contents with npm pack..."
+          npm pack --dry-run 2>&1 | tee pack-output.txt
+
+          # Verify critical files are included
+          for file in ChatSessionManager.js webServer.js index.js probeChat.js; do
+            if ! grep -q "$file" pack-output.txt; then
+              echo "ERROR: $file is missing from package!"
+              exit 1
+            fi
+          done
+          echo "All critical files verified in package"
+
       - name: Update package version
         run: |
           cd examples/chat

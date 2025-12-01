@@ -13,7 +13,7 @@
     "web": "node index.js --web",
     "build": "node build.js",
     "build:prod": "cross-env NODE_ENV=production node build.js",
-    "test": "cross-env NODE_ENV=test node --test test/integration/chatFlows.test.js test/integration/toolCalling.test.js",
+    "test": "cross-env NODE_ENV=test node --test test/unit/packageFiles.test.js test/integration/chatFlows.test.js test/integration/toolCalling.test.js",
     "test:chat": "cross-env NODE_ENV=test node --test test/integration/chatFlows.test.js",
     "test:tools": "cross-env NODE_ENV=test node --test test/integration/toolCalling.test.js",
     "prepublishOnly": "chmod +x ./bin/probe-chat.js"
@@ -82,6 +82,7 @@
     "test/",
     "index.js",
     "probeChat.js",
+    "ChatSessionManager.js",
     "tokenCounter.js",
     "tokenUsageDisplay.js",
     "webServer.js",
