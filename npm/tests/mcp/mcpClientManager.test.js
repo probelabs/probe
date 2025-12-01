@@ -4,7 +4,7 @@
 
 import { jest } from '@jest/globals';
 import { MCPClientManager, createTransport } from '../../src/agent/mcp/client.js';
-import { validateTimeout, DEFAULT_TIMEOUT, MAX_TIMEOUT } from '../../src/agent/mcp/config.js';
+import { validateTimeout, parseEnabledServers, DEFAULT_TIMEOUT, MAX_TIMEOUT } from '../../src/agent/mcp/config.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -251,6 +251,7 @@ describe('Per-Server Timeout Configuration', () => {
   });
 
   test('should use global timeout when no per-server timeout configured', async () => {
+    const CUSTOM_GLOBAL_TIMEOUT = 45000; // 45 seconds
     const config = {
       mcpServers: {
         'test-server': {
@@ -262,17 +263,19 @@ describe('Per-Server Timeout Configuration', () => {
         }
       },
       settings: {
-        timeout: 45000 // 45 second global timeout
+        timeout: CUSTOM_GLOBAL_TIMEOUT
       }
     };
 
     await manager.initialize(config);
 
     // Verify the config is stored correctly
-    expect(manager.config.settings.timeout).toBe(45000);
+    expect(manager.config.settings.timeout).toBe(CUSTOM_GLOBAL_TIMEOUT);
   });
 
   test('should prefer per-server timeout over global timeout', async () => {
+    const FAST_TIMEOUT = 5000; // 5 seconds
+    const SLOW_TIMEOUT = 120000; // 2 minutes
     const config = {
       mcpServers: {
         'fast-server': {
@@ -280,14 +283,14 @@ describe('Per-Server Timeout Configuration', () => {
           args: ['-e', 'console.log("fast")'],
           transport: 'stdio',
           enabled: true,
-          timeout: 5000 // 5 second per-server timeout
+          timeout: FAST_TIMEOUT
         },
         'slow-server': {
           command: 'node',
           args: ['-e', 'console.log("slow")'],
           transport: 'stdio',
           enabled: true,
-          timeout: 120000 // 2 minute per-server timeout
+          timeout: SLOW_TIMEOUT
         },
         'default-server': {
           command: 'node',
@@ -298,15 +301,15 @@ describe('Per-Server Timeout Configuration', () => {
         }
       },
       settings: {
-        timeout: 30000 // 30 second global timeout
+        timeout: DEFAULT_TIMEOUT
       }
     };
 
     await manager.initialize(config);
 
     // Verify per-server timeouts are stored in config
-    expect(config.mcpServers['fast-server'].timeout).toBe(5000);
-    expect(config.mcpServers['slow-server'].timeout).toBe(120000);
+    expect(config.mcpServers['fast-server'].timeout).toBe(FAST_TIMEOUT);
+    expect(config.mcpServers['slow-server'].timeout).toBe(SLOW_TIMEOUT);
     expect(config.mcpServers['default-server'].timeout).toBeUndefined();
   });
 
@@ -343,7 +346,7 @@ describe('Per-Server Timeout Configuration', () => {
         }
       },
       settings: {
-        timeout: 30000
+        timeout: DEFAULT_TIMEOUT
       }
     };
 
@@ -402,6 +405,112 @@ describe('Per-Server Timeout Configuration', () => {
 
     // Invalid server should be skipped, only valid server should be processed
     expect(result.total).toBe(1);
+  });
+});
+
+describe('parseEnabledServers Timeout Validation', () => {
+  test('should validate and normalize timeout at config load time', () => {
+    const config = {
+      mcpServers: {
+        'server-with-valid-timeout': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 60000
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBe(60000);
+  });
+
+  test('should cap excessive timeout to MAX_TIMEOUT at load time', () => {
+    const config = {
+      mcpServers: {
+        'server-with-large-timeout': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 999999999
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBe(MAX_TIMEOUT);
+  });
+
+  test('should skip server with invalid negative timeout at load time', () => {
+    const config = {
+      mcpServers: {
+        'invalid-server': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: -1000
+        },
+        'valid-server': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 5000
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    // Invalid server should be skipped
+    expect(servers).toHaveLength(1);
+    expect(servers[0].name).toBe('valid-server');
+    expect(servers[0].timeout).toBe(5000);
+  });
+
+  test('should allow server without timeout (uses default at runtime)', () => {
+    const config = {
+      mcpServers: {
+        'server-no-timeout': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true
+          // No timeout - will use DEFAULT_TIMEOUT at runtime
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBeUndefined();
+  });
+
+  test('should preserve zero timeout as valid value', () => {
+    const config = {
+      mcpServers: {
+        'zero-timeout-server': {
+          command: 'node',
+          args: ['server.js'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 0
+        }
+      }
+    };
+
+    const servers = parseEnabledServers(config);
+
+    expect(servers).toHaveLength(1);
+    expect(servers[0].timeout).toBe(0);
   });
 });
 
