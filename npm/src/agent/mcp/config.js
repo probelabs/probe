@@ -246,6 +246,16 @@ export function parseEnabledServers(config) {
       }
     }
 
+    // Validate and normalize timeout if present (fail-fast validation)
+    if (server.timeout !== undefined) {
+      const validatedTimeout = validateTimeout(server.timeout);
+      if (validatedTimeout === undefined) {
+        console.error(`[MCP ERROR] Server ${name} has invalid timeout value: ${server.timeout}`);
+        continue;
+      }
+      server.timeout = validatedTimeout;
+    }
+
     servers.push(server);
   }
 

@@ -4,6 +4,7 @@
 
 import { jest } from '@jest/globals';
 import { MCPClientManager, createTransport } from '../../src/agent/mcp/client.js';
+import { validateTimeout, DEFAULT_TIMEOUT, MAX_TIMEOUT } from '../../src/agent/mcp/config.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -352,7 +353,7 @@ describe('Per-Server Timeout Configuration', () => {
     expect(config.mcpServers['no-timeout-server'].timeout).toBe(0);
   });
 
-  test('should cap timeout at maximum value (10 minutes)', async () => {
+  test('should cap timeout at maximum value (10 minutes) at config load time', async () => {
     const config = {
       mcpServers: {
         'test-server': {
@@ -365,34 +366,92 @@ describe('Per-Server Timeout Configuration', () => {
       }
     };
 
-    await manager.initialize(config);
+    const result = await manager.initialize(config);
 
-    // Config stores the original value, but callTool will cap it
-    // This test verifies the config is stored
-    expect(config.mcpServers['test-server'].timeout).toBe(999999999);
+    // Timeout should be capped to MAX_TIMEOUT (600000) at load time
+    // The server config is normalized by parseEnabledServers
+    expect(result.total).toBe(1);
+    // Verify the client's stored config has the capped value
+    const clientInfo = manager.clients.get('test-server');
+    if (clientInfo) {
+      expect(clientInfo.config.timeout).toBe(MAX_TIMEOUT);
+    }
   });
 
-  test('should handle negative timeout by falling back to default', async () => {
+  test('should skip server with negative timeout at config load time', async () => {
     const config = {
       mcpServers: {
-        'test-server': {
+        'invalid-server': {
           command: 'node',
           args: ['-e', 'console.log("test")'],
           transport: 'stdio',
           enabled: true,
           timeout: -5000 // Invalid negative value
+        },
+        'valid-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 5000 // Valid value
         }
-      },
-      settings: {
-        timeout: 45000
       }
     };
 
-    await manager.initialize(config);
+    const result = await manager.initialize(config);
 
-    // Config stores the original value, but callTool will validate and use fallback
-    expect(config.mcpServers['test-server'].timeout).toBe(-5000);
-    // The validation happens in callTool, which will reject this and use global
+    // Invalid server should be skipped, only valid server should be processed
+    expect(result.total).toBe(1);
+  });
+});
+
+describe('validateTimeout Function', () => {
+  test('should return undefined for undefined input', () => {
+    expect(validateTimeout(undefined)).toBeUndefined();
+  });
+
+  test('should return undefined for null input', () => {
+    expect(validateTimeout(null)).toBeUndefined();
+  });
+
+  test('should return undefined for negative numbers', () => {
+    expect(validateTimeout(-1000)).toBeUndefined();
+    expect(validateTimeout(-1)).toBeUndefined();
+  });
+
+  test('should return undefined for non-numeric strings', () => {
+    expect(validateTimeout('invalid')).toBeUndefined();
+    expect(validateTimeout('abc')).toBeUndefined();
+  });
+
+  test('should return undefined for NaN', () => {
+    expect(validateTimeout(NaN)).toBeUndefined();
+  });
+
+  test('should return undefined for Infinity', () => {
+    expect(validateTimeout(Infinity)).toBeUndefined();
+    expect(validateTimeout(-Infinity)).toBeUndefined();
+  });
+
+  test('should return 0 for zero input', () => {
+    expect(validateTimeout(0)).toBe(0);
+  });
+
+  test('should return valid positive numbers unchanged up to MAX_TIMEOUT', () => {
+    expect(validateTimeout(1000)).toBe(1000);
+    expect(validateTimeout(30000)).toBe(30000);
+    expect(validateTimeout(DEFAULT_TIMEOUT)).toBe(DEFAULT_TIMEOUT);
+  });
+
+  test('should cap values at MAX_TIMEOUT', () => {
+    expect(validateTimeout(MAX_TIMEOUT)).toBe(MAX_TIMEOUT);
+    expect(validateTimeout(MAX_TIMEOUT + 1)).toBe(MAX_TIMEOUT);
+    expect(validateTimeout(999999999)).toBe(MAX_TIMEOUT);
+  });
+
+  test('should convert numeric strings to numbers', () => {
+    expect(validateTimeout('5000')).toBe(5000);
+    expect(validateTimeout('30000')).toBe(30000);
   });
 });
 
