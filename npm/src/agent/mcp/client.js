@@ -274,8 +274,10 @@ export class MCPClientManager {
         console.error(`[MCP DEBUG] Calling ${toolName} with args:`, JSON.stringify(args, null, 2));
       }
 
-      // Get timeout from config (default 30 seconds)
-      const timeout = this.config?.settings?.timeout || 30000;
+      // Get timeout: per-server timeout takes priority over global timeout (default 30 seconds)
+      const serverTimeout = clientInfo.config?.timeout;
+      const globalTimeout = this.config?.settings?.timeout || 30000;
+      const timeout = serverTimeout ?? globalTimeout;
 
       // Create a timeout promise
       const timeoutPromise = new Promise((_, reject) => {

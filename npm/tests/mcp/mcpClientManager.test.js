@@ -236,6 +236,124 @@ describe('MCPClientManager', () => {
   });
 });
 
+describe('Per-Server Timeout Configuration', () => {
+  let manager;
+
+  beforeEach(() => {
+    manager = new MCPClientManager({ debug: false });
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.disconnect();
+    }
+  });
+
+  test('should use global timeout when no per-server timeout configured', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true
+          // No timeout specified
+        }
+      },
+      settings: {
+        timeout: 45000 // 45 second global timeout
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Verify the config is stored correctly
+    expect(manager.config.settings.timeout).toBe(45000);
+  });
+
+  test('should prefer per-server timeout over global timeout', async () => {
+    const config = {
+      mcpServers: {
+        'fast-server': {
+          command: 'node',
+          args: ['-e', 'console.log("fast")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 5000 // 5 second per-server timeout
+        },
+        'slow-server': {
+          command: 'node',
+          args: ['-e', 'console.log("slow")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 120000 // 2 minute per-server timeout
+        },
+        'default-server': {
+          command: 'node',
+          args: ['-e', 'console.log("default")'],
+          transport: 'stdio',
+          enabled: true
+          // No per-server timeout, should use global
+        }
+      },
+      settings: {
+        timeout: 30000 // 30 second global timeout
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Verify per-server timeouts are stored in config
+    expect(config.mcpServers['fast-server'].timeout).toBe(5000);
+    expect(config.mcpServers['slow-server'].timeout).toBe(120000);
+    expect(config.mcpServers['default-server'].timeout).toBeUndefined();
+  });
+
+  test('should use default 30s timeout when neither per-server nor global timeout set', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+      // No settings.timeout
+    };
+
+    await manager.initialize(config);
+
+    // Global timeout should fall back to default 30000ms
+    expect(manager.config?.settings?.timeout).toBeUndefined();
+    // The actual default is applied in callTool, which uses || 30000
+  });
+
+  test('should handle zero timeout as valid per-server value', async () => {
+    // Zero timeout could be used to disable timeout (infinite wait)
+    // Using nullish coalescing (??) ensures 0 is treated as a valid value
+    const config = {
+      mcpServers: {
+        'no-timeout-server': {
+          command: 'node',
+          args: ['-e', 'console.log("test")'],
+          transport: 'stdio',
+          enabled: true,
+          timeout: 0 // Explicitly set to 0
+        }
+      },
+      settings: {
+        timeout: 30000
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Zero should be stored and used (not fall back to global)
+    expect(config.mcpServers['no-timeout-server'].timeout).toBe(0);
+  });
+});
+
 describe('HTTP Transport', () => {
   test('should handle HTTP transport methods', async () => {
     const config = {

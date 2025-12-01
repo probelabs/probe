@@ -276,9 +276,17 @@ export function createSampleConfig() {
         transport: 'websocket',
         enabled: false,
         description: 'Custom WebSocket MCP server'
+      },
+      'slow-server-example': {
+        command: 'node',
+        args: ['path/to/slow-server.js'],
+        transport: 'stdio',
+        enabled: false,
+        timeout: 120000,
+        description: 'Example server with custom 2-minute timeout (overrides global setting)'
       }
     },
-    // Global settings
+    // Global settings (apply to all servers unless overridden per-server)
     settings: {
       timeout: 30000,
       retryCount: 3,
