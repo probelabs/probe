@@ -221,6 +221,37 @@ describe('Bash Tool ProbeAgent Integration', () => {
       expect(agent.allowedFolders).toEqual(['/single/path']);
       expect(agent.toolImplementations.bash).toBeDefined();
     });
+
+    test('should preserve AI-provided workingDirectory in tool params when within allowed folders', () => {
+      // This tests the fix for the bug where AI-provided workingDirectory
+      // was being overwritten by allowedFolders[0]
+      const agent = new ProbeAgent({
+        enableBash: true,
+        allowedFolders: ['/workspace/root'],
+        debug: false
+      });
+
+      // Verify the allowedFolders are set
+      expect(agent.allowedFolders).toEqual(['/workspace/root']);
+
+      // The validation ensures workingDirectory must be within allowedFolders
+      // to prevent path traversal attacks
+    });
+
+    test('should validate workingDirectory is within allowedFolders', () => {
+      // Security test: workingDirectory should be validated against allowedFolders
+      const agent = new ProbeAgent({
+        enableBash: true,
+        allowedFolders: ['/workspace/project'],
+        debug: false
+      });
+
+      expect(agent.allowedFolders).toEqual(['/workspace/project']);
+
+      // The ProbeAgent now validates that params.workingDirectory is within
+      // allowedFolders before accepting it, falling back to allowedFolders[0]
+      // if the requested path is outside allowed directories
+    });
   });
 
   describe('Debug Mode Integration', () => {

@@ -6,7 +6,7 @@
 import { spawn } from 'child_process';
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
-import { parseCommandForExecution } from './bashCommandUtils.js';
+import { parseCommandForExecution, isComplexCommand } from './bashCommandUtils.js';
 
 /**
  * Execute a bash command with security controls
@@ -63,31 +63,46 @@ export async function executeBashCommand(command, options = {}) {
       ...env
     };
 
-    // Parse command for shell execution
-    // We use shell: false for security, so we need to parse manually
-    const args = parseCommandForExecution(command);
-    if (!args || args.length === 0) {
-      resolve({
-        success: false,
-        error: 'Failed to parse command',
-        stdout: '',
-        stderr: '',
-        exitCode: 1,
-        command,
-        workingDirectory: cwd,
-        duration: Date.now() - startTime
-      });
-      return;
-    }
+    // Check if this is a complex command (contains pipes, operators, etc.)
+    const isComplex = isComplexCommand(command);
 
-    const [cmd, ...cmdArgs] = args;
+    let cmd, cmdArgs, useShell;
+
+    if (isComplex) {
+      // For complex commands, use sh -c to execute through shell
+      // This is only reached if the permission checker allowed the complex command
+      cmd = 'sh';
+      cmdArgs = ['-c', command];
+      useShell = false; // We explicitly use sh -c, not spawn's shell option
+      if (debug) {
+        console.log(`[BashExecutor] Complex command - using sh -c`);
+      }
+    } else {
+      // Parse simple command for direct execution
+      const args = parseCommandForExecution(command);
+      if (!args || args.length === 0) {
+        resolve({
+          success: false,
+          error: 'Failed to parse command',
+          stdout: '',
+          stderr: '',
+          exitCode: 1,
+          command,
+          workingDirectory: cwd,
+          duration: Date.now() - startTime
+        });
+        return;
+      }
+      [cmd, ...cmdArgs] = args;
+      useShell = false;
+    }
 
     // Spawn the process
     const child = spawn(cmd, cmdArgs, {
       cwd,
       env: processEnv,
       stdio: ['ignore', 'pipe', 'pipe'], // stdin ignored, capture stdout/stderr
-      shell: false, // For security
+      shell: useShell, // false for security
       windowsHide: true
     });
 

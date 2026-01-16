@@ -2501,10 +2501,26 @@ When troubleshooting:
               // Execute native tool
               try {
                 // Add sessionId and workingDirectory to params for tool execution
+                // Validate and resolve workingDirectory
+                let resolvedWorkingDirectory = (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
+                if (params.workingDirectory) {
+                  const requestedDir = resolve(params.workingDirectory);
+                  // Check if the requested directory is within allowed folders
+                  const isWithinAllowed = !this.allowedFolders || this.allowedFolders.length === 0 ||
+                    this.allowedFolders.some(folder => {
+                      const resolvedFolder = resolve(folder);
+                      return requestedDir === resolvedFolder || requestedDir.startsWith(resolvedFolder + sep);
+                    });
+                  if (isWithinAllowed) {
+                    resolvedWorkingDirectory = requestedDir;
+                  } else if (this.debug) {
+                    console.error(`[DEBUG] Rejected workingDirectory "${params.workingDirectory}" - not within allowed folders`);
+                  }
+                }
                 const toolParams = {
                   ...params,
                   sessionId: this.sessionId,
-                  workingDirectory: (this.allowedFolders && this.allowedFolders[0]) || process.cwd()
+                  workingDirectory: resolvedWorkingDirectory
                 };
 
                 // Log tool execution in debug mode

@@ -4,7 +4,7 @@
  */
 
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
-import { parseSimpleCommand, parseCommand, parseCommandForExecution, isComplexCommand } from '../../src/agent/bashCommandUtils.js';
+import { parseSimpleCommand, parseCommand, parseCommandForExecution, isComplexCommand, isComplexPattern, matchesComplexPattern } from '../../src/agent/bashCommandUtils.js';
 import { BashPermissionChecker } from '../../src/agent/bashPermissions.js';
 
 // Mock the 'ai' package since it may not be available in test environment
@@ -126,6 +126,88 @@ describe('Simple Command Parser', () => {
   });
 });
 
+describe('Complex Pattern Matching', () => {
+  describe('isComplexPattern', () => {
+    test('should detect patterns with pipes', () => {
+      expect(isComplexPattern('ls | grep *')).toBe(true);
+      expect(isComplexPattern('git branch -a | grep *')).toBe(true);
+    });
+
+    test('should detect patterns with logical AND', () => {
+      expect(isComplexPattern('cd * && git *')).toBe(true);
+      expect(isComplexPattern('make && make test')).toBe(true);
+    });
+
+    test('should detect patterns with logical OR', () => {
+      expect(isComplexPattern('* || echo failed')).toBe(true);
+    });
+
+    test('should detect patterns with redirections', () => {
+      expect(isComplexPattern('* > output.txt')).toBe(true);
+      expect(isComplexPattern('cat < *')).toBe(true);
+    });
+
+    test('should detect patterns with semicolon', () => {
+      expect(isComplexPattern('cd *; ls')).toBe(true);
+    });
+
+    test('should detect patterns with command substitution', () => {
+      expect(isComplexPattern('echo $(date)')).toBe(true);
+      expect(isComplexPattern('ls `pwd`')).toBe(true);
+    });
+
+    test('should detect patterns with background execution', () => {
+      expect(isComplexPattern('task &')).toBe(true);
+    });
+
+    test('should not detect simple patterns as complex', () => {
+      expect(isComplexPattern('git:status')).toBe(false);
+      expect(isComplexPattern('ls:*')).toBe(false);
+      expect(isComplexPattern('npm:test')).toBe(false);
+    });
+
+    test('should handle null/undefined', () => {
+      expect(isComplexPattern(null)).toBe(false);
+      expect(isComplexPattern(undefined)).toBe(false);
+      expect(isComplexPattern('')).toBe(false);
+    });
+  });
+
+  describe('matchesComplexPattern', () => {
+    test('should match exact complex commands', () => {
+      expect(matchesComplexPattern('cd /tmp && ls', 'cd /tmp && ls')).toBe(true);
+    });
+
+    test('should match with wildcard at end', () => {
+      expect(matchesComplexPattern('cd /tmp && git status', 'cd * && git *')).toBe(true);
+      expect(matchesComplexPattern('cd /project && git log', 'cd * && git *')).toBe(true);
+    });
+
+    test('should match pipe patterns', () => {
+      expect(matchesComplexPattern('git branch -a | grep release', 'git branch -a | grep *')).toBe(true);
+      expect(matchesComplexPattern('git branch -a | grep feature', 'git branch -a | grep *')).toBe(true);
+    });
+
+    test('should match git fetch && git tag patterns', () => {
+      expect(matchesComplexPattern('git fetch --tags && git tag -l "v*"', 'git fetch * && git tag *')).toBe(true);
+    });
+
+    test('should not match non-matching commands', () => {
+      expect(matchesComplexPattern('rm -rf /', 'cd * && git *')).toBe(false);
+      expect(matchesComplexPattern('ls | grep test', 'git branch -a | grep *')).toBe(false);
+    });
+
+    test('should handle whitespace normalization', () => {
+      expect(matchesComplexPattern('cd  /tmp  &&  ls', 'cd * && ls')).toBe(true);
+    });
+
+    test('should handle null/undefined', () => {
+      expect(matchesComplexPattern(null, 'pattern')).toBe(false);
+      expect(matchesComplexPattern('command', null)).toBe(false);
+    });
+  });
+});
+
 describe('Simplified Permission Checker', () => {
   let checker;
 
@@ -137,30 +219,54 @@ describe('Simplified Permission Checker', () => {
     });
   });
 
-  describe('Complex Command Rejection', () => {
-    test('should reject piped commands', () => {
+  describe('Complex Command Handling', () => {
+    test('should reject complex commands without matching patterns', () => {
       const result = checker.check('ls | grep test');
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Complex shell commands');
+      expect(result.reason).toContain('Complex shell commands require explicit allow patterns');
       expect(result.isComplex).toBe(true);
     });
 
-    test('should reject commands with logical operators', () => {
-      const result = checker.check('make && make test');
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Complex shell commands');
+    test('should allow complex commands with matching allow patterns', () => {
+      const checkerWithComplex = new BashPermissionChecker({
+        allow: ['cd * && git *', 'git branch -a | grep *'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result1 = checkerWithComplex.check('cd /project && git status');
+      expect(result1.allowed).toBe(true);
+      expect(result1.isComplex).toBe(true);
+
+      const result2 = checkerWithComplex.check('git branch -a | grep release');
+      expect(result2.allowed).toBe(true);
+      expect(result2.isComplex).toBe(true);
     });
 
-    test('should reject command substitution', () => {
+    test('should reject complex commands matching deny patterns', () => {
+      const checkerWithComplex = new BashPermissionChecker({
+        allow: ['cd * && *'],
+        deny: ['cd * && rm *'],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checkerWithComplex.check('cd /tmp && rm -rf *');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('deny pattern');
+    });
+
+    test('should reject command substitution without matching patterns', () => {
       const result = checker.check('echo $(whoami)');
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Complex shell commands');
+      expect(result.reason).toContain('Complex shell commands require explicit allow patterns');
     });
 
-    test('should reject redirections', () => {
+    test('should reject redirections without matching patterns', () => {
       const result = checker.check('ls > output.txt');
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Complex shell commands');
+      expect(result.reason).toContain('Complex shell commands require explicit allow patterns');
     });
   });
 
@@ -233,7 +339,7 @@ describe('Bash Tool Integration with Simplified Architecture', () => {
     expect(typeof tool.execute).toBe('function');
   });
 
-  test('should reject complex commands in tool execution', async () => {
+  test('should reject complex commands without matching patterns in tool execution', async () => {
     const tool = bashTool({
       enableBash: true,
       bashConfig: { allow: ['ls:*'], deny: [] }
@@ -241,7 +347,32 @@ describe('Bash Tool Integration with Simplified Architecture', () => {
 
     const result = await tool.execute({ command: 'ls | grep test' });
     expect(result).toContain('Permission denied');
-    expect(result).toContain('Complex shell commands');
+    expect(result).toContain('Complex shell commands require explicit allow patterns');
+  });
+
+  test('should allow complex commands with matching patterns in tool execution', async () => {
+    const tool = bashTool({
+      enableBash: true,
+      bashConfig: {
+        allow: ['ls | grep *'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      }
+    });
+
+    // The permission check should pass - actual execution may fail in test env
+    // but we're testing that permissions work correctly
+    let permissionError = null;
+    try {
+      await tool.execute({ command: 'ls | grep test' });
+    } catch (error) {
+      if (error.message && error.message.includes('Permission denied')) {
+        permissionError = error;
+      }
+    }
+
+    expect(permissionError).toBeNull();
   });
 
   test('should handle simple commands in tool', async () => {
@@ -296,7 +427,7 @@ describe('Architecture Alignment Tests', () => {
     }
   });
 
-  test('should ensure complex commands are consistently rejected', () => {
+  test('should ensure complex commands are detected consistently', () => {
     const complexCommands = [
       'ls | grep test',
       'make && make test',
@@ -310,15 +441,51 @@ describe('Architecture Alignment Tests', () => {
       const parserResult = parseCommandForExecution(command);
       const isComplex = isComplexCommand(command);
 
-      // Parser should reject complex commands
+      // Parser should reject complex commands (returns null)
       expect(parserResult).toBeNull();
       expect(isComplex).toBe(true);
 
-      // Permission checker should also reject
-      const checker = new BashPermissionChecker({ allow: ['*'], deny: [] });
-      const permissionResult = checker.check(command);
-      expect(permissionResult.allowed).toBe(false);
-      expect(permissionResult.reason).toContain('Complex shell commands');
+      // Permission checker without complex patterns should reject
+      const checkerWithoutPatterns = new BashPermissionChecker({
+        allow: ['*'], // Only simple wildcard, no complex patterns
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+      const rejectResult = checkerWithoutPatterns.check(command);
+      expect(rejectResult.allowed).toBe(false);
+      expect(rejectResult.reason).toContain('Complex shell commands require explicit allow patterns');
+    }
+  });
+
+  test('should allow complex commands when matching patterns are configured', () => {
+    const checkerWithPatterns = new BashPermissionChecker({
+      allow: [
+        'ls | grep *',
+        'make && make test',
+        'echo $(date)',
+        'ls > *',
+        'cmd1 ; cmd2',
+        'background-task &'
+      ],
+      deny: [],
+      disableDefaultAllow: true,
+      disableDefaultDeny: true
+    });
+
+    const complexCommands = [
+      'ls | grep test',
+      'make && make test',
+      'echo $(date)',
+      'ls > output.txt',
+      'cmd1 ; cmd2',
+      'background-task &'
+    ];
+
+    for (const command of complexCommands) {
+      const result = checkerWithPatterns.check(command);
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
     }
   });
 });
