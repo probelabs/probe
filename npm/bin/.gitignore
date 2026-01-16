@@ -5,3 +5,5 @@
 !.gitkeep
 !README.md
 !probe
+!binaries
+!binaries/**
