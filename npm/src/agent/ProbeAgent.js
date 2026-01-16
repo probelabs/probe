@@ -2504,7 +2504,8 @@ When troubleshooting:
                 const toolParams = {
                   ...params,
                   sessionId: this.sessionId,
-                  workingDirectory: (this.allowedFolders && this.allowedFolders[0]) || process.cwd()
+                  // Only set default workingDirectory if not already provided in params
+                  workingDirectory: params.workingDirectory || (this.allowedFolders && this.allowedFolders[0]) || process.cwd()
                 };
 
                 // Log tool execution in debug mode

@@ -4,7 +4,7 @@
  */
 
 import { DEFAULT_ALLOW_PATTERNS, DEFAULT_DENY_PATTERNS } from './bashDefaults.js';
-import { parseCommand, isComplexCommand } from './bashCommandUtils.js';
+import { parseCommand, isComplexCommand, isComplexPattern, matchesComplexPattern } from './bashCommandUtils.js';
 
 /**
  * Check if a pattern matches a parsed command
@@ -125,7 +125,7 @@ export class BashPermissionChecker {
   }
 
   /**
-   * Check if a simple command is allowed (rejects complex commands for security)
+   * Check if a simple command is allowed (complex commands allowed if they match patterns)
    * @param {string} command - Command to check
    * @returns {Object} Permission result
    */
@@ -138,19 +138,17 @@ export class BashPermissionChecker {
       };
     }
 
-    // First check if this is a complex command - reject immediately for security
-    if (isComplexCommand(command)) {
-      return {
-        allowed: false,
-        reason: 'Complex shell commands with pipes, operators, or redirections are not supported for security reasons',
-        command: command,
-        isComplex: true
-      };
+    // Check if this is a complex command
+    const commandIsComplex = isComplexCommand(command);
+
+    if (commandIsComplex) {
+      // For complex commands, check against complex patterns in allow/deny lists
+      return this._checkComplexCommand(command);
     }
 
     // Parse the simple command
     const parsed = parseCommand(command);
-    
+
     if (parsed.error) {
       return {
         allowed: false,
@@ -203,12 +201,75 @@ export class BashPermissionChecker {
       parsed: parsed,
       isComplex: false
     };
-    
+
     if (this.debug) {
       console.log(`[BashPermissions] ALLOWED - command passed all checks`);
     }
-    
+
     return result;
+  }
+
+  /**
+   * Check a complex command against complex patterns in allow/deny lists
+   * @private
+   * @param {string} command - Complex command to check
+   * @returns {Object} Permission result
+   */
+  _checkComplexCommand(command) {
+    if (this.debug) {
+      console.log(`[BashPermissions] Checking complex command: "${command}"`);
+    }
+
+    // Get complex patterns from allow and deny lists
+    const complexAllowPatterns = this.allowPatterns.filter(p => isComplexPattern(p));
+    const complexDenyPatterns = this.denyPatterns.filter(p => isComplexPattern(p));
+
+    if (this.debug) {
+      console.log(`[BashPermissions] Complex allow patterns: ${complexAllowPatterns.length}`);
+      console.log(`[BashPermissions] Complex deny patterns: ${complexDenyPatterns.length}`);
+    }
+
+    // Check deny patterns first (deny takes precedence)
+    for (const pattern of complexDenyPatterns) {
+      if (matchesComplexPattern(command, pattern)) {
+        if (this.debug) {
+          console.log(`[BashPermissions] DENIED - matches complex deny pattern: ${pattern}`);
+        }
+        return {
+          allowed: false,
+          reason: `Command matches deny pattern: ${pattern}`,
+          command: command,
+          isComplex: true,
+          matchedPatterns: [pattern]
+        };
+      }
+    }
+
+    // Check allow patterns
+    for (const pattern of complexAllowPatterns) {
+      if (matchesComplexPattern(command, pattern)) {
+        if (this.debug) {
+          console.log(`[BashPermissions] ALLOWED - matches complex allow pattern: ${pattern}`);
+        }
+        return {
+          allowed: true,
+          command: command,
+          isComplex: true,
+          matchedPattern: pattern
+        };
+      }
+    }
+
+    // No matching complex pattern found - reject complex command
+    if (this.debug) {
+      console.log(`[BashPermissions] DENIED - no matching complex pattern found`);
+    }
+    return {
+      allowed: false,
+      reason: 'Complex shell commands require explicit allow patterns (e.g., "cd * && git *")',
+      command: command,
+      isComplex: true
+    };
   }
 
   /**

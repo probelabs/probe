@@ -160,6 +160,69 @@ export function isComplexCommand(command) {
 }
 
 /**
+ * Check if a pattern is a complex pattern (contains shell operators)
+ * Complex patterns are used to match full command strings including operators
+ * @param {string} pattern - Pattern to check
+ * @returns {boolean} True if pattern contains shell operators
+ */
+export function isComplexPattern(pattern) {
+  if (!pattern || typeof pattern !== 'string') return false;
+
+  // Check for operators in the pattern (aligned with complexPatterns in parseSimpleCommand)
+  const operatorPatterns = [
+    /\|/,           // Pipes
+    /&&/,           // Logical AND
+    /\|\|/,         // Logical OR
+    /;/,            // Command separator
+    /&$/,           // Background execution
+    /\$\(/,         // Command substitution $()
+    /`/,            // Command substitution ``
+    />/,            // Redirection >
+    /</,            // Redirection <
+  ];
+
+  return operatorPatterns.some(p => p.test(pattern));
+}
+
+/**
+ * Convert a glob-style pattern to regex for matching
+ * Supports * as wildcard (matches any characters except operators)
+ * @param {string} pattern - Glob pattern
+ * @returns {RegExp} Compiled regex
+ */
+function globToRegex(pattern) {
+  // Escape regex special characters except *
+  let escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&');
+  // Convert * to .*? (non-greedy match)
+  escaped = escaped.replace(/\*/g, '.*?');
+  // Make it match the full string
+  return new RegExp('^' + escaped + '$', 'i');
+}
+
+/**
+ * Match a command string against a complex pattern
+ * Complex patterns use glob-style wildcards (*) for matching
+ * @param {string} command - Full command string
+ * @param {string} pattern - Complex pattern with wildcards
+ * @returns {boolean} True if command matches the pattern
+ */
+export function matchesComplexPattern(command, pattern) {
+  if (!command || !pattern) return false;
+
+  // Normalize whitespace
+  const normalizedCommand = command.trim().replace(/\s+/g, ' ');
+  const normalizedPattern = pattern.trim().replace(/\s+/g, ' ');
+
+  try {
+    const regex = globToRegex(normalizedPattern);
+    return regex.test(normalizedCommand);
+  } catch (e) {
+    // If regex fails, fall back to exact match
+    return normalizedCommand === normalizedPattern;
+  }
+}
+
+/**
  * Legacy compatibility function - parses command for permission checking
  * @param {string} command - Command to parse
  * @returns {Object} Parse result compatible with existing permission checker
