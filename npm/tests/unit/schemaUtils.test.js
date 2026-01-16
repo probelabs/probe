@@ -211,6 +211,102 @@ describe('Schema Utilities', () => {
       expect(parsed.key).toBe('value');
       expect(parsed.nested.array).toEqual([1, 2, 3]);
     });
+
+    // Tests for <result> tag stripping (fixes GitHub issue #336)
+    describe('<result> tag stripping', () => {
+      test('should strip <result> wrapper from JSON content', () => {
+        const input = '<result>{"intent": "code_help", "topic": "How does rate limiting work?"}</result>';
+        const result = cleanSchemaResponse(input);
+
+        expect(result).not.toContain('<result>');
+        expect(result).not.toContain('</result>');
+        expect(() => JSON.parse(result)).not.toThrow();
+
+        const parsed = JSON.parse(result);
+        expect(parsed.intent).toBe('code_help');
+        expect(parsed.topic).toBe('How does rate limiting work?');
+      });
+
+      test('should strip <result> wrapper with whitespace around JSON', () => {
+        const input = '<result>\n  {"key": "value"}\n</result>';
+        const result = cleanSchemaResponse(input);
+
+        expect(result).toBe('{"key": "value"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should strip <result> wrapper with multiline JSON', () => {
+        const input = `<result>
+{
+  "intent": "code_help",
+  "topic": "Rate limiting",
+  "details": ["Redis", "Gateway"]
+}
+</result>`;
+        const result = cleanSchemaResponse(input);
+
+        expect(result).not.toContain('<result>');
+        expect(result).not.toContain('</result>');
+        expect(() => JSON.parse(result)).not.toThrow();
+
+        const parsed = JSON.parse(result);
+        expect(parsed.intent).toBe('code_help');
+        expect(parsed.details).toEqual(['Redis', 'Gateway']);
+      });
+
+      test('should handle <result> wrapper containing code block', () => {
+        // Some models might wrap a code block in <result> tags
+        const input = '<result>\n```json\n{"test": "value"}\n```\n</result>';
+        const result = cleanSchemaResponse(input);
+
+        // Should strip both <result> and code block
+        expect(result).not.toContain('<result>');
+        expect(result).not.toContain('</result>');
+        expect(result).not.toContain('```');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should not strip partial <result> tags', () => {
+        // Only opening tag - should not be stripped
+        const input1 = '<result>{"test": "value"}';
+        expect(cleanSchemaResponse(input1)).toBe(input1);
+
+        // Only closing tag - should not be stripped
+        const input2 = '{"test": "value"}</result>';
+        expect(cleanSchemaResponse(input2)).toBe(input2);
+      });
+
+      test('should not strip <result> when embedded in other content', () => {
+        const input = 'Here is the result: <result>{"test": "value"}</result> as requested';
+        expect(cleanSchemaResponse(input)).toBe(input);
+      });
+
+      test('should handle nested <result> tags correctly', () => {
+        // The regex should match the outermost <result> tags
+        const input = '<result><result>{"nested": true}</result></result>';
+        const result = cleanSchemaResponse(input);
+
+        // After stripping outer tags, inner content should remain
+        // Then recursive call strips inner tags
+        expect(result).toBe('{"nested": true}');
+      });
+
+      test('should strip <result> wrapper from array JSON', () => {
+        const input = '<result>[{"id": 1}, {"id": 2}]</result>';
+        const result = cleanSchemaResponse(input);
+
+        expect(result).toBe('[{"id": 1}, {"id": 2}]');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should preserve <result> inside JSON string values', () => {
+        // <result> appearing as content inside a JSON value should be preserved
+        const input = '{"message": "The <result> tag was found"}';
+        const result = cleanSchemaResponse(input);
+
+        expect(result).toBe('{"message": "The <result> tag was found"}');
+      });
+    });
   });
 
   describe('validateJsonResponse', () => {

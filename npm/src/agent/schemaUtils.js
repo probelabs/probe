@@ -253,6 +253,14 @@ export function cleanSchemaResponse(response) {
 
   const trimmed = response.trim();
 
+  // Strip <result>...</result> wrapper if present (legacy XML format from some AI models)
+  // Some models like Google Gemini wrap JSON in <result> tags despite instructions not to
+  const resultWrapperMatch = trimmed.match(/^<result>\s*([\s\S]*?)\s*<\/result>$/);
+  if (resultWrapperMatch) {
+    // Recursively clean the inner content in case there are nested patterns
+    return cleanSchemaResponse(resultWrapperMatch[1]);
+  }
+
   // First, look for JSON after code block markers - similar to mermaid extraction
   // Try with json language specifier
   const jsonBlockMatch = trimmed.match(/```json\s*\n([\s\S]*?)\n```/);
