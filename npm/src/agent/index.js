@@ -520,7 +520,7 @@ class ProbeAgentMcpServer {
                 // Retry once with correction prompt
                 const correctionPrompt = createJsonCorrectionPrompt(result, schema, validation.error);
                 try {
-                  result = await agent.answer(correctionPrompt, [], { schema, _schemaFormatted: true });
+                  result = await agent.answer(correctionPrompt, [], { schema, _schemaFormatted: true, _disableTools: true });
                   result = cleanSchemaResponse(result);
                   
                   // Validate again after correction
@@ -863,11 +863,11 @@ async function main() {
             try {
               if (appTracer) {
                 result = await appTracer.withSpan('agent.json_correction',
-                  () => agent.answer(correctionPrompt, [], { schema, _schemaFormatted: true }),
+                  () => agent.answer(correctionPrompt, [], { schema, _schemaFormatted: true, _disableTools: true }),
                   { 'original_error': validation.error }
                 );
               } else {
-                result = await agent.answer(correctionPrompt, [], { schema, _schemaFormatted: true });
+                result = await agent.answer(correctionPrompt, [], { schema, _schemaFormatted: true, _disableTools: true });
               }
               result = cleanSchemaResponse(result);
               

@@ -1009,16 +1009,16 @@ describe('Schema Utilities', () => {
       expect(prompt).toContain(schema);
       expect(prompt).toContain(error);
       expect(prompt).toContain('CRITICAL JSON ERROR:');
-      expect(prompt).toContain('Return ONLY the corrected JSON');
+      expect(prompt).toContain('attempt_completion with ONLY valid JSON');
     });
 
     test('should create more urgent prompt for second retry (retryCount 1)', () => {
       const invalidResponse = '{"test": value}';
       const schema = '{"test": "string"}';
       const error = 'Unexpected token v in JSON';
-      
+
       const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, 1);
-      
+
       expect(prompt).toContain('URGENT - JSON PARSING FAILED:');
       expect(prompt).toContain('second chance');
       expect(prompt).toContain('ABSOLUTELY NO explanatory text');
@@ -1028,13 +1028,13 @@ describe('Schema Utilities', () => {
       const invalidResponse = '{"test": value}';
       const schema = '{"test": "string"}';
       const error = 'Unexpected token v in JSON';
-      
+
       const prompt = createJsonCorrectionPrompt(invalidResponse, schema, error, 2);
-      
+
       expect(prompt).toContain('FINAL ATTEMPT - CRITICAL JSON ERROR:');
       expect(prompt).toContain('final retry');
-      expect(prompt).toContain('EXAMPLE:');
-      expect(prompt).toContain('NOT:');
+      expect(prompt).toContain('CORRECT:');
+      expect(prompt).toContain('WRONG:');
     });
 
     test('should cap at highest strength level for retryCount > 2', () => {

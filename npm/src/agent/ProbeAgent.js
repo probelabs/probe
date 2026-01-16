@@ -2372,31 +2372,41 @@ When troubleshooting:
 
         // Parse tool call from response with valid tools list
         // Build validTools based on allowedTools configuration (same pattern as getSystemMessage)
+        // When _disableTools is set, only allow attempt_completion for JSON correction flows
         const validTools = [];
-        if (this.allowedTools.isEnabled('search')) validTools.push('search');
-        if (this.allowedTools.isEnabled('query')) validTools.push('query');
-        if (this.allowedTools.isEnabled('extract')) validTools.push('extract');
-        if (this.allowedTools.isEnabled('listFiles')) validTools.push('listFiles');
-        if (this.allowedTools.isEnabled('searchFiles')) validTools.push('searchFiles');
-        if (this.allowedTools.isEnabled('readImage')) validTools.push('readImage');
-        if (this.allowedTools.isEnabled('attempt_completion')) validTools.push('attempt_completion');
+        if (options._disableTools) {
+          // Only allow attempt_completion for JSON correction - no search/query/edit tools
+          validTools.push('attempt_completion');
+          if (this.debug) {
+            console.log(`[DEBUG] Tools disabled for this call - only attempt_completion allowed`);
+          }
+        } else {
+          if (this.allowedTools.isEnabled('search')) validTools.push('search');
+          if (this.allowedTools.isEnabled('query')) validTools.push('query');
+          if (this.allowedTools.isEnabled('extract')) validTools.push('extract');
+          if (this.allowedTools.isEnabled('listFiles')) validTools.push('listFiles');
+          if (this.allowedTools.isEnabled('searchFiles')) validTools.push('searchFiles');
+          if (this.allowedTools.isEnabled('readImage')) validTools.push('readImage');
+          if (this.allowedTools.isEnabled('attempt_completion')) validTools.push('attempt_completion');
 
-        // Edit tools (require both allowEdit flag AND allowedTools permission)
-        if (this.allowEdit && this.allowedTools.isEnabled('implement')) {
-          validTools.push('implement', 'edit', 'create');
+          // Edit tools (require both allowEdit flag AND allowedTools permission)
+          if (this.allowEdit && this.allowedTools.isEnabled('implement')) {
+            validTools.push('implement', 'edit', 'create');
+          }
+          // Bash tool (require both enableBash flag AND allowedTools permission)
+          if (this.enableBash && this.allowedTools.isEnabled('bash')) {
+            validTools.push('bash');
+          }
+          // Delegate tool (require both enableDelegate flag AND allowedTools permission)
+          if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
+            validTools.push('delegate');
+          }
         }
-        // Bash tool (require both enableBash flag AND allowedTools permission)
-        if (this.enableBash && this.allowedTools.isEnabled('bash')) {
-          validTools.push('bash');
-        }
-        // Delegate tool (require both enableDelegate flag AND allowedTools permission)
-        if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
-          validTools.push('delegate');
-        }
-        
+
         // Try parsing with hybrid parser that supports both native and MCP tools
+        // When _disableTools is set, skip MCP tools entirely
         const nativeTools = validTools;
-        const parsedTool = this.mcpBridge
+        const parsedTool = (this.mcpBridge && !options._disableTools)
           ? parseHybridXmlToolCall(assistantResponseContent, nativeTools, this.mcpBridge)
           : parseXmlToolCallWithThinking(assistantResponseContent, validTools);
         if (parsedTool) {
@@ -3164,7 +3174,8 @@ Convert your previous response content into actual JSON data that follows this s
               finalResult = await this.answer(correctionPrompt, [], {
                 ...options,
                 _schemaFormatted: true,
-                _skipValidation: true  // Skip validation in recursive correction calls to prevent loops
+                _skipValidation: true,  // Skip validation in recursive correction calls to prevent loops
+                _disableTools: true     // Only allow attempt_completion - prevent AI from using search/query tools
               });
               finalResult = cleanSchemaResponse(finalResult);
               
