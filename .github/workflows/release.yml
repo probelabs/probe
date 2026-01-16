@@ -264,7 +264,14 @@ jobs:
         run: cd npm && npm run build
 
       - name: Publish to npm
-        run: cd npm && npm publish --access public --provenance
+        shell: bash
+        run: |
+          cd npm
+          if [[ "$VERSION" == *-rc* ]] || [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
+            npm publish --access public --provenance --tag next
+          else
+            npm publish --access public --provenance
+          fi
 
   publish-probe-chat-package:
     name: Publish Probe Chat Package to npm
@@ -320,7 +327,14 @@ jobs:
           echo "Updated probe-chat package.json to version $VERSION"
 
       - name: Publish to npm
-        run: cd examples/chat && npm publish --access public --provenance
+        shell: bash
+        run: |
+          cd examples/chat
+          if [[ "$VERSION" == *-rc* ]] || [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
+            npm publish --access public --provenance --tag next
+          else
+            npm publish --access public --provenance
+          fi
 
 # The publish-probe-web-package job has been removed as the web functionality
 # has been merged into the probe-chat package
