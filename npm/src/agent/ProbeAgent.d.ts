@@ -19,6 +19,21 @@ export interface ProbeAgentOptions {
   allowEdit?: boolean;
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;
+  /** Enable bash tool for command execution */
+  enableBash?: boolean;
+  /** Bash tool configuration (allow/deny patterns) */
+  bashConfig?: {
+    /** Additional allowed command patterns */
+    allow?: string[];
+    /** Additional denied command patterns */
+    deny?: string[];
+    /** Disable default allow list */
+    disableDefaultAllow?: boolean;
+    /** Disable default deny list */
+    disableDefaultDeny?: boolean;
+    /** Enable debug logging for permission checks */
+    debug?: boolean;
+  };
   /** Search directory path */
   path?: string;
   /** Force specific AI provider */

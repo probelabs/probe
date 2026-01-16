@@ -121,6 +121,70 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
         })
       );
     });
+
+    it('should inherit enableBash from parent when true', async () => {
+      const task = 'Test task with bash access';
+
+      await delegate({
+        task,
+        enableBash: true
+      });
+
+      // Check that enableBash is inherited
+      expect(MockProbeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enableBash: true
+        })
+      );
+    });
+
+    it('should inherit bashConfig from parent', async () => {
+      const task = 'Test task with bash config';
+      const bashConfig = {
+        allow: ['git', 'npm'],
+        deny: ['rm', 'sudo']
+      };
+
+      await delegate({
+        task,
+        enableBash: true,
+        bashConfig
+      });
+
+      // Check that bashConfig is inherited
+      expect(MockProbeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enableBash: true,
+          bashConfig: bashConfig
+        })
+      );
+    });
+
+    it('should default enableBash to false when not provided', async () => {
+      const task = 'Test task without bash';
+
+      await delegate({ task });
+
+      // Check that enableBash defaults to false
+      expect(MockProbeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          enableBash: false
+        })
+      );
+    });
+
+    it('should default bashConfig to null when not provided', async () => {
+      const task = 'Test task without bash config';
+
+      await delegate({ task });
+
+      // Check that bashConfig defaults to null
+      expect(MockProbeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          bashConfig: null
+        })
+      );
+    });
   });
 
   describe('Concurrent delegation limits', () => {
