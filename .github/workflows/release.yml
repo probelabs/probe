@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write # Required to upload release assets
+  id-token: write # Required for npm OIDC authentication
 
 jobs:
   build-and-release:
@@ -209,10 +210,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
           registry-url: "https://registry.npmjs.org/"
-          scope: "@probelabs"
-          token: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
         run: cd npm && npm install
@@ -262,9 +261,7 @@ jobs:
         run: cd npm && npm run build
 
       - name: Publish to npm
-        run: cd npm && npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: cd npm && npm publish --access public --provenance
 
   publish-probe-chat-package:
     name: Publish Probe Chat Package to npm
@@ -285,10 +282,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "18"
+          node-version: "20"
           registry-url: "https://registry.npmjs.org/"
-          scope: "@probelabs"
-          token: ${{ secrets.NPM_TOKEN }}
 
       - name: Install dependencies
         run: cd examples/chat && npm install
@@ -319,9 +314,8 @@ jobs:
           echo "Updated probe-chat package.json to version $VERSION"
 
       - name: Publish to npm
-        run: cd examples/chat && npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: cd examples/chat && npm publish --access public --provenance
+
 # The publish-probe-web-package job has been removed as the web functionality
 # has been merged into the probe-chat package
 
