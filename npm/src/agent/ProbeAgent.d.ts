@@ -23,10 +23,16 @@ export interface ProbeAgentOptions {
   enableBash?: boolean;
   /** Bash tool configuration (allow/deny patterns) */
   bashConfig?: {
-    /** Allowed command patterns */
+    /** Additional allowed command patterns */
     allow?: string[];
-    /** Denied command patterns */
+    /** Additional denied command patterns */
     deny?: string[];
+    /** Disable default allow list */
+    disableDefaultAllow?: boolean;
+    /** Disable default deny list */
+    disableDefaultDeny?: boolean;
+    /** Enable debug logging for permission checks */
+    debug?: boolean;
   };
   /** Search directory path */
   path?: string;
