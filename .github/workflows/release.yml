@@ -195,6 +195,9 @@ jobs:
     name: Publish Node.js Package to npm
     needs: build-and-release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -210,8 +213,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org/"
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: cd npm && npm install
@@ -261,12 +264,15 @@ jobs:
         run: cd npm && npm run build
 
       - name: Publish to npm
-        run: cd npm && npm publish --access public --provenance
+        run: cd npm && npm publish --access public
 
   publish-probe-chat-package:
     name: Publish Probe Chat Package to npm
     needs: publish-npm-package
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -282,8 +288,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          registry-url: "https://registry.npmjs.org/"
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
 
       - name: Install dependencies
         run: cd examples/chat && npm install
@@ -314,7 +320,7 @@ jobs:
           echo "Updated probe-chat package.json to version $VERSION"
 
       - name: Publish to npm
-        run: cd examples/chat && npm publish --access public --provenance
+        run: cd examples/chat && npm publish --access public
 
 # The publish-probe-web-package job has been removed as the web functionality
 # has been merged into the probe-chat package
