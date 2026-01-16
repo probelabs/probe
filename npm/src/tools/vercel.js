@@ -239,10 +239,12 @@ export const extractTool = (options = {}) => {
  * @param {number} [options.timeout=300] - Default timeout in seconds
  * @param {string} [options.cwd] - Working directory to use if not specified in call
  * @param {string[]} [options.allowedFolders] - Allowed folders for workspace isolation
+ * @param {boolean} [options.enableBash=false] - Enable bash tool for sub-agents
+ * @param {Object} [options.bashConfig] - Bash configuration (allow/deny patterns)
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig } = options;
 
 	return tool({
 		name: 'delegate',
@@ -309,7 +311,9 @@ export const delegateTool = (options = {}) => {
 				path: effectivePath,
 				provider,
 				model,
-				tracer
+				tracer,
+				enableBash,
+				bashConfig
 			});
 
 			return result;

@@ -176,6 +176,8 @@ const delegationManager = new DelegationManager();
  * @param {string} [options.provider] - AI provider (inherited from parent)
  * @param {string} [options.model] - AI model (inherited from parent)
  * @param {Object} [options.tracer=null] - Telemetry tracer instance
+ * @param {boolean} [options.enableBash=false] - Enable bash tool (inherited from parent)
+ * @param {Object} [options.bashConfig] - Bash configuration (inherited from parent)
  * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({
@@ -188,7 +190,9 @@ export async function delegate({
 	parentSessionId = null,
 	path = null,
 	provider = null,
-	model = null
+	model = null,
+	enableBash = false,
+	bashConfig = null
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -234,9 +238,11 @@ export async function delegate({
 			maxIterations: remainingIterations,
 			debug,
 			tracer,
-			path,      // Inherit from parent
-			provider,  // Inherit from parent
-			model      // Inherit from parent
+			path,       // Inherit from parent
+			provider,   // Inherit from parent
+			model,      // Inherit from parent
+			enableBash, // Inherit from parent
+			bashConfig  // Inherit from parent
 		});
 
 		if (debug) {

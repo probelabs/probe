@@ -51,7 +51,9 @@ describe('Delegate Tool Configuration', () => {
         path: undefined, // No cwd or allowedFolders configured
         provider: undefined,
         model: undefined,
-        tracer: undefined
+        tracer: undefined,
+        enableBash: false,
+        bashConfig: undefined
       });
 
       expect(result).toBe('Mock delegate response');
@@ -139,6 +141,82 @@ describe('Delegate Tool Configuration', () => {
 
       // Tool now throws errors instead of returning error strings
       await expect(tool.execute({ task })).rejects.toThrow('Delegation process failed');
+    });
+
+    it('should pass enableBash to delegate function when enabled', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300,
+        enableBash: true
+      });
+      const task = 'Run git commands to analyze history';
+
+      await tool.execute({ task });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          enableBash: true
+        })
+      );
+    });
+
+    it('should pass bashConfig to delegate function', async () => {
+      const bashConfig = {
+        allow: ['git', 'npm', 'node'],
+        deny: ['rm', 'sudo', 'chmod']
+      };
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300,
+        enableBash: true,
+        bashConfig
+      });
+      const task = 'Run npm commands';
+
+      await tool.execute({ task });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          enableBash: true,
+          bashConfig
+        })
+      );
+    });
+
+    it('should default enableBash to false when not specified', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300
+      });
+      const task = 'Search code without bash';
+
+      await tool.execute({ task });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          enableBash: false
+        })
+      );
+    });
+
+    it('should pass undefined bashConfig when not specified', async () => {
+      const tool = delegateTool({
+        debug: false,
+        timeout: 300
+      });
+      const task = 'Search code without bash config';
+
+      await tool.execute({ task });
+
+      expect(mockDelegate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          task,
+          bashConfig: undefined
+        })
+      );
     });
   });
 

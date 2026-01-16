@@ -94,7 +94,9 @@ describe('Delegate Tool Integration', () => {
         path: undefined,
         provider: undefined,
         model: undefined,
-        tracer: undefined
+        tracer: undefined,
+        enableBash: false,
+        bashConfig: undefined
       });
 
       expect(result).toBe('Security analysis complete: Found 3 vulnerabilities');
