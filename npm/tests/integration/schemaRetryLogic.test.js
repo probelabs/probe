@@ -26,19 +26,19 @@ describe('Schema Validation Retry Logic Integration Tests', () => {
     // Test the first retry (retryCount 0)
     const prompt0 = schemaUtils.createJsonCorrectionPrompt(invalidResponse, schema, error, 0);
     expect(prompt0).toContain('CRITICAL JSON ERROR:');
-    expect(prompt0).toContain('Return ONLY the corrected JSON');
-    
-    // Test the second retry (retryCount 1)  
+    expect(prompt0).toContain('attempt_completion with ONLY valid JSON');
+
+    // Test the second retry (retryCount 1)
     const prompt1 = schemaUtils.createJsonCorrectionPrompt(invalidResponse, schema, error, 1);
     expect(prompt1).toContain('URGENT - JSON PARSING FAILED:');
     expect(prompt1).toContain('second chance');
     expect(prompt1).toContain('ABSOLUTELY NO explanatory text');
-    
+
     // Test the third retry (retryCount 2)
     const prompt2 = schemaUtils.createJsonCorrectionPrompt(invalidResponse, schema, error, 2);
     expect(prompt2).toContain('FINAL ATTEMPT - CRITICAL JSON ERROR:');
     expect(prompt2).toContain('final retry');
-    expect(prompt2).toContain('EXAMPLE:');
+    expect(prompt2).toContain('CORRECT:');
   });
 
   test('should simulate retry logic behavior with real functions', () => {

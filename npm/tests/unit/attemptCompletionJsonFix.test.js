@@ -223,7 +223,7 @@ describe('attempt_completion JSON schema fix', () => {
       );
 
       expect(correctionPrompt).toContain('CRITICAL JSON ERROR:');
-      expect(correctionPrompt).toContain('You MUST fix this and return ONLY valid JSON');
+      expect(correctionPrompt).toContain('attempt_completion with ONLY valid JSON');
       expect(correctionPrompt).toContain(schema);
       expect(correctionPrompt).toContain(attemptCompletionResult.substring(0, 100));
 

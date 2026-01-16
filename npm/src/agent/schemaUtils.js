@@ -787,21 +787,22 @@ export function createJsonCorrectionPrompt(invalidResponse, schema, errorOrValid
   }
 
   // Create increasingly stronger prompts based on retry attempt
+  // These prompts explicitly instruct the AI to use attempt_completion with the JSON result
   const strengthLevels = [
     {
       prefix: "CRITICAL JSON ERROR:",
-      instruction: "You MUST fix this and return ONLY valid JSON.",
-      emphasis: "Return ONLY the corrected JSON, with no additional text or markdown formatting."
+      instruction: "You MUST fix this and respond using attempt_completion with ONLY valid JSON as the result.",
+      emphasis: "Use attempt_completion with ONLY the corrected JSON in the result field. No explanatory text, no markdown, no code blocks."
     },
     {
       prefix: "URGENT - JSON PARSING FAILED:",
-      instruction: "This is your second chance. Return ONLY valid JSON that can be parsed by JSON.parse().",
-      emphasis: "ABSOLUTELY NO explanatory text, greetings, or formatting. ONLY JSON."
+      instruction: "This is your second chance. Use attempt_completion with valid JSON that can be parsed by JSON.parse().",
+      emphasis: "ABSOLUTELY NO explanatory text or formatting. Use attempt_completion with ONLY raw JSON in the result."
     },
     {
       prefix: "FINAL ATTEMPT - CRITICAL JSON ERROR:",
-      instruction: "This is the final retry. You MUST return ONLY raw JSON without any other content.",
-      emphasis: "EXAMPLE: {\"key\": \"value\"} NOT: ```json{\"key\": \"value\"}``` NOT: Here is the JSON: {\"key\": \"value\"}"
+      instruction: "This is the final retry. You MUST use attempt_completion with ONLY raw JSON in the result field.",
+      emphasis: "CORRECT: <attempt_completion><result>{\"key\": \"value\"}</result></attempt_completion>\nWRONG: Here is the JSON: {\"key\": \"value\"}\nWRONG: ```json{\"key\": \"value\"}```"
     }
   ];
 
