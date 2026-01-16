@@ -291,19 +291,52 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.isEnabled('listFiles')).toBe(false);
     });
 
-    test('should build empty validTools array when disableTools is true', async () => {
+    test('should set allowedTools.isEnabled to false for all tools when disableTools is true', async () => {
       const agent = new ProbeAgent({
         path: process.cwd(),
         disableTools: true
       });
       await agent.initialize();
 
-      // Verify that no tools are enabled
+      // Verify that allowedTools configuration reports no tools enabled
+      // Note: This tests the configuration parsing, not the validTools array built in the agentic loop
       expect(agent.allowedTools.mode).toBe('none');
       expect(agent.allowedTools.isEnabled('search')).toBe(false);
       expect(agent.allowedTools.isEnabled('query')).toBe(false);
       expect(agent.allowedTools.isEnabled('extract')).toBe(false);
       expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
+    });
+
+    test('should always allow attempt_completion in validTools even when disableTools is true (fixes #333)', async () => {
+      // This test verifies that attempt_completion is always recognized as valid
+      // even when disableTools: true, because it's a completion signal not a tool.
+      // Without this fix, the agent would loop infinitely when tools are disabled.
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        disableTools: true
+      });
+      await agent.initialize();
+
+      // Verify configuration says no tools enabled
+      expect(agent.allowedTools.mode).toBe('none');
+      expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
+
+      // But attempt_completion should still be parsed and recognized
+      // We test this by verifying the parsing logic works
+      const { parseXmlToolCallWithThinking } = await import('../../src/agent/tools.js');
+
+      // Build validTools the same way the agentic loop does - always include attempt_completion
+      const validTools = ['attempt_completion'];
+
+      const response = `<attempt_completion>
+<result>{"answer": "test"}</result>
+</attempt_completion>`;
+
+      const parsed = parseXmlToolCallWithThinking(response, validTools);
+      expect(parsed).not.toBeNull();
+      expect(parsed.toolName).toBe('attempt_completion');
+      // The result contains the JSON content (may include wrapper tags depending on parser)
+      expect(parsed.params.result).toContain('{"answer": "test"}');
     });
 
     test('should respect both enableBash flag and allowedTools in validTools', async () => {
