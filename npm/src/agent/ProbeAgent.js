@@ -2387,7 +2387,9 @@ When troubleshooting:
           if (this.allowedTools.isEnabled('listFiles')) validTools.push('listFiles');
           if (this.allowedTools.isEnabled('searchFiles')) validTools.push('searchFiles');
           if (this.allowedTools.isEnabled('readImage')) validTools.push('readImage');
-          if (this.allowedTools.isEnabled('attempt_completion')) validTools.push('attempt_completion');
+          // Always allow attempt_completion - it's a completion signal, not a tool
+          // This ensures agents can complete even when disableTools: true is set (fixes #333)
+          validTools.push('attempt_completion');
 
           // Edit tools (require both allowEdit flag AND allowedTools permission)
           if (this.allowEdit && this.allowedTools.isEnabled('implement')) {
