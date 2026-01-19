@@ -440,9 +440,10 @@ class ProbeAgentMcpServer {
           }
 
           // Build options with smart defaults
+          // Use 'cwd' instead of 'path' - the extract function uses cwd for resolving relative file paths
           const options = {
             files: args.files,
-            path: args.path,
+            cwd: args.path,
             format: 'xml',
             allowTests: true,  // Include test files by default
           };

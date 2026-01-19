@@ -267,7 +267,8 @@ jobs:
         shell: bash
         run: |
           cd npm
-          if [[ "$VERSION" == *-rc* ]] || [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
+          # Publish alpha/beta as 'next', but rc and stable as 'latest'
+          if [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
             npm publish --access public --provenance --tag next
           else
             npm publish --access public --provenance
@@ -330,7 +331,8 @@ jobs:
         shell: bash
         run: |
           cd examples/chat
-          if [[ "$VERSION" == *-rc* ]] || [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
+          # Publish alpha/beta as 'next', but rc and stable as 'latest'
+          if [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
             npm publish --access public --provenance --tag next
           else
             npm publish --access public --provenance
