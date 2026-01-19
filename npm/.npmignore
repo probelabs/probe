@@ -1,0 +1,17 @@
+# Test files
+*.test.js
+__tests__/
+coverage/
+
+# Development files
+*.md
+!MERMAID_SUPPORT_SUMMARY.md
+!GITHUB_MERMAID_COMPATIBILITY.md
+tsconfig.json
+
+# Build scripts (not needed in published package)
+scripts/build-*.cjs
+scripts/build-*.js
+
+# Node modules
+node_modules/

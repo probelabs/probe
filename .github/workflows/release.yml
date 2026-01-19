@@ -267,11 +267,15 @@ jobs:
         shell: bash
         run: |
           cd npm
-          # Publish alpha/beta as 'next', but rc and stable as 'latest'
+          # Publish alpha/beta as 'next', rc as both 'latest' and 'rc', stable as 'latest'
+          # Note: npm requires explicit --tag for prerelease versions
           if [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
             npm publish --access public --provenance --tag next
+          elif [[ "$VERSION" == *-rc* ]]; then
+            npm publish --access public --provenance --tag latest
+            npm dist-tag add "@probelabs/probe@$VERSION" rc
           else
-            npm publish --access public --provenance
+            npm publish --access public --provenance --tag latest
           fi
 
   publish-probe-chat-package:
@@ -331,11 +335,15 @@ jobs:
         shell: bash
         run: |
           cd examples/chat
-          # Publish alpha/beta as 'next', but rc and stable as 'latest'
+          # Publish alpha/beta as 'next', rc as both 'latest' and 'rc', stable as 'latest'
+          # Note: npm requires explicit --tag for prerelease versions
           if [[ "$VERSION" == *-alpha* ]] || [[ "$VERSION" == *-beta* ]]; then
             npm publish --access public --provenance --tag next
+          elif [[ "$VERSION" == *-rc* ]]; then
+            npm publish --access public --provenance --tag latest
+            npm dist-tag add "probe-chat@$VERSION" rc
           else
-            npm publish --access public --provenance
+            npm publish --access public --provenance --tag latest
           fi
 
 # The publish-probe-web-package job has been removed as the web functionality

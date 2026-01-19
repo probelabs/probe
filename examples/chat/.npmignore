@@ -1,0 +1,12 @@
+# Test files
+*.test.js
+__tests__/
+coverage/
+pack-output.txt
+
+# Development files
+*.md
+tsconfig.json
+
+# Node modules
+node_modules/
