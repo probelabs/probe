@@ -14,6 +14,7 @@ import {
 } from '@modelcontextprotocol/sdk/types.js';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
+import { extract } from '../index.js';
 import { initializeSimpleTelemetryFromOptions, SimpleAppTracer } from './simpleTelemetry.js';
 import { 
   cleanSchemaResponse, 
@@ -395,11 +396,30 @@ class ProbeAgentMcpServer {
             required: ['query']
           },
         },
+        {
+          name: 'extract_code',
+          description: "Extract full code blocks from files using tree-sitter AST parsing. Use this to get complete code content based on file paths and symbols returned by search_code. Each file path can include optional line numbers or symbol names to extract specific code blocks.",
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: 'Absolute path to the project root directory (used as working directory for relative file paths).',
+              },
+              files: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Array of file paths to extract from. Formats: "file.js" (entire file), "file.js:42" (code block at line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (specific symbol). Line numbers and symbols are part of the path string, not separate parameters. Paths can be absolute or relative to the project directory.',
+              }
+            },
+            required: ['path', 'files'],
+          },
+        },
       ],
     }));
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
-      if (request.params.name !== 'search_code') {
+      if (request.params.name !== 'search_code' && request.params.name !== 'extract_code') {
         throw new McpError(
           ErrorCode.MethodNotFound,
           `Unknown tool: ${request.params.name}`
@@ -409,6 +429,42 @@ class ProbeAgentMcpServer {
       try {
         const args = request.params.arguments;
 
+        // Handle extract_code tool
+        if (request.params.name === 'extract_code') {
+          // Validate required parameters
+          if (!args.path) {
+            throw new Error("Path is required");
+          }
+          if (!args.files || !Array.isArray(args.files) || args.files.length === 0) {
+            throw new Error("Files array is required and must not be empty");
+          }
+
+          // Build options with smart defaults
+          const options = {
+            files: args.files,
+            path: args.path,
+            format: 'xml',
+            allowTests: true,  // Include test files by default
+          };
+
+          if (process.env.DEBUG === '1') {
+            console.error('[DEBUG] Executing extract_code with options:', JSON.stringify(options, null, 2));
+          }
+
+          // Execute the extract command
+          const result = await extract(options);
+
+          return {
+            content: [
+              {
+                type: 'text',
+                text: result,
+              },
+            ],
+          };
+        }
+
+        // Handle search_code tool
         // Validate required fields
         if (!args.query) {
           throw new Error("Query is required");
@@ -554,7 +610,7 @@ class ProbeAgentMcpServer {
           ],
         };
       } catch (error) {
-        console.error(`Error executing search_code:`, error);
+        console.error(`Error executing ${request.params.name}:`, error);
         return {
           content: [
             {
