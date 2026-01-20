@@ -265,6 +265,8 @@ jobs:
 
       - name: Publish to npm
         shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd npm
           # Publish alpha/beta as 'next', rc as both 'latest' and 'rc', stable as 'latest'
@@ -333,6 +335,8 @@ jobs:
 
       - name: Publish to npm
         shell: bash
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd examples/chat
           # Publish alpha/beta as 'next', rc as both 'latest' and 'rc', stable as 'latest'
