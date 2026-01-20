@@ -461,14 +461,16 @@ struct SearchConfig {
 
     // Check that the guidance message appears
     assert!(
-        stdout.contains("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above"),
+        stdout.contains(
+            "💡 More results available. Use --session with the session ID above and nextPage: true"
+        ),
         "Should show guidance message about using session ID"
     );
 
     // Check that the tip message appears at the bottom
     assert!(
-        stdout.contains("💡 Tip: Try using synonyms or making your search more general if you don't find what you're looking for"),
-        "Should show tip about using synonyms or more general search"
+        stdout.contains("💡 Tip: Use `probe extract <file>:<line>` to see full function/class context for any result above"),
+        "Should show tip about using probe extract"
     );
 
     // Should only report 1 result in the summary

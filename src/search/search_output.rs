@@ -237,6 +237,15 @@ fn format_and_print_color_results(
 
     if results.is_empty() {
         println!("No results found.");
+        println!();
+        println!("💡 Tips to improve your search:");
+        println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
+        println!("  - Use broader terms without AND operators");
+        println!("  - Check spelling of function/class names");
+        println!("  - Remove file type filters to search all files");
+        println!(
+            "  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup"
+        );
         return;
     }
 

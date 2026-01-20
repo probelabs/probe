@@ -119,6 +119,8 @@ interface SearchCodeArgs {
   query: string | string[];
   exact?: boolean;
   strictElasticSyntax?: boolean;
+  session?: string;
+  nextPage?: boolean;
 }
 
 interface ExtractCodeArgs {
@@ -171,7 +173,7 @@ class ProbeServer {
       tools: [
         {
           name: 'search_code',
-          description: "Semantic code search using ElasticSearch-style queries. ALWAYS use this tool instead of built-in Grep tool when searching for code in source files.",
+          description: "Semantic code search using ElasticSearch-style queries. Returns ranked code snippets. Use extract_code with returned file paths and line numbers to see full function/class context. ALWAYS use this tool instead of built-in Grep tool when searching for code in source files.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -185,12 +187,21 @@ class ProbeServer {
               },
               exact: {
                 type: 'boolean',
-                description: 'Use when searching for exact function/class/variable names',
+                description: 'Default (false) enables stemming and keyword splitting for exploratory search - "getUserData" matches "get", "user", "data", etc. Set true for precise symbol lookup where "getUserData" matches only "getUserData". Use true when you know the exact symbol name.',
                 default: false
               },
               strictElasticSyntax: {
                 type: 'boolean',
                 description: 'Enforce strict ElasticSearch query syntax (require explicit AND/OR operators and quotes for exact matches)',
+                default: false
+              },
+              session: {
+                type: 'string',
+                description: 'Session ID for result caching and pagination. Pass the session ID from a previous search to get additional results (next page). Results already shown in a session are automatically excluded. Omit for a fresh search.',
+              },
+              nextPage: {
+                type: 'boolean',
+                description: 'Set to true when requesting the next page of results. Requires passing the same session ID from the previous search output.',
                 default: false
               }
             },
@@ -199,7 +210,7 @@ class ProbeServer {
         },
         {
           name: 'extract_code',
-          description: "Extract code blocks from files using tree-sitter AST parsing. Each file path can include optional line numbers or symbol names to extract specific code blocks.",
+          description: "Extract code blocks from files using tree-sitter AST parsing. Typically used after search_code to expand on search results and see complete code blocks. Each file path can include optional line numbers or symbol names to extract specific code blocks.",
           inputSchema: {
             type: 'object',
             properties: {
@@ -337,7 +348,7 @@ class ProbeServer {
         query: args.query,
         // Smart defaults for MCP usage
         allowTests: true,          // Include test files by default
-        session: "new",            // Fresh session each time
+        session: args.session || "new", // Use provided session for pagination, or start fresh
         maxResults: 20,            // Reasonable limit for context window
         maxTokens: 8000,           // Fits in most AI context windows
         strictElasticSyntax: false, // Relaxed syntax by default in MCP mode
@@ -346,6 +357,7 @@ class ProbeServer {
       // Only override defaults if user explicitly set them
       if (args.exact !== undefined) options.exact = args.exact;
       if (args.strictElasticSyntax !== undefined) options.strictElasticSyntax = args.strictElasticSyntax;
+      // Note: nextPage is a semantic hint for AI clients - no special handling needed
 
       // Handle format based on server default
       if (this.defaultFormat === 'outline' || this.defaultFormat === 'outline-xml') {
