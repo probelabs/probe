@@ -461,7 +461,9 @@ struct SearchConfig {
 
     // Check that the guidance message appears
     assert!(
-        stdout.contains("💡 More results available. Use --session with the session ID above and nextPage: true"),
+        stdout.contains(
+            "💡 More results available. Use --session with the session ID above and nextPage: true"
+        ),
         "Should show guidance message about using session ID"
     );
 
