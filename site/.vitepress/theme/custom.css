@@ -621,3 +621,49 @@ a:hover {
   border-radius: 0;
   color: inherit;
 }
+
+/* Portfolio Page Styles */
+.VPDoc.has-aside .content-container {
+  max-width: 100% !important;
+}
+
+.vp-doc .portfolio-home {
+  max-width: none !important;
+}
+
+/* Hide sidebar on portfolio page */
+.portfolio-home ~ aside,
+.VPSidebar {
+  display: none !important;
+}
+
+/* Full width container for portfolio */
+.VPContent.has-sidebar {
+  padding-left: 0 !important;
+}
+
+/* Override VitePress home layout defaults */
+.VPHome .portfolio-home {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* Hide VitePress default home features */
+.VPHome .VPFeatures,
+.VPHome .VPHomeFeatures {
+  display: none !important;
+}
+
+/* Typography enhancements for portfolio */
+@media (prefers-reduced-motion: no-preference) {
+  .portfolio-home * {
+    animation-duration: 0.3s;
+    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+/* Smooth scroll behavior */
+html {
+  scroll-behavior: smooth;
+}

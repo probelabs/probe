@@ -2,8 +2,8 @@ import { defineConfig } from 'vitepress'
 
 // https://vitepress.dev/reference/site-config
 export default defineConfig({
-  title: "Probe",
-  description: "AI-friendly, fully local, semantic code search tool designed to power the next generation of AI coding assistants",
+  title: "Probe Labs",
+  description: "Agentic infrastructure platform enabling 10x engineering teams. Build the engineering organization that moves at AI speed.",
   lastUpdated: true,
   cleanUrls: true,
   appearance: true,
@@ -46,6 +46,27 @@ export default defineConfig({
       }
     }
   },
+
+  vite: {
+    server: {
+      fs: {
+        strict: false
+      }
+    },
+    plugins: [
+      {
+        name: 'rewrite-maid',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url === '/maid' || req.url === '/maid/') {
+              req.url = '/maid/index.html'
+            }
+            next()
+          })
+        }
+      }
+    ]
+  },
   
   themeConfig: {
     darkModeSwitchLabel: 'Appearance',
@@ -54,11 +75,38 @@ export default defineConfig({
     
     nav: [
       { text: 'Home', link: '/' },
-      { text: 'Quick Start', link: '/quick-start' },
-      { text: 'Blog', link: '/blog/' },
-      { text: 'Changelog', link: '/changelog' },
       {
-        text: 'Documentation',
+        text: 'Solutions',
+        items: [
+          { text: 'For Enterprise', link: '/solutions/enterprise' },
+          { text: 'For Agencies', link: '/solutions/agencies' },
+          { text: 'For Platform Teams', link: '/solutions/platform-teams' }
+        ]
+      },
+      {
+        text: 'Products',
+        items: [
+          { text: 'Probe', link: '/products/probe' },
+          { text: 'Wiser', link: '/products/wiser' },
+          { text: 'Mermaid Engine', link: '/products/mermaid-engine' },
+          { text: 'Memory Layer', link: '/products/memory-layer' }
+        ]
+      },
+      {
+        text: 'Company',
+        items: [
+          { text: 'About', link: '/company/about' },
+          { text: 'Blog', link: '/blog/' }
+        ]
+      },
+      {
+        text: 'Guides',
+        items: [
+          { text: 'Build a Slack Bot', link: '/guides/slack-bot' }
+        ]
+      },
+      {
+        text: 'Probe Docs',
         items: [
           { text: 'Core Concepts & Setup', items: [
             { text: 'What is Probe?', link: '/features' },
@@ -88,8 +136,7 @@ export default defineConfig({
           ]}
         ]
       },
-      { text: 'GitHub', link: 'https://github.com/probelabs/probe' },
-      { text: 'Discord', link: 'https://discord.gg/hBN4UsTZ' }
+      { text: 'Contact', link: '#contact' }
     ],
 
     sidebar: [
@@ -115,6 +162,13 @@ export default defineConfig({
           { text: 'Web Interface for Teams', link: '/use-cases/deploying-probe-web-interface' },
           { text: 'Developers & SDK', link: '/use-cases/building-ai-tools' },
           { text: 'GitHub Actions Integration', link: '/integrations/github-actions' }
+        ]
+      },
+      {
+        text: 'Guides',
+        collapsed: false,
+        items: [
+          { text: 'Build a Slack Bot', link: '/guides/slack-bot' }
         ]
       },
       {
