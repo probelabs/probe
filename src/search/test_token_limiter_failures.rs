@@ -245,7 +245,7 @@ mod token_limiter_failure_tests {
         // but exceeds 100% with actual tokens
         let crafted_content = "a=1;b=2;".repeat(15); // Should estimate ~22-23 tokens but be much more
 
-        let _results = vec![create_test_result(&crafted_content, Some(0))];
+        let _results = [create_test_result(&crafted_content, Some(0))];
 
         let estimated_tokens = (crafted_content.len() / 4).max(1);
         let actual_tokens = count_block_tokens(&crafted_content);
