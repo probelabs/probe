@@ -427,11 +427,6 @@ export function main() {
 
   // --- Non-Interactive Mode ---
   if (isNonInteractive) {
-    if (!hasApiKeys) {
-      logError(chalk.red('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
-      process.exit(1);
-    }
-
     let chat;
     try {
       // Pass session ID if provided, ProbeChat generates one otherwise
@@ -445,8 +440,6 @@ export function main() {
         bashConfig: bashConfig,
         completionPrompt: completionPrompt
       });
-      // Model/Provider info is logged via logInfo above if debug enabled
-      logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`)); // Log the actual session ID being used
     } catch (error) {
       logError(chalk.red(`Initializing chat failed: ${error.message}`));
       process.exit(1);
@@ -468,6 +461,19 @@ export function main() {
     // Async function to handle the single chat request
     const runNonInteractiveChat = async () => {
       try {
+        // Initialize the chat (handles API key validation, claude-code/codex fallback)
+        await chat.initialize();
+
+        // Validate provider after initialization
+        const providerInfo = chat.getProviderInfo();
+        if (providerInfo.provider === 'unknown' || providerInfo.provider === 'uninitialized') {
+          throw new Error('No valid AI provider available. Please set an API key or install claude/codex CLI.');
+        }
+
+        // Log provider info after successful initialization
+        logInfo(chalk.green(`Using provider: ${providerInfo.provider} with model: ${providerInfo.model}`));
+        logInfo(chalk.blue(`Using Session ID: ${chat.getSessionId()}`));
+
         // Get message from command line argument or stdin
         let message = options.message;
 
@@ -533,16 +539,6 @@ export function main() {
   // --- Interactive CLI Mode ---
   // (This block only runs if not non-interactive and not web mode)
 
-  if (!hasApiKeys) {
-    // Use logError and standard console.log for setup instructions
-    logError(chalk.red('No API key provided. Please set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY environment variable.'));
-    console.log(chalk.cyan('You can find these instructions in the .env.example file:'));
-    console.log(chalk.cyan('1. Create a .env file by copying .env.example'));
-    console.log(chalk.cyan('2. Add your API key to the .env file'));
-    console.log(chalk.cyan('3. Restart the application'));
-    process.exit(1);
-  }
-
   // Initialize ProbeChat for CLI mode
   let chat;
   try {
@@ -557,24 +553,42 @@ export function main() {
       bashConfig: bashConfig,
       completionPrompt: completionPrompt
     });
-
-    // Log model/provider info using logInfo
-    if (chat.apiType === 'anthropic') {
-      logInfo(chalk.green(`Using Anthropic API with model: ${chat.model}`));
-    } else if (chat.apiType === 'openai') {
-      logInfo(chalk.green(`Using OpenAI API with model: ${chat.model}`));
-    } else if (chat.apiType === 'google') {
-      logInfo(chalk.green(`Using Google API with model: ${chat.model}`));
-    }
-
-    logInfo(chalk.blue(`Session ID: ${chat.getSessionId()}`));
-    logInfo(chalk.cyan('Type "exit" or "quit" to end the chat'));
-    logInfo(chalk.cyan('Type "usage" to see token usage statistics'));
-    logInfo(chalk.cyan('Type "clear" to clear the chat history'));
-    logInfo(chalk.cyan('-------------------------------------------'));
   } catch (error) {
-    logError(chalk.red(`Error initializing chat: ${error.message}`));
+    logError(chalk.red(`Error creating chat instance: ${error.message}`));
     process.exit(1);
+  }
+
+  // Async initialization wrapper for interactive mode
+  async function initializeAndStartChat() {
+    try {
+      // Initialize the chat (handles API key validation, claude-code/codex fallback)
+      await chat.initialize();
+
+      // Validate provider after initialization
+      const providerInfo = chat.getProviderInfo();
+      if (providerInfo.provider === 'unknown' || providerInfo.provider === 'uninitialized') {
+        throw new Error('No valid AI provider available. Please set an API key or install claude/codex CLI.');
+      }
+
+      // Log provider info after successful initialization
+      if (providerInfo.isCliProvider) {
+        logInfo(chalk.green(`Using ${providerInfo.provider} CLI`));
+      } else {
+        logInfo(chalk.green(`Using ${providerInfo.provider} API with model: ${providerInfo.model}`));
+      }
+
+      logInfo(chalk.blue(`Session ID: ${chat.getSessionId()}`));
+      logInfo(chalk.cyan('Type "exit" or "quit" to end the chat'));
+      logInfo(chalk.cyan('Type "usage" to see token usage statistics'));
+      logInfo(chalk.cyan('Type "clear" to clear the chat history'));
+      logInfo(chalk.cyan('-------------------------------------------'));
+
+      // Start the interactive chat loop
+      await runInteractiveChat();
+    } catch (error) {
+      logError(chalk.red(`Error initializing chat: ${error.message}`));
+      process.exit(1);
+    }
   }
 
   // Format AI response for interactive mode
@@ -598,7 +612,7 @@ export function main() {
   }
 
   // Main interactive chat loop
-  async function startChat() {
+  async function runInteractiveChat() {
     while (true) {
       const { message } = await inquirer.prompt([
         {
@@ -613,7 +627,7 @@ export function main() {
         logInfo(chalk.yellow('Goodbye!'));
         break;
       } else if (message.toLowerCase() === 'usage') {
-        const usage = chat.getTokenUsage();
+        const usage = chat.getUsageSummary();
         const display = new TokenUsageDisplay();
         const formatted = display.format(usage);
 
@@ -630,9 +644,9 @@ export function main() {
         process.stdout.write('\x1B]0;Context: ' + formatted.contextWindow + '\x07');
         continue;
       } else if (message.toLowerCase() === 'clear') {
-        const newSessionId = chat.clearHistory();
+        chat.clearHistory();
         logInfo(chalk.yellow('Chat history cleared'));
-        logInfo(chalk.blue(`New session ID: ${newSessionId}`));
+        logInfo(chalk.blue(`New session ID: ${chat.getSessionId()}`));
         continue;
       }
 
@@ -656,7 +670,7 @@ export function main() {
     }
   }
 
-  startChat().catch((error) => {
+  initializeAndStartChat().catch((error) => {
     logError(chalk.red(`Fatal error in interactive chat: ${error.message}`));
     process.exit(1);
   });

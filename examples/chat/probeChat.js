@@ -266,6 +266,9 @@ export class ProbeChat {
   constructor(options = {}) {
     this.isNonInteractive = options.isNonInteractive || process.env.PROBE_NON_INTERACTIVE === '1';
     this.debug = options.debug || process.env.DEBUG_CHAT === '1';
+    this._initialized = false;
+    this._initializing = null; // Promise to prevent concurrent initialization
+    this._initError = null; // Store initialization error to prevent infinite retries
 
     // Initialize ProbeAgent with MCP support
     const agentOptions = {
@@ -283,11 +286,81 @@ export class ProbeChat {
 
     if (this.debug) {
       console.log(`[DEBUG] ProbeChat initialized with MCP ${agentOptions.enableMcp ? 'enabled' : 'disabled'}`);
+    }
+  }
 
-      // Log available tools after a short delay to allow MCP initialization
-      setTimeout(() => {
-        this.logAvailableTools();
-      }, 100);
+  /**
+   * Initialize the chat agent asynchronously.
+   *
+   * This method is safe to call multiple times - subsequent calls will return
+   * immediately if already initialized, or wait for the ongoing initialization.
+   *
+   * If initialization fails, the error is stored and rethrown on subsequent calls
+   * to prevent infinite retry loops.
+   *
+   * This initializes the ProbeAgent which handles:
+   * - API key validation
+   * - Auto-detection of claude-code or codex CLI as fallback
+   * - MCP initialization
+   * - History loading from storage
+   *
+   * @returns {Promise<void>}
+   * @throws {Error} If no valid AI provider is available
+   */
+  async initialize() {
+    // If previous initialization failed, rethrow the stored error
+    if (this._initError) {
+      throw this._initError;
+    }
+
+    // Return existing initialization promise if in progress (prevents concurrent init)
+    if (this._initializing) {
+      return this._initializing;
+    }
+
+    // Already initialized successfully
+    if (this._initialized) {
+      return;
+    }
+
+    this._initializing = (async () => {
+      try {
+        await this.agent.initialize();
+
+        // Mark as initialized immediately after agent init succeeds
+        this._initialized = true;
+
+        // Debug logging wrapped in try-catch to not affect initialization state
+        if (this.debug) {
+          try {
+            const provider = this.agent.clientApiProvider || this.agent.apiType || 'unknown';
+            console.log(`[DEBUG] ProbeChat agent initialized with provider: ${provider}`);
+            this.logAvailableTools();
+          } catch (logError) {
+            console.error('[DEBUG] Logging failed:', logError.message);
+          }
+        }
+      } catch (error) {
+        // Store error to prevent infinite retry loops
+        this._initError = error;
+        throw error;
+      } finally {
+        // Always clear the initializing promise
+        this._initializing = null;
+      }
+    })();
+
+    return this._initializing;
+  }
+
+  /**
+   * Ensure the agent is initialized before use.
+   * Called automatically by chat() - you don't need to call this directly.
+   * @private
+   */
+  async _ensureInitialized() {
+    if (!this._initialized) {
+      await this.initialize();
     }
   }
 
@@ -333,17 +406,26 @@ export class ProbeChat {
   }
 
   /**
-   * Answer a question using the agentic flow with optional image support
+   * Send a chat message and get AI response.
+   *
+   * This method automatically initializes the agent on first call if not already
+   * initialized. For explicit control over initialization (e.g., to handle errors
+   * separately), call initialize() first.
+   *
    * @param {string} message - The user's question
    * @param {Object} [options] - Optional configuration
    * @param {string} [options.schema] - JSON schema for structured output
    * @param {Array} [options.images] - Array of image data (base64 strings or URLs)
-   * @returns {Promise<string>} - The final answer
+   * @returns {Promise<Object>} - The AI response with token usage
+   * @throws {Error} If message is empty or if no valid AI provider is available
    */
   async chat(message, options = {}) {
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       throw new Error('Message is required and must be a non-empty string');
     }
+
+    // Ensure the agent is initialized (handles API key validation, claude-code/codex fallback)
+    await this._ensureInitialized();
 
     // Extract images from the message text if not provided in options
     let images = options.images || [];
@@ -380,6 +462,26 @@ export class ProbeChat {
   }
 
   /**
+   * Get provider information
+   * @returns {Object} - Provider info with type and model
+   */
+  getProviderInfo() {
+    return {
+      provider: this.agent.clientApiProvider || this.agent.apiType || 'unknown',
+      model: this.agent.model || 'unknown',
+      isCliProvider: ['claude-code', 'codex'].includes(this.agent.clientApiProvider || this.agent.apiType)
+    };
+  }
+
+  /**
+   * Check if the agent is initialized
+   * @returns {boolean}
+   */
+  isInitialized() {
+    return this._initialized;
+  }
+
+  /**
    * Get usage summary for the current session
    */
   getUsageSummary() {
@@ -387,11 +489,13 @@ export class ProbeChat {
   }
 
   /**
-   * Clear conversation history
+   * Clear conversation history and return the new session ID
+   * @returns {string} - The new session ID
    */
   clearHistory() {
     this.agent.clearHistory();
     this.tokenUsage.clear();
+    return this.agent.sessionId;
   }
 
   /**
