@@ -5,9 +5,13 @@
 
 import { extract } from '../../src/index.js';
 import path from 'path';
+import os from 'os';
 
 // Get the project root directory
 const projectRoot = path.resolve(process.cwd(), '..');
+
+// Get system temp directory (works cross-platform: /tmp on Unix, C:\Users\...\Temp on Windows)
+const systemTmpDir = os.tmpdir();
 
 describe('MCP extract_code path resolution', () => {
 	describe('path parameter maps to cwd', () => {
@@ -76,7 +80,7 @@ describe('MCP extract_code path resolution', () => {
 			// Using a different cwd that doesn't contain the files
 			const options = {
 				files: ['npm/src/extract.js:1-10'],
-				cwd: '/tmp',
+				cwd: systemTmpDir,  // Use cross-platform temp directory
 				format: 'xml',
 				allowTests: true,
 			};
@@ -107,7 +111,7 @@ describe('MCP extract_code path resolution', () => {
 			const absolutePath = path.join(projectRoot, 'npm/src/extract.js');
 			const options = {
 				files: [`${absolutePath}:1-10`],
-				cwd: '/tmp',  // Different cwd
+				cwd: systemTmpDir,  // Use cross-platform temp directory
 				format: 'xml',
 				allowTests: true,
 			};
