@@ -275,7 +275,7 @@ jobs:
             npm publish --access public --provenance --tag next
           elif [[ "$VERSION" == *-rc* ]]; then
             npm publish --access public --provenance --tag latest
-            npm dist-tag add "@probelabs/probe@$VERSION" rc
+            npm dist-tag add "@probelabs/probe@$VERSION" rc || true
           else
             npm publish --access public --provenance --tag latest
           fi
@@ -345,7 +345,7 @@ jobs:
             npm publish --access public --provenance --tag next
           elif [[ "$VERSION" == *-rc* ]]; then
             npm publish --access public --provenance --tag latest
-            npm dist-tag add "probe-chat@$VERSION" rc
+            npm dist-tag add "probe-chat@$VERSION" rc || true
           else
             npm publish --access public --provenance --tag latest
           fi
