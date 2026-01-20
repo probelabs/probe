@@ -186,9 +186,17 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 limited_results.limits_applied.as_ref(),
             );
         } else {
-            // For other formats, print the "No results found" message
+            // For other formats, print the "No results found" message with helpful tips
             println!("{}", "No results found.".yellow().bold());
+            println!();
+            println!("💡 Tips to improve your search:");
+            println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
+            println!("  - Use broader terms without AND operators");
+            println!("  - Check spelling of function/class names");
+            println!("  - Remove file type filters to search all files");
+            println!("  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup");
             if params.verbose {
+                println!();
                 println!("Search completed in {duration:.2?}");
             }
         }
@@ -316,17 +324,17 @@ fn handle_search(params: SearchParams) -> Result<()> {
                     );
                 }
 
-                // Show guidance message to get more results
+                // Show guidance message to get more results (pagination)
                 if total_skipped > 0 {
                     output!();
                     if let Some(session_id) = search_options.session {
                         if !session_id.is_empty() && session_id != "new" {
-                            output!("💡 To get more results from this search query, repeat it with the same params and session ID: {session_id}");
+                            output!("💡 More results available. Re-run with session: \"{session_id}\" and nextPage: true");
                         } else {
-                            output!("💡 To get more results from this search query, repeat it with the same params and session ID (see above)");
+                            output!("💡 More results available. Re-run with the session ID shown above and nextPage: true");
                         }
                     } else {
-                        output!("💡 To get more results from this search query, repeat it with the same params and use --session with the session ID shown above");
+                        output!("💡 More results available. Use --session with the session ID above and nextPage: true");
                     }
                 }
 
@@ -364,10 +372,10 @@ fn handle_search(params: SearchParams) -> Result<()> {
         }
     }
 
-    // Add helpful tip at the very bottom of output (but not for JSON/XML formats)
-    if params.format != "json" && params.format != "xml" {
+    // Add helpful tip at the very bottom of output (only when there are results, not for JSON/XML formats)
+    if !limited_results.results.is_empty() && params.format != "json" && params.format != "xml" {
         println!();
-        println!("💡 Tip: Try using synonyms or making your search more general if you don't find what you're looking for");
+        println!("💡 Tip: Use `probe extract <file>:<line>` to see full function/class context for any result above");
     }
 
     Ok(())
