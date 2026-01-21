@@ -3,6 +3,8 @@
  * This module contains the core logic for thinking tag removal and attempt_complete recovery
  */
 
+import { DEFAULT_VALID_TOOLS, buildToolTagPattern } from '../tools/common.js';
+
 /**
  * Remove thinking tags and their content from XML string
  * Handles both closed and unclosed thinking tags
@@ -24,7 +26,8 @@ export function removeThinkingTags(xmlString) {
     const afterThinking = result.substring(thinkingIndex + '<thinking>'.length);
 
     // Look for any tool tags in the remaining content
-    const toolPattern = /<(search|query|extract|listFiles|searchFiles|implement|attempt_completion|attempt_complete)>/;
+    // Use the shared tool list to build the pattern dynamically
+    const toolPattern = buildToolTagPattern(DEFAULT_VALID_TOOLS);
     const toolMatch = afterThinking.match(toolPattern);
 
     if (toolMatch) {
@@ -148,8 +151,8 @@ export function checkAttemptCompleteRecovery(cleanedXmlString, validTools = []) 
  * @returns {boolean} - True if other tool tags are found
  */
 function hasOtherToolTags(xmlString, validTools = []) {
-  const defaultTools = ['search', 'query', 'extract', 'listFiles', 'searchFiles', 'implement', 'attempt_completion'];
-  const toolsToCheck = validTools.length > 0 ? validTools : defaultTools;
+  // Use the shared canonical tool list as default
+  const toolsToCheck = validTools.length > 0 ? validTools : DEFAULT_VALID_TOOLS;
   
   // Check for any tool tags other than attempt_complete variants
   for (const tool of toolsToCheck) {

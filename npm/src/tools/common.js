@@ -325,7 +325,8 @@ export const delegateDescription = 'Automatically delegate big distinct tasks to
 export const bashDescription = 'Execute bash commands for system exploration and development tasks. Secure by default with built-in allow/deny lists.';
 
 // Valid tool names that should be parsed as tool calls
-const DEFAULT_VALID_TOOLS = [
+// This is the canonical list - all other tool lists should reference this
+export const DEFAULT_VALID_TOOLS = [
 	'search',
 	'query',
 	'extract',
@@ -333,8 +334,24 @@ const DEFAULT_VALID_TOOLS = [
 	'listFiles',
 	'searchFiles',
 	'implement',
+	'bash',
 	'attempt_completion'
 ];
+
+/**
+ * Build a regex pattern to match any tool tag from the valid tools list
+ * @param {string[]} tools - List of tool names (defaults to DEFAULT_VALID_TOOLS)
+ * @returns {RegExp} - Regex pattern to match tool opening tags
+ */
+export function buildToolTagPattern(tools = DEFAULT_VALID_TOOLS) {
+	// Also include attempt_complete as an alias for attempt_completion
+	const allTools = [...tools];
+	if (allTools.includes('attempt_completion') && !allTools.includes('attempt_complete')) {
+		allTools.push('attempt_complete');
+	}
+	const escaped = allTools.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+	return new RegExp(`<(${escaped.join('|')})>`);
+}
 
 /**
  * Get valid parameter names for a specific tool from its schema
