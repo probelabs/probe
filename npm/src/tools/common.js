@@ -516,13 +516,17 @@ export function createMessagePreview(message, charsPerSide = 200) {
 
 /**
  * Parse targets string into array of file specifications
- * Handles space-separated targets for extract tool
+ * Handles both space-separated and comma-separated targets for extract tool
  *
- * @param {string} targets - Space-separated file targets (e.g., "file1.rs:10-20 file2.rs#symbol")
+ * @param {string} targets - Space or comma-separated file targets (e.g., "file1.rs:10-20, file2.rs#symbol")
  * @returns {string[]} Array of individual file specifications
  *
  * @example
  * parseTargets("file1.rs:10-20 file2.rs:30-40")
+ * // Returns: ["file1.rs:10-20", "file2.rs:30-40"]
+ *
+ * @example
+ * parseTargets("file1.rs:10-20, file2.rs:30-40")
  * // Returns: ["file1.rs:10-20", "file2.rs:30-40"]
  *
  * @example
@@ -534,6 +538,6 @@ export function parseTargets(targets) {
 		return [];
 	}
 
-	// Split on any whitespace (spaces, tabs, newlines) and filter out empty strings
-	return targets.split(/\s+/).filter(f => f.length > 0);
+	// Split on any whitespace or comma (with optional surrounding whitespace) and filter out empty strings
+	return targets.split(/[\s,]+/).filter(f => f.length > 0);
 }
