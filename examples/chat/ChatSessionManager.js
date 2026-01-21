@@ -63,15 +63,18 @@ export class ChatSessionManager {
   }
   
   /**
-   * Initialize the ChatSessionManager by loading history
+   * Initialize the ChatSessionManager by initializing ProbeAgent and loading history
    * This must be called before using chat()
    */
   async initialize() {
     if (this._ready) return; // Already initialized
-    
+
+    // Initialize ProbeAgent (handles API key detection and CLI fallback)
+    await this.agent.initialize();
+
     await this.loadHistory();
     this._ready = true;
-    
+
     if (this.debug) {
       console.log(`[ChatSessionManager] Initialized session ${this.sessionId} with ${this.agent.history.length} messages from storage`);
     }
