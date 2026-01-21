@@ -4,7 +4,7 @@
  */
 
 import { tool } from 'ai';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, sep } from 'path';
 import { BashPermissionChecker } from '../agent/bashPermissions.js';
 import { executeBashCommand, formatExecutionResult, validateExecutionOptions } from '../agent/bashExecutor.js';
 
@@ -155,7 +155,9 @@ For code exploration, try these safe alternatives:
           const resolvedWorkingDir = resolve(workingDir);
           const isAllowed = allowedFolders.some(folder => {
             const resolvedFolder = resolve(folder);
-            return resolvedWorkingDir.startsWith(resolvedFolder);
+            // Use exact match OR startsWith with separator to prevent bypass attacks
+            // e.g., '/tmp-malicious' should NOT match allowed folder '/tmp'
+            return resolvedWorkingDir === resolvedFolder || resolvedWorkingDir.startsWith(resolvedFolder + sep);
           });
 
           if (!isAllowed) {
