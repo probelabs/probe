@@ -4,6 +4,7 @@
  */
 
 import { z } from 'zod';
+import { resolve, isAbsolute } from 'path';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
@@ -540,4 +541,66 @@ export function parseTargets(targets) {
 
 	// Split on any whitespace or comma (with optional surrounding whitespace) and filter out empty strings
 	return targets.split(/[\s,]+/).filter(f => f.length > 0);
+}
+
+/**
+ * Parse and resolve paths from a comma-separated string
+ * Handles both relative and absolute paths, resolving relative paths against the cwd
+ *
+ * @param {string} pathStr - Path string, possibly comma-separated
+ * @param {string} cwd - Working directory for resolving relative paths
+ * @returns {string[]} Array of resolved paths
+ */
+export function parseAndResolvePaths(pathStr, cwd) {
+	if (!pathStr) return [];
+
+	// Split on comma and trim whitespace
+	const paths = pathStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
+
+	// Resolve relative paths against cwd
+	return paths.map(p => {
+		if (isAbsolute(p)) {
+			return p;
+		}
+		// Resolve relative path against cwd
+		return cwd ? resolve(cwd, p) : p;
+	});
+}
+
+/**
+ * Resolve a target path that may include line numbers or symbols
+ * Handles formats: "file.rs", "file.rs:10", "file.rs:10-20", "file.rs#symbol"
+ * On Windows, correctly handles drive letter colons (e.g., "C:\path\file.rs:42")
+ *
+ * @param {string} target - Target string with optional line number or symbol
+ * @param {string} cwd - Working directory for resolving relative paths
+ * @returns {string} Resolved target path with suffix preserved
+ */
+export function resolveTargetPath(target, cwd) {
+	// On Windows, skip the drive letter colon (e.g., "C:" at index 1)
+	const searchStart = (target.length > 2 && target[1] === ':' && /[a-zA-Z]/.test(target[0])) ? 2 : 0;
+	const colonIdx = target.indexOf(':', searchStart);
+	const hashIdx = target.indexOf('#');
+	let filePart, suffix;
+
+	if (colonIdx !== -1 && (hashIdx === -1 || colonIdx < hashIdx)) {
+		// Has line number (file.rs:10 or file.rs:10-20)
+		filePart = target.substring(0, colonIdx);
+		suffix = target.substring(colonIdx);
+	} else if (hashIdx !== -1) {
+		// Has symbol (file.rs#symbol)
+		filePart = target.substring(0, hashIdx);
+		suffix = target.substring(hashIdx);
+	} else {
+		// Just file path
+		filePart = target;
+		suffix = '';
+	}
+
+	// Resolve relative path
+	if (!isAbsolute(filePart) && cwd) {
+		filePart = resolve(cwd, filePart);
+	}
+
+	return filePart + suffix;
 }

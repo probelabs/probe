@@ -4,36 +4,11 @@
  */
 
 import { tool } from 'ai';
-import { resolve, isAbsolute } from 'path';
 import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
-import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets } from './common.js';
-
-/**
- * Parse and resolve paths from a comma-separated string
- * Handles both relative and absolute paths, resolving relative paths against the cwd
- *
- * @param {string} pathStr - Path string, possibly comma-separated
- * @param {string} cwd - Working directory for resolving relative paths
- * @returns {string[]} Array of resolved paths
- */
-function parseAndResolvePaths(pathStr, cwd) {
-	if (!pathStr) return [];
-
-	// Split on comma and trim whitespace
-	const paths = pathStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
-
-	// Resolve relative paths against cwd
-	return paths.map(p => {
-		if (isAbsolute(p)) {
-			return p;
-		}
-		// Resolve relative path against cwd
-		return cwd ? resolve(cwd, p) : p;
-	});
-}
+import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 
 /**
  * Search tool generator
@@ -220,36 +195,7 @@ export const extractTool = (options = {}) => {
 					const parsedTargets = parseTargets(targets);
 
 					// Resolve relative paths in targets against cwd
-					// Handles formats like: "file.rs", "file.rs:10", "file.rs:10-20", "file.rs#symbol"
-					const files = parsedTargets.map(target => {
-						// Extract the file path part (before : or #)
-						// On Windows, skip the drive letter colon (e.g., "C:" at index 1)
-						const searchStart = (target.length > 2 && target[1] === ':' && /[a-zA-Z]/.test(target[0])) ? 2 : 0;
-						const colonIdx = target.indexOf(':', searchStart);
-						const hashIdx = target.indexOf('#');
-						let filePart, suffix;
-
-						if (colonIdx !== -1 && (hashIdx === -1 || colonIdx < hashIdx)) {
-							// Has line number (file.rs:10 or file.rs:10-20)
-							filePart = target.substring(0, colonIdx);
-							suffix = target.substring(colonIdx);
-						} else if (hashIdx !== -1) {
-							// Has symbol (file.rs#symbol)
-							filePart = target.substring(0, hashIdx);
-							suffix = target.substring(hashIdx);
-						} else {
-							// Just file path
-							filePart = target;
-							suffix = '';
-						}
-
-						// Resolve relative path
-						if (!isAbsolute(filePart) && effectiveCwd) {
-							filePart = resolve(effectiveCwd, filePart);
-						}
-
-						return filePart + suffix;
-					});
+					const files = parsedTargets.map(target => resolveTargetPath(target, effectiveCwd));
 
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;

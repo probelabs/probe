@@ -11,7 +11,7 @@ export { editTool, createTool } from './edit.js';
 // Export LangChain tools
 export { createSearchTool, createQueryTool, createExtractTool } from './langchain.js';
 
-// Export common schemas
+// Export common schemas and utilities
 export {
 	searchSchema,
 	querySchema,
@@ -23,7 +23,9 @@ export {
 	bashDescription,
 	bashToolDefinition,
 	attemptCompletionSchema,
-	attemptCompletionToolDefinition
+	attemptCompletionToolDefinition,
+	parseAndResolvePaths,
+	resolveTargetPath
 } from './common.js';
 
 // Export edit and create schemas
