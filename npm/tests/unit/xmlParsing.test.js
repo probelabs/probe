@@ -1,4 +1,51 @@
 import { parseXmlToolCall, parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
+import { DEFAULT_VALID_TOOLS, buildToolTagPattern } from '../../src/tools/common.js';
+
+describe('Shared Tool List', () => {
+  test('DEFAULT_VALID_TOOLS should include bash', () => {
+    expect(DEFAULT_VALID_TOOLS).toContain('bash');
+  });
+
+  test('DEFAULT_VALID_TOOLS should include all standard tools', () => {
+    const expectedTools = [
+      'search',
+      'query',
+      'extract',
+      'delegate',
+      'listFiles',
+      'searchFiles',
+      'implement',
+      'bash',
+      'attempt_completion'
+    ];
+    expectedTools.forEach(tool => {
+      expect(DEFAULT_VALID_TOOLS).toContain(tool);
+    });
+  });
+
+  test('buildToolTagPattern should create regex matching all tools', () => {
+    const pattern = buildToolTagPattern(DEFAULT_VALID_TOOLS);
+
+    // Test that pattern matches all standard tools
+    expect('<search>').toMatch(pattern);
+    expect('<bash>').toMatch(pattern);
+    expect('<attempt_completion>').toMatch(pattern);
+    expect('<attempt_complete>').toMatch(pattern); // alias
+
+    // Test that pattern doesn't match non-tools
+    expect('<div>').not.toMatch(pattern);
+    expect('<strong>').not.toMatch(pattern);
+  });
+
+  test('buildToolTagPattern should work with custom tool list', () => {
+    const customTools = ['customTool', 'anotherTool'];
+    const pattern = buildToolTagPattern(customTools);
+
+    expect('<customTool>').toMatch(pattern);
+    expect('<anotherTool>').toMatch(pattern);
+    expect('<search>').not.toMatch(pattern);
+  });
+});
 
 describe('XML Tool Call Parsing', () => {
   describe('parseXmlToolCall', () => {
@@ -668,6 +715,63 @@ Let me analyze this.
   return true;
 }`,
           path: './src'
+        }
+      });
+    });
+  });
+
+  describe('Bash tool parsing', () => {
+    test('should parse bash tool call with default valid tools', () => {
+      const aiResponse = `<bash>
+<command>git log --grep="#7054" --oneline</command>
+<workingDirectory>/tmp/workspaces/tyk</workingDirectory>
+</bash>`;
+
+      const result = parseXmlToolCall(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'bash',
+        params: {
+          command: 'git log --grep="#7054" --oneline',
+          workingDirectory: '/tmp/workspaces/tyk'
+        }
+      });
+    });
+
+    test('should handle bash tool with unclosed thinking tag', () => {
+      // This is the exact scenario from the user's bug report
+      const aiResponse = `<thinking>
+The user wants to know in which version PR #7054 was merged.
+My plan is as follows:
+1. Find the commit hash for PR #7054.
+The working directory should be the tyk project path.<bash>
+<command>git log --grep="#7054" --oneline</command>
+<workingDirectory>/tmp/workspaces/tyk</workingDirectory>
+</bash>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'bash',
+        params: {
+          command: 'git log --grep="#7054" --oneline',
+          workingDirectory: '/tmp/workspaces/tyk'
+        }
+      });
+    });
+
+    test('should handle bash tool directly attached to text (no newline)', () => {
+      const aiResponse = `<thinking>
+The working directory should be the tyk project path.<bash>
+<command>git status</command>
+</bash>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse);
+
+      expect(result).toEqual({
+        toolName: 'bash',
+        params: {
+          command: 'git status'
         }
       });
     });

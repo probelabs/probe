@@ -25,7 +25,9 @@ export {
 	attemptCompletionSchema,
 	attemptCompletionToolDefinition,
 	parseAndResolvePaths,
-	resolveTargetPath
+	resolveTargetPath,
+	DEFAULT_VALID_TOOLS,
+	buildToolTagPattern
 } from './common.js';
 
 // Export edit and create schemas
