@@ -1,10 +1,12 @@
 /**
  * Tests for path resolution in search and extract tools
  * Verifies support for relative paths and comma-separated paths
+ * Cross-platform compatible (works on both Unix and Windows)
  */
 
 import { parseTargets } from '../../src/tools/common.js';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, join } from 'path';
+import { tmpdir } from 'os';
 
 describe('Path Resolution', () => {
 	describe('parseTargets', () => {
@@ -55,61 +57,66 @@ describe('Path Resolution', () => {
 	});
 
 	describe('parseAndResolvePaths helper', () => {
-		// Import the function dynamically since it's not exported
-		// We'll test it indirectly through the tool behavior
+		// Use tmpdir() as a cross-platform absolute path base
+		const testCwd = join(tmpdir(), 'test-project');
 
 		test('should resolve relative paths against cwd', () => {
-			const cwd = '/project/root';
 			const paths = 'src/file.rs, lib/other.rs';
 
 			// Parse and resolve manually to test the logic
 			const parsed = paths.split(',').map(p => p.trim()).filter(p => p.length > 0);
 			const resolved = parsed.map(p => {
 				if (isAbsolute(p)) return p;
-				return resolve(cwd, p);
+				return resolve(testCwd, p);
 			});
 
+			// Use resolve() to generate expected paths (cross-platform)
 			expect(resolved).toEqual([
-				'/project/root/src/file.rs',
-				'/project/root/lib/other.rs'
+				resolve(testCwd, 'src/file.rs'),
+				resolve(testCwd, 'lib/other.rs')
 			]);
 		});
 
 		test('should not modify absolute paths', () => {
-			const cwd = '/project/root';
-			const paths = '/absolute/path/file.rs, /other/absolute/path.rs';
+			// Use platform-specific absolute paths
+			const absolutePath1 = resolve(tmpdir(), 'absolute/path/file.rs');
+			const absolutePath2 = resolve(tmpdir(), 'other/absolute/path.rs');
+			const paths = `${absolutePath1}, ${absolutePath2}`;
 
 			const parsed = paths.split(',').map(p => p.trim()).filter(p => p.length > 0);
 			const resolved = parsed.map(p => {
 				if (isAbsolute(p)) return p;
-				return resolve(cwd, p);
+				return resolve(testCwd, p);
 			});
 
 			expect(resolved).toEqual([
-				'/absolute/path/file.rs',
-				'/other/absolute/path.rs'
+				absolutePath1,
+				absolutePath2
 			]);
 		});
 
 		test('should handle mixed relative and absolute paths', () => {
-			const cwd = '/project/root';
-			const paths = 'src/file.rs, /absolute/path.rs, lib/other.rs';
+			const absolutePath = resolve(tmpdir(), 'absolute/path.rs');
+			const paths = `src/file.rs, ${absolutePath}, lib/other.rs`;
 
 			const parsed = paths.split(',').map(p => p.trim()).filter(p => p.length > 0);
 			const resolved = parsed.map(p => {
 				if (isAbsolute(p)) return p;
-				return resolve(cwd, p);
+				return resolve(testCwd, p);
 			});
 
 			expect(resolved).toEqual([
-				'/project/root/src/file.rs',
-				'/absolute/path.rs',
-				'/project/root/lib/other.rs'
+				resolve(testCwd, 'src/file.rs'),
+				absolutePath,
+				resolve(testCwd, 'lib/other.rs')
 			]);
 		});
 	});
 
 	describe('extract target path resolution', () => {
+		// Use tmpdir() as a cross-platform absolute path base
+		const testCwd = join(tmpdir(), 'project');
+
 		// Helper to simulate the extractTool path resolution logic
 		function resolveTargetPath(target, cwd) {
 			const colonIdx = target.indexOf(':');
@@ -135,42 +142,39 @@ describe('Path Resolution', () => {
 		}
 
 		test('should resolve relative path without suffix', () => {
-			const result = resolveTargetPath('src/file.rs', '/project');
-			expect(result).toBe('/project/src/file.rs');
+			const result = resolveTargetPath('src/file.rs', testCwd);
+			expect(result).toBe(resolve(testCwd, 'src/file.rs'));
 		});
 
 		test('should resolve relative path with line number', () => {
-			const result = resolveTargetPath('src/file.rs:42', '/project');
-			expect(result).toBe('/project/src/file.rs:42');
+			const result = resolveTargetPath('src/file.rs:42', testCwd);
+			expect(result).toBe(resolve(testCwd, 'src/file.rs') + ':42');
 		});
 
 		test('should resolve relative path with line range', () => {
-			const result = resolveTargetPath('src/file.rs:10-20', '/project');
-			expect(result).toBe('/project/src/file.rs:10-20');
+			const result = resolveTargetPath('src/file.rs:10-20', testCwd);
+			expect(result).toBe(resolve(testCwd, 'src/file.rs') + ':10-20');
 		});
 
 		test('should resolve relative path with symbol', () => {
-			const result = resolveTargetPath('src/file.rs#functionName', '/project');
-			expect(result).toBe('/project/src/file.rs#functionName');
+			const result = resolveTargetPath('src/file.rs#functionName', testCwd);
+			expect(result).toBe(resolve(testCwd, 'src/file.rs') + '#functionName');
 		});
 
 		test('should resolve relative path with class.method symbol', () => {
-			const result = resolveTargetPath('src/file.rs#Class.method', '/project');
-			expect(result).toBe('/project/src/file.rs#Class.method');
+			const result = resolveTargetPath('src/file.rs#Class.method', testCwd);
+			expect(result).toBe(resolve(testCwd, 'src/file.rs') + '#Class.method');
 		});
 
 		test('should not modify absolute path', () => {
-			const result = resolveTargetPath('/absolute/file.rs:42', '/project');
-			expect(result).toBe('/absolute/file.rs:42');
+			const absolutePath = resolve(tmpdir(), 'absolute/file.rs');
+			const result = resolveTargetPath(absolutePath + ':42', testCwd);
+			expect(result).toBe(absolutePath + ':42');
 		});
 
-		test('should handle Windows-style paths on Windows', () => {
-			// Skip this test on non-Windows
-			if (process.platform !== 'win32') {
-				return;
-			}
-			const result = resolveTargetPath('src\\file.rs:42', 'C:\\project');
-			expect(result).toBe('C:\\project\\src\\file.rs:42');
+		test('should handle nested relative paths', () => {
+			const result = resolveTargetPath('src/deep/nested/file.rs:42', testCwd);
+			expect(result).toBe(resolve(testCwd, 'src/deep/nested/file.rs') + ':42');
 		});
 	});
 });
