@@ -8,7 +8,7 @@ import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
-import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets } from './common.js';
+import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 
 /**
  * Search tool generator
@@ -31,16 +31,19 @@ export const searchTool = (options = {}) => {
 				// Use parameter maxTokens if provided, otherwise use the default
 				const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
-				// Use the path from parameters if provided, otherwise use cwd from config
-				let searchPath = path || options.cwd || '.';
-
-				// If path is "." or "./", use the cwd if available
-				if ((searchPath === "." || searchPath === "./") && options.cwd) {
-					if (debug) {
-						console.error(`Using cwd "${options.cwd}" instead of "${searchPath}"`);
-					}
-					searchPath = options.cwd;
+				// Parse and resolve paths (supports comma-separated and relative paths)
+				let searchPaths;
+				if (path) {
+					searchPaths = parseAndResolvePaths(path, options.cwd);
 				}
+
+				// Default to cwd or '.' if no paths provided
+				if (!searchPaths || searchPaths.length === 0) {
+					searchPaths = [options.cwd || '.'];
+				}
+
+				// Join paths with space for CLI (probe search supports multiple paths)
+				const searchPath = searchPaths.join(' ');
 
 				if (debug) {
 					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", exact: ${exact ? 'true' : 'false'}, language: ${language || 'all'}, session: ${sessionId || 'none'}`);
@@ -90,16 +93,19 @@ export const queryTool = (options = {}) => {
 		inputSchema: querySchema,
 		execute: async ({ pattern, path, language, allow_tests }) => {
 			try {
-				// Use the path from parameters if provided, otherwise use cwd from config
-				let queryPath = path || options.cwd || '.';
-
-				// If path is "." or "./", use the cwd if available
-				if ((queryPath === "." || queryPath === "./") && options.cwd) {
-					if (debug) {
-						console.error(`Using cwd "${options.cwd}" instead of "${queryPath}"`);
-					}
-					queryPath = options.cwd;
+				// Parse and resolve paths (supports comma-separated and relative paths)
+				let queryPaths;
+				if (path) {
+					queryPaths = parseAndResolvePaths(path, options.cwd);
 				}
+
+				// Default to cwd or '.' if no paths provided
+				if (!queryPaths || queryPaths.length === 0) {
+					queryPaths = [options.cwd || '.'];
+				}
+
+				// Join paths with space for CLI (probe query supports multiple paths)
+				const queryPath = queryPaths.join(' ');
 
 				if (debug) {
 					console.error(`Executing query with pattern: "${pattern}", path: "${queryPath}", language: ${language || 'auto'}`);
@@ -185,8 +191,11 @@ export const extractTool = (options = {}) => {
 					};
 				} else if (targets) {
 					// Parse targets to handle line numbers and symbol names
-					// Split on whitespace to support multiple targets in one call
-					const files = parseTargets(targets);
+					// Now supports both whitespace and comma-separated targets
+					const parsedTargets = parseTargets(targets);
+
+					// Resolve relative paths in targets against cwd
+					const files = parsedTargets.map(target => resolveTargetPath(target, effectiveCwd));
 
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;

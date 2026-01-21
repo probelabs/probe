@@ -239,11 +239,129 @@ describe('Bash Tool Integration', () => {
       expect(result).not.toContain('not within allowed folders');
 
       // Should deny execution outside allowed folders
-      result = await restrictedTool.execute({ 
+      result = await restrictedTool.execute({
         command: 'pwd',
         workingDirectory: '/usr'
       });
       expect(result).toContain('not within allowed folders');
+    });
+
+    test('should allow relative paths within allowed folders', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+
+      // Create a temporary subdirectory for testing
+      const testSubdir = path.join('/tmp', 'bash-tool-test-subdir');
+      if (!fs.existsSync(testSubdir)) {
+        fs.mkdirSync(testSubdir, { recursive: true });
+      }
+
+      try {
+        const restrictedTool = bashTool({
+          debug: false,
+          allowedFolders: ['/tmp'],
+          bashConfig: { timeout: 5000 }
+        });
+
+        // Should allow relative path that resolves within allowed folder
+        const result = await restrictedTool.execute({
+          command: 'pwd',
+          workingDirectory: 'bash-tool-test-subdir'
+        });
+
+        // The relative path 'bash-tool-test-subdir' should resolve to /tmp/bash-tool-test-subdir
+        // which is within the allowed folder /tmp
+        expect(result).not.toContain('not within allowed folders');
+        expect(result).toContain('/tmp/bash-tool-test-subdir');
+      } finally {
+        // Cleanup
+        if (fs.existsSync(testSubdir)) {
+          fs.rmdirSync(testSubdir);
+        }
+      }
+    });
+
+    test('should reject paths that look similar but are outside allowed folders', async () => {
+      // Security test: /tmp-malicious should NOT match /tmp
+      const restrictedTool = bashTool({
+        debug: false,
+        allowedFolders: ['/tmp'],
+        bashConfig: { timeout: 5000 }
+      });
+
+      const result = await restrictedTool.execute({
+        command: 'pwd',
+        workingDirectory: '/tmp-malicious'
+      });
+
+      expect(result).toContain('not within allowed folders');
+    });
+
+    test('should reject relative paths with traversal that escape allowed folders', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+
+      // Create a test directory structure
+      const testSubdir = path.join('/tmp', 'bash-tool-traversal-test');
+      if (!fs.existsSync(testSubdir)) {
+        fs.mkdirSync(testSubdir, { recursive: true });
+      }
+
+      try {
+        const restrictedTool = bashTool({
+          debug: false,
+          allowedFolders: [testSubdir],
+          bashConfig: { timeout: 5000 }
+        });
+
+        // Attempt to escape using ../
+        const result = await restrictedTool.execute({
+          command: 'pwd',
+          workingDirectory: '../'
+        });
+
+        // Should be rejected because ../ from testSubdir goes to /tmp, not testSubdir
+        expect(result).toContain('not within allowed folders');
+      } finally {
+        if (fs.existsSync(testSubdir)) {
+          fs.rmdirSync(testSubdir);
+        }
+      }
+    });
+
+    test('should handle empty string workingDirectory gracefully', async () => {
+      const restrictedTool = bashTool({
+        debug: false,
+        allowedFolders: ['/tmp'],
+        bashConfig: { timeout: 5000 }
+      });
+
+      // Empty string should fall back to default directory
+      const result = await restrictedTool.execute({
+        command: 'pwd',
+        workingDirectory: ''
+      });
+
+      // Should not error - empty string is falsy so uses default
+      expect(result).not.toContain('Error');
+    });
+
+    test('should handle whitespace-only workingDirectory gracefully', async () => {
+      const restrictedTool = bashTool({
+        debug: false,
+        allowedFolders: ['/tmp'],
+        bashConfig: { timeout: 5000 }
+      });
+
+      // Whitespace-only should be treated as a path (likely invalid)
+      const result = await restrictedTool.execute({
+        command: 'pwd',
+        workingDirectory: '   '
+      });
+
+      // This will likely fail because "   " is not a valid path
+      // The important thing is it doesn't cause a crash or security bypass
+      expect(typeof result).toBe('string');
     });
   });
 
