@@ -119,7 +119,10 @@ describe('Path Resolution', () => {
 
 		// Helper to simulate the extractTool path resolution logic
 		function resolveTargetPath(target, cwd) {
-			const colonIdx = target.indexOf(':');
+			// On Windows, skip the drive letter colon (e.g., "C:" at index 1)
+			// Start searching for line number colon after potential drive letter
+			const searchStart = (target.length > 2 && target[1] === ':' && /[a-zA-Z]/.test(target[0])) ? 2 : 0;
+			const colonIdx = target.indexOf(':', searchStart);
 			const hashIdx = target.indexOf('#');
 			let filePart, suffix;
 

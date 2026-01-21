@@ -223,7 +223,9 @@ export const extractTool = (options = {}) => {
 					// Handles formats like: "file.rs", "file.rs:10", "file.rs:10-20", "file.rs#symbol"
 					const files = parsedTargets.map(target => {
 						// Extract the file path part (before : or #)
-						const colonIdx = target.indexOf(':');
+						// On Windows, skip the drive letter colon (e.g., "C:" at index 1)
+						const searchStart = (target.length > 2 && target[1] === ':' && /[a-zA-Z]/.test(target[0])) ? 2 : 0;
+						const colonIdx = target.indexOf(':', searchStart);
 						const hashIdx = target.indexOf('#');
 						let filePart, suffix;
 
