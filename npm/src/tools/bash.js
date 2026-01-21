@@ -4,7 +4,7 @@
  */
 
 import { tool } from 'ai';
-import { resolve } from 'path';
+import { resolve, isAbsolute } from 'path';
 import { BashPermissionChecker } from '../agent/bashPermissions.js';
 import { executeBashCommand, formatExecutionResult, validateExecutionOptions } from '../agent/bashExecutor.js';
 
@@ -144,7 +144,11 @@ For code exploration, try these safe alternatives:
         }
 
         // Determine working directory
-        const workingDir = workingDirectory || getDefaultWorkingDirectory();
+        const defaultDir = getDefaultWorkingDirectory();
+        // Resolve relative paths against the default working directory context, not process.cwd()
+        const workingDir = workingDirectory
+          ? (isAbsolute(workingDirectory) ? resolve(workingDirectory) : resolve(defaultDir, workingDirectory))
+          : defaultDir;
 
         // Validate working directory is within allowed folders if specified
         if (allowedFolders && allowedFolders.length > 0) {

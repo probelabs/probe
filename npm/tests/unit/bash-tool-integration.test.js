@@ -239,11 +239,46 @@ describe('Bash Tool Integration', () => {
       expect(result).not.toContain('not within allowed folders');
 
       // Should deny execution outside allowed folders
-      result = await restrictedTool.execute({ 
+      result = await restrictedTool.execute({
         command: 'pwd',
         workingDirectory: '/usr'
       });
       expect(result).toContain('not within allowed folders');
+    });
+
+    test('should allow relative paths within allowed folders', async () => {
+      const fs = await import('fs');
+      const path = await import('path');
+
+      // Create a temporary subdirectory for testing
+      const testSubdir = path.join('/tmp', 'bash-tool-test-subdir');
+      if (!fs.existsSync(testSubdir)) {
+        fs.mkdirSync(testSubdir, { recursive: true });
+      }
+
+      try {
+        const restrictedTool = bashTool({
+          debug: false,
+          allowedFolders: ['/tmp'],
+          bashConfig: { timeout: 5000 }
+        });
+
+        // Should allow relative path that resolves within allowed folder
+        const result = await restrictedTool.execute({
+          command: 'pwd',
+          workingDirectory: 'bash-tool-test-subdir'
+        });
+
+        // The relative path 'bash-tool-test-subdir' should resolve to /tmp/bash-tool-test-subdir
+        // which is within the allowed folder /tmp
+        expect(result).not.toContain('not within allowed folders');
+        expect(result).toContain('/tmp/bash-tool-test-subdir');
+      } finally {
+        // Cleanup
+        if (fs.existsSync(testSubdir)) {
+          fs.rmdirSync(testSubdir);
+        }
+      }
     });
   });
 

@@ -2460,7 +2460,10 @@ Follow these instructions carefully:
                 // Validate and resolve workingDirectory
                 let resolvedWorkingDirectory = (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
                 if (params.workingDirectory) {
-                  const requestedDir = resolve(params.workingDirectory);
+                  // Resolve relative paths against the current working directory context, not process.cwd()
+                  const requestedDir = isAbsolute(params.workingDirectory)
+                    ? resolve(params.workingDirectory)
+                    : resolve(resolvedWorkingDirectory, params.workingDirectory);
                   // Check if the requested directory is within allowed folders
                   const isWithinAllowed = !this.allowedFolders || this.allowedFolders.length === 0 ||
                     this.allowedFolders.some(folder => {
