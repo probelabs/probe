@@ -2458,7 +2458,8 @@ Follow these instructions carefully:
               try {
                 // Add sessionId and workingDirectory to params for tool execution
                 // Validate and resolve workingDirectory
-                let resolvedWorkingDirectory = (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
+                // Priority: explicit cwd > first allowed folder > process.cwd()
+                let resolvedWorkingDirectory = this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
                 if (params.workingDirectory) {
                   // Resolve relative paths against the current working directory context, not process.cwd()
                   const requestedDir = isAbsolute(params.workingDirectory)
