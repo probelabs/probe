@@ -98,13 +98,12 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
 /**
  * Start the web server
  * @param {string} version - The version of the application
- * @param {boolean} hasApiKeys - Whether any API keys are configured
  * @param {Object} options - Additional options
  * @param {boolean} options.allowEdit - Whether to allow editing files via the implement tool
  */
-export async function startWebServer(version, hasApiKeys = true, options = {}) {
+export async function startWebServer(version, options = {}) {
 	const allowEdit = options?.allowEdit || false;
-	
+
 	if (allowEdit) {
 		console.log('Edit mode enabled: implement tool is available');
 	}
@@ -120,11 +119,11 @@ export async function startWebServer(version, hasApiKeys = true, options = {}) {
 	}
 
 	// Initialize persistent storage for web mode
-	globalStorage = new JsonChatStorage({ 
-		webMode: true, 
-		verbose: process.env.DEBUG_CHAT === '1' 
+	globalStorage = new JsonChatStorage({
+		webMode: true,
+		verbose: process.env.DEBUG_CHAT === '1'
 	});
-	
+
 	// Initialize storage synchronously before server starts
 	try {
 		await globalStorage.initialize();
@@ -144,13 +143,9 @@ export async function startWebServer(version, hasApiKeys = true, options = {}) {
 		? process.env.ALLOWED_FOLDERS.split(',').map(folder => folder.trim()).filter(Boolean)
 		: [];
 
-
-	let noApiKeysMode = !hasApiKeys;
-	if (noApiKeysMode) {
-		console.log('Running in No API Keys mode - will show setup instructions to users');
-	} else {
-		console.log('API keys detected. Chat functionality enabled.');
-	}
+	// Note: API key / CLI availability is checked lazily in ProbeAgent.initialize()
+	// when the first chat message is sent. This allows fallback to Claude Code or Codex CLI.
+	console.log('Chat functionality enabled (API availability checked on first message)');
 
 
 	// Define the tools available for direct API calls (bypassing LLM loop)
@@ -419,7 +414,7 @@ export async function startWebServer(version, hasApiKeys = true, options = {}) {
 			// UI Routes
 			'GET /': (req, res) => {
 				const htmlPath = join(__dirname, 'index.html');
-				serveHtml(res, htmlPath, { 'data-no-api-keys': noApiKeysMode ? 'true' : 'false' });
+				serveHtml(res, htmlPath, { 'data-no-api-keys': 'false' });
 			},
 
 			// Chat session route - serves HTML with injected session ID
@@ -428,15 +423,15 @@ export async function startWebServer(version, hasApiKeys = true, options = {}) {
 				if (!sessionId) {
 					return sendError(res, 400, 'Invalid session ID in URL');
 				}
-				
+
 				// Validate that session exists or at least has a valid UUID format
 				if (!isValidUUID(sessionId)) {
 					return sendError(res, 400, 'Invalid session ID format');
 				}
 
 				const htmlPath = join(__dirname, 'index.html');
-				serveHtml(res, htmlPath, { 
-					'data-no-api-keys': noApiKeysMode ? 'true' : 'false',
+				serveHtml(res, htmlPath, {
+					'data-no-api-keys': 'false',
 					'data-session-id': sessionId
 				});
 			},
@@ -451,7 +446,7 @@ export async function startWebServer(version, hasApiKeys = true, options = {}) {
 				sendJson(res, 200, {
 					folders: folders,
 					currentDir: currentDir,
-					noApiKeysMode: noApiKeysMode
+					noApiKeysMode: false
 				});
 			},
 
@@ -700,12 +695,6 @@ export async function startWebServer(version, hasApiKeys = true, options = {}) {
 					// Update last activity timestamp
 					chatInstance.lastActivity = Date.now();
 
-					// Check if API keys are needed but missing
-					if (chatInstance.noApiKeysMode) {
-						console.warn(`[WARN] Chat request for session ${chatSessionId} cannot proceed: No API keys configured.`);
-						return sendError(res, 503, 'Chat service unavailable: API key not configured on server.');
-					}
-
 					// Register this request as active for cancellation
 					registerRequest(chatSessionId, { abort: () => chatInstance.abort() });
 					if (DEBUG) console.log(`[DEBUG] Registered cancellable request for session: ${chatSessionId}`);
@@ -918,9 +907,6 @@ export async function startWebServer(version, hasApiKeys = true, options = {}) {
 		console.log(`Probe Web Interface v${version}`);
 		console.log(`Server running on http://localhost:${PORT}`);
 		console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-		if (noApiKeysMode) {
-			console.log('*** Running in NO API KEYS mode. Chat functionality disabled. ***');
-		}
 	});
 }
 

@@ -346,12 +346,6 @@ export function main() {
     process.env.PORT = options.port;
   }
 
-  // Check for API keys
-  const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-  const openaiApiKey = process.env.OPENAI_API_KEY;
-  const googleApiKey = process.env.GOOGLE_API_KEY;
-  const hasApiKeys = !!(anthropicApiKey || openaiApiKey || googleApiKey);
-
   // --- Bash Configuration Processing ---
   let bashConfig = null;
   if (options.enableBash) {
@@ -406,16 +400,13 @@ export function main() {
 
   // --- Web Mode (check before non-interactive to override) ---
   if (options.web) {
-    if (!hasApiKeys) {
-      // Use logWarn for web mode warning
-      logWarn(chalk.yellow('Warning: No API key provided. The web interface will show instructions on how to set up API keys.'));
-    }
-    // Import and start web server
+    // Note: API key / CLI availability is checked lazily in ProbeAgent.initialize()
+    // when the first chat message is sent. This allows fallback to Claude Code or Codex CLI.
     import('./webServer.js')
       .then(async module => {
         const { startWebServer } = module;
         logInfo(`Starting web server on port ${process.env.PORT || 8080}...`);
-        await startWebServer(version, hasApiKeys, { allowEdit: options.allowEdit });
+        await startWebServer(version, { allowEdit: options.allowEdit });
       })
       .catch(error => {
         logError(chalk.red(`Error starting web server: ${error.message}`));
