@@ -821,4 +821,162 @@ I should search for this...
       });
     });
   });
+
+  describe('Edit and Create tool parsing (Issue #349)', () => {
+    test('should parse edit tool with all parameters', () => {
+      const validTools = ['search', 'edit', 'create', 'attempt_completion'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<old_string>function oldName() {
+  return 42;
+}</old_string>
+<new_string>function newName() {
+  return 42;
+}</new_string>
+</edit>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse, validTools);
+
+      expect(result).toEqual({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          old_string: `function oldName() {
+  return 42;
+}`,
+          new_string: `function newName() {
+  return 42;
+}`
+        }
+      });
+    });
+
+    test('should parse edit tool with replace_all parameter', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>config.json</file_path>
+<old_string>"debug": false</old_string>
+<new_string>"debug": true</new_string>
+<replace_all>true</replace_all>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toEqual({
+        toolName: 'edit',
+        params: {
+          file_path: 'config.json',
+          old_string: '"debug": false',
+          new_string: '"debug": true',
+          replace_all: true
+        }
+      });
+    });
+
+    test('should parse create tool with all parameters', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>src/newFile.js</file_path>
+<content>export function hello() {
+  return "Hello, world!";
+}</content>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toEqual({
+        toolName: 'create',
+        params: {
+          file_path: 'src/newFile.js',
+          content: `export function hello() {
+  return "Hello, world!";
+}`
+        }
+      });
+    });
+
+    test('should parse create tool with overwrite parameter', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>README.md</file_path>
+<content># My Project
+
+This is a new project.</content>
+<overwrite>true</overwrite>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toEqual({
+        toolName: 'create',
+        params: {
+          file_path: 'README.md',
+          content: `# My Project
+
+This is a new project.`,
+          overwrite: true
+        }
+      });
+    });
+
+    test('should handle edit tool with unclosed tags', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>test.js
+<old_string>foo
+<new_string>bar`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toEqual({
+        toolName: 'edit',
+        params: {
+          file_path: 'test.js',
+          old_string: 'foo',
+          new_string: 'bar'
+        }
+      });
+    });
+
+    test('should handle create tool with unclosed tags', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>new.txt
+<content>Hello World`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toEqual({
+        toolName: 'create',
+        params: {
+          file_path: 'new.txt',
+          content: 'Hello World'
+        }
+      });
+    });
+
+    test('should handle edit tool inside thinking tags', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<thinking>
+I need to rename this function to follow the naming convention.
+</thinking>
+
+<edit>
+<file_path>src/utils.js</file_path>
+<old_string>const getUserName = () => {}</old_string>
+<new_string>const getUsername = () => {}</new_string>
+</edit>`;
+
+      const result = parseXmlToolCallWithThinking(aiResponse, validTools);
+
+      expect(result).toEqual({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/utils.js',
+          old_string: 'const getUserName = () => {}',
+          new_string: 'const getUsername = () => {}'
+        }
+      });
+    });
+  });
 });

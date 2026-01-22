@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import { resolve, isAbsolute } from 'path';
+import { editSchema, createSchema } from './edit.js';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
@@ -359,14 +360,16 @@ export function buildToolTagPattern(tools = DEFAULT_VALID_TOOLS) {
  * @returns {string[]} - Array of valid parameter names for this tool
  */
 function getValidParamsForTool(toolName) {
-	// Map tool names to their schemas
+	// Map tool names to their schemas (supports both Zod and JSON Schema formats)
 	const schemaMap = {
 		search: searchSchema,
 		query: querySchema,
 		extract: extractSchema,
 		delegate: delegateSchema,
 		bash: bashSchema,
-		attempt_completion: attemptCompletionSchema
+		attempt_completion: attemptCompletionSchema,
+		edit: editSchema,
+		create: createSchema
 	};
 
 	const schema = schemaMap[toolName];
@@ -382,8 +385,13 @@ function getValidParamsForTool(toolName) {
 	}
 
 	// Extract keys from Zod schema
-	if (schema && schema._def && schema._def.shape) {
+	if (schema._def && schema._def.shape) {
 		return Object.keys(schema._def.shape());
+	}
+
+	// Extract keys from JSON Schema (used by edit and create tools)
+	if (schema.properties) {
+		return Object.keys(schema.properties);
 	}
 
 	// Fallback: return empty array if we can't extract schema keys
