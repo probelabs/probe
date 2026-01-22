@@ -114,21 +114,24 @@ describe('Delegate Tool Configuration', () => {
       );
     });
 
-    it('should prioritize cwd over allowedFolders', async () => {
+    it('should prioritize allowedFolders[0] (workspace root) over cwd (navigation context)', async () => {
+      // Issue #348 fix: workspace root should take priority over navigation cwd
+      // to prevent path doubling when parent navigates to subdirectories
       const tool = delegateTool({
         debug: false,
         timeout: 300,
-        cwd: '/default/path',
-        allowedFolders: ['/allowed/folder']
+        cwd: '/workspace/project/deep/nested',  // Navigation context (subdirectory)
+        allowedFolders: ['/workspace/project']  // Workspace root
       });
-      const task = 'Use cwd priority';
+      const task = 'Use workspace root priority';
 
       await tool.execute({ task });
 
+      // Subagent should receive workspace root, not the navigation subdirectory
       expect(mockDelegate).toHaveBeenCalledWith(
         expect.objectContaining({
           task,
-          path: '/default/path'
+          path: '/workspace/project'
         })
       );
     });

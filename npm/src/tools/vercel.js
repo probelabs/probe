@@ -295,9 +295,22 @@ export const delegateTool = (options = {}) => {
 				throw new TypeError('model must be a string, null, or undefined');
 			}
 
-			// Use inherited path if not specified in AI call
-			// Priority: explicit path > cwd > first allowedFolder
-			const effectivePath = path || cwd || (allowedFolders && allowedFolders[0]);
+			// Determine the path to pass to the subagent
+			// NOTE: Delegation intentionally uses DIFFERENT priority than other tools.
+			//
+			// Other tools (search, extract, query, bash) use: cwd || allowedFolders[0]
+			// Delegation uses: path || allowedFolders[0] || cwd
+			//
+			// This is intentional because:
+			// - Other tools operate within the parent's navigation context (cwd is correct)
+			// - Subagents need a FRESH start from workspace root, not parent's navigation state
+			// - Using parent's cwd would cause "path doubling" (Issue #348) where paths like
+			//   /workspace/project/src/internal/build/src/internal/build/file.go get constructed
+			//
+			// The workspace root (allowedFolders[0]) is the security boundary and correct base
+			// for subagent operations. Parent navigation context should not leak to subagents.
+			const workspaceRoot = allowedFolders && allowedFolders[0];
+			const effectivePath = path || workspaceRoot || cwd;
 
 			if (debug) {
 				console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
@@ -305,7 +318,7 @@ export const delegateTool = (options = {}) => {
 					console.error(`Parent session: ${parentSessionId}`);
 				}
 				if (effectivePath && effectivePath !== path) {
-					console.error(`Using inherited path: ${effectivePath}`);
+					console.error(`Using workspace root: ${effectivePath} (cwd was: ${cwd || 'not set'})`);
 				}
 			}
 

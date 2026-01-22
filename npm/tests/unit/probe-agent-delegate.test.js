@@ -398,3 +398,182 @@ describe('Delegate tracer handling', () => {
     })).rejects.not.toThrow('createDelegationSpan is not a function');
   });
 });
+
+/**
+ * Tests for delegation path inheritance fix (Issue #348)
+ *
+ * This test suite verifies that subagents receive the correct workspace root
+ * instead of a subdirectory from the parent's navigation context, preventing
+ * "path doubling" issues where paths like:
+ *   /workspace/tyk/internal/build/tyk/internal/build/version.go
+ * are incorrectly constructed.
+ */
+describe('Delegation path inheritance (Issue #348)', () => {
+  // NOTE: The effectivePath calculation is tested with proper mocking in
+  // tests/delegate-config.test.js - see "should prioritize allowedFolders[0]
+  // (workspace root) over cwd (navigation context)" test.
+
+  describe('ProbeAgent cwd initialization', () => {
+    test('should set cwd when explicitly provided', () => {
+      const workspaceRoot = '/workspace/project';
+
+      const agent = new ProbeAgent({
+        path: workspaceRoot,
+        cwd: workspaceRoot
+      });
+
+      // When cwd is explicitly provided, it should be used
+      expect(agent.cwd).toBe(workspaceRoot);
+      expect(agent.allowedFolders).toContain(workspaceRoot);
+    });
+
+    test('should have null cwd when not explicitly provided', () => {
+      const workspaceRoot = '/workspace/project';
+
+      const agent = new ProbeAgent({
+        path: workspaceRoot
+        // cwd not provided
+      });
+
+      // cwd should be null (will fall back to allowedFolders[0] in initializeTools)
+      expect(agent.cwd).toBeNull();
+      expect(agent.allowedFolders).toContain(workspaceRoot);
+    });
+
+    test('should use cwd over allowedFolders[0] when explicitly set', () => {
+      const workspaceRoot = '/workspace/project';
+      const explicitCwd = '/workspace/project/specific-dir';
+
+      const agent = new ProbeAgent({
+        path: workspaceRoot,
+        cwd: explicitCwd
+      });
+
+      expect(agent.cwd).toBe(explicitCwd);
+      expect(agent.allowedFolders).toContain(workspaceRoot);
+    });
+  });
+
+  describe('Path doubling prevention', () => {
+    test('should demonstrate path doubling scenario (before fix)', () => {
+      // This test documents the bug scenario
+
+      // Scenario: Parent at /workspace/tyk navigates to /workspace/tyk/internal/build
+      // Parent's cwd becomes: /workspace/tyk/internal/build
+      // When delegating, this cwd is passed as path to subagent
+      // Subagent's allowedFolders becomes: ['/workspace/tyk/internal/build']
+      // Subagent's cwd (null) falls back to allowedFolders[0]
+      // AI calls extract('tyk/internal/build/version.go')
+      // Path resolves to: /workspace/tyk/internal/build/tyk/internal/build/version.go
+      // Result: File not found!
+
+      const parentNavigationCwd = '/workspace/tyk/internal/build';
+      const relativePathFromAI = 'tyk/internal/build/version.go';
+
+      // Path doubling: joining subdirectory cwd with relative path
+      const incorrectPath = `${parentNavigationCwd}/${relativePathFromAI}`;
+      expect(incorrectPath).toBe('/workspace/tyk/internal/build/tyk/internal/build/version.go');
+    });
+
+    test('should ensure subagent starts from workspace root', () => {
+      // The fix in delegate.js now passes cwd: path to subagent
+      // This ensures subagent's tool config uses workspace root for path resolution
+
+      const workspaceRoot = '/workspace/project';
+
+      // Simulating what delegate.js does after fix:
+      const subagentOptions = {
+        path: workspaceRoot,       // Workspace root from delegateTool
+        cwd: workspaceRoot         // Explicitly set cwd to same value (the fix)
+      };
+
+      const agent = new ProbeAgent(subagentOptions);
+
+      // Verify cwd is explicitly set
+      expect(agent.cwd).toBe(workspaceRoot);
+      // Verify allowedFolders uses the same workspace root
+      expect(agent.allowedFolders[0]).toBe(workspaceRoot);
+    });
+  });
+
+  describe('Edge cases', () => {
+    test('should handle when allowedFolders is empty', () => {
+      const tool = delegateTool({
+        cwd: '/some/path',
+        allowedFolders: []  // Empty array
+      });
+
+      expect(tool).toBeDefined();
+    });
+
+    test('should handle when allowedFolders is undefined', () => {
+      const tool = delegateTool({
+        cwd: '/some/path'
+        // allowedFolders not provided
+      });
+
+      expect(tool).toBeDefined();
+    });
+
+    test('should handle when both cwd and allowedFolders are undefined', () => {
+      const tool = delegateTool({});
+
+      expect(tool).toBeDefined();
+    });
+
+    test('should handle multiple allowedFolders', () => {
+      const tool = delegateTool({
+        cwd: '/workspace/project/deep/nested',
+        allowedFolders: ['/workspace/project', '/workspace/other']
+      });
+
+      expect(tool).toBeDefined();
+      // First allowedFolder should be used as workspace root
+    });
+  });
+});
+
+describe('delegateTool path priority', () => {
+  // These tests verify the effectivePath calculation logic
+  // Priority: explicit path > allowedFolders[0] (workspace root) > cwd
+
+  test('effectivePath priority order documentation', () => {
+    // The fix changes the priority from:
+    //   BEFORE: path || cwd || allowedFolders[0]
+    //   AFTER:  path || allowedFolders[0] || cwd
+
+    // This ensures navigation context (cwd) doesn't override workspace root
+
+    const scenarios = [
+      {
+        name: 'AI provides explicit path',
+        path: '/explicit/path',
+        cwd: '/nav/context',
+        allowedFolders: ['/workspace/root'],
+        expected: '/explicit/path'
+      },
+      {
+        name: 'No explicit path, use workspace root (not cwd)',
+        path: undefined,
+        cwd: '/workspace/root/deep/nested',  // Navigation context
+        allowedFolders: ['/workspace/root'],  // Workspace root
+        expected: '/workspace/root'  // Should use this, not cwd
+      },
+      {
+        name: 'No allowedFolders, fall back to cwd',
+        path: undefined,
+        cwd: '/some/path',
+        allowedFolders: undefined,
+        expected: '/some/path'
+      }
+    ];
+
+    scenarios.forEach(scenario => {
+      // Calculate effectivePath using the same logic as delegateTool
+      const workspaceRoot = scenario.allowedFolders && scenario.allowedFolders[0];
+      const effectivePath = scenario.path || workspaceRoot || scenario.cwd;
+
+      expect(effectivePath).toBe(scenario.expected);
+    });
+  });
+});
