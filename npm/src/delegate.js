@@ -229,6 +229,9 @@ export async function delegate({
 			console.error(`[DELEGATE] Using ProbeAgent SDK with code-researcher prompt`);
 		}
 		// Create a new ProbeAgent instance for the delegated task
+		// IMPORTANT: We pass both path and cwd set to the same value (workspace root)
+		// to prevent path doubling issues. The parent's navigation context should not
+		// affect the subagent's path resolution - subagents always work from workspace root.
 		const subagent = new ProbeAgent({
 			sessionId,
 			promptType: 'code-researcher',  // Clean prompt, not inherited from parent
@@ -238,7 +241,8 @@ export async function delegate({
 			maxIterations: remainingIterations,
 			debug,
 			tracer,
-			path,       // Inherit from parent
+			path,       // Workspace root (from delegateTool)
+			cwd: path,  // Explicitly set cwd to workspace root to prevent path doubling
 			provider,   // Inherit from parent
 			model,      // Inherit from parent
 			enableBash, // Inherit from parent
