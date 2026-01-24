@@ -199,6 +199,14 @@ export declare class ProbeAgent {
   constructor(options?: ProbeAgentOptions);
 
   /**
+   * Initialize the agent asynchronously (must be called after constructor)
+   * This method initializes MCP, merges MCP tools, loads history from storage,
+   * and performs CLI fallback detection (claude-code/codex) when no API keys are set.
+   * @returns Promise that resolves when initialization is complete
+   */
+  initialize(): Promise<void>;
+
+  /**
    * Answer a question with optional image attachments
    * @param message - The question or prompt
    * @param images - Optional array of image data or paths
