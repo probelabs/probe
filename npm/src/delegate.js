@@ -178,6 +178,7 @@ const delegationManager = new DelegationManager();
  * @param {Object} [options.tracer=null] - Telemetry tracer instance
  * @param {boolean} [options.enableBash=false] - Enable bash tool (inherited from parent)
  * @param {Object} [options.bashConfig] - Bash configuration (inherited from parent)
+ * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root
  * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({
@@ -192,7 +193,8 @@ export async function delegate({
 	provider = null,
 	model = null,
 	enableBash = false,
-	bashConfig = null
+	bashConfig = null,
+	architectureFileName = null
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -246,7 +248,8 @@ export async function delegate({
 			provider,   // Inherit from parent
 			model,      // Inherit from parent
 			enableBash, // Inherit from parent
-			bashConfig  // Inherit from parent
+			bashConfig, // Inherit from parent
+			architectureFileName
 		});
 
 		if (debug) {

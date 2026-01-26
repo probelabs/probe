@@ -120,6 +120,7 @@ function parseArgs() {
     allowedFolders: null,
     prompt: null,
     systemPrompt: null,
+    architectureFileName: null,
     schema: null,
     provider: null,
     model: null,
@@ -172,6 +173,8 @@ function parseArgs() {
       config.prompt = args[++i];
     } else if (arg === '--system-prompt' && i + 1 < args.length) {
       config.systemPrompt = args[++i];
+    } else if (arg === '--architecture-file' && i + 1 < args.length) {
+      config.architectureFileName = args[++i];
     } else if (arg === '--schema' && i + 1 < args.length) {
       config.schema = args[++i];
     } else if (arg === '--provider' && i + 1 < args.length) {
@@ -254,6 +257,7 @@ Options:
   --allowed-folders <dirs>         Comma-separated list of allowed directories for file operations
   --prompt <type>                  Persona: code-explorer, engineer, code-review, support, architect
   --system-prompt <text|file>      Custom system prompt (text or file path)
+  --architecture-file <name>       Architecture context filename in repo root (default: ARCHITECTURE.md)
   --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
@@ -391,6 +395,10 @@ class ProbeAgentMcpServer {
               system_prompt: {
                 type: 'string',
                 description: 'Optional custom system prompt (text or file path).',
+              },
+              architecture_file: {
+                type: 'string',
+                description: 'Optional architecture context filename in repo root (default: ARCHITECTURE.md).',
               }
             },
             required: ['query']
@@ -511,6 +519,7 @@ class ProbeAgentMcpServer {
             path: args.path || (args.allowed_folders && args.allowed_folders[0]) || process.cwd(),
             promptType: args.prompt || 'code-explorer',
             customPrompt: systemPrompt,
+            architectureFileName: args.architecture_file,
             provider: args.provider,
             model: args.model,
             allowEdit: !!args.allow_edit,
@@ -803,6 +812,7 @@ async function main() {
       allowedFolders: config.allowedFolders,
       promptType: config.prompt,
       customPrompt: systemPrompt,
+      architectureFileName: config.architectureFileName,
       allowEdit: config.allowEdit,
       enableDelegate: config.enableDelegate,
       debug: config.verbose,

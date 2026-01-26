@@ -254,6 +254,7 @@ export class ProbeChat {
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
+   * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (default: ARCHITECTURE.md)
    * @param {string} [options.provider] - Force specific AI provider
    * @param {string} [options.model] - Override model name
    * @param {boolean} [options.debug] - Enable debug mode
