@@ -1571,29 +1571,46 @@ export class ProbeAgent {
       return null;
     }
 
+    let entries;
     try {
-      const entries = await readdir(rootDirectory, { withFileTypes: true });
-      const match = entries.find(
-        (entry) => entry.isFile() && entry.name.toLowerCase() === targetName.toLowerCase()
-      );
-
-      if (!match) {
-        return null;
+      entries = await readdir(rootDirectory, { withFileTypes: true });
+    } catch (error) {
+      this.architectureContext = null;
+      if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
+        console.warn(`[WARN] Cannot read architecture context directory: ${rootDirectory} (${error.code})`);
+      } else if (this.debug) {
+        console.log(`[DEBUG] Could not list architecture context directory: ${error.message}`);
       }
+      return null;
+    }
 
-      const filePath = resolve(rootDirectory, match.name);
+    const match = entries.find(
+      (entry) => entry.isFile() && entry.name.toLowerCase() === targetName.toLowerCase()
+    );
+
+    if (!match) {
+      return null;
+    }
+
+    const filePath = resolve(rootDirectory, match.name);
+    try {
       const content = await readFile(filePath, 'utf8');
-
       this.architectureContext = {
         name: match.name,
         path: filePath,
         content
       };
     } catch (error) {
-      if (this.debug) {
-        console.log(`[DEBUG] Could not load architecture context: ${error.message}`);
-      }
       this.architectureContext = null;
+      if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
+        console.warn(`[WARN] Cannot read architecture context file: ${filePath} (${error.code})`);
+      } else if (error && error.code === 'ENOENT') {
+        if (this.debug) {
+          console.log(`[DEBUG] Architecture context file disappeared: ${filePath}`);
+        }
+      } else {
+        console.warn(`[WARN] Failed to read architecture context file: ${filePath} (${error.message})`);
+      }
     }
 
     return this.architectureContext;
