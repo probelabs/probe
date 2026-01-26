@@ -1051,9 +1051,7 @@ export class ProbeAgent {
         // For Claude Code, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
         await this.loadArchitectureContext();
-        const systemPrompt = this.customPrompt
-          ? `${this.customPrompt}${this.getArchitectureSection()}`
-          : this.getClaudeNativeSystemPrompt();
+        const systemPrompt = this.getClaudeNativeSystemPrompt();
 
         this.engine = await createEnhancedClaudeCLIEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
@@ -1085,9 +1083,7 @@ export class ProbeAgent {
         // For Codex CLI, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
         await this.loadArchitectureContext();
-        const systemPrompt = this.customPrompt
-          ? `${this.customPrompt}${this.getArchitectureSection()}`
-          : this.getCodexNativeSystemPrompt();
+        const systemPrompt = this.getCodexNativeSystemPrompt();
 
         this.engine = await createCodexEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
