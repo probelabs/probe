@@ -99,7 +99,7 @@ export class ProbeAgent {
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
    * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
-   * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (default: ARCHITECTURE.md)
+   * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present)
    * @param {string} [options.path] - Search directory path
    * @param {string} [options.cwd] - Working directory for resolving relative paths (independent of allowedFolders)
    * @param {string} [options.provider] - Force specific AI provider
@@ -196,7 +196,11 @@ export class ProbeAgent {
     this.bashConfig = options.bashConfig || {};
 
     // Architecture context configuration
-    this.architectureFileName = options.architectureFileName || 'ARCHITECTURE.md';
+    const configuredArchitectureFileName =
+      typeof options.architectureFileName === 'string' && options.architectureFileName.trim()
+        ? options.architectureFileName
+        : null;
+    this.architectureFileName = configuredArchitectureFileName;
     this.architectureContext = null;
     this._architectureContextLoaded = false;
 
@@ -1577,7 +1581,7 @@ export class ProbeAgent {
 
   /**
    * Load architecture context from repository root (case-insensitive filename match)
-   * @returns {Promise<Object|null>} Architecture context with { name, path, content } or null
+   * @returns {Promise<Object|null>} Architecture context with { name, path, content, sources? } or null
    */
   async loadArchitectureContext() {
     if (this._architectureContextLoaded) {
@@ -1585,26 +1589,33 @@ export class ProbeAgent {
     }
 
     const rootDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
-    const configuredName = (this.architectureFileName || 'ARCHITECTURE.md').trim();
-    const targetName = basename(configuredName);
+    const configuredName =
+      typeof this.architectureFileName === 'string' ? this.architectureFileName.trim() : '';
+    const hasConfiguredName = !!configuredName;
+    let guidanceCandidates = [];
 
-    // Only allow simple filenames (no path separators or traversal)
-    if (
-      !configuredName ||
-      configuredName !== targetName ||
-      configuredName.includes('/') ||
-      configuredName.includes('\\') ||
-      configuredName.includes('..') ||
-      isAbsolute(configuredName)
-    ) {
-      console.warn(`[WARN] Invalid architectureFileName (must be a simple filename): ${configuredName}`);
-      this._architectureContextLoaded = true;
-      return null;
-    }
+    if (hasConfiguredName) {
+      const targetName = basename(configuredName);
 
-    if (!targetName) {
-      this._architectureContextLoaded = true;
-      return null;
+      // Only allow simple filenames (no path separators or traversal)
+      if (
+        configuredName !== targetName ||
+        configuredName.includes('/') ||
+        configuredName.includes('\\') ||
+        configuredName.includes('..') ||
+        isAbsolute(configuredName)
+      ) {
+        console.warn(`[WARN] Invalid architectureFileName (must be a simple filename): ${configuredName}`);
+      } else if (targetName) {
+        const targetLower = targetName.toLowerCase();
+        if (targetLower === 'agents.md') {
+          guidanceCandidates = ['agents.md', 'claude.md'];
+        } else {
+          guidanceCandidates = [targetName];
+        }
+      }
+    } else {
+      guidanceCandidates = ['agents.md', 'claude.md'];
     }
 
     if (!existsSync(rootDirectory)) {
@@ -1625,42 +1636,82 @@ export class ProbeAgent {
       return null;
     }
 
-    const match = entries.find((entry) => {
-      if (entry.name.toLowerCase() !== targetName.toLowerCase()) {
-        return false;
-      }
+    const entryByLower = new Map();
+    for (const entry of entries) {
       if (entry.isSymbolicLink()) {
-        return false;
+        continue;
       }
-      return entry.isFile();
-    });
+      if (!entry.isFile()) {
+        continue;
+      }
+      entryByLower.set(entry.name.toLowerCase(), entry);
+    }
 
-    if (!match) {
+    let guidanceMatch = null;
+    for (const candidateName of guidanceCandidates) {
+      const entry = entryByLower.get(candidateName.toLowerCase());
+      if (entry) {
+        guidanceMatch = entry;
+        break;
+      }
+    }
+
+    const architectureMatch = entryByLower.get('architecture.md');
+
+    if (!guidanceMatch && !architectureMatch) {
       this._architectureContextLoaded = true;
       return null;
     }
 
-    const filePath = resolve(rootDirectory, match.name);
-    try {
-      const content = await readFile(filePath, 'utf8');
-      this.architectureContext = {
-        name: match.name,
-        path: filePath,
-        content
-      };
-      this._architectureContextLoaded = true;
-    } catch (error) {
-      this.architectureContext = null;
-      if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
-        console.warn(`[WARN] Cannot read architecture context file: ${filePath} (${error.code})`);
-      } else if (error && error.code === 'ENOENT') {
-        if (this.debug) {
-          console.log(`[DEBUG] Architecture context file disappeared: ${filePath}`);
+    const uniqueEntries = [];
+    const seen = new Set();
+    const pushEntry = (entry) => {
+      if (!entry) return;
+      const key = entry.name.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      uniqueEntries.push(entry);
+    };
+
+    pushEntry(guidanceMatch);
+    pushEntry(architectureMatch);
+
+    const contexts = [];
+    for (const entry of uniqueEntries) {
+      const filePath = resolve(rootDirectory, entry.name);
+      try {
+        const content = await readFile(filePath, 'utf8');
+        contexts.push({
+          name: entry.name,
+          path: filePath,
+          content
+        });
+      } catch (error) {
+        if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
+          console.warn(`[WARN] Cannot read architecture context file: ${filePath} (${error.code})`);
+        } else if (error && error.code === 'ENOENT') {
+          if (this.debug) {
+            console.log(`[DEBUG] Architecture context file disappeared: ${filePath}`);
+          }
+        } else {
+          console.warn(`[WARN] Failed to read architecture context file: ${filePath} (${error.message})`);
         }
-      } else {
-        console.warn(`[WARN] Failed to read architecture context file: ${filePath} (${error.message})`);
       }
     }
+
+    if (!contexts.length) {
+      this.architectureContext = null;
+      this._architectureContextLoaded = true;
+      return null;
+    }
+
+    this.architectureContext = {
+      name: contexts[0].name,
+      path: contexts[0].path,
+      content: contexts.map((context) => context.content).join('\n\n'),
+      sources: contexts
+    };
+    this._architectureContextLoaded = true;
 
     return this.architectureContext;
   }

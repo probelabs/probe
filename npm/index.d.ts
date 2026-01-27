@@ -15,7 +15,7 @@ export interface ProbeAgentOptions {
   promptType?: 'code-explorer' | 'engineer' | 'code-review' | 'support' | 'architect';
   /** Allow the use of the 'implement' tool for code editing */
   allowEdit?: boolean;
-  /** Architecture context filename to embed from repo root (default: ARCHITECTURE.md) */
+  /** Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present) */
   architectureFileName?: string;
   /** Search directory path */
   path?: string;

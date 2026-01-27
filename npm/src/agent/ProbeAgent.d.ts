@@ -19,7 +19,7 @@ export interface ProbeAgentOptions {
   allowEdit?: boolean;
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;
-  /** Architecture context filename to embed from repo root (default: ARCHITECTURE.md) */
+  /** Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present) */
   architectureFileName?: string;
   /** Enable bash tool for command execution */
   enableBash?: boolean;
