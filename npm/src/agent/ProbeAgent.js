@@ -1555,6 +1555,20 @@ export class ProbeAgent {
     const configuredName = (this.architectureFileName || 'ARCHITECTURE.md').trim();
     const targetName = basename(configuredName);
 
+    // Only allow simple filenames (no path separators or traversal)
+    if (
+      !configuredName ||
+      configuredName !== targetName ||
+      configuredName.includes('/') ||
+      configuredName.includes('\\') ||
+      configuredName.includes('..') ||
+      isAbsolute(configuredName)
+    ) {
+      console.warn(`[WARN] Invalid architectureFileName (must be a simple filename): ${configuredName}`);
+      this._architectureContextLoaded = true;
+      return null;
+    }
+
     if (!targetName) {
       this._architectureContextLoaded = true;
       return null;
