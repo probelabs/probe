@@ -100,23 +100,27 @@ export function stripFrontmatter(content) {
   return body.trim();
 }
 
-export async function parseSkillFile(skillFilePath, directoryName, { debug = false } = {}) {
+function createError(code, message) {
+  return { code, message };
+}
+
+export async function parseSkillFile(skillFilePath, directoryName) {
   let content;
   try {
     content = await readFile(skillFilePath, 'utf8');
   } catch (error) {
-    if (debug) {
-      console.warn(`[skills] Failed to read ${skillFilePath}: ${error.message}`);
-    }
-    return null;
+    return {
+      skill: null,
+      error: createError('read_failed', error.message)
+    };
   }
 
   const { hasFrontmatter, frontmatterText, body, invalid } = extractFrontmatter(content);
   if (invalid) {
-    if (debug) {
-      console.warn(`[skills] Invalid frontmatter in ${skillFilePath}; skipping`);
-    }
-    return null;
+    return {
+      skill: null,
+      error: createError('invalid_frontmatter', 'Missing closing frontmatter delimiter')
+    };
   }
 
   let data = {};
@@ -124,27 +128,35 @@ export async function parseSkillFile(skillFilePath, directoryName, { debug = fal
     try {
       data = YAML.parse(frontmatterText, { schema: 'failsafe' }) || {};
     } catch (error) {
-      if (debug) {
-        console.warn(`[skills] Invalid YAML in ${skillFilePath}; skipping`);
-      }
-      return null;
+      return {
+        skill: null,
+        error: createError('invalid_yaml', error.message)
+      };
     }
   }
 
   data = normalizeFrontmatter(data);
 
   const rawName = typeof data.name === 'string' ? data.name.trim() : '';
-  const name = deriveSkillName(rawName, directoryName, { debug, skillFilePath });
-  if (!name) return null;
+  const name = deriveSkillName(rawName, directoryName, { debug: false, skillFilePath });
+  if (!name) {
+    return {
+      skill: null,
+      error: createError('invalid_name', 'Skill name is invalid')
+    };
+  }
 
   const rawDescription = typeof data.description === 'string' ? data.description.trim() : '';
   const description = deriveDescription(rawDescription, body);
 
   return {
-    name,
-    description,
-    skillFilePath,
-    directoryName,
-    sourceDir: dirname(skillFilePath)
+    skill: {
+      name,
+      description,
+      skillFilePath,
+      directoryName,
+      sourceDir: dirname(skillFilePath)
+    },
+    error: null
   };
 }

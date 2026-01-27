@@ -1,5 +1,5 @@
 import { existsSync } from 'fs';
-import { readdir, readFile } from 'fs/promises';
+import { readdir, readFile, realpath, lstat } from 'fs/promises';
 import { resolve, join, isAbsolute, sep, relative } from 'path';
 import { parseSkillFile, stripFrontmatter } from './parser.js';
 
@@ -7,7 +7,9 @@ const DEFAULT_SKILL_DIRS = ['.claude/skills', '.codex/skills', 'skills', '.skill
 const SKILL_FILE_NAME = 'SKILL.md';
 
 function isPathInside(basePath, targetPath) {
-  const rel = relative(basePath, targetPath);
+  const base = resolve(basePath);
+  const target = resolve(targetPath);
+  const rel = relative(base, target);
   if (rel === '') return true;
   if (rel === '..' || rel.startsWith(`..${sep}`)) return false;
   if (isAbsolute(rel)) return false;
@@ -23,19 +25,31 @@ function isSafeEntryName(name) {
 export class SkillRegistry {
   constructor({ repoRoot, skillDirs = DEFAULT_SKILL_DIRS, debug = false } = {}) {
     this.repoRoot = repoRoot ? resolve(repoRoot) : process.cwd();
+    this.repoRootReal = null;
     this.skillDirs = Array.isArray(skillDirs) && skillDirs.length > 0 ? skillDirs : DEFAULT_SKILL_DIRS;
     this.debug = debug;
     this.skills = [];
     this.skillsByName = new Map();
+    this.loadErrors = [];
     this.loaded = false;
   }
 
   async loadSkills() {
     if (this.loaded) return this.skills;
 
+    this.loadErrors = [];
+    this.repoRootReal = await this._resolveRealPath(this.repoRoot);
+    if (!this.repoRootReal) {
+      if (this.debug) {
+        console.warn(`[skills] Failed to resolve repo root: ${this.repoRoot}`);
+      }
+      this.loaded = true;
+      return this.skills;
+    }
+
     const discovered = [];
     for (const skillDir of this.skillDirs) {
-      const resolvedDir = this._resolveSkillDir(skillDir);
+      const resolvedDir = await this._resolveSkillDir(skillDir);
       if (!resolvedDir) continue;
       const skillsInDir = await this._scanSkillDir(resolvedDir);
       discovered.push(...skillsInDir);
@@ -50,6 +64,10 @@ export class SkillRegistry {
     return this.skills;
   }
 
+  getLoadErrors() {
+    return this.loadErrors;
+  }
+
   getSkill(name) {
     return this.skillsByName.get(name);
   }
@@ -62,18 +80,28 @@ export class SkillRegistry {
     return stripFrontmatter(content);
   }
 
-  _resolveSkillDir(skillDir) {
-    const resolved = isAbsolute(skillDir) ? resolve(skillDir) : resolve(this.repoRoot, skillDir);
-    const repoRoot = resolve(this.repoRoot);
+  async _resolveRealPath(target) {
+    try {
+      return await realpath(target);
+    } catch (_error) {
+      return null;
+    }
+  }
 
-    if (!isPathInside(repoRoot, resolved)) {
+  async _resolveSkillDir(skillDir) {
+    const resolved = isAbsolute(skillDir) ? resolve(skillDir) : resolve(this.repoRoot, skillDir);
+    const repoRoot = this.repoRootReal || resolve(this.repoRoot);
+    const resolvedReal = await this._resolveRealPath(resolved);
+    if (!resolvedReal) return null;
+
+    if (!isPathInside(repoRoot, resolvedReal)) {
       if (this.debug) {
-        console.warn(`[skills] Skipping skill dir outside repo: ${resolved}`);
+        console.warn(`[skills] Skipping skill dir outside repo: ${resolvedReal}`);
       }
       return null;
     }
 
-    return resolved;
+    return resolvedReal;
   }
 
   async _scanSkillDir(dirPath) {
@@ -101,17 +129,43 @@ export class SkillRegistry {
 
       const skillFolder = join(dirPath, entry.name);
       const skillFilePath = join(skillFolder, SKILL_FILE_NAME);
-      const resolvedSkillPath = resolve(skillFilePath);
-      if (!isPathInside(dirPath, resolvedSkillPath)) {
+      let skillStat;
+      try {
+        skillStat = await lstat(skillFilePath);
+      } catch (_error) {
+        continue;
+      }
+
+      if (skillStat.isSymbolicLink()) {
         if (this.debug) {
-          console.warn(`[skills] Skipping skill path outside directory: ${resolvedSkillPath}`);
+          console.warn(`[skills] Skipping symlinked SKILL.md: ${skillFilePath}`);
+        }
+        continue;
+      }
+
+      const resolvedSkillPath = await this._resolveRealPath(skillFilePath);
+      if (!resolvedSkillPath || !isPathInside(dirPath, resolvedSkillPath)) {
+        if (this.debug) {
+          console.warn(`[skills] Skipping skill path outside directory: ${resolvedSkillPath || skillFilePath}`);
         }
         continue;
       }
       if (!existsSync(skillFilePath)) continue;
 
-      const skill = await parseSkillFile(skillFilePath, entry.name, { debug: this.debug });
-      if (!skill) continue;
+      const { skill, error } = await parseSkillFile(skillFilePath, entry.name);
+      if (!skill) {
+        if (error) {
+          this.loadErrors.push({
+            path: skillFilePath,
+            code: error.code,
+            message: error.message
+          });
+        }
+        if (this.debug && error) {
+          console.warn(`[skills] Skipping ${skillFilePath}: ${error.code} (${error.message})`);
+        }
+        continue;
+      }
 
       if (this.skillsByName.has(skill.name)) {
         if (this.debug) {
