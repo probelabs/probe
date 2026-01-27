@@ -1592,9 +1592,15 @@ export class ProbeAgent {
       return null;
     }
 
-    const match = entries.find(
-      (entry) => entry.isFile() && entry.name.toLowerCase() === targetName.toLowerCase()
-    );
+    const match = entries.find((entry) => {
+      if (entry.name.toLowerCase() !== targetName.toLowerCase()) {
+        return false;
+      }
+      if (entry.isSymbolicLink()) {
+        return false;
+      }
+      return entry.isFile();
+    });
 
     if (!match) {
       this._architectureContextLoaded = true;
