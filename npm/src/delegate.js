@@ -173,11 +173,13 @@ const delegationManager = new DelegationManager();
  * @param {number} [options.maxIterations=30] - Maximum tool iterations allowed
  * @param {string} [options.parentSessionId=null] - Parent session ID for tracking
  * @param {string} [options.path] - Search directory path (inherited from parent)
+ * @param {string[]} [options.allowedFolders] - Allowed folders (inherited from parent)
  * @param {string} [options.provider] - AI provider (inherited from parent)
  * @param {string} [options.model] - AI model (inherited from parent)
  * @param {Object} [options.tracer=null] - Telemetry tracer instance
  * @param {boolean} [options.enableBash=false] - Enable bash tool (inherited from parent)
  * @param {Object} [options.bashConfig] - Bash configuration (inherited from parent)
+ * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root
  * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({
@@ -189,10 +191,12 @@ export async function delegate({
 	tracer = null,
 	parentSessionId = null,
 	path = null,
+	allowedFolders = null,
 	provider = null,
 	model = null,
 	enableBash = false,
-	bashConfig = null
+	bashConfig = null,
+	architectureFileName = null
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -242,11 +246,13 @@ export async function delegate({
 			debug,
 			tracer,
 			path,       // Workspace root (from delegateTool)
+			allowedFolders, // Inherit allowed folders to keep architecture context root consistent
 			cwd: path,  // Explicitly set cwd to workspace root to prevent path doubling
 			provider,   // Inherit from parent
 			model,      // Inherit from parent
 			enableBash, // Inherit from parent
-			bashConfig  // Inherit from parent
+			bashConfig, // Inherit from parent
+			architectureFileName
 		});
 
 		if (debug) {

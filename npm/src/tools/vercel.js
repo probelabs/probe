@@ -250,10 +250,11 @@ export const extractTool = (options = {}) => {
  * @param {string[]} [options.allowedFolders] - Allowed folders for workspace isolation
  * @param {boolean} [options.enableBash=false] - Enable bash tool for sub-agents
  * @param {Object} [options.bashConfig] - Bash configuration (allow/deny patterns)
+ * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig, architectureFileName } = options;
 
 	return tool({
 		name: 'delegate',
@@ -331,11 +332,13 @@ export const delegateTool = (options = {}) => {
 				maxIterations: maxIterations || 30,
 				parentSessionId,
 				path: effectivePath,
+				allowedFolders,
 				provider,
 				model,
 				tracer,
 				enableBash,
-				bashConfig
+				bashConfig,
+				architectureFileName
 			});
 
 			return result;

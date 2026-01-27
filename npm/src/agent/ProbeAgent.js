@@ -12,7 +12,7 @@ import { streamText } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
-import { readFile, stat } from 'fs/promises';
+import { readFile, stat, readdir } from 'fs/promises';
 import { resolve, isAbsolute, dirname, basename, normalize, sep } from 'path';
 import { TokenCounter } from './tokenCounter.js';
 import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
@@ -94,6 +94,7 @@ export class ProbeAgent {
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
    * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
+   * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (default: ARCHITECTURE.md)
    * @param {string} [options.path] - Search directory path
    * @param {string} [options.cwd] - Working directory for resolving relative paths (independent of allowedFolders)
    * @param {string} [options.provider] - Force specific AI provider
@@ -175,6 +176,11 @@ export class ProbeAgent {
     // Bash configuration
     this.enableBash = !!options.enableBash;
     this.bashConfig = options.bashConfig || {};
+
+    // Architecture context configuration
+    this.architectureFileName = options.architectureFileName || 'ARCHITECTURE.md';
+    this.architectureContext = null;
+    this._architectureContextLoaded = false;
 
     // Search configuration - support both path (single) and allowedFolders (array)
     if (options.allowedFolders && Array.isArray(options.allowedFolders)) {
@@ -442,6 +448,7 @@ export class ProbeAgent {
       enableBash: this.enableBash,
       bashConfig: this.bashConfig,
       allowedTools: this.allowedTools,
+      architectureFileName: this.architectureFileName,
       isToolAllowed
     };
 
@@ -1043,7 +1050,7 @@ export class ProbeAgent {
 
         // For Claude Code, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
-        const systemPrompt = this.customPrompt || this.getClaudeNativeSystemPrompt();
+        const systemPrompt = await this.getClaudeNativeSystemPrompt();
 
         this.engine = await createEnhancedClaudeCLIEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
@@ -1074,7 +1081,7 @@ export class ProbeAgent {
 
         // For Codex CLI, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
-        const systemPrompt = this.customPrompt || this.getCodexNativeSystemPrompt();
+        const systemPrompt = await this.getCodexNativeSystemPrompt();
 
         this.engine = await createCodexEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
@@ -1536,10 +1543,113 @@ export class ProbeAgent {
   }
 
   /**
+   * Load architecture context from repository root (case-insensitive filename match)
+   * @returns {Promise<Object|null>} Architecture context with { name, path, content } or null
+   */
+  async loadArchitectureContext() {
+    if (this._architectureContextLoaded) {
+      return this.architectureContext;
+    }
+
+    const rootDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
+    const configuredName = (this.architectureFileName || 'ARCHITECTURE.md').trim();
+    const targetName = basename(configuredName);
+
+    // Only allow simple filenames (no path separators or traversal)
+    if (
+      !configuredName ||
+      configuredName !== targetName ||
+      configuredName.includes('/') ||
+      configuredName.includes('\\') ||
+      configuredName.includes('..') ||
+      isAbsolute(configuredName)
+    ) {
+      console.warn(`[WARN] Invalid architectureFileName (must be a simple filename): ${configuredName}`);
+      this._architectureContextLoaded = true;
+      return null;
+    }
+
+    if (!targetName) {
+      this._architectureContextLoaded = true;
+      return null;
+    }
+
+    if (!existsSync(rootDirectory)) {
+      this._architectureContextLoaded = true;
+      return null;
+    }
+
+    let entries;
+    try {
+      entries = await readdir(rootDirectory, { withFileTypes: true });
+    } catch (error) {
+      this.architectureContext = null;
+      if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
+        console.warn(`[WARN] Cannot read architecture context directory: ${rootDirectory} (${error.code})`);
+      } else if (this.debug) {
+        console.log(`[DEBUG] Could not list architecture context directory: ${error.message}`);
+      }
+      return null;
+    }
+
+    const match = entries.find((entry) => {
+      if (entry.name.toLowerCase() !== targetName.toLowerCase()) {
+        return false;
+      }
+      if (entry.isSymbolicLink()) {
+        return false;
+      }
+      return entry.isFile();
+    });
+
+    if (!match) {
+      this._architectureContextLoaded = true;
+      return null;
+    }
+
+    const filePath = resolve(rootDirectory, match.name);
+    try {
+      const content = await readFile(filePath, 'utf8');
+      this.architectureContext = {
+        name: match.name,
+        path: filePath,
+        content
+      };
+      this._architectureContextLoaded = true;
+    } catch (error) {
+      this.architectureContext = null;
+      if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
+        console.warn(`[WARN] Cannot read architecture context file: ${filePath} (${error.code})`);
+      } else if (error && error.code === 'ENOENT') {
+        if (this.debug) {
+          console.log(`[DEBUG] Architecture context file disappeared: ${filePath}`);
+        }
+      } else {
+        console.warn(`[WARN] Failed to read architecture context file: ${filePath} (${error.message})`);
+      }
+    }
+
+    return this.architectureContext;
+  }
+
+  /**
+   * Format architecture context for prompt inclusion
+   * @returns {string} Architecture section or empty string
+   */
+  getArchitectureSection() {
+    if (!this.architectureContext?.content) {
+      return '';
+    }
+
+    return `\n\n# Architecture\n\n${this.architectureContext.content}\n`;
+  }
+
+  /**
    * Get system prompt for Claude native engines (CLI/SDK) without XML formatting
    * These engines have native MCP support and don't need XML instructions
    */
-  getClaudeNativeSystemPrompt() {
+  async getClaudeNativeSystemPrompt() {
+    await this.loadArchitectureContext();
     let systemPrompt = '';
 
     // Add persona/role if configured
@@ -1583,6 +1693,9 @@ When exploring code:
       systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
       systemPrompt += '```\n' + this.fileList + '\n```\n';
     }
+
+    // Add architecture context if available
+    systemPrompt += this.getArchitectureSection();
 
     return systemPrompt;
   }
@@ -1590,7 +1703,8 @@ When exploring code:
   /**
    * Get system prompt for Codex CLI (similar to Claude but optimized for Codex)
    */
-  getCodexNativeSystemPrompt() {
+  async getCodexNativeSystemPrompt() {
+    await this.loadArchitectureContext();
     let systemPrompt = '';
 
     // Add persona/role if configured
@@ -1634,6 +1748,9 @@ When exploring code:
       systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
       systemPrompt += '```\n' + this.fileList + '\n```\n';
     }
+
+    // Add architecture context if available
+    systemPrompt += this.getArchitectureSection();
 
     return systemPrompt;
   }
@@ -1875,6 +1992,10 @@ Follow these instructions carefully:
       }
       systemMessage += `\n# Repository Structure\n\nYou are working with a repository located at: ${searchDirectory}\n\n`;
     }
+
+    // Add architecture context if available
+    await this.loadArchitectureContext();
+    systemMessage += this.getArchitectureSection();
 
     if (this.allowedFolders.length > 0) {
       systemMessage += `\n**Important**: For security reasons, you can only search within these allowed folders: ${this.allowedFolders.join(', ')}\n\n`;
@@ -3371,6 +3492,7 @@ Convert your previous response content into actual JSON data that follows this s
       promptType: this.promptType,
       allowEdit: this.allowEdit,
       enableDelegate: this.enableDelegate,
+      architectureFileName: this.architectureFileName,
       path: this.allowedFolders[0], // Use first allowed folder as primary path
       allowedFolders: [...this.allowedFolders],
       cwd: this.cwd, // Preserve explicit working directory

@@ -79,6 +79,7 @@ export function main() {
     .option('--trace-remote [endpoint]', 'Enable tracing to remote endpoint (default: http://localhost:4318/v1/traces)')
     .option('--trace-console', 'Enable tracing to console (for debugging)')
     .option('--completion-prompt <prompt>', 'Custom prompt to run after attempt_completion for validation/review (can be a string or path to a file)')
+    .option('--architecture-file <name>', 'Architecture context filename to embed from repo root (default: ARCHITECTURE.md)')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 
@@ -427,6 +428,7 @@ export function main() {
         customPrompt: customPrompt,
         promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
         allowEdit: options.allowEdit,
+        architectureFileName: options.architectureFile,
         enableBash: options.enableBash,
         bashConfig: bashConfig,
         completionPrompt: completionPrompt
@@ -540,6 +542,7 @@ export function main() {
       customPrompt: customPrompt,
       promptType: options.prompt && ['architect', 'code-review', 'code-review-template', 'support', 'engineer'].includes(options.prompt) ? options.prompt : null,
       allowEdit: options.allowEdit,
+      architectureFileName: options.architectureFile,
       enableBash: options.enableBash,
       bashConfig: bashConfig,
       completionPrompt: completionPrompt
