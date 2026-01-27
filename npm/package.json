@@ -89,6 +89,7 @@
     "glob": "^10.3.10",
     "gpt-tokenizer": "^3.0.1",
     "tar": "^6.2.0",
+    "yaml": "^2.6.1",
     "zod": "^3.24.2"
   },
   "devDependencies": {

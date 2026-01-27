@@ -140,6 +140,36 @@ export MODEL_NAME=claude-3-5-sonnet-20241022
 - **Token tracking** - Monitor usage and costs
 - **Configurable personas** - Engineer, architect, code-review, and more
 
+### Agent Skills (repo-local)
+
+ProbeAgent can discover and activate Agent Skills stored inside your repository. Place skills under:
+- `.claude/skills/<skill-name>/SKILL.md`
+- `.codex/skills/<skill-name>/SKILL.md`
+- `skills/<skill-name>/SKILL.md`
+- `.skills/<skill-name>/SKILL.md`
+
+`SKILL.md` should contain YAML frontmatter followed by Markdown instructions. Example:
+
+```markdown
+---
+name: onboarding
+description: Help new engineers understand the repo structure and conventions.
+---
+
+Use this skill to explain key modules, build steps, and common workflows.
+```
+
+Then in the agent loop you can call:
+```xml
+<listSkills></listSkills>
+```
+or:
+```xml
+<useSkill>
+<name>onboarding</name>
+</useSkill>
+```
+
 ### Retry and Fallback Support
 
 ProbeAgent includes comprehensive retry and fallback capabilities for maximum reliability:

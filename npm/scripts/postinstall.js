@@ -92,11 +92,17 @@ You can download the binary from: https://github.com/probelabs/probe/releases
 !.gitkeep
 !README.md
 !probe
+!binaries
+!binaries/**
 `;
 
-		await fs.writeFile(gitignorePath, gitignoreContent);
-		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-			console.log('Created .gitignore file in bin directory');
+		if (!(await fs.pathExists(gitignorePath))) {
+			await fs.writeFile(gitignorePath, gitignoreContent);
+			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+				console.log('Created .gitignore file in bin directory');
+			}
+		} else if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
+			console.log('Skipped .gitignore creation (already exists)');
 		}
 
 		// Get the package version first

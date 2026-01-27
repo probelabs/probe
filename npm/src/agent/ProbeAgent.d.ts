@@ -66,6 +66,12 @@ export interface ProbeAgentOptions {
   disableMermaidValidation?: boolean;
   /** Disable automatic JSON validation and fixing (prevents infinite recursion in JsonFixingAgent) */
   disableJsonValidation?: boolean;
+  /** Enable agent skills discovery and activation */
+  enableSkills?: boolean;
+  /** Disable agent skills (overrides enableSkills) */
+  disableSkills?: boolean;
+  /** Skill directories to scan relative to repo root */
+  skillDirs?: string[];
   /** Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation) */
   completionPrompt?: string;
 }

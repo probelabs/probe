@@ -30,6 +30,14 @@ export const delegateSchema = z.object({
 	task: z.string().describe('The task to delegate to a subagent. Be specific about what needs to be accomplished.')
 });
 
+export const listSkillsSchema = z.object({
+	filter: z.string().optional().describe('Optional substring filter to match skill names or descriptions.')
+});
+
+export const useSkillSchema = z.object({
+	name: z.string().describe('Skill name to load and activate.')
+});
+
 export const bashSchema = z.object({
 	command: z.string().describe('The bash command to execute'),
 	workingDirectory: z.string().optional().describe('Directory to execute the command in (optional)'),
@@ -332,6 +340,8 @@ export const DEFAULT_VALID_TOOLS = [
 	'query',
 	'extract',
 	'delegate',
+	'listSkills',
+	'useSkill',
 	'listFiles',
 	'searchFiles',
 	'implement',
@@ -366,6 +376,8 @@ function getValidParamsForTool(toolName) {
 		query: querySchema,
 		extract: extractSchema,
 		delegate: delegateSchema,
+		listSkills: listSkillsSchema,
+		useSkill: useSkillSchema,
 		bash: bashSchema,
 		attempt_completion: attemptCompletionSchema,
 		edit: editSchema,

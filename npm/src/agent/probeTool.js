@@ -59,7 +59,7 @@ export function clearToolExecutionData(sessionId) {
 }
 
 // Wrap the tools to emit events and handle cancellation
-const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
+export const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
   return {
     ...tool, // Spread schema, description etc.
     execute: async (params) => { // The execute function now receives parsed params

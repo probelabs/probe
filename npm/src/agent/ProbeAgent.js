@@ -27,6 +27,8 @@ import {
   bashToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
+  listSkillsToolDefinition,
+  useSkillToolDefinition,
   readImageToolDefinition,
   attemptCompletionToolDefinition,
   implementToolDefinition,
@@ -61,6 +63,9 @@ import {
   parseHybridXmlToolCall,
   loadMCPConfigurationFromPath
 } from './mcp/index.js';
+import { SkillRegistry } from './skills/registry.js';
+import { formatAvailableSkillsXml } from './skills/formatting.js';
+import { createSkillToolInstances } from './skills/tools.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
@@ -105,6 +110,9 @@ export class ProbeAgent {
    * @param {number} [options.maxIterations] - Maximum tool iterations (overrides MAX_TOOL_ITERATIONS env var)
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
    * @param {boolean} [options.disableJsonValidation=false] - Disable automatic JSON validation and fixing (prevents infinite recursion in JsonFixingAgent)
+   * @param {boolean} [options.enableSkills=true] - Enable agent skills discovery and activation
+   * @param {boolean} [options.disableSkills=false] - Disable agent skills (overrides enableSkills)
+   * @param {Array<string>} [options.skillDirs] - Skill directories to scan relative to repo root
    * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration
    * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
    * @param {Object} [options.mcpConfig] - MCP configuration object (overrides mcpConfigPath)
@@ -149,6 +157,16 @@ export class ProbeAgent {
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
     this.disableJsonValidation = !!options.disableJsonValidation;
+    this.enableSkills = options.disableSkills ? false : (options.enableSkills !== undefined ? !!options.enableSkills : true);
+    if (Array.isArray(options.skillDirs)) {
+      this.skillDirs = options.skillDirs;
+    } else if (typeof options.skillDirs === 'string') {
+      this.skillDirs = options.skillDirs.split(',').map(dir => dir.trim()).filter(Boolean);
+    } else {
+      this.skillDirs = null;
+    }
+    this.skillsRegistry = null;
+    this.activeSkills = new Map();
 
     // Completion prompt for post-completion validation/review
     this.completionPrompt = options.completionPrompt || null;
@@ -480,6 +498,21 @@ export class ProbeAgent {
     }
     if (isToolAllowed('searchFiles')) {
       this.toolImplementations.searchFiles = searchFilesToolInstance;
+    }
+
+    if (this.enableSkills) {
+      const registry = this._getSkillsRegistry();
+      const { listSkillsToolInstance, useSkillToolInstance } = createSkillToolInstances({
+        registry,
+        activeSkills: this.activeSkills
+      });
+
+      if (isToolAllowed('listSkills')) {
+        this.toolImplementations.listSkills = listSkillsToolInstance;
+      }
+      if (isToolAllowed('useSkill')) {
+        this.toolImplementations.useSkill = useSkillToolInstance;
+      }
     }
 
     // Image loading tool
@@ -1644,6 +1677,35 @@ export class ProbeAgent {
     return `\n\n# Architecture\n\n${this.architectureContext.content}\n`;
   }
 
+  _getSkillsRepoRoot() {
+    if (this.allowedFolders && this.allowedFolders.length > 0) {
+      return resolve(this.allowedFolders[0]);
+    }
+    return process.cwd();
+  }
+
+  _getSkillsRegistry() {
+    if (!this.skillsRegistry) {
+      this.skillsRegistry = new SkillRegistry({
+        repoRoot: this._getSkillsRepoRoot(),
+        skillDirs: this.skillDirs || undefined,
+        debug: this.debug
+      });
+    }
+    return this.skillsRegistry;
+  }
+
+  async _loadSkillsMetadata() {
+    if (!this.enableSkills) return [];
+    return await this._getSkillsRegistry().loadSkills();
+  }
+
+  async _getAvailableSkillsXml() {
+    const skills = await this._loadSkillsMetadata();
+    if (!skills.length) return '';
+    return formatAvailableSkillsXml(skills);
+  }
+
   /**
    * Get system prompt for Claude native engines (CLI/SDK) without XML formatting
    * These engines have native MCP support and don't need XML instructions
@@ -1807,6 +1869,12 @@ When exploring code:
     if (isToolAllowed('searchFiles')) {
       toolDefinitions += `${searchFilesToolDefinition}\n`;
     }
+    if (this.enableSkills && isToolAllowed('listSkills')) {
+      toolDefinitions += `${listSkillsToolDefinition}\n`;
+    }
+    if (this.enableSkills && isToolAllowed('useSkill')) {
+      toolDefinitions += `${useSkillToolDefinition}\n`;
+    }
     if (isToolAllowed('readImage')) {
       toolDefinitions += `${readImageToolDefinition}\n`;
     }
@@ -1900,7 +1968,7 @@ Available Tools:
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
-- readImage: Read and load an image file for AI analysis.
+${this.enableSkills ? '- listSkills: List available agent skills discovered in the repository.\n- useSkill: Load and activate a specific skill\'s instructions.\n' : ''}- readImage: Read and load an image file for AI analysis.
 ${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n- edit: Edit files using exact string replacement.\n- create: Create new files with specified content.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}${this.enableBash ? '- bash: Execute bash commands for system operations.\n' : ''}
 - attempt_completion: Finalize the task and provide the result to the user.
 - attempt_complete: Quick completion using previous response (shorthand).
@@ -1957,6 +2025,14 @@ Follow these instructions carefully:
 
     // Add Tool Definitions
     systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
+
+    // Add available skills (metadata only)
+    if (this.enableSkills) {
+      const skillsXml = await this._getAvailableSkillsXml();
+      if (skillsXml) {
+        systemMessage += `\n# Available Skills\n${skillsXml}\n\nTo use a skill, call the useSkill tool with its name.\n`;
+      }
+    }
 
     // Add MCP tools if available (filtered by allowedTools)
     if (this.mcpBridge && this.mcpBridge.getToolNames().length > 0) {
@@ -2451,6 +2527,8 @@ Follow these instructions carefully:
           if (this.allowedTools.isEnabled('extract')) validTools.push('extract');
           if (this.allowedTools.isEnabled('listFiles')) validTools.push('listFiles');
           if (this.allowedTools.isEnabled('searchFiles')) validTools.push('searchFiles');
+          if (this.enableSkills && this.allowedTools.isEnabled('listSkills')) validTools.push('listSkills');
+          if (this.enableSkills && this.allowedTools.isEnabled('useSkill')) validTools.push('useSkill');
           if (this.allowedTools.isEnabled('readImage')) validTools.push('readImage');
           // Always allow attempt_completion - it's a completion signal, not a tool
           // This ensures agents can complete even when disableTools: true is set (fixes #333)
@@ -3505,6 +3583,8 @@ Convert your previous response content into actual JSON data that follows this s
       disableMermaidValidation: this.disableMermaidValidation,
       disableJsonValidation: this.disableJsonValidation,
       completionPrompt: this.completionPrompt,
+      enableSkills: this.enableSkills,
+      skillDirs: this.skillDirs ? [...this.skillDirs] : null,
       allowedTools: allowedToolsArray,
       enableMcp: !!this.mcpBridge,
       mcpConfig: this.mcpConfig,
