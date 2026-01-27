@@ -1581,7 +1581,7 @@ export class ProbeAgent {
 
   /**
    * Load architecture context from repository root (case-insensitive filename match)
-   * @returns {Promise<Object|null>} Architecture context with { name, path, content, sources? } or null
+   * @returns {Promise<Object|null>} Architecture context with { name, path, content, sources, primarySource, guidanceSource, architectureSource } or null
    */
   async loadArchitectureContext() {
     if (this._architectureContextLoaded) {
@@ -1657,6 +1657,8 @@ export class ProbeAgent {
     }
 
     const architectureMatch = entryByLower.get('architecture.md');
+    const guidanceKey = guidanceMatch ? guidanceMatch.name.toLowerCase() : null;
+    const architectureKey = architectureMatch ? architectureMatch.name.toLowerCase() : null;
 
     if (!guidanceMatch && !architectureMatch) {
       this._architectureContextLoaded = true;
@@ -1681,10 +1683,18 @@ export class ProbeAgent {
       const filePath = resolve(rootDirectory, entry.name);
       try {
         const content = await readFile(filePath, 'utf8');
+        let kind = 'other';
+        const entryKey = entry.name.toLowerCase();
+        if (guidanceKey && entryKey === guidanceKey) {
+          kind = 'guidance';
+        } else if (architectureKey && entryKey === architectureKey) {
+          kind = 'architecture';
+        }
         contexts.push({
           name: entry.name,
           path: filePath,
-          content
+          content,
+          kind
         });
       } catch (error) {
         if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
@@ -1705,11 +1715,18 @@ export class ProbeAgent {
       return null;
     }
 
+    const guidanceSource = contexts.find((context) => context.kind === 'guidance') || null;
+    const architectureSource = contexts.find((context) => context.kind === 'architecture') || null;
+    const primarySource = guidanceSource || architectureSource || contexts[0];
+
     this.architectureContext = {
-      name: contexts[0].name,
-      path: contexts[0].path,
+      name: primarySource?.name || null,
+      path: primarySource?.path || null,
       content: contexts.map((context) => context.content).join('\n\n'),
-      sources: contexts
+      sources: contexts,
+      primarySource,
+      guidanceSource,
+      architectureSource
     };
     this._architectureContextLoaded = true;
 
