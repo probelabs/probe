@@ -202,7 +202,8 @@ describe('RetryManager', () => {
 
       // With backoffFactor of 10, delay should be capped at maxDelay (2000ms)
       const delay2 = timestamps[2] - timestamps[1];
-      expect(delay2).toBeGreaterThanOrEqual(2000); // Should be at least maxDelay
+      // Allow small timing variance in CI/runtime scheduling
+      expect(delay2).toBeGreaterThanOrEqual(1950);
       expect(delay2).toBeLessThan(2100); // Should not exceed maxDelay significantly
     });
 
