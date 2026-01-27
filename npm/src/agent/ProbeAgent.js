@@ -63,7 +63,9 @@ import {
   parseHybridXmlToolCall,
   loadMCPConfigurationFromPath
 } from './mcp/index.js';
-import { SkillRegistry, formatAvailableSkillsXml } from './skills/registry.js';
+import { SkillRegistry } from './skills/registry.js';
+import { formatAvailableSkillsXml } from './skills/formatting.js';
+import { createSkillToolInstances } from './skills/tools.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
@@ -498,63 +500,19 @@ export class ProbeAgent {
       this.toolImplementations.searchFiles = searchFilesToolInstance;
     }
 
-    if (this.enableSkills && isToolAllowed('listSkills')) {
-      this.toolImplementations.listSkills = {
-        execute: async (params = {}) => {
-          const filter = typeof params.filter === 'string' ? params.filter.trim().toLowerCase() : '';
-          const skills = await this._loadSkillsMetadata();
-          const filtered = filter
-            ? skills.filter(skill =>
-                skill.name.toLowerCase().includes(filter) ||
-                (skill.description || '').toLowerCase().includes(filter)
-              )
-            : skills;
-          return {
-            skills: filtered.map(skill => ({
-              name: skill.name,
-              description: skill.description
-            }))
-          };
-        }
-      };
-    }
+    if (this.enableSkills) {
+      const registry = this._getSkillsRegistry();
+      const { listSkillsToolInstance, useSkillToolInstance } = createSkillToolInstances({
+        registry,
+        activeSkills: this.activeSkills
+      });
 
-    if (this.enableSkills && isToolAllowed('useSkill')) {
-      this.toolImplementations.useSkill = {
-        execute: async (params = {}) => {
-          const rawName = typeof params.name === 'string' ? params.name.trim() : '';
-          if (!rawName) {
-            throw new Error('Skill name is required');
-          }
-
-          const registry = this._getSkillsRegistry();
-          await registry.loadSkills();
-
-          let skill = registry.getSkill(rawName);
-          if (!skill) {
-            const lowerName = rawName.toLowerCase();
-            skill = registry.getSkill(lowerName);
-          }
-
-          if (!skill) {
-            const available = registry.getSkills().map(s => s.name).join(', ') || 'None';
-            throw new Error(`Skill '${rawName}' not found. Available skills: ${available}`);
-          }
-
-          const instructions = await registry.loadSkillInstructions(skill.name);
-          if (!instructions) {
-            throw new Error(`Skill '${skill.name}' has no instructions`);
-          }
-
-          this.activeSkills.set(skill.name, { ...skill, instructions });
-
-          return {
-            name: skill.name,
-            description: skill.description,
-            instructions
-          };
-        }
-      };
+      if (isToolAllowed('listSkills')) {
+        this.toolImplementations.listSkills = listSkillsToolInstance;
+      }
+      if (isToolAllowed('useSkill')) {
+        this.toolImplementations.useSkill = useSkillToolInstance;
+      }
     }
 
     // Image loading tool
