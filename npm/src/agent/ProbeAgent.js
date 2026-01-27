@@ -1050,8 +1050,7 @@ export class ProbeAgent {
 
         // For Claude Code, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
-        await this.loadArchitectureContext();
-        const systemPrompt = this.getClaudeNativeSystemPrompt();
+        const systemPrompt = await this.getClaudeNativeSystemPrompt();
 
         this.engine = await createEnhancedClaudeCLIEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
@@ -1082,8 +1081,7 @@ export class ProbeAgent {
 
         // For Codex CLI, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
-        await this.loadArchitectureContext();
-        const systemPrompt = this.getCodexNativeSystemPrompt();
+        const systemPrompt = await this.getCodexNativeSystemPrompt();
 
         this.engine = await createCodexEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
@@ -1553,17 +1551,17 @@ export class ProbeAgent {
       return this.architectureContext;
     }
 
-    this._architectureContextLoaded = true;
-
     const rootDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
     const configuredName = (this.architectureFileName || 'ARCHITECTURE.md').trim();
     const targetName = basename(configuredName);
 
     if (!targetName) {
+      this._architectureContextLoaded = true;
       return null;
     }
 
     if (!existsSync(rootDirectory)) {
+      this._architectureContextLoaded = true;
       return null;
     }
 
@@ -1585,6 +1583,7 @@ export class ProbeAgent {
     );
 
     if (!match) {
+      this._architectureContextLoaded = true;
       return null;
     }
 
@@ -1596,6 +1595,7 @@ export class ProbeAgent {
         path: filePath,
         content
       };
+      this._architectureContextLoaded = true;
     } catch (error) {
       this.architectureContext = null;
       if (error && (error.code === 'EACCES' || error.code === 'EPERM')) {
@@ -1628,7 +1628,8 @@ export class ProbeAgent {
    * Get system prompt for Claude native engines (CLI/SDK) without XML formatting
    * These engines have native MCP support and don't need XML instructions
    */
-  getClaudeNativeSystemPrompt() {
+  async getClaudeNativeSystemPrompt() {
+    await this.loadArchitectureContext();
     let systemPrompt = '';
 
     // Add persona/role if configured
@@ -1682,7 +1683,8 @@ When exploring code:
   /**
    * Get system prompt for Codex CLI (similar to Claude but optimized for Codex)
    */
-  getCodexNativeSystemPrompt() {
+  async getCodexNativeSystemPrompt() {
+    await this.loadArchitectureContext();
     let systemPrompt = '';
 
     // Add persona/role if configured
