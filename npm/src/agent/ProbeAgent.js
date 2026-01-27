@@ -96,7 +96,7 @@ export class ProbeAgent {
    * @param {string} [options.sessionId] - Optional session ID
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
    * @param {string} [options.systemPrompt] - Alias for customPrompt; takes precedence when both are provided
-   * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
+   * @param {string} [options.promptType] - Predefined prompt type (code-explorer, code-searcher, architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
    * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
    * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (default: ARCHITECTURE.md)
@@ -106,6 +106,7 @@ export class ProbeAgent {
    * @param {string} [options.model] - Override model name
    * @param {boolean} [options.debug] - Enable debug mode
    * @param {boolean} [options.outline] - Enable outline-xml format for search results
+   * @param {boolean} [options.searchDelegate=true] - Use a delegated code-search subagent for the search tool
    * @param {number} [options.maxResponseTokens] - Maximum tokens for AI responses
    * @param {number} [options.maxIterations] - Maximum tool iterations (overrides MAX_TOOL_ITERATIONS env var)
    * @param {boolean} [options.disableMermaidValidation=false] - Disable automatic mermaid diagram validation and fixing
@@ -147,6 +148,7 @@ export class ProbeAgent {
     this.cancelled = false;
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
+    this.searchDelegate = options.searchDelegate !== undefined ? !!options.searchDelegate : true;
     this.maxResponseTokens = options.maxResponseTokens || (() => {
       const val = parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10);
       if (isNaN(val) || val < 0 || val > 200000) {
@@ -225,6 +227,7 @@ export class ProbeAgent {
       console.log(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
       console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
+      console.log(`[DEBUG] Search delegation enabled: ${this.searchDelegate}`);
     }
 
     // Initialize tools
@@ -461,12 +464,15 @@ export class ProbeAgent {
       cwd: this.cwd || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd()),
       allowedFolders: this.allowedFolders,
       outline: this.outline,
+      searchDelegate: this.searchDelegate,
       allowEdit: this.allowEdit,
       enableDelegate: this.enableDelegate,
       enableBash: this.enableBash,
       bashConfig: this.bashConfig,
       allowedTools: this.allowedTools,
       architectureFileName: this.architectureFileName,
+      provider: this.clientApiProvider,
+      model: this.clientApiModel,
       isToolAllowed
     };
 
@@ -1736,10 +1742,17 @@ export class ProbeAgent {
       systemPrompt += `\n- bash: Execute bash commands for system operations`;
     }
 
+    const searchGuidance = this.searchDelegate
+      ? '1. Start with search to retrieve extracted code blocks'
+      : '1. Start with search to find relevant code patterns';
+    const extractGuidance = this.searchDelegate
+      ? '2. Use extract only if you need more context or a full file'
+      : '2. Use extract to get detailed context when needed';
+
     systemPrompt += `\n
 When exploring code:
-1. Start with search to find relevant code patterns
-2. Use extract to get detailed context when needed
+${searchGuidance}
+${extractGuidance}
 3. Prefer focused, specific searches over broad queries
 4. Combine multiple tools to build complete understanding`;
 
@@ -1791,10 +1804,17 @@ When exploring code:
       systemPrompt += `\n- bash: Execute bash commands for system operations`;
     }
 
+    const searchGuidance = this.searchDelegate
+      ? '1. Start with search to retrieve extracted code blocks'
+      : '1. Start with search to find relevant code patterns';
+    const extractGuidance = this.searchDelegate
+      ? '2. Use extract only if you need more context or a full file'
+      : '2. Use extract to get detailed context when needed';
+
     systemPrompt += `\n
 When exploring code:
-1. Start with search to find relevant code patterns
-2. Use extract to get detailed context when needed
+${searchGuidance}
+${extractGuidance}
 3. Prefer focused, specific searches over broad queries
 4. Combine multiple tools to build complete understanding`;
 
@@ -1855,7 +1875,10 @@ When exploring code:
 
     // Core tools (filtered by allowedTools)
     if (isToolAllowed('search')) {
-      toolDefinitions += `${searchToolDefinition}\n`;
+      const searchDefinition = this.searchDelegate
+        ? `${searchToolDefinition}\n**Note:** This search tool delegates code searching to a dedicated subagent and returns extracted code blocks. Use extract only to expand context or if search returns no code.`
+        : searchToolDefinition;
+      toolDefinitions += `${searchDefinition}\n`;
     }
     if (isToolAllowed('query')) {
       toolDefinitions += `${queryToolDefinition}\n`;
@@ -1963,7 +1986,7 @@ I need to find code related to error handling in the search module. The most app
 10. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
 
 Available Tools:
-- search: Search code using keyword queries.
+- search: Search code using keyword queries${this.searchDelegate ? ' (returns extracted code blocks via a dedicated subagent)' : ''}.
 - query: Search code using structural AST patterns.
 - extract: Extract specific code blocks or lines from files.
 - listFiles: List files and directories in a specified location.
@@ -1980,7 +2003,7 @@ Follow these instructions carefully:
 1. Analyze the user's request.
 2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
 3. Use the available tools step-by-step to fulfill the request.
-4. You should always prefer the \`search\` tool for code-related questions. Read full files only if really necessary.
+4. You should always prefer the \`search\` tool for code-related questions.${this.searchDelegate ? ' It already returns extracted code blocks; use \`extract\` only to expand context or read full files.' : ' Read full files only if really necessary.'}
 5. Ensure to get really deep and understand the full picture before answering.
 6. You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
 7. Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
@@ -2717,6 +2740,7 @@ Follow these instructions carefully:
                       path: this.searchPath,            // Inherit search path
                       provider: this.apiType,           // Inherit AI provider (string identifier)
                       model: this.model,                // Inherit model
+                      searchDelegate: this.searchDelegate,
                       debug: this.debug,
                       tracer: this.tracer
                     };
@@ -3578,6 +3602,7 @@ Convert your previous response content into actual JSON data that follows this s
       model: this.clientApiModel,
       debug: this.debug,
       outline: this.outline,
+      searchDelegate: this.searchDelegate,
       maxResponseTokens: this.maxResponseTokens,
       maxIterations: this.maxIterations,
       disableMermaidValidation: this.disableMermaidValidation,

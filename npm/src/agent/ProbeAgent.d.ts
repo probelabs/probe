@@ -14,7 +14,7 @@ export interface ProbeAgentOptions {
   /** Alias for customPrompt. More intuitive naming for system prompts. */
   systemPrompt?: string;
   /** Predefined prompt type (persona) */
-  promptType?: 'code-explorer' | 'engineer' | 'code-review' | 'support' | 'architect';
+  promptType?: 'code-explorer' | 'code-searcher' | 'engineer' | 'code-review' | 'support' | 'architect';
   /** Allow the use of the 'implement' tool for code editing */
   allowEdit?: boolean;
   /** Enable the delegate tool for task distribution to subagents */
@@ -38,6 +38,8 @@ export interface ProbeAgentOptions {
   };
   /** Search directory path */
   path?: string;
+  /** Use a delegated code-search subagent for the search tool (default: true) */
+  searchDelegate?: boolean;
   /** Force specific AI provider */
   provider?: 'anthropic' | 'openai' | 'google' | 'bedrock';
   /** Override model name */
