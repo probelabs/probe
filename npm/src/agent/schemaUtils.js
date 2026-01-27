@@ -1143,6 +1143,28 @@ export function replaceMermaidDiagramsInMarkdown(originalResponse, correctedDiag
   return modifiedResponse;
 }
 
+function replaceSingleMermaidDiagramInResponse(response, originalDiagram, newContent) {
+  if (!originalDiagram) {
+    return response;
+  }
+
+  const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
+  const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${newContent}\n\`\`\``;
+
+  if (originalDiagram.isInJson) {
+    return replaceMermaidDiagramsInJson(response, [
+      {
+        ...originalDiagram,
+        content: newContent
+      }
+    ]);
+  }
+
+  return response.slice(0, originalDiagram.startIndex) +
+    newCodeBlock +
+    response.slice(originalDiagram.endIndex);
+}
+
 /**
  * Validate a single Mermaid diagram
  * @param {string} diagram - Mermaid diagram code
@@ -1849,12 +1871,11 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       if (maidResult.errors.length === 0) {
         // Maid fixed it completely
         const originalDiagram = diagrams[invalidDiagram.originalIndex];
-        const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
-        const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${maidResult.fixed}\n\`\`\``;
-
-        fixedResponse = fixedResponse.slice(0, originalDiagram.startIndex) +
-                       newCodeBlock +
-                       fixedResponse.slice(originalDiagram.endIndex);
+        fixedResponse = replaceSingleMermaidDiagramInResponse(
+          fixedResponse,
+          originalDiagram,
+          maidResult.fixed
+        );
 
         fixingResults.push({
           diagramIndex: invalidDiagram.originalIndex,
@@ -1874,12 +1895,11 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
       } else if (maidResult.wasFixed) {
         // Maid improved it but didn't fix everything - update content for AI fixing
         const originalDiagram = diagrams[invalidDiagram.originalIndex];
-        const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
-        const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${maidResult.fixed}\n\`\`\``;
-
-        fixedResponse = fixedResponse.slice(0, originalDiagram.startIndex) +
-                       newCodeBlock +
-                       fixedResponse.slice(originalDiagram.endIndex);
+        fixedResponse = replaceSingleMermaidDiagramInResponse(
+          fixedResponse,
+          originalDiagram,
+          maidResult.fixed
+        );
 
         fixingResults.push({
           diagramIndex: invalidDiagram.originalIndex,
@@ -1987,12 +2007,11 @@ export async function validateAndFixMermaidResponse(response, options = {}) {
         if (fixedContent && fixedContent !== invalidDiagram.content) {
           // Replace the diagram in the response
           const originalDiagram = updatedDiagrams[invalidDiagram.originalIndex];
-          const attributesStr = originalDiagram.attributes ? ` ${originalDiagram.attributes}` : '';
-          const newCodeBlock = `\`\`\`mermaid${attributesStr}\n${fixedContent}\n\`\`\``;
-
-          fixedResponse = fixedResponse.slice(0, originalDiagram.startIndex) +
-                         newCodeBlock +
-                         fixedResponse.slice(originalDiagram.endIndex);
+          fixedResponse = replaceSingleMermaidDiagramInResponse(
+            fixedResponse,
+            originalDiagram,
+            fixedContent
+          );
 
           // Find existing result or create new one
           const existingResultIndex = fixingResults.findIndex(r => r.diagramIndex === invalidDiagram.originalIndex);

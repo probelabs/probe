@@ -427,6 +427,36 @@ Some final text.`;
       expect(result.wasFixed).toBe(true);
       expect(result.isValid).toBe(true);
     });
+
+    test('should fix JSON-embedded diagrams without corrupting surrounding text', async () => {
+      const response = `Intro text.
+
+\`\`\`json
+{
+  "status": "ok",
+  "diagram": "\`\`\`mermaid\\ngraph TD\\n  A --> B[Broken\\n  B --> C\\n\`\`\`",
+  "note": "All prompt text"
+}
+\`\`\`
+
+Outro text.`;
+
+      const result = await validateAndFixMermaidResponse(response);
+
+      expect(result.isValid).toBe(true);
+      expect(result.wasFixed).toBe(true);
+      expect(result.fixedResponse).toContain('Intro text.');
+      expect(result.fixedResponse).toContain('Outro text.');
+
+      const jsonMatch = result.fixedResponse.match(/```json\s*\n([\s\S]*?)\n```/);
+      expect(jsonMatch).not.toBeNull();
+      const parsed = JSON.parse(jsonMatch[1]);
+      expect(parsed.status).toBe('ok');
+      expect(parsed.note).toBe('All prompt text');
+      expect(parsed.diagram).toContain('```mermaid');
+      expect(parsed.diagram).toContain('graph TD');
+      expect(parsed.diagram).toMatch(/B\[Broken\]/);
+    });
   });
 
   describe('Edge Cases and Error Handling', () => {
