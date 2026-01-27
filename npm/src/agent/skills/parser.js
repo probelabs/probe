@@ -122,7 +122,7 @@ export async function parseSkillFile(skillFilePath, directoryName, { debug = fal
   let data = {};
   if (hasFrontmatter) {
     try {
-      data = YAML.parse(frontmatterText) || {};
+      data = YAML.parse(frontmatterText, { schema: 'failsafe' }) || {};
     } catch (error) {
       if (debug) {
         console.warn(`[skills] Invalid YAML in ${skillFilePath}; skipping`);

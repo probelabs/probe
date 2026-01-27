@@ -1,10 +1,24 @@
 import { existsSync } from 'fs';
 import { readdir, readFile } from 'fs/promises';
-import { resolve, join, isAbsolute, sep } from 'path';
+import { resolve, join, isAbsolute, sep, relative } from 'path';
 import { parseSkillFile, stripFrontmatter } from './parser.js';
 
 const DEFAULT_SKILL_DIRS = ['.claude/skills', '.codex/skills', 'skills', '.skills'];
 const SKILL_FILE_NAME = 'SKILL.md';
+
+function isPathInside(basePath, targetPath) {
+  const rel = relative(basePath, targetPath);
+  if (rel === '') return true;
+  if (rel === '..' || rel.startsWith(`..${sep}`)) return false;
+  if (isAbsolute(rel)) return false;
+  return true;
+}
+
+function isSafeEntryName(name) {
+  if (!name || name === '.' || name === '..') return false;
+  if (name.includes('\0')) return false;
+  return !name.includes('/') && !name.includes('\\');
+}
 
 export class SkillRegistry {
   constructor({ repoRoot, skillDirs = DEFAULT_SKILL_DIRS, debug = false } = {}) {
@@ -50,9 +64,9 @@ export class SkillRegistry {
 
   _resolveSkillDir(skillDir) {
     const resolved = isAbsolute(skillDir) ? resolve(skillDir) : resolve(this.repoRoot, skillDir);
-    const repoRoot = this.repoRoot.endsWith(sep) ? this.repoRoot : `${this.repoRoot}${sep}`;
+    const repoRoot = resolve(this.repoRoot);
 
-    if (resolved !== this.repoRoot && !resolved.startsWith(repoRoot)) {
+    if (!isPathInside(repoRoot, resolved)) {
       if (this.debug) {
         console.warn(`[skills] Skipping skill dir outside repo: ${resolved}`);
       }
@@ -78,9 +92,22 @@ export class SkillRegistry {
     const results = [];
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
+      if (!isSafeEntryName(entry.name)) {
+        if (this.debug) {
+          console.warn(`[skills] Skipping unsafe skill directory name: ${entry.name}`);
+        }
+        continue;
+      }
 
       const skillFolder = join(dirPath, entry.name);
       const skillFilePath = join(skillFolder, SKILL_FILE_NAME);
+      const resolvedSkillPath = resolve(skillFilePath);
+      if (!isPathInside(dirPath, resolvedSkillPath)) {
+        if (this.debug) {
+          console.warn(`[skills] Skipping skill path outside directory: ${resolvedSkillPath}`);
+        }
+        continue;
+      }
       if (!existsSync(skillFilePath)) continue;
 
       const skill = await parseSkillFile(skillFilePath, entry.name, { debug: this.debug });
