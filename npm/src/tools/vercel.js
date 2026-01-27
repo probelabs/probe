@@ -332,6 +332,7 @@ export const delegateTool = (options = {}) => {
 				maxIterations: maxIterations || 30,
 				parentSessionId,
 				path: effectivePath,
+				allowedFolders,
 				provider,
 				model,
 				tracer,

@@ -173,6 +173,7 @@ const delegationManager = new DelegationManager();
  * @param {number} [options.maxIterations=30] - Maximum tool iterations allowed
  * @param {string} [options.parentSessionId=null] - Parent session ID for tracking
  * @param {string} [options.path] - Search directory path (inherited from parent)
+ * @param {string[]} [options.allowedFolders] - Allowed folders (inherited from parent)
  * @param {string} [options.provider] - AI provider (inherited from parent)
  * @param {string} [options.model] - AI model (inherited from parent)
  * @param {Object} [options.tracer=null] - Telemetry tracer instance
@@ -190,6 +191,7 @@ export async function delegate({
 	tracer = null,
 	parentSessionId = null,
 	path = null,
+	allowedFolders = null,
 	provider = null,
 	model = null,
 	enableBash = false,
@@ -244,6 +246,7 @@ export async function delegate({
 			debug,
 			tracer,
 			path,       // Workspace root (from delegateTool)
+			allowedFolders, // Inherit allowed folders to keep architecture context root consistent
 			cwd: path,  // Explicitly set cwd to workspace root to prevent path doubling
 			provider,   // Inherit from parent
 			model,      // Inherit from parent
