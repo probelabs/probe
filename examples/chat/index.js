@@ -79,7 +79,7 @@ export function main() {
     .option('--trace-remote [endpoint]', 'Enable tracing to remote endpoint (default: http://localhost:4318/v1/traces)')
     .option('--trace-console', 'Enable tracing to console (for debugging)')
     .option('--completion-prompt <prompt>', 'Custom prompt to run after attempt_completion for validation/review (can be a string or path to a file)')
-    .option('--architecture-file <name>', 'Architecture context filename to embed from repo root (default: ARCHITECTURE.md)')
+    .option('--architecture-file <name>', 'Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present)')
     .argument('[path]', 'Path to the codebase to search (overrides ALLOWED_FOLDERS)')
     .parse(process.argv);
 

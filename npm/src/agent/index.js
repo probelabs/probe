@@ -263,7 +263,7 @@ Options:
   --allowed-folders <dirs>         Comma-separated list of allowed directories for file operations
   --prompt <type>                  Persona: code-explorer, engineer, code-review, support, architect
   --system-prompt <text|file>      Custom system prompt (text or file path)
-  --architecture-file <name>       Architecture context filename in repo root (default: ARCHITECTURE.md)
+  --architecture-file <name>       Architecture context filename in repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present)
   --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
@@ -406,7 +406,7 @@ class ProbeAgentMcpServer {
               },
               architecture_file: {
                 type: 'string',
-                description: 'Optional architecture context filename in repo root (default: ARCHITECTURE.md).',
+                description: 'Optional architecture context filename in repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present).',
               }
             },
             required: ['query']
