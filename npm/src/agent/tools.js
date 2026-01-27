@@ -172,6 +172,50 @@ User: Find all markdown files in the docs directory, but only at the top level.
 </examples>
 `;
 
+// Define the listSkills tool XML definition
+export const listSkillsToolDefinition = `
+## listSkills
+Description: List available agent skills discovered in the repository.
+
+Parameters:
+- filter: (optional) Substring filter to match skill names or descriptions.
+
+Usage Example:
+
+<examples>
+
+User: What skills are available?
+<listSkills>
+</listSkills>
+
+User: Show me skills related to docs
+<listSkills>
+<filter>docs</filter>
+</listSkills>
+
+</examples>
+`;
+
+// Define the useSkill tool XML definition
+export const useSkillToolDefinition = `
+## useSkill
+Description: Load and activate a specific skill's instructions. Use this before following a skill's guidance.
+
+Parameters:
+- name: (required) The skill name to activate.
+
+Usage Example:
+
+<examples>
+
+User: Use the onboarding skill
+<useSkill>
+<name>onboarding</name>
+</useSkill>
+
+</examples>
+`;
+
 // Define the readImage tool XML definition
 export const readImageToolDefinition = `
 ## readImage

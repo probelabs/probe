@@ -138,6 +138,8 @@ function parseArgs() {
     noMermaidValidation: false, // New flag to disable mermaid validation
     allowedTools: null, // Tool filtering: ['*'] = all, [] = none, ['tool1', 'tool2'] = specific
     disableTools: false, // Convenience flag to disable all tools
+    disableSkills: false, // Disable skill discovery and activation
+    skillDirs: null, // Comma-separated list of repo-relative skill directories
     // Bash tool configuration
     enableBash: false,
     bashAllow: null,
@@ -208,6 +210,10 @@ function parseArgs() {
     } else if (arg === '--disable-tools') {
       // Convenience flag to disable all tools (raw AI mode)
       config.disableTools = true;
+    } else if (arg === '--no-skills') {
+      config.disableSkills = true;
+    } else if (arg === '--skills-dir' && i + 1 < args.length) {
+      config.skillDirs = args[++i].split(',').map(dir => dir.trim()).filter(Boolean);
     } else if (arg === '--enable-bash') {
       config.enableBash = true;
     } else if (arg === '--bash-allow' && i + 1 < args.length) {
@@ -266,10 +272,12 @@ Options:
   --allowed-tools <tools>          Filter available tools (comma-separated list)
                                    Use '*' or 'all' for all tools (default)
                                    Use 'none' or '' for no tools (raw AI mode)
-                                   Specific tools: search,query,extract,listFiles,searchFiles
+                                   Specific tools: search,query,extract,listFiles,searchFiles,listSkills,useSkill
                                    Supports exclusion: '*,!bash' (all except bash)
   --disable-tools                  Disable all tools (raw AI mode, no code analysis)
                                    Convenience flag equivalent to --allowed-tools none
+  --skills-dir <dirs>              Comma-separated list of repo-relative skill directories to scan
+  --no-skills                      Disable skill discovery and activation
   --verbose                        Enable verbose output
   --outline                        Use outline-xml format for code search results
   --mcp                           Run as MCP server
@@ -822,6 +830,8 @@ async function main() {
       disableMermaidValidation: config.noMermaidValidation,
       allowedTools: config.allowedTools,
       disableTools: config.disableTools,
+      enableSkills: !config.disableSkills,
+      skillDirs: config.skillDirs,
       enableBash: config.enableBash,
       bashConfig: bashConfig
     };
