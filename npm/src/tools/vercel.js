@@ -119,6 +119,7 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 	return [
 		'You are a code-search subagent. Your ONLY job is to return ALL relevant code locations.',
 		'Use ONLY the search tool. Do NOT answer the question or explain anything.',
+		'Use the query exactly as provided (no substitutions or paraphrasing). If nothing is found, return {"targets": []}.',
 		'Return ONLY valid JSON with this shape: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}.',
 		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
 		`Search query: ${searchQuery}`,
@@ -244,7 +245,10 @@ export const searchTool = (options = {}) => {
 
 				const targets = parseDelegatedTargets(delegateResult);
 				if (!targets.length) {
-					return 'No relevant code locations found.';
+					if (debug) {
+						console.error('Delegated search returned no targets; falling back to raw search');
+					}
+					return await runRawSearch();
 				}
 
 				const effectiveCwd = options.cwd || '.';

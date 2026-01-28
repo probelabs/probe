@@ -116,6 +116,25 @@ describe('searchDelegate behavior', () => {
     expect(mockSearch).toHaveBeenCalledTimes(1);
   });
 
+  test('falls back to raw search when delegation returns no targets', async () => {
+    mockDelegate.mockResolvedValue(JSON.stringify({ targets: [] }));
+    mockSearch.mockResolvedValue('RAW-SEARCH');
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace']
+    });
+
+    const result = await tool.execute({
+      query: 'searchDelegate',
+      path: 'src'
+    });
+
+    expect(result).toBe('RAW-SEARCH');
+    expect(mockSearch).toHaveBeenCalledTimes(1);
+  });
+
   test('uses raw search when searchDelegate=false', async () => {
     mockSearch.mockResolvedValue('RAW-SEARCH');
 
