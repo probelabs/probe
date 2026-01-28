@@ -244,7 +244,10 @@ export const searchTool = (options = {}) => {
 
 				const targets = parseDelegatedTargets(delegateResult);
 				if (!targets.length) {
-					return 'No relevant code locations found.';
+					if (debug) {
+						console.error('Delegated search returned no targets; falling back to raw search');
+					}
+					return await runRawSearch();
 				}
 
 				const effectiveCwd = options.cwd || '.';
