@@ -180,6 +180,11 @@ const delegationManager = new DelegationManager();
  * @param {boolean} [options.enableBash=false] - Enable bash tool (inherited from parent)
  * @param {Object} [options.bashConfig] - Bash configuration (inherited from parent)
  * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root
+ * @param {string} [options.promptType='code-researcher'] - Prompt type for the subagent
+ * @param {Array<string>|null} [options.allowedTools] - Allowed tools for the subagent (null = default)
+ * @param {boolean} [options.disableTools=false] - Disable all tools for the subagent
+ * @param {boolean} [options.searchDelegate] - Use delegated search in the subagent
+ * @param {Object|string} [options.schema] - Optional JSON schema to enforce response format
  * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({
@@ -196,7 +201,12 @@ export async function delegate({
 	model = null,
 	enableBash = false,
 	bashConfig = null,
-	architectureFileName = null
+	architectureFileName = null,
+	promptType = 'code-researcher',
+	allowedTools = null,
+	disableTools = false,
+	searchDelegate = undefined,
+	schema = null
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -230,7 +240,7 @@ export async function delegate({
 			console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
 			console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
 			console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
-			console.error(`[DELEGATE] Using ProbeAgent SDK with code-researcher prompt`);
+			console.error(`[DELEGATE] Using ProbeAgent SDK with ${promptType} prompt`);
 		}
 		// Create a new ProbeAgent instance for the delegated task
 		// IMPORTANT: We pass both path and cwd set to the same value (workspace root)
@@ -238,8 +248,8 @@ export async function delegate({
 		// affect the subagent's path resolution - subagents always work from workspace root.
 		const subagent = new ProbeAgent({
 			sessionId,
-			promptType: 'code-researcher',  // Clean prompt, not inherited from parent
-			enableDelegate: false,           // Explicitly disable delegation to prevent recursion
+			promptType,               // Clean prompt, not inherited from parent
+			enableDelegate: false,     // Explicitly disable delegation to prevent recursion
 			disableMermaidValidation: true,  // Faster processing
 			disableJsonValidation: true,     // Simpler responses
 			maxIterations: remainingIterations,
@@ -252,12 +262,15 @@ export async function delegate({
 			model,      // Inherit from parent
 			enableBash, // Inherit from parent
 			bashConfig, // Inherit from parent
-			architectureFileName
+			architectureFileName,
+			allowedTools,
+			disableTools,
+			searchDelegate
 		});
 
 		if (debug) {
 			console.error(`[DELEGATE] Created subagent with session ${sessionId}`);
-			console.error(`[DELEGATE] Subagent config: promptType=code-researcher, enableDelegate=false, maxIterations=${remainingIterations}`);
+			console.error(`[DELEGATE] Subagent config: promptType=${promptType}, enableDelegate=false, maxIterations=${remainingIterations}`);
 		}
 
 		// Set up timeout with proper cleanup
@@ -275,7 +288,8 @@ export async function delegate({
 		});
 
 		// Execute the task with timeout
-		const answerPromise = subagent.answer(task);
+		const answerOptions = schema ? { schema } : undefined;
+		const answerPromise = answerOptions ? subagent.answer(task, [], answerOptions) : subagent.answer(task);
 		const response = await Promise.race([answerPromise, timeoutPromise]);
 
 		// Clear timeout immediately after race completes to prevent memory leak

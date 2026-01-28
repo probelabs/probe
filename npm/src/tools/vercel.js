@@ -10,6 +10,125 @@ import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
 import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 
+const CODE_SEARCH_SCHEMA = {
+	type: 'object',
+	properties: {
+		targets: {
+			type: 'array',
+			items: { type: 'string' },
+			description: 'List of file targets like "path/to/file.ext#Symbol" or "path/to/file.ext:line" or "path/to/file.ext:start-end".'
+		}
+	},
+	required: ['targets'],
+	additionalProperties: false
+};
+
+function normalizeTargets(targets) {
+	if (!Array.isArray(targets)) return [];
+	const seen = new Set();
+	const normalized = [];
+
+	for (const target of targets) {
+		if (typeof target !== 'string') continue;
+		const trimmed = target.trim();
+		if (!trimmed || seen.has(trimmed)) continue;
+		seen.add(trimmed);
+		normalized.push(trimmed);
+	}
+
+	return normalized;
+}
+
+function extractJsonSnippet(text) {
+	const jsonBlockMatch = text.match(/```json\s*([\s\S]*?)```/i);
+	if (jsonBlockMatch) {
+		return jsonBlockMatch[1].trim();
+	}
+
+	const anyBlockMatch = text.match(/```\s*([\s\S]*?)```/);
+	if (anyBlockMatch) {
+		return anyBlockMatch[1].trim();
+	}
+
+	const firstBrace = text.indexOf('{');
+	const lastBrace = text.lastIndexOf('}');
+	if (firstBrace !== -1 && lastBrace > firstBrace) {
+		return text.slice(firstBrace, lastBrace + 1);
+	}
+
+	const firstBracket = text.indexOf('[');
+	const lastBracket = text.lastIndexOf(']');
+	if (firstBracket !== -1 && lastBracket > firstBracket) {
+		return text.slice(firstBracket, lastBracket + 1);
+	}
+
+	return null;
+}
+
+function fallbackTargetsFromText(text) {
+	const candidates = [];
+	const lines = text.split(/\r?\n/);
+
+	for (const line of lines) {
+		let cleaned = line.trim();
+		if (!cleaned) continue;
+		cleaned = cleaned.replace(/^[-*•\d.)\s]+/, '').trim();
+		if (!cleaned) continue;
+		const token = cleaned.split(/\s+/)[0];
+		if (/[#:]|[/\\]|\\./.test(token)) {
+			candidates.push(token);
+		}
+	}
+
+	return candidates;
+}
+
+function parseDelegatedTargets(rawResponse) {
+	if (!rawResponse || typeof rawResponse !== 'string') return [];
+	const trimmed = rawResponse.trim();
+
+	const tryParse = (text) => {
+		try {
+			return JSON.parse(text);
+		} catch {
+			return null;
+		}
+	};
+
+	let parsed = tryParse(trimmed);
+	if (!parsed) {
+		const snippet = extractJsonSnippet(trimmed);
+		if (snippet) {
+			parsed = tryParse(snippet);
+		}
+	}
+
+	if (parsed) {
+		if (Array.isArray(parsed)) {
+			return normalizeTargets(parsed);
+		}
+		if (Array.isArray(parsed.targets)) {
+			return normalizeTargets(parsed.targets);
+		}
+	}
+
+	return normalizeTargets(fallbackTargetsFromText(trimmed));
+}
+
+function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, allowTests }) {
+	return [
+		'You are a code-search subagent. Your ONLY job is to return ALL relevant code locations.',
+		'Use ONLY the search tool. Do NOT answer the question or explain anything.',
+		'Return ONLY valid JSON with this shape: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}.',
+		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
+		`Search query: ${searchQuery}`,
+		`Search path(s): ${searchPath}`,
+		`Options: exact=${exact ? 'true' : 'false'}, language=${language || 'auto'}, allow_tests=${allowTests ? 'true' : 'false'}.`,
+		'Run additional searches only if needed to capture all relevant locations.',
+		'Deduplicate targets.'
+	].join('\n');
+}
+
 /**
  * Search tool generator
  * 
@@ -20,58 +139,138 @@ import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescrip
  * @returns {Object} Configured search tool
  */
 export const searchTool = (options = {}) => {
-	const { sessionId, maxTokens = 10000, debug = false, outline = false } = options;
+	const {
+		sessionId,
+		maxTokens = 10000,
+		debug = false,
+		outline = false,
+		searchDelegate = false
+	} = options;
 
 	return tool({
 		name: 'search',
-		description: searchDescription,
+		description: searchDelegate
+			? `${searchDescription} (delegates code search to a subagent and returns extracted code blocks)`
+			: searchDescription,
 		inputSchema: searchSchema,
 		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language }) => {
-			try {
-				// Use parameter maxTokens if provided, otherwise use the default
-				const effectiveMaxTokens = paramMaxTokens || maxTokens;
+			// Use parameter maxTokens if provided, otherwise use the default
+			const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
-				// Parse and resolve paths (supports comma-separated and relative paths)
-				let searchPaths;
-				if (path) {
-					searchPaths = parseAndResolvePaths(path, options.cwd);
-				}
+			// Parse and resolve paths (supports comma-separated and relative paths)
+			let searchPaths;
+			if (path) {
+				searchPaths = parseAndResolvePaths(path, options.cwd);
+			}
 
-				// Default to cwd or '.' if no paths provided
-				if (!searchPaths || searchPaths.length === 0) {
-					searchPaths = [options.cwd || '.'];
-				}
+			// Default to cwd or '.' if no paths provided
+			if (!searchPaths || searchPaths.length === 0) {
+				searchPaths = [options.cwd || '.'];
+			}
 
-				// Join paths with space for CLI (probe search supports multiple paths)
-				const searchPath = searchPaths.join(' ');
+			// Join paths with space for CLI (probe search supports multiple paths)
+			const searchPath = searchPaths.join(' ');
 
+			const searchOptions = {
+				query: searchQuery,
+				path: searchPath,
+				cwd: options.cwd, // Working directory for resolving relative paths
+				allowTests: allow_tests ?? true,
+				exact,
+				json: false,
+				maxTokens: effectiveMaxTokens,
+				session: sessionId, // Pass session ID if provided
+				language // Pass language parameter if provided
+			};
+
+			// Add outline format if enabled
+			if (outline) {
+				searchOptions.format = 'outline-xml';
+			}
+
+			const runRawSearch = async () => {
 				if (debug) {
 					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", exact: ${exact ? 'true' : 'false'}, language: ${language || 'all'}, session: ${sessionId || 'none'}`);
 				}
+				return await search(searchOptions);
+			};
 
-				const searchOptions = {
-					query: searchQuery,
-					path: searchPath,
-					cwd: options.cwd, // Working directory for resolving relative paths
-					allowTests: allow_tests ?? true,
-					exact,
-					json: false,
-					maxTokens: effectiveMaxTokens,
-					session: sessionId, // Pass session ID if provided
-					language // Pass language parameter if provided
-				};
+			if (!searchDelegate) {
+				try {
+					return await runRawSearch();
+				} catch (error) {
+					console.error('Error executing search command:', error);
+					return `Error executing search command: ${error.message}`;
+				}
+			}
 
-				// Add outline format if enabled
-				if (outline) {
-					searchOptions.format = 'outline-xml';
+			try {
+				if (debug) {
+					console.error(`Delegating search with query: "${searchQuery}", path: "${searchPath}"`);
 				}
 
-				const results = await search(searchOptions);
+				const delegateTask = buildSearchDelegateTask({
+					searchQuery,
+					searchPath,
+					exact,
+					language,
+					allowTests: allow_tests ?? true
+				});
 
-				return results;
+				const runDelegation = () => delegate({
+					task: delegateTask,
+					debug,
+					parentSessionId: sessionId,
+					path: options.allowedFolders?.[0] || options.cwd || '.',
+					allowedFolders: options.allowedFolders,
+					provider: options.provider || null,
+					model: options.model || null,
+					tracer: options.tracer || null,
+					enableBash: false,
+					bashConfig: null,
+					architectureFileName: options.architectureFileName || null,
+					promptType: 'code-searcher',
+					allowedTools: ['search', 'attempt_completion'],
+					searchDelegate: false,
+					schema: CODE_SEARCH_SCHEMA
+				});
+
+				const delegateResult = options.tracer?.withSpan
+					? await options.tracer.withSpan('search.delegate', runDelegation, {
+						'search.query': searchQuery,
+						'search.path': searchPath
+					})
+					: await runDelegation();
+
+				const targets = parseDelegatedTargets(delegateResult);
+				if (!targets.length) {
+					if (debug) {
+						console.error('Delegated search returned no targets; falling back to raw search');
+					}
+					return await runRawSearch();
+				}
+
+				const effectiveCwd = options.cwd || '.';
+				const resolvedTargets = targets.map(target => resolveTargetPath(target, effectiveCwd));
+				const extractOptions = {
+					files: resolvedTargets,
+					cwd: effectiveCwd,
+					allowTests: allow_tests ?? true
+				};
+
+				if (outline) {
+					extractOptions.format = 'xml';
+				}
+
+				return await extract(extractOptions);
 			} catch (error) {
-				console.error('Error executing search command:', error);
-				return `Error executing search command: ${error.message}`;
+				console.error('Delegated search failed, falling back to raw search:', error);
+				try {
+					return await runRawSearch();
+				} catch (fallbackError) {
+					console.error('Error executing search command:', fallbackError);
+					return `Error executing search command: ${fallbackError.message}`;
+				}
 			}
 		}
 	});
@@ -260,7 +459,7 @@ export const delegateTool = (options = {}) => {
 		name: 'delegate',
 		description: delegateDescription,
 		inputSchema: delegateSchema,
-		execute: async ({ task, currentIteration, maxIterations, parentSessionId, path, provider, model, tracer }) => {
+		execute: async ({ task, currentIteration, maxIterations, parentSessionId, path, provider, model, tracer, searchDelegate }) => {
 			// Validate required parameters - throw errors for consistency
 			if (!task || typeof task !== 'string') {
 				throw new Error('Task parameter is required and must be a non-empty string');
@@ -294,6 +493,10 @@ export const delegateTool = (options = {}) => {
 
 			if (model !== undefined && model !== null && typeof model !== 'string') {
 				throw new TypeError('model must be a string, null, or undefined');
+			}
+
+			if (searchDelegate !== undefined && typeof searchDelegate !== 'boolean') {
+				throw new TypeError('searchDelegate must be a boolean if provided');
 			}
 
 			// Determine the path to pass to the subagent
@@ -338,7 +541,8 @@ export const delegateTool = (options = {}) => {
 				tracer,
 				enableBash,
 				bashConfig,
-				architectureFileName
+				architectureFileName,
+				searchDelegate
 			});
 
 			return result;

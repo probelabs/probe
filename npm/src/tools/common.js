@@ -111,7 +111,8 @@ export const attemptCompletionSchema = {
 
 export const searchToolDefinition = `
 ## search
-Description: Search code in the repository using Elasticsearch query syntax (except field based queries, e.g. "filename:..." NOT supported).
+Description: Search code in the repository. You may provide a free-form question about the code or a concise Elasticsearch-style keyword query (field based queries, e.g. "filename:..." NOT supported).
+Note: This tool may internally use a dedicated search subagent when search delegation is enabled. This is separate from the "delegate" tool and does not require an explicit delegate call.
 
 You need to focus on main keywords when constructing the query, and always use elastic search syntax like OR AND and brackets to group keywords.
 
@@ -121,7 +122,7 @@ You need to focus on main keywords when constructing the query, and always use e
 - Once data is returned, it's cached and won't return on next runs (this is expected behavior)
 
 Parameters:
-- query: (required) Search query with Elasticsearch syntax. Use quotes for exact matches ("functionName"), AND/OR for boolean logic, - for negation, + for important terms.
+- query: (required) Search query. Free-form questions are accepted, but for best results prefer Elasticsearch-style syntax with quotes for exact matches ("functionName"), AND/OR for boolean logic, - for negation, + for important terms.
 - path: (optional, default: '.') Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc.
 
 **Workflow:** Always start with search, then use extract for detailed context when needed.
@@ -327,7 +328,7 @@ User: Check system info
 </examples>
 `;
 
-export const searchDescription = 'Search code in the repository using Elasticsearch-like query syntax. Use this tool first for any code-related questions.';
+export const searchDescription = 'Search code in the repository. Free-form questions are accepted, but Elasticsearch-style keyword queries work best. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
