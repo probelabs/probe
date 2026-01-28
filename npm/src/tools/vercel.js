@@ -119,6 +119,7 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 	return [
 		'You are a code-search subagent. Your ONLY job is to return ALL relevant code locations.',
 		'Use ONLY the search tool. Do NOT answer the question or explain anything.',
+		'Translate the question into a concise keyword/boolean search query for the search tool (quotes, AND/OR/NOT) instead of passing the full question verbatim.',
 		'Use the query exactly as provided (no substitutions or paraphrasing). If nothing is found, return {"targets": []}.',
 		'Return ONLY valid JSON with this shape: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}.',
 		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
