@@ -9,7 +9,7 @@ import { editSchema, createSchema } from './edit.js';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
-	query: z.string().describe('Search query with Elasticsearch syntax. Use quotes for exact matches, AND/OR for boolean logic, - for negation.'),
+	query: z.string().describe('Well-formed question about the codebase. Avoid keyword-only queries; the tool will translate the question into effective searches.'),
 	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.')
 });
 
@@ -132,7 +132,7 @@ Usage Example:
 User: Where is the login logic?
 Assistant workflow:
 1. <search>
-<query>login AND auth AND token</query>
+<query>Where is login handled and how does auth work?</query>
 <path>.</path>
 </search>
 2. Now lets look closer: <extract>
@@ -141,25 +141,25 @@ Assistant workflow:
 
 User: How to calculate the total amount in the payments module?
 <search>
-<query>calculate AND payment</query>
+<query>How is the total amount calculated in payments?</query>
 <path>src/utils</path>
 </search>
 
 User: How do the user authentication and authorization work?
 <search>
-<query>+user AND (authentication OR authorization OR authz)</query>
+<query>How do user authentication and authorization work?</query>
 <path>.</path>
 </search>
 
 User: Find all react imports in the project.
 <search>
-<query>"import" AND "react"</query>
+<query>Where does the project import React?</query>
 <path>.</path>
 </search>
 
 User: Find how decompound library works?
 <search>
-<query>decompound</query>
+<query>How does the decompound library work?</query>
 <path>/dep/rust/decompound</path>
 </search>
 
@@ -326,7 +326,7 @@ User: Check system info
 </examples>
 `;
 
-export const searchDescription = 'Search code in the repository. Free-form questions are accepted, but Elasticsearch-style keyword queries work best. Use this tool first for any code-related questions.';
+export const searchDescription = 'Search code in the repository. Provide a well-formed question about the codebase; avoid keyword-only queries. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
