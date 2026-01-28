@@ -218,60 +218,64 @@ export async function delegate({
 	// Calculate remaining iterations for subagent
 	const remainingIterations = Math.max(1, maxIterations - currentIteration);
 
-	// Create delegation span for telemetry if tracer is available and has the method
-	const delegationSpan = typeof tracer?.createDelegationSpan === 'function'
-		? tracer.createDelegationSpan(sessionId, task)
-		: null;
-
 	let timeoutId = null;
 	let acquired = false;
+	const spanAttributes = {
+		'delegation.session_id': sessionId,
+		'delegation.parent_session_id': parentSessionId,
+		'delegation.prompt_type': promptType,
+		'delegation.timeout_s': timeout,
+		'delegation.max_iterations': maxIterations,
+		'delegation.remaining_iterations': remainingIterations
+	};
 
-	try {
-		// Check limits and acquire delegation slot inside try block for proper cleanup
-		delegationManager.tryAcquire(parentSessionId);
-		acquired = true;
+	const runDelegation = async () => {
+		try {
+			// Check limits and acquire delegation slot inside try block for proper cleanup
+			delegationManager.tryAcquire(parentSessionId);
+			acquired = true;
 
-		if (debug) {
-			const stats = delegationManager.getStats();
-			console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
-			console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
-			console.error(`[DELEGATE] Task: ${task}`);
-			console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
-			console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
-			console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
-			console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
-			console.error(`[DELEGATE] Using ProbeAgent SDK with ${promptType} prompt`);
-		}
-		// Create a new ProbeAgent instance for the delegated task
-		// IMPORTANT: We pass both path and cwd set to the same value (workspace root)
-		// to prevent path doubling issues. The parent's navigation context should not
-		// affect the subagent's path resolution - subagents always work from workspace root.
-		const subagent = new ProbeAgent({
-			sessionId,
-			promptType,               // Clean prompt, not inherited from parent
-			enableDelegate: false,     // Explicitly disable delegation to prevent recursion
-			disableMermaidValidation: true,  // Faster processing
-			disableJsonValidation: true,     // Simpler responses
-			maxIterations: remainingIterations,
-			debug,
-			tracer,
-			path,       // Workspace root (from delegateTool)
-			allowedFolders, // Inherit allowed folders to keep architecture context root consistent
-			cwd: path,  // Explicitly set cwd to workspace root to prevent path doubling
-			provider,   // Inherit from parent
-			model,      // Inherit from parent
-			enableBash, // Inherit from parent
-			bashConfig, // Inherit from parent
-			architectureFileName,
-			allowedTools,
-			disableTools,
-			searchDelegate
-		});
+			if (debug) {
+				const stats = delegationManager.getStats();
+				console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
+				console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
+				console.error(`[DELEGATE] Task: ${task}`);
+				console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
+				console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
+				console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
+				console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
+				console.error(`[DELEGATE] Using ProbeAgent SDK with ${promptType} prompt`);
+			}
+			// Create a new ProbeAgent instance for the delegated task
+			// IMPORTANT: We pass both path and cwd set to the same value (workspace root)
+			// to prevent path doubling issues. The parent's navigation context should not
+			// affect the subagent's path resolution - subagents always work from workspace root.
+			const subagent = new ProbeAgent({
+				sessionId,
+				promptType,               // Clean prompt, not inherited from parent
+				enableDelegate: false,     // Explicitly disable delegation to prevent recursion
+				disableMermaidValidation: true,  // Faster processing
+				disableJsonValidation: true,     // Simpler responses
+				maxIterations: remainingIterations,
+				debug,
+				tracer,
+				path,       // Workspace root (from delegateTool)
+				allowedFolders, // Inherit allowed folders to keep architecture context root consistent
+				cwd: path,  // Explicitly set cwd to workspace root to prevent path doubling
+				provider,   // Inherit from parent
+				model,      // Inherit from parent
+				enableBash, // Inherit from parent
+				bashConfig, // Inherit from parent
+				architectureFileName,
+				allowedTools,
+				disableTools,
+				searchDelegate
+			});
 
-		if (debug) {
-			console.error(`[DELEGATE] Created subagent with session ${sessionId}`);
-			console.error(`[DELEGATE] Subagent config: promptType=${promptType}, enableDelegate=false, maxIterations=${remainingIterations}`);
-		}
+			if (debug) {
+				console.error(`[DELEGATE] Created subagent with session ${sessionId}`);
+				console.error(`[DELEGATE] Subagent config: promptType=${promptType}, enableDelegate=false, maxIterations=${remainingIterations}`);
+			}
 
 		// Set up timeout with proper cleanup
 		// TODO: Implement AbortController support in ProbeAgent.answer() for proper cancellation
@@ -281,119 +285,115 @@ export async function delegate({
 		// 2. The delegation slot is properly released on timeout
 		// 3. The parent receives timeout error and can handle it
 		// Future improvement: Add signal parameter to ProbeAgent.answer(task, [], { signal })
-		const timeoutPromise = new Promise((_, reject) => {
-			timeoutId = setTimeout(() => {
-				reject(new Error(`Delegation timed out after ${timeout} seconds`));
-			}, timeout * 1000);
-		});
+			const timeoutPromise = new Promise((_, reject) => {
+				timeoutId = setTimeout(() => {
+					reject(new Error(`Delegation timed out after ${timeout} seconds`));
+				}, timeout * 1000);
+			});
 
 		// Execute the task with timeout
-		const answerOptions = schema ? { schema } : undefined;
-		const answerPromise = answerOptions ? subagent.answer(task, [], answerOptions) : subagent.answer(task);
-		const response = await Promise.race([answerPromise, timeoutPromise]);
+			const answerOptions = schema ? { schema } : undefined;
+			const answerPromise = answerOptions ? subagent.answer(task, [], answerOptions) : subagent.answer(task);
+			const response = await Promise.race([answerPromise, timeoutPromise]);
 
 		// Clear timeout immediately after race completes to prevent memory leak
 		// Note: timeoutId is always set by this point (synchronous in Promise constructor)
 		// but we keep the null check for defensive programming
-		if (timeoutId !== null) {
-			clearTimeout(timeoutId);
-			timeoutId = null;
-		}
+			if (timeoutId !== null) {
+				clearTimeout(timeoutId);
+				timeoutId = null;
+			}
 
 		const duration = Date.now() - startTime;
 
 		// Validate response (check for type first, then content)
-		if (typeof response !== 'string') {
-			throw new Error('Delegate agent returned invalid response (not a string)');
-		}
+			if (typeof response !== 'string') {
+				throw new Error('Delegate agent returned invalid response (not a string)');
+			}
 
-		const trimmedResponse = response.trim();
-		if (trimmedResponse.length === 0) {
-			throw new Error('Delegate agent returned empty or whitespace-only response');
-		}
+			const trimmedResponse = response.trim();
+			if (trimmedResponse.length === 0) {
+				throw new Error('Delegate agent returned empty or whitespace-only response');
+			}
 
 		// Check for null bytes (edge case)
-		if (trimmedResponse.includes('\0')) {
-			throw new Error('Delegate agent returned response containing null bytes');
-		}
+			if (trimmedResponse.includes('\0')) {
+				throw new Error('Delegate agent returned response containing null bytes');
+			}
 
-		if (debug) {
-			console.error(`[DELEGATE] Task completed successfully for session ${sessionId}`);
-			console.error(`[DELEGATE] Duration: ${(duration / 1000).toFixed(2)}s`);
-			console.error(`[DELEGATE] Response length: ${response.length} chars`);
-		}
+			if (debug) {
+				console.error(`[DELEGATE] Task completed successfully for session ${sessionId}`);
+				console.error(`[DELEGATE] Duration: ${(duration / 1000).toFixed(2)}s`);
+				console.error(`[DELEGATE] Response length: ${response.length} chars`);
+			}
 
 		// Record successful completion in telemetry
-		if (tracer) {
-			tracer.recordDelegationEvent('completed', {
-				'delegation.session_id': sessionId,
-				'delegation.parent_session_id': parentSessionId,
-				'delegation.duration_ms': duration,
-				'delegation.response_length': response.length,
-				'delegation.success': true
-			});
-
-			if (delegationSpan) {
-				delegationSpan.setAttributes({
+			if (tracer) {
+				tracer.recordDelegationEvent('completed', {
+					'delegation.session_id': sessionId,
+					'delegation.parent_session_id': parentSessionId,
+					'delegation.duration_ms': duration,
+					'delegation.response_length': response.length,
+					'delegation.success': true
+				});
+				tracer.setAttributes?.({
 					'delegation.result.success': true,
 					'delegation.result.response_length': response.length,
 					'delegation.result.duration_ms': duration
 				});
-				delegationSpan.setStatus({ code: 1 }); // OK
-				delegationSpan.end();
 			}
-		}
 
 		// Release delegation slot
-		if (acquired) {
-			delegationManager.release(parentSessionId, debug);
-		}
+			if (acquired) {
+				delegationManager.release(parentSessionId, debug);
+			}
 
-		return response;
-
-	} catch (error) {
+			return response;
+		} catch (error) {
 		// Clear timeout if still active
-		if (timeoutId !== null) {
-			clearTimeout(timeoutId);
-			timeoutId = null;
-		}
+			if (timeoutId !== null) {
+				clearTimeout(timeoutId);
+				timeoutId = null;
+			}
 
 		const duration = Date.now() - startTime;
 
 		// Release delegation slot on error (only if it was acquired)
-		if (acquired) {
-			delegationManager.release(parentSessionId, debug);
-		}
+			if (acquired) {
+				delegationManager.release(parentSessionId, debug);
+			}
 
-		if (debug) {
-			console.error(`[DELEGATE] Task failed for session ${sessionId} after ${duration}ms`);
-			console.error(`[DELEGATE] Error: ${error.message}`);
-			console.error(`[DELEGATE] Stack: ${error.stack}`);
-		}
+			if (debug) {
+				console.error(`[DELEGATE] Task failed for session ${sessionId} after ${duration}ms`);
+				console.error(`[DELEGATE] Error: ${error.message}`);
+				console.error(`[DELEGATE] Stack: ${error.stack}`);
+			}
 
 		// Record failure in telemetry
-		if (tracer) {
-			tracer.recordDelegationEvent('failed', {
-				'delegation.session_id': sessionId,
-				'delegation.parent_session_id': parentSessionId,
-				'delegation.duration_ms': duration,
-				'delegation.error_message': error.message,
-				'delegation.success': false
-			});
-
-			if (delegationSpan) {
-				delegationSpan.setAttributes({
+			if (tracer) {
+				tracer.recordDelegationEvent('failed', {
+					'delegation.session_id': sessionId,
+					'delegation.parent_session_id': parentSessionId,
+					'delegation.duration_ms': duration,
+					'delegation.error_message': error.message,
+					'delegation.success': false
+				});
+				tracer.setAttributes?.({
 					'delegation.result.success': false,
 					'delegation.result.error': error.message,
 					'delegation.result.duration_ms': duration
 				});
-				delegationSpan.setStatus({ code: 2, message: error.message }); // ERROR
-				delegationSpan.end();
 			}
-		}
 
-		throw new Error(`Delegation failed: ${error.message}`);
+			throw new Error(`Delegation failed: ${error.message}`);
+		}
+	};
+
+	if (typeof tracer?.withSpan === 'function') {
+		return tracer.withSpan('delegation.session', runDelegation, spanAttributes);
 	}
+
+	return runDelegation();
 }
 
 

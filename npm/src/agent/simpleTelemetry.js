@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, createWriteStream } from 'fs';
+import { AsyncLocalStorage } from 'async_hooks';
 import { dirname } from 'path';
 
 /**
@@ -36,15 +37,21 @@ export class SimpleTelemetry {
     }
   }
 
-  createSpan(name, attributes = {}) {
+  createSpan(name, attributes = {}, options = {}) {
+    const traceId = options.traceId || this.generateTraceId();
+    const parentSpanId = options.parentSpanId || null;
+    const spanKind = options.spanKind || 'INTERNAL';
     const span = {
-      traceId: this.generateTraceId(),
+      traceId,
       spanId: this.generateSpanId(),
+      parentSpanId,
+      spanKind,
       name,
       startTime: Date.now(),
       attributes: { ...attributes, service: this.serviceName },
       events: [],
-      status: 'OK'
+      status: 'OK',
+      statusMessage: null
     };
     
     return {
@@ -60,7 +67,23 @@ export class SimpleTelemetry {
         Object.assign(span.attributes, attrs);
       },
       setStatus: (status) => {
-        span.status = status;
+        if (typeof status === 'string') {
+          span.status = status;
+          return;
+        }
+        if (status && typeof status === 'object') {
+          const code = status.code ?? status.statusCode;
+          if (code === 2) {
+            span.status = 'ERROR';
+          } else if (code === 1) {
+            span.status = 'OK';
+          } else if (code === 0) {
+            span.status = 'UNSET';
+          }
+          if (status.message) {
+            span.statusMessage = status.message;
+          }
+        }
       },
       end: () => {
         span.endTime = Date.now();
@@ -123,6 +146,7 @@ export class SimpleAppTracer {
   constructor(telemetry, sessionId = null) {
     this.telemetry = telemetry;
     this.sessionId = sessionId || this.generateSessionId();
+    this.contextStore = new AsyncLocalStorage();
   }
 
   generateSessionId() {
@@ -136,7 +160,7 @@ export class SimpleAppTracer {
   createSessionSpan(attributes = {}) {
     if (!this.isEnabled()) return null;
 
-    return this.telemetry.createSpan('agent.session', {
+    return this.createSpanWithContext('agent.session', {
       'session.id': this.sessionId,
       ...attributes
     });
@@ -145,26 +169,41 @@ export class SimpleAppTracer {
   createAISpan(modelName, provider, attributes = {}) {
     if (!this.isEnabled()) return null;
 
-    return this.telemetry.createSpan('ai.request', {
+    return this.createSpanWithContext('ai.request', {
       'ai.model': modelName,
       'ai.provider': provider,
       'session.id': this.sessionId,
       ...attributes
-    });
+    }, { spanKind: 'CLIENT' });
   }
 
   createToolSpan(toolName, attributes = {}) {
     if (!this.isEnabled()) return null;
 
-    return this.telemetry.createSpan('tool.call', {
+    return this.createSpanWithContext('tool.call', {
       'tool.name': toolName,
       'session.id': this.sessionId,
       ...attributes
     });
   }
 
+  createDelegationSpan(sessionId, task, attributes = {}) {
+    if (!this.isEnabled()) return null;
+
+    return this.createSpanWithContext('delegation.session', {
+      'delegation.session_id': sessionId,
+      'delegation.task': task,
+      'session.id': this.sessionId,
+      ...attributes
+    });
+  }
+
   addEvent(name, attributes = {}) {
-    // For simplicity, just log events when no active span
+    const store = this.contextStore.getStore();
+    if (store?.span?.addEvent) {
+      store.span.addEvent(name, attributes);
+      return;
+    }
     if (this.telemetry && this.telemetry.enableConsole) {
       console.log('[Event]', name, attributes);
     }
@@ -220,36 +259,54 @@ export class SimpleAppTracer {
   }
 
   setAttributes(attributes) {
-    // For simplicity, just log attributes when no active span
+    const store = this.contextStore.getStore();
+    if (store?.span?.setAttributes) {
+      store.span.setAttributes(attributes);
+      return;
+    }
     if (this.telemetry && this.telemetry.enableConsole) {
       console.log('[Attributes]', attributes);
     }
   }
 
-  async withSpan(spanName, fn, attributes = {}) {
+  createSpanWithContext(name, attributes = {}, options = {}) {
+    if (!this.isEnabled()) return null;
+    const parent = this.contextStore.getStore();
+    const spanOptions = {
+      traceId: options.traceId || parent?.traceId,
+      parentSpanId: options.parentSpanId || parent?.spanId,
+      spanKind: options.spanKind
+    };
+    return this.telemetry.createSpan(name, {
+      'session.id': this.sessionId,
+      ...attributes
+    }, spanOptions);
+  }
+
+  async withSpan(spanName, fn, attributes = {}, options = {}) {
     if (!this.isEnabled()) {
       return fn();
     }
 
-    const span = this.telemetry.createSpan(spanName, {
-      'session.id': this.sessionId,
-      ...attributes
-    });
+    const span = this.createSpanWithContext(spanName, attributes, options);
+    const context = { traceId: span.traceId, spanId: span.spanId, span };
 
-    try {
-      const result = await fn();
-      span.setStatus('OK');
-      return result;
-    } catch (error) {
-      span.setStatus('ERROR');
-      span.addEvent('exception', { 
-        'exception.message': error.message,
-        'exception.stack': error.stack 
-      });
-      throw error;
-    } finally {
-      span.end();
-    }
+    return this.contextStore.run(context, async () => {
+      try {
+        const result = await fn(span);
+        span.setStatus('OK');
+        return result;
+      } catch (error) {
+        span.setStatus({ code: 2, message: error.message });
+        span.addEvent('exception', { 
+          'exception.message': error.message,
+          'exception.stack': error.stack 
+        });
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
   }
 
   async flush() {

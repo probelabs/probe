@@ -200,7 +200,11 @@ export const searchTool = (options = {}) => {
 			}, {
 				'search.query': searchQuery,
 				'search.path': searchPath,
-				'search.exact': Boolean(exact)
+				'search.exact': Boolean(exact),
+				'probe.search.query': searchQuery,
+				'probe.search.path': searchPath,
+				'probe.search.exact': Boolean(exact),
+				'probe.search.max_tokens': effectiveMaxTokens
 			});
 
 			if (!searchDelegate) {
@@ -245,7 +249,9 @@ export const searchTool = (options = {}) => {
 
 				const delegateResult = await withSpan('search.delegate', runDelegation, {
 					'search.query': searchQuery,
-					'search.path': searchPath
+					'search.path': searchPath,
+					'probe.search.query': searchQuery,
+					'probe.search.path': searchPath
 				});
 
 				const targets = parseDelegatedTargets(delegateResult);
@@ -270,7 +276,9 @@ export const searchTool = (options = {}) => {
 
 				return await withSpan('search.extract', () => extract(extractOptions), {
 					'search.targets': resolvedTargets.length,
-					'search.path': searchPath
+					'search.path': searchPath,
+					'probe.search.targets': resolvedTargets.length,
+					'probe.search.path': searchPath
 				});
 			} catch (error) {
 				console.error('Delegated search failed, falling back to raw search:', error);

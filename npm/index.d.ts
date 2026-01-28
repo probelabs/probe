@@ -618,7 +618,7 @@ export interface SimpleTelemetryOptions {
  */
 export declare class SimpleTelemetry {
   constructor(options?: SimpleTelemetryOptions);
-  log(message: string, data?: any): void;
+  createSpan(name: string, attributes?: Record<string, any>, options?: Record<string, any>): any;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
 }
@@ -629,7 +629,16 @@ export declare class SimpleTelemetry {
 export declare class SimpleAppTracer {
   constructor(telemetry?: SimpleTelemetry, sessionId?: string);
   isEnabled(): boolean;
-  log(operation: string, data?: any): void;
+  createSessionSpan(attributes?: Record<string, any>): any;
+  createAISpan(modelName: string, provider: string, attributes?: Record<string, any>): any;
+  createToolSpan(toolName: string, attributes?: Record<string, any>): any;
+  createDelegationSpan(sessionId: string, task: string, attributes?: Record<string, any>): any;
+  recordDelegationEvent(eventType: string, data?: Record<string, any>): void;
+  recordJsonValidationEvent(eventType: string, data?: Record<string, any>): void;
+  recordMermaidValidationEvent(eventType: string, data?: Record<string, any>): void;
+  addEvent(name: string, attributes?: Record<string, any>): void;
+  setAttributes(attributes: Record<string, any>): void;
+  withSpan(spanName: string, fn: Function, attributes?: Record<string, any>, options?: Record<string, any>): Promise<any>;
   flush(): Promise<void>;
   shutdown(): Promise<void>;
 }
