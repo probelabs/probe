@@ -100,6 +100,13 @@ describe('Path Resolution', () => {
 			const result = parseAndResolvePaths('src/file.rs', null);
 			expect(result).toEqual(['src/file.rs']);
 		});
+
+		test('should not double-resolve when path equals cwd', () => {
+			const relativeCwd = join('project', 'src');
+			const expected = resolve(process.cwd(), relativeCwd);
+			const result = parseAndResolvePaths(relativeCwd, relativeCwd);
+			expect(result).toEqual([expected]);
+		});
 	});
 
 	describe('resolveTargetPath', () => {

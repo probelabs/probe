@@ -594,9 +594,22 @@ export function parseAndResolvePaths(pathStr, cwd) {
 
 	// Split on comma and trim whitespace
 	const paths = pathStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
+	const normalizeForCompare = (value) => {
+		if (!value) return '';
+		const abs = isAbsolute(value) ? value : resolve(process.cwd(), value);
+		return abs.replace(/\\/g, '/').replace(/\/+$/, '');
+	};
+	const normalizeForResult = (value) => {
+		if (!value) return value;
+		return isAbsolute(value) ? value : resolve(process.cwd(), value);
+	};
+	const normalizedCwd = cwd ? normalizeForCompare(cwd) : '';
 
 	// Resolve relative paths against cwd
 	return paths.map(p => {
+		if (cwd && normalizeForCompare(p) === normalizedCwd) {
+			return normalizeForResult(cwd);
+		}
 		if (isAbsolute(p)) {
 			return p;
 		}
