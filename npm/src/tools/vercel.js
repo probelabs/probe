@@ -130,6 +130,22 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 	].join('\n');
 }
 
+function buildDelegatedQuestion(query) {
+	if (!query || typeof query !== 'string') return query;
+	const trimmed = query.trim();
+	if (!trimmed) return trimmed;
+	const looksQuestion = /[?]$/.test(trimmed) || /^(how|where|what|why|when|which|explain|describe|show|find)\b/i.test(trimmed);
+	const hasSpace = /\s/.test(trimmed);
+	const hasOperators = /\b(AND|OR|NOT)\b/i.test(trimmed);
+	const hasPunctuation = /[":()]/.test(trimmed);
+
+	if (looksQuestion) return trimmed;
+	if (!hasSpace && !hasOperators && !hasPunctuation) {
+		return `Where is "${trimmed}" defined or used in the codebase?`;
+	}
+	return trimmed;
+}
+
 /**
  * Search tool generator
  * 
@@ -221,8 +237,9 @@ export const searchTool = (options = {}) => {
 					console.error(`Delegating search with query: "${searchQuery}", path: "${searchPath}"`);
 				}
 
+				const delegatedQuery = buildDelegatedQuestion(searchQuery);
 				const delegateTask = buildSearchDelegateTask({
-					searchQuery,
+					searchQuery: delegatedQuery,
 					searchPath,
 					exact,
 					language,
@@ -248,10 +265,11 @@ export const searchTool = (options = {}) => {
 				});
 
 				const delegateResult = await withSpan('search.delegate', runDelegation, {
-					'search.query': searchQuery,
+					'search.query': delegatedQuery,
 					'search.path': searchPath,
-					'probe.search.query': searchQuery,
-					'probe.search.path': searchPath
+					'probe.search.query': delegatedQuery,
+					'probe.search.path': searchPath,
+					'probe.search.original_query': searchQuery
 				});
 
 				const targets = parseDelegatedTargets(delegateResult);

@@ -84,7 +84,7 @@ describe('searchDelegate behavior', () => {
       'search.delegate',
       expect.any(Function),
       expect.objectContaining({
-        'search.query': 'searchDelegate',
+        'search.query': expect.stringContaining('searchDelegate'),
         'search.path': expect.any(String)
       })
     );
