@@ -88,11 +88,12 @@ describe('searchDelegate behavior', () => {
         'search.path': expect.any(String)
       })
     );
+    const expectedFiles = [
+      `${resolve('/workspace/src/a.js')}#foo`,
+      `${resolve('/workspace/src/b.js')}:10-12`
+    ];
     expect(mockExtract).toHaveBeenCalledWith(expect.objectContaining({
-      files: expect.arrayContaining([
-        '/workspace/src/a.js#foo',
-        '/workspace/src/b.js:10-12'
-      ])
+      files: expect.arrayContaining(expectedFiles)
     }));
     expect(mockSearch).not.toHaveBeenCalled();
   });
