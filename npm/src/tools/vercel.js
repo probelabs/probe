@@ -147,6 +147,9 @@ export const searchTool = (options = {}) => {
 		outline = false,
 		searchDelegate = false
 	} = options;
+	const withSpan = options.tracer?.withSpan
+		? (name, fn, attrs) => options.tracer.withSpan(name, fn, attrs)
+		: (_name, fn) => fn();
 
 	return tool({
 		name: 'search',
@@ -189,12 +192,16 @@ export const searchTool = (options = {}) => {
 				searchOptions.format = 'outline-xml';
 			}
 
-			const runRawSearch = async () => {
+			const runRawSearch = async () => withSpan('search.raw', async () => {
 				if (debug) {
 					console.error(`Executing search with query: "${searchQuery}", path: "${searchPath}", exact: ${exact ? 'true' : 'false'}, language: ${language || 'all'}, session: ${sessionId || 'none'}`);
 				}
 				return await search(searchOptions);
-			};
+			}, {
+				'search.query': searchQuery,
+				'search.path': searchPath,
+				'search.exact': Boolean(exact)
+			});
 
 			if (!searchDelegate) {
 				try {
@@ -236,12 +243,10 @@ export const searchTool = (options = {}) => {
 					schema: CODE_SEARCH_SCHEMA
 				});
 
-				const delegateResult = options.tracer?.withSpan
-					? await options.tracer.withSpan('search.delegate', runDelegation, {
-						'search.query': searchQuery,
-						'search.path': searchPath
-					})
-					: await runDelegation();
+				const delegateResult = await withSpan('search.delegate', runDelegation, {
+					'search.query': searchQuery,
+					'search.path': searchPath
+				});
 
 				const targets = parseDelegatedTargets(delegateResult);
 				if (!targets.length) {
@@ -263,7 +268,10 @@ export const searchTool = (options = {}) => {
 					extractOptions.format = 'xml';
 				}
 
-				return await extract(extractOptions);
+				return await withSpan('search.extract', () => extract(extractOptions), {
+					'search.targets': resolvedTargets.length,
+					'search.path': searchPath
+				});
 			} catch (error) {
 				console.error('Delegated search failed, falling back to raw search:', error);
 				try {
