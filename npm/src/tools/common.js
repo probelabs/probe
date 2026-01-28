@@ -111,10 +111,8 @@ export const attemptCompletionSchema = {
 
 export const searchToolDefinition = `
 ## search
-Description: Search code in the repository. You may provide a free-form question about the code or a concise Elasticsearch-style keyword query (field based queries, e.g. "filename:..." NOT supported).
+Description: Search code in the repository. Provide a well-formed, free-form question about the codebase (not just keywords). The tool will translate the question into effective search queries.
 Note: This tool may internally use a dedicated search subagent when search delegation is enabled. This is separate from the "delegate" tool and does not require an explicit delegate call.
-
-You need to focus on main keywords when constructing the query, and always use elastic search syntax like OR AND and brackets to group keywords.
 
 **Session Management & Caching:**
 - Ensure not to re-read the same symbols twice - reuse context from previous tool calls
@@ -122,7 +120,7 @@ You need to focus on main keywords when constructing the query, and always use e
 - Once data is returned, it's cached and won't return on next runs (this is expected behavior)
 
 Parameters:
-- query: (required) Search query. Free-form questions are accepted, but for best results prefer Elasticsearch-style syntax with quotes for exact matches ("functionName"), AND/OR for boolean logic, - for negation, + for important terms.
+- query: (required) A clear, well-formed question about the code. Avoid single-token or keyword-only inputs.
 - path: (optional, default: '.') Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc.
 
 **Workflow:** Always start with search, then use extract for detailed context when needed.

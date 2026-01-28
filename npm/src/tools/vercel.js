@@ -264,6 +264,9 @@ export const searchTool = (options = {}) => {
 
 				const effectiveCwd = options.cwd || '.';
 				const resolvedTargets = targets.map(target => resolveTargetPath(target, effectiveCwd));
+				const targetSampleLimit = 25;
+				const targetSample = resolvedTargets.slice(0, targetSampleLimit);
+				const targetSampleString = targetSample.join(', ');
 				const extractOptions = {
 					files: resolvedTargets,
 					cwd: effectiveCwd,
@@ -278,7 +281,10 @@ export const searchTool = (options = {}) => {
 					'search.targets': resolvedTargets.length,
 					'search.path': searchPath,
 					'probe.search.targets': resolvedTargets.length,
-					'probe.search.path': searchPath
+					'probe.search.path': searchPath,
+					'probe.search.targets_sample': targetSampleString,
+					'probe.search.targets_sample_count': targetSample.length,
+					'probe.search.targets_truncated': resolvedTargets.length > targetSampleLimit
 				});
 			} catch (error) {
 				console.error('Delegated search failed, falling back to raw search:', error);
