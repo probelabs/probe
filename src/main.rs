@@ -186,15 +186,33 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 limited_results.limits_applied.as_ref(),
             );
         } else {
-            // For other formats, print the "No results found" message with helpful tips
-            println!("{}", "No results found.".yellow().bold());
-            println!();
-            println!("💡 Tips to improve your search:");
-            println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
-            println!("  - Use broader terms without AND operators");
-            println!("  - Check spelling of function/class names");
-            println!("  - Remove file type filters to search all files");
-            println!("  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup");
+            // Check if results are empty because all were filtered by session cache
+            let cached_skipped = limited_results.cached_blocks_skipped.unwrap_or(0);
+            if cached_skipped > 0 {
+                // All results were already seen - show clear exhaustion signal
+                println!(
+                    "{} {}",
+                    "Filtered already-seen blocks (session deduplication):"
+                        .yellow()
+                        .bold(),
+                    cached_skipped
+                );
+                println!();
+                println!(
+                    "{}",
+                    "✓ All results retrieved for this query. No need to search again with this session.".green().bold()
+                );
+            } else {
+                // Genuinely no results found - show helpful tips
+                println!("{}", "No results found.".yellow().bold());
+                println!();
+                println!("💡 Tips to improve your search:");
+                println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
+                println!("  - Use broader terms without AND operators");
+                println!("  - Check spelling of function/class names");
+                println!("  - Remove file type filters to search all files");
+                println!("  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup");
+            }
             if params.verbose {
                 println!();
                 println!("Search completed in {duration:.2?}");
@@ -329,12 +347,12 @@ fn handle_search(params: SearchParams) -> Result<()> {
                     output!();
                     if let Some(session_id) = search_options.session {
                         if !session_id.is_empty() && session_id != "new" {
-                            output!("💡 More results available. Re-run with session: \"{session_id}\" and nextPage: true");
+                            output!("💡 More results may be available. Re-run with session: \"{session_id}\" and nextPage: true. Stop when you see \"All results retrieved\".");
                         } else {
-                            output!("💡 More results available. Re-run with the session ID shown above and nextPage: true");
+                            output!("💡 More results may be available. Re-run with the session ID shown above and nextPage: true. Stop when you see \"All results retrieved\".");
                         }
                     } else {
-                        output!("💡 More results available. Use --session with the session ID above and nextPage: true");
+                        output!("💡 More results may be available. Use --session with the session ID above and nextPage: true. Stop when you see \"All results retrieved\".");
                     }
                 }
 
@@ -359,13 +377,15 @@ fn handle_search(params: SearchParams) -> Result<()> {
             }
         }
 
-        // Display information about cached blocks
+        // Display information about cached blocks (when there are still results to show)
         if let Some(cached_skipped) = limited_results.cached_blocks_skipped {
             if cached_skipped > 0 {
                 println!();
                 println!(
                     "{} {}",
-                    "Skipped blocks due to session cache:".yellow().bold(),
+                    "Filtered already-seen blocks (session deduplication):"
+                        .yellow()
+                        .bold(),
                     cached_skipped
                 );
             }
