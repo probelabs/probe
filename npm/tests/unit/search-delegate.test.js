@@ -88,13 +88,15 @@ describe('searchDelegate behavior', () => {
         'search.path': expect.any(String)
       })
     );
-    const expectedFiles = [
-      `${resolve('/workspace/src/a.js')}#foo`,
-      `${resolve('/workspace/src/b.js')}:10-12`
-    ];
-    expect(mockExtract).toHaveBeenCalledWith(expect.objectContaining({
-      files: expect.arrayContaining(expectedFiles)
-    }));
+    const extractArgs = mockExtract.mock.calls[0][0];
+    expect(extractArgs).toEqual(expect.objectContaining({ files: expect.any(Array) }));
+    const normalizedFiles = extractArgs.files.map((file) =>
+      file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
+    );
+    expect(normalizedFiles).toEqual(expect.arrayContaining([
+      '/workspace/src/a.js#foo',
+      '/workspace/src/b.js:10-12'
+    ]));
     expect(mockSearch).not.toHaveBeenCalled();
   });
 
