@@ -9,7 +9,7 @@ import { editSchema, createSchema } from './edit.js';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
-	query: z.string().describe('Well-formed question about the codebase. Avoid keyword-only queries; the tool will translate the question into effective searches.'),
+	query: z.string().describe('Well-formed question about the codebase. Keyword/boolean syntax is also supported when delegation is disabled or for precise filtering (quotes, AND/OR/NOT).'),
 	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.')
 });
 
@@ -111,7 +111,7 @@ export const attemptCompletionSchema = {
 
 export const searchToolDefinition = `
 ## search
-Description: Search code in the repository. Provide a well-formed, free-form question about the codebase (not just keywords). The tool will translate the question into effective search queries.
+Description: Search code in the repository. Prefer a well-formed question about the codebase (not just keywords). Keyword/boolean syntax is also supported when delegation is disabled or for precise filtering.
 Note: This tool may internally use a dedicated search subagent when search delegation is enabled. This is separate from the "delegate" tool and does not require an explicit delegate call.
 
 **Session Management & Caching:**
@@ -120,7 +120,7 @@ Note: This tool may internally use a dedicated search subagent when search deleg
 - Once data is returned, it's cached and won't return on next runs (this is expected behavior)
 
 Parameters:
-- query: (required) A clear, well-formed question about the code. Avoid single-token or keyword-only inputs.
+- query: (required) A clear, well-formed question about the code. Keyword/boolean syntax is also supported (quotes, AND/OR/NOT) when delegation is disabled or for precise filtering.
 - path: (optional, default: '.') Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc.
 
 **Workflow:** Always start with search, then use extract for detailed context when needed.
@@ -154,6 +154,12 @@ User: How do the user authentication and authorization work?
 User: Find all react imports in the project.
 <search>
 <query>Where does the project import React?</query>
+<path>.</path>
+</search>
+
+User: (When delegation is disabled) Find all React imports quickly.
+<search>
+<query>"import" AND "react"</query>
 <path>.</path>
 </search>
 

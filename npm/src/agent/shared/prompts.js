@@ -26,6 +26,7 @@ When searching:
 - Use only the search tool
 - Run additional searches only if needed to capture all relevant locations
 - Prefer specific, focused queries
+- Keyword/boolean syntax is allowed when useful (quotes, AND/OR/NOT)
 
 Output format (MANDATORY):
 - Return ONLY valid JSON with a single top-level key: "targets"
