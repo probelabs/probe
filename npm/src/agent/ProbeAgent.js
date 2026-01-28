@@ -469,6 +469,7 @@ export class ProbeAgent {
       enableDelegate: this.enableDelegate,
       enableBash: this.enableBash,
       bashConfig: this.bashConfig,
+      tracer: this.tracer,
       allowedTools: this.allowedTools,
       architectureFileName: this.architectureFileName,
       provider: this.clientApiProvider,

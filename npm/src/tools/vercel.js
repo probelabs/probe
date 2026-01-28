@@ -217,7 +217,7 @@ export const searchTool = (options = {}) => {
 					allowTests: allow_tests ?? true
 				});
 
-				const delegateResult = await delegate({
+				const runDelegation = () => delegate({
 					task: delegateTask,
 					debug,
 					parentSessionId: sessionId,
@@ -225,6 +225,7 @@ export const searchTool = (options = {}) => {
 					allowedFolders: options.allowedFolders,
 					provider: options.provider || null,
 					model: options.model || null,
+					tracer: options.tracer || null,
 					enableBash: false,
 					bashConfig: null,
 					architectureFileName: options.architectureFileName || null,
@@ -233,6 +234,13 @@ export const searchTool = (options = {}) => {
 					searchDelegate: false,
 					schema: CODE_SEARCH_SCHEMA
 				});
+
+				const delegateResult = options.tracer?.withSpan
+					? await options.tracer.withSpan('search.delegate', runDelegation, {
+						'search.query': searchQuery,
+						'search.path': searchPath
+					})
+					: await runDelegation();
 
 				const targets = parseDelegatedTargets(delegateResult);
 				if (!targets.length) {
