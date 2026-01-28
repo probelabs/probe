@@ -61,6 +61,7 @@ const SEARCH_FLAG_MAP = {
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
+ * @param {boolean} [options.suppressBinaryDebug] - Strip DEBUG env for probe binary execution
  * @param {boolean} [options.json] - Return results as parsed JSON instead of string
  * @returns {Promise<string|Object>} - Search results as string or parsed JSON
  * @throws {Error} If the search fails
@@ -158,12 +159,17 @@ export async function search(options) {
 		console.error(`Executing: ${binaryPath} ${args.join(' ')}`);
 	}
 
+	const env = options.suppressBinaryDebug
+		? { ...process.env, DEBUG: '0' }
+		: process.env;
+
 	try {
 		// Execute with execFile (no shell, prevents command injection)
 		const { stdout, stderr } = await execFileAsync(binaryPath, args, {
 			cwd,
 			timeout: options.timeout * 1000, // Convert seconds to milliseconds
-			maxBuffer: 50 * 1024 * 1024 // 50MB buffer for large outputs
+			maxBuffer: 50 * 1024 * 1024, // 50MB buffer for large outputs
+			env
 		});
 
 		// Log after executing

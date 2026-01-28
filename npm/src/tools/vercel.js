@@ -200,6 +200,7 @@ export const searchTool = (options = {}) => {
 				exact,
 				json: false,
 				maxTokens: effectiveMaxTokens,
+				suppressBinaryDebug: true,
 				session: sessionId, // Pass session ID if provided
 				language // Pass language parameter if provided
 			};
@@ -289,7 +290,8 @@ export const searchTool = (options = {}) => {
 				const extractOptions = {
 					files: resolvedTargets,
 					cwd: effectiveCwd,
-					allowTests: allow_tests ?? true
+					allowTests: allow_tests ?? true,
+					suppressBinaryDebug: true
 				};
 
 				if (outline) {
@@ -358,7 +360,8 @@ export const queryTool = (options = {}) => {
 					cwd: options.cwd, // Working directory for resolving relative paths
 					language,
 					allowTests: allow_tests ?? true,
-					json: false
+					json: false,
+					suppressBinaryDebug: true
 				});
 
 				return results;
@@ -399,7 +402,7 @@ export const extractTool = (options = {}) => {
 
 				// Create a temporary file for input content if provided
 				let tempFilePath = null;
-				let extractOptions = { cwd: effectiveCwd };
+				let extractOptions = { cwd: effectiveCwd, suppressBinaryDebug: true };
 
 				if (input_content) {
 					// Import required modules
@@ -428,7 +431,8 @@ export const extractTool = (options = {}) => {
 						cwd: effectiveCwd,
 						allowTests: allow_tests ?? true,
 						contextLines: context_lines,
-						format: effectiveFormat
+						format: effectiveFormat,
+						suppressBinaryDebug: true
 					};
 				} else if (targets) {
 					// Parse targets to handle line numbers and symbol names
@@ -450,7 +454,8 @@ export const extractTool = (options = {}) => {
 						cwd: effectiveCwd,
 						allowTests: allow_tests ?? true,
 						contextLines: context_lines,
-						format: effectiveFormat
+						format: effectiveFormat,
+						suppressBinaryDebug: true
 					};
 				} else {
 					throw new Error('Either targets or input_content must be provided');

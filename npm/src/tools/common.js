@@ -332,7 +332,7 @@ User: Check system info
 </examples>
 `;
 
-export const searchDescription = 'Search code in the repository. Provide a well-formed question about the codebase; avoid keyword-only queries. Use this tool first for any code-related questions.';
+export const searchDescription = 'Search code in the repository. Provide a well-formed question about the codebase; avoid keyword-only queries. If you must use keyword/boolean syntax, include OR synonyms for uncertain terms. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';

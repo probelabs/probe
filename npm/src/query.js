@@ -37,6 +37,7 @@ const QUERY_FLAG_MAP = {
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
+ * @param {boolean} [options.suppressBinaryDebug] - Strip DEBUG env for probe binary execution
  * @param {boolean} [options.json] - Return results as parsed JSON instead of string
  * @returns {Promise<string|Object>} - Query results as string or parsed JSON
  * @throws {Error} If the query fails
@@ -67,6 +68,9 @@ export async function query(options) {
 	// Get the working directory (cwd option for resolving relative paths)
 	// Validate and normalize the path to prevent path traversal attacks
 	const cwd = await validateCwdPath(options.cwd);
+	const env = options.suppressBinaryDebug
+		? { ...process.env, DEBUG: '0' }
+		: process.env;
 
 	// Create a single log record with all query parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {
@@ -82,7 +86,7 @@ export async function query(options) {
 	const command = `${binaryPath} query ${cliArgs.join(' ')}`;
 
 	try {
-		const { stdout, stderr } = await execAsync(command, { cwd });
+		const { stdout, stderr } = await execAsync(command, { cwd, env });
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);

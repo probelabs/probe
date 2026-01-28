@@ -35,6 +35,7 @@ const EXTRACT_FLAG_MAP = {
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
+ * @param {boolean} [options.suppressBinaryDebug] - Strip DEBUG env for probe binary execution
  * @param {boolean} [options.json] - Return results as parsed JSON instead of string
  * @returns {Promise<string|Object>} - Extracted code as string or parsed JSON
  * @throws {Error} If the extraction fails
@@ -76,6 +77,9 @@ export async function extract(options) {
 	// Get the working directory (cwd option sets working directory for relative file resolution)
 	// Validate and normalize the path to prevent path traversal attacks
 	const cwd = await validateCwdPath(options.cwd);
+	const env = options.suppressBinaryDebug
+		? { ...process.env, DEBUG: '0' }
+		: process.env;
 
 	// Create a single log record with all extract parameters (only in debug mode)
 	if (process.env.DEBUG === '1') {
@@ -95,14 +99,14 @@ export async function extract(options) {
 
 	// If content is provided, use spawn with stdin piping
 	if (hasContent) {
-		return extractWithStdin(binaryPath, cliArgs, options.content, options, cwd);
+		return extractWithStdin(binaryPath, cliArgs, options.content, options, cwd, env);
 	}
 
 	// Otherwise use exec for simple command execution
 	const command = `${binaryPath} extract ${cliArgs.join(' ')}`;
 
 	try {
-		const { stdout, stderr } = await execAsync(command, { cwd });
+		const { stdout, stderr } = await execAsync(command, { cwd, env });
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);
@@ -120,11 +124,12 @@ export async function extract(options) {
  * Extract with content piped to stdin
  * @private
  */
-function extractWithStdin(binaryPath, cliArgs, content, options, cwd) {
+function extractWithStdin(binaryPath, cliArgs, content, options, cwd, env) {
 	return new Promise((resolve, reject) => {
 		const childProcess = spawn(binaryPath, ['extract', ...cliArgs], {
 			stdio: ['pipe', 'pipe', 'pipe'],
-			cwd
+			cwd,
+			env
 		});
 
 		let stdout = '';

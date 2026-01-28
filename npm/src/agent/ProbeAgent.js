@@ -2768,19 +2768,22 @@ Follow these instructions carefully:
                 };
 
                 const getToolResultMetrics = (result) => {
+                  const previewLimit = 1000;
                   const type = result === null ? 'null' : Array.isArray(result) ? 'array' : typeof result;
                   const buildPreview = (value) => {
                     if (typeof value !== 'string') return {};
-                    if (value.length <= 200) {
+                    if (value.length <= previewLimit * 2) {
                       return {
+                        'tool.result.preview_limit': previewLimit,
                         'tool.result.preview_head': value,
                         'tool.result.preview_tail': '',
                         'tool.result.preview_truncated': false
                       };
                     }
                     return {
-                      'tool.result.preview_head': value.slice(0, 100),
-                      'tool.result.preview_tail': value.slice(-100),
+                      'tool.result.preview_limit': previewLimit,
+                      'tool.result.preview_head': value.slice(0, previewLimit),
+                      'tool.result.preview_tail': value.slice(-previewLimit),
                       'tool.result.preview_truncated': true
                     };
                   };
