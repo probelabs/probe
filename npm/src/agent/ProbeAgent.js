@@ -2767,10 +2767,43 @@ Follow these instructions carefully:
                   return await this.toolImplementations[toolName].execute(toolParams);
                 };
 
+                const getToolResultMetrics = (result) => {
+                  const type = result === null ? 'null' : Array.isArray(result) ? 'array' : typeof result;
+                  if (typeof result === 'string') {
+                    return {
+                      'tool.result.type': type,
+                      'tool.result.size_chars': result.length,
+                      'tool.result.size_bytes': Buffer.byteLength(result, 'utf8')
+                    };
+                  }
+                  if (result == null) {
+                    return { 'tool.result.type': type };
+                  }
+                  try {
+                    const json = JSON.stringify(result);
+                    if (typeof json === 'string') {
+                      return {
+                        'tool.result.type': type,
+                        'tool.result.size_chars': json.length,
+                        'tool.result.size_bytes': Buffer.byteLength(json, 'utf8')
+                      };
+                    }
+                  } catch {
+                    return { 'tool.result.type': type };
+                  }
+                  return { 'tool.result.type': type };
+                };
+
                 let toolResult;
                 try {
                   if (this.tracer) {
-                    toolResult = await this.tracer.withSpan('tool.call', executeToolCall, {
+                    toolResult = await this.tracer.withSpan('tool.call', async (span) => {
+                      const result = await executeToolCall();
+                      if (span?.setAttributes) {
+                        span.setAttributes(getToolResultMetrics(result));
+                      }
+                      return result;
+                    }, {
                       'tool.name': toolName,
                       'tool.params': JSON.stringify(toolParams).substring(0, 500),
                       'iteration': currentIteration
