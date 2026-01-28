@@ -84,21 +84,49 @@ describe('searchDelegate behavior', () => {
       'search.delegate',
       expect.any(Function),
       expect.objectContaining({
-        'search.query': 'searchDelegate',
+        'search.query': expect.stringContaining('searchDelegate'),
         'search.path': expect.any(String)
       })
     );
     expect(mockExtract).toHaveBeenCalledWith(expect.objectContaining({
       files: expect.arrayContaining([
-        '/workspace/src/a.js#foo',
-        '/workspace/src/b.js:10-12'
+        expect.stringMatching(/[/\\]workspace[/\\]src[/\\]a\\.js#foo/),
+        expect.stringMatching(/[/\\]workspace[/\\]src[/\\]b\\.js:10-12/)
       ])
     }));
+    const extractArgs = mockExtract.mock.calls[0][0];
+    expect(extractArgs).toEqual(expect.objectContaining({ files: expect.any(Array) }));
+    const normalizedFiles = extractArgs.files.map((file) =>
+      file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
+    );
+    expect(normalizedFiles).toEqual(expect.arrayContaining([
+      '/workspace/src/a.js#foo',
+      '/workspace/src/b.js:10-12'
+    ]));
     expect(mockSearch).not.toHaveBeenCalled();
   });
 
   test('falls back to raw search when delegation fails', async () => {
     mockDelegate.mockRejectedValue(new Error('boom'));
+    mockSearch.mockResolvedValue('RAW-SEARCH');
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace']
+    });
+
+    const result = await tool.execute({
+      query: 'searchDelegate',
+      path: 'src'
+    });
+
+    expect(result).toBe('RAW-SEARCH');
+    expect(mockSearch).toHaveBeenCalledTimes(1);
+  });
+
+  test('falls back to raw search when delegation returns no targets', async () => {
+    mockDelegate.mockResolvedValue(JSON.stringify({ targets: [] }));
     mockSearch.mockResolvedValue('RAW-SEARCH');
 
     const tool = searchTool({
