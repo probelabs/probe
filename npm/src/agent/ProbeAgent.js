@@ -2769,11 +2769,28 @@ Follow these instructions carefully:
 
                 const getToolResultMetrics = (result) => {
                   const type = result === null ? 'null' : Array.isArray(result) ? 'array' : typeof result;
+                  const buildPreview = (value) => {
+                    if (typeof value !== 'string') return {};
+                    if (value.length <= 200) {
+                      return {
+                        'tool.result.preview_head': value,
+                        'tool.result.preview_tail': '',
+                        'tool.result.preview_truncated': false
+                      };
+                    }
+                    return {
+                      'tool.result.preview_head': value.slice(0, 100),
+                      'tool.result.preview_tail': value.slice(-100),
+                      'tool.result.preview_truncated': true
+                    };
+                  };
+
                   if (typeof result === 'string') {
                     return {
                       'tool.result.type': type,
                       'tool.result.size_chars': result.length,
-                      'tool.result.size_bytes': Buffer.byteLength(result, 'utf8')
+                      'tool.result.size_bytes': Buffer.byteLength(result, 'utf8'),
+                      ...buildPreview(result)
                     };
                   }
                   if (result == null) {
@@ -2785,7 +2802,8 @@ Follow these instructions carefully:
                       return {
                         'tool.result.type': type,
                         'tool.result.size_chars': json.length,
-                        'tool.result.size_bytes': Buffer.byteLength(json, 'utf8')
+                        'tool.result.size_bytes': Buffer.byteLength(json, 'utf8'),
+                        ...buildPreview(json)
                       };
                     }
                   } catch {
