@@ -219,6 +219,18 @@ export class SimpleAppTracer {
     });
   }
 
+  /**
+   * Record task management events
+   */
+  recordTaskEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`task.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
   setAttributes(attributes) {
     // For simplicity, just log attributes when no active span
     if (this.telemetry && this.telemetry.enableConsole) {

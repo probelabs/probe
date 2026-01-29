@@ -254,15 +254,27 @@ Use <task><action>list</action></task> to review current status.
  * Create task tool instance
  * @param {Object} options - Configuration options
  * @param {import('./TaskManager.js').TaskManager} options.taskManager - TaskManager instance
+ * @param {Object} [options.tracer] - Optional tracer for telemetry
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @returns {Object} Tool instance with execute function
  */
 export function createTaskTool(options = {}) {
-  const { taskManager, debug = false } = options;
+  const { taskManager, tracer, debug = false } = options;
 
   if (!taskManager) {
     throw new Error('TaskManager instance is required');
   }
+
+  /**
+   * Record task telemetry event
+   * @param {string} eventType - Event type (created, updated, completed, deleted, listed, error)
+   * @param {Object} data - Event data
+   */
+  const recordTaskEvent = (eventType, data = {}) => {
+    if (tracer && typeof tracer.recordTaskEvent === 'function') {
+      tracer.recordTaskEvent(eventType, data);
+    }
+  };
 
   return {
     name: 'task',
@@ -278,6 +290,9 @@ export function createTaskTool(options = {}) {
       try {
         const validation = taskSchema.safeParse(params);
         if (!validation.success) {
+          recordTaskEvent('validation_error', {
+            'task.error': validation.error.message
+          });
           return `Error: Invalid task parameters - ${validation.error.message}`;
         }
 
@@ -289,10 +304,25 @@ export function createTaskTool(options = {}) {
               // Batch create
               const created = taskManager.createTasks(tasks);
               const ids = created.map(t => t.id).join(', ');
+              recordTaskEvent('batch_created', {
+                'task.action': 'create',
+                'task.count': created.length,
+                'task.ids': ids,
+                'task.total_count': taskManager.listTasks().length
+              });
               return `Created ${created.length} tasks: ${ids}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (title) {
               // Single create
               const task = taskManager.createTask({ title, description, priority, dependencies, after });
+              recordTaskEvent('created', {
+                'task.action': 'create',
+                'task.id': task.id,
+                'task.title': title,
+                'task.priority': priority || 'none',
+                'task.has_dependencies': dependencies && dependencies.length > 0,
+                'task.after': after || 'none',
+                'task.total_count': taskManager.listTasks().length
+              });
               return `Created task ${task.id}: ${task.title}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
               return 'Error: Create action requires either "tasks" array or "title" parameter';
@@ -304,6 +334,11 @@ export function createTaskTool(options = {}) {
               // Batch update
               const updated = taskManager.updateTasks(tasks);
               const ids = updated.map(t => t.id).join(', ');
+              recordTaskEvent('batch_updated', {
+                'task.action': 'update',
+                'task.count': updated.length,
+                'task.ids': ids
+              });
               return `Updated ${updated.length} tasks: ${ids}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
               // Single update
@@ -315,6 +350,12 @@ export function createTaskTool(options = {}) {
               if (dependencies) updates.dependencies = dependencies;
 
               const task = taskManager.updateTask(id, updates);
+              recordTaskEvent('updated', {
+                'task.action': 'update',
+                'task.id': id,
+                'task.new_status': status || 'unchanged',
+                'task.fields_updated': Object.keys(updates).join(', ')
+              });
               return `Updated task ${task.id}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
               return 'Error: Update action requires either "tasks" array or "id" parameter';
@@ -326,10 +367,22 @@ export function createTaskTool(options = {}) {
               // Batch complete
               const ids = tasks.map(t => typeof t === 'string' ? t : t.id);
               const completed = taskManager.completeTasks(ids);
+              recordTaskEvent('batch_completed', {
+                'task.action': 'complete',
+                'task.count': completed.length,
+                'task.ids': ids.join(', '),
+                'task.incomplete_remaining': taskManager.getIncompleteTasks().length
+              });
               return `Completed ${completed.length} tasks\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
               // Single complete
               const task = taskManager.completeTask(id);
+              recordTaskEvent('completed', {
+                'task.action': 'complete',
+                'task.id': id,
+                'task.title': task.title,
+                'task.incomplete_remaining': taskManager.getIncompleteTasks().length
+              });
               return `Completed task ${task.id}: ${task.title}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
               return 'Error: Complete action requires either "tasks" array or "id" parameter';
@@ -341,10 +394,21 @@ export function createTaskTool(options = {}) {
               // Batch delete
               const ids = tasks.map(t => typeof t === 'string' ? t : t.id);
               const deleted = taskManager.deleteTasks(ids);
+              recordTaskEvent('batch_deleted', {
+                'task.action': 'delete',
+                'task.count': deleted.length,
+                'task.ids': deleted.join(', '),
+                'task.total_count': taskManager.listTasks().length
+              });
               return `Deleted ${deleted.length} tasks: ${deleted.join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
               // Single delete
               taskManager.deleteTask(id);
+              recordTaskEvent('deleted', {
+                'task.action': 'delete',
+                'task.id': id,
+                'task.total_count': taskManager.listTasks().length
+              });
               return `Deleted task ${id}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
               return 'Error: Delete action requires either "tasks" array or "id" parameter';
@@ -352,13 +416,28 @@ export function createTaskTool(options = {}) {
           }
 
           case 'list': {
+            const allTasks = taskManager.listTasks();
+            const incomplete = taskManager.getIncompleteTasks();
+            recordTaskEvent('listed', {
+              'task.action': 'list',
+              'task.total_count': allTasks.length,
+              'task.incomplete_count': incomplete.length,
+              'task.completed_count': allTasks.length - incomplete.length
+            });
             return taskManager.formatTasksForPrompt();
           }
 
           default:
+            recordTaskEvent('unknown_action', {
+              'task.action': action
+            });
             return `Error: Unknown action "${action}". Valid actions: create, update, complete, delete, list`;
         }
       } catch (error) {
+        recordTaskEvent('error', {
+          'task.error': error.message,
+          'task.action': params?.action || 'unknown'
+        });
         if (debug) {
           console.error('[TaskTool] Error:', error);
         }

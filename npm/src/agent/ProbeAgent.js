@@ -2234,7 +2234,15 @@ Follow these instructions carefully:
         if (isToolAllowed('task')) {
           this.toolImplementations.task = createTaskTool({
             taskManager: this.taskManager,
+            tracer: this.tracer,
             debug: this.debug
+          });
+        }
+
+        // Record telemetry for task initialization
+        if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
+          this.tracer.recordTaskEvent('session_started', {
+            'task.enabled': true
           });
         }
 
@@ -2709,6 +2717,16 @@ Follow these instructions carefully:
             if (this.enableTasks && this.taskManager && this.taskManager.hasIncompleteTasks()) {
               const taskSummary = this.taskManager.getTaskSummary();
               const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
+              const incompleteTasks = this.taskManager.getIncompleteTasks();
+
+              // Record telemetry for blocked completion
+              if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
+                this.tracer.recordTaskEvent('completion_blocked', {
+                  'task.incomplete_count': incompleteTasks.length,
+                  'task.incomplete_ids': incompleteTasks.map(t => t.id).join(', '),
+                  'task.iteration': currentIteration
+                });
+              }
 
               if (this.debug) {
                 console.log('[DEBUG] Task checkpoint: Blocking completion due to incomplete tasks');
