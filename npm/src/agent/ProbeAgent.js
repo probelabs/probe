@@ -69,7 +69,7 @@ import { createSkillToolInstances } from './skills/tools.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
-import { formatErrorForAI } from '../utils/error-types.js';
+import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
 import {
   TaskManager,
   createTaskTool,
@@ -3130,12 +3130,10 @@ Follow these instructions carefully:
             if (this.debug) {
               console.log(`[DEBUG] Detected unrecognized tool '${unrecognizedTool}' in assistant response.`);
             }
-            reminderContent = `<tool_result>
-<error type="parameter_error" recoverable="true">
-<message>Tool '${unrecognizedTool}' is not available in this context.</message>
-<suggestion>Available tools: ${validTools.join(', ')}. Please use one of these tools instead.</suggestion>
-</error>
-</tool_result>`;
+            const toolError = new ParameterError(`Tool '${unrecognizedTool}' is not available in this context.`, {
+              suggestion: `Available tools: ${validTools.join(', ')}. Please use one of these tools instead.`
+            });
+            reminderContent = `<tool_result>\n${formatErrorForAI(toolError)}\n</tool_result>`;
           } else {
             // Standard reminder - no tool call detected at all
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
