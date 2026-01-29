@@ -2584,9 +2584,16 @@ Follow these instructions carefully:
             };
 
             if (this.tracer) {
+              // Prepare input preview for tracing (truncate if very long)
+              const inputPreview = message.length > 1000
+                ? message.substring(0, 1000) + '... [truncated]'
+                : message;
+
               await this.tracer.withSpan('ai.request', executeAIRequest, {
                 'ai.model': this.model,
                 'ai.provider': this.clientApiProvider || 'auto',
+                'ai.input': inputPreview,
+                'ai.input_length': message.length,
                 'iteration': currentIteration,
                 'max_tokens': maxResponseTokens,
                 'temperature': 0.3,
