@@ -9,6 +9,7 @@ import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
 import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
+import { formatErrorForAI } from '../utils/error-types.js';
 
 const CODE_SEARCH_SCHEMA = {
 	type: 'object',
@@ -200,7 +201,7 @@ export const searchTool = (options = {}) => {
 					return await runRawSearch();
 				} catch (error) {
 					console.error('Error executing search command:', error);
-					return `Error executing search command: ${error.message}`;
+					return formatErrorForAI(error);
 				}
 			}
 
@@ -269,7 +270,8 @@ export const searchTool = (options = {}) => {
 					return await runRawSearch();
 				} catch (fallbackError) {
 					console.error('Error executing search command:', fallbackError);
-					return `Error executing search command: ${fallbackError.message}`;
+					// Both delegation and fallback failed - provide detailed error
+					return formatErrorForAI(fallbackError);
 				}
 			}
 		}
@@ -322,7 +324,7 @@ export const queryTool = (options = {}) => {
 				return results;
 			} catch (error) {
 				console.error('Error executing query command:', error);
-				return `Error executing query command: ${error.message}`;
+				return formatErrorForAI(error);
 			}
 		}
 	});
@@ -433,7 +435,7 @@ export const extractTool = (options = {}) => {
 				return results;
 			} catch (error) {
 				console.error('Error executing extract command:', error);
-				return `Error executing extract command: ${error.message}`;
+				return formatErrorForAI(error);
 			}
 		}
 	});

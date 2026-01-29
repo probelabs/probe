@@ -7,6 +7,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getBinaryPath, buildCliArgs } from './utils.js';
 import { validateCwdPath } from './utils/path-validation.js';
+import { TimeoutError, categorizeError } from './utils/error-types.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -234,13 +235,26 @@ export async function search(options) {
 	} catch (error) {
 		// Check if the error is a timeout
 		if (error.code === 'ETIMEDOUT' || error.killed) {
-			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds.\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}\nCwd: ${cwd}`;
+			const timeoutMessage = `Search operation timed out after ${options.timeout} seconds`;
 			console.error(timeoutMessage);
-			throw new Error(timeoutMessage);
+			throw new TimeoutError(timeoutMessage, {
+				suggestion: 'The search operation timed out. Try a more specific query, reduce the search scope, or increase the timeout.',
+				details: {
+					timeout: options.timeout,
+					query: options.query,
+					path: options.path
+				}
+			});
 		}
 
-		// Enhance error message with command details
-		const errorMessage = `Error executing search command: ${error.message}\nBinary: ${binaryPath}\nArgs: ${args.join(' ')}\nCwd: ${cwd}`;
-		throw new Error(errorMessage);
+		// Categorize and enhance the error
+		const structuredError = categorizeError(error);
+		structuredError.details = {
+			...structuredError.details,
+			binary: binaryPath,
+			args: args.join(' '),
+			cwd: cwd
+		};
+		throw structuredError;
 	}
 }

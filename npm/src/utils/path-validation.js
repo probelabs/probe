@@ -5,6 +5,7 @@
 
 import path from 'path';
 import { promises as fs } from 'fs';
+import { PathError } from './error-types.js';
 
 /**
  * Validates and normalizes a path to be used as working directory (cwd).
@@ -18,7 +19,7 @@ import { promises as fs } from 'fs';
  * @param {string} inputPath - The path to validate
  * @param {string} [defaultPath] - Default path to use if inputPath is not provided
  * @returns {Promise<string>} Normalized absolute path
- * @throws {Error} If the path is invalid or doesn't exist
+ * @throws {PathError} If the path is invalid or doesn't exist
  */
 export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 	// Use default if not provided
@@ -32,11 +33,28 @@ export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 	try {
 		const stats = await fs.stat(normalizedPath);
 		if (!stats.isDirectory()) {
-			throw new Error(`Path is not a directory: ${normalizedPath}`);
+			throw new PathError(`Path is not a directory: ${normalizedPath}`, {
+				suggestion: 'The specified path is a file, not a directory. Please provide a directory path for searching.',
+				details: { path: normalizedPath, type: 'file' }
+			});
 		}
 	} catch (error) {
+		// Re-throw if already a PathError
+		if (error instanceof PathError) {
+			throw error;
+		}
 		if (error.code === 'ENOENT') {
-			throw new Error(`Path does not exist: ${normalizedPath}`);
+			throw new PathError(`Path does not exist: ${normalizedPath}`, {
+				suggestion: 'The specified path does not exist. Please verify the path is correct or use a different directory.',
+				details: { path: normalizedPath }
+			});
+		}
+		if (error.code === 'EACCES') {
+			throw new PathError(`Permission denied: ${normalizedPath}`, {
+				recoverable: false,
+				suggestion: 'Permission denied accessing this path. This is a system-level restriction.',
+				details: { path: normalizedPath }
+			});
 		}
 		throw error;
 	}
