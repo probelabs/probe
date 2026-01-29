@@ -2226,28 +2226,34 @@ Follow these instructions carefully:
 
       // START CHECKPOINT: Initialize task management for this request
       if (this.enableTasks) {
-        // Create fresh TaskManager for each request (request-scoped)
-        this.taskManager = new TaskManager({ debug: this.debug });
+        try {
+          // Create fresh TaskManager for each request (request-scoped)
+          this.taskManager = new TaskManager({ debug: this.debug });
 
-        // Register task tool for this request
-        const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
-        if (isToolAllowed('task')) {
-          this.toolImplementations.task = createTaskTool({
-            taskManager: this.taskManager,
-            tracer: this.tracer,
-            debug: this.debug
-          });
-        }
+          // Register task tool for this request
+          const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
+          if (isToolAllowed('task')) {
+            this.toolImplementations.task = createTaskTool({
+              taskManager: this.taskManager,
+              tracer: this.tracer,
+              debug: this.debug
+            });
+          }
 
-        // Record telemetry for task initialization
-        if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
-          this.tracer.recordTaskEvent('session_started', {
-            'task.enabled': true
-          });
-        }
+          // Record telemetry for task initialization
+          if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
+            this.tracer.recordTaskEvent('session_started', {
+              'task.enabled': true
+            });
+          }
 
-        if (this.debug) {
-          console.log('[DEBUG] Task management initialized for this request');
+          if (this.debug) {
+            console.log('[DEBUG] Task management initialized for this request');
+          }
+        } catch (taskInitError) {
+          // Log error but don't fail the request - task management is optional
+          console.error('[ProbeAgent] Failed to initialize task management:', taskInitError.message);
+          this.taskManager = null;
         }
       }
 

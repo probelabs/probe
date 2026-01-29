@@ -528,4 +528,59 @@ describe('TaskManager', () => {
       expect(taskIds).toEqual(['task-1', 'task-3', 'task-4', 'task-2']);
     });
   });
+
+  describe('Input Validation', () => {
+    test('should throw error for invalid status value', () => {
+      manager.createTask({ title: 'Task 1' });
+
+      expect(() => {
+        manager.updateTask('task-1', { status: 'invalid_status' });
+      }).toThrow(/Invalid status/);
+    });
+
+    test('should throw error for invalid priority value', () => {
+      manager.createTask({ title: 'Task 1' });
+
+      expect(() => {
+        manager.updateTask('task-1', { priority: 'urgent' });
+      }).toThrow(/Invalid priority/);
+    });
+
+    test('should throw error when dependencies is not an array', () => {
+      manager.createTask({ title: 'Task 1' });
+      manager.createTask({ title: 'Task 2' });
+
+      expect(() => {
+        manager.updateTask('task-2', { dependencies: 'task-1' });
+      }).toThrow(/Dependencies must be an array/);
+    });
+
+    test('should accept valid status values', () => {
+      manager.createTask({ title: 'Task 1' });
+
+      // All valid statuses should work
+      const validStatuses = ['pending', 'in_progress', 'completed', 'cancelled'];
+      for (const status of validStatuses) {
+        const updated = manager.updateTask('task-1', { status });
+        expect(updated.status).toBe(status);
+      }
+    });
+
+    test('should accept valid priority values', () => {
+      manager.createTask({ title: 'Task 1' });
+
+      // All valid priorities should work
+      const validPriorities = ['low', 'medium', 'high', 'critical'];
+      for (const priority of validPriorities) {
+        const updated = manager.updateTask('task-1', { priority });
+        expect(updated.priority).toBe(priority);
+      }
+    });
+
+    test('should allow null priority to clear it', () => {
+      manager.createTask({ title: 'Task 1', priority: 'high' });
+      const updated = manager.updateTask('task-1', { priority: null });
+      expect(updated.priority).toBeNull();
+    });
+  });
 });

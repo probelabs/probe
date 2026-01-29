@@ -6,11 +6,24 @@
 import { z } from 'zod';
 
 /**
+ * Schema for a single task item in batch operations
+ */
+export const taskItemSchema = z.object({
+  id: z.string().optional(),
+  title: z.string().optional(),
+  description: z.string().optional(),
+  status: z.enum(['pending', 'in_progress', 'completed', 'cancelled']).optional(),
+  priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
+  dependencies: z.array(z.string()).optional(),
+  after: z.string().optional()
+});
+
+/**
  * Task schema for validation
  */
 export const taskSchema = z.object({
   action: z.enum(['create', 'update', 'complete', 'delete', 'list']),
-  tasks: z.array(z.any()).optional(),
+  tasks: z.array(z.union([z.string(), taskItemSchema])).optional(),
   id: z.string().optional(),
   title: z.string().optional(),
   description: z.string().optional(),
@@ -364,8 +377,12 @@ export function createTaskTool(options = {}) {
 
           case 'complete': {
             if (tasks && Array.isArray(tasks)) {
-              // Batch complete
-              const ids = tasks.map(t => typeof t === 'string' ? t : t.id);
+              // Batch complete - validate each item has an id
+              const ids = tasks.map((t, index) => {
+                if (typeof t === 'string') return t;
+                if (t && typeof t.id === 'string') return t.id;
+                throw new Error(`Invalid task item at index ${index}: must be a string ID or object with 'id' property`);
+              });
               const completed = taskManager.completeTasks(ids);
               recordTaskEvent('batch_completed', {
                 'task.action': 'complete',
@@ -391,8 +408,12 @@ export function createTaskTool(options = {}) {
 
           case 'delete': {
             if (tasks && Array.isArray(tasks)) {
-              // Batch delete
-              const ids = tasks.map(t => typeof t === 'string' ? t : t.id);
+              // Batch delete - validate each item has an id
+              const ids = tasks.map((t, index) => {
+                if (typeof t === 'string') return t;
+                if (t && typeof t.id === 'string') return t.id;
+                throw new Error(`Invalid task item at index ${index}: must be a string ID or object with 'id' property`);
+              });
               const deleted = taskManager.deleteTasks(ids);
               recordTaskEvent('batch_deleted', {
                 'task.action': 'delete',

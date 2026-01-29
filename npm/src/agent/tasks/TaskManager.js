@@ -157,6 +157,20 @@ export class TaskManager {
   }
 
   /**
+   * Valid status values for tasks
+   * @type {string[]}
+   * @private
+   */
+  static VALID_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'];
+
+  /**
+   * Valid priority values for tasks
+   * @type {string[]}
+   * @private
+   */
+  static VALID_PRIORITIES = ['low', 'medium', 'high', 'critical'];
+
+  /**
    * Update a task
    * @param {string} id - Task ID
    * @param {Object} updates - Fields to update
@@ -169,15 +183,30 @@ export class TaskManager {
       throw new Error(`Task "${id}" not found. Available tasks: ${this._getAvailableTaskIds()}`);
     }
 
-    // Handle status updates
-    if (updates.status) {
+    // Validate status if provided
+    if (updates.status !== undefined) {
+      if (!TaskManager.VALID_STATUSES.includes(updates.status)) {
+        throw new Error(`Invalid status "${updates.status}". Valid statuses: ${TaskManager.VALID_STATUSES.join(', ')}`);
+      }
       if (updates.status === 'completed' && !task.completedAt) {
         updates.completedAt = this._now();
       }
     }
 
+    // Validate priority if provided
+    if (updates.priority !== undefined && updates.priority !== null) {
+      if (!TaskManager.VALID_PRIORITIES.includes(updates.priority)) {
+        throw new Error(`Invalid priority "${updates.priority}". Valid priorities: ${TaskManager.VALID_PRIORITIES.join(', ')}`);
+      }
+    }
+
     // Handle dependency updates
-    if (updates.dependencies) {
+    if (updates.dependencies !== undefined) {
+      // Validate dependencies is an array
+      if (!Array.isArray(updates.dependencies)) {
+        throw new Error('Dependencies must be an array');
+      }
+
       // Validate new dependencies exist
       for (const depId of updates.dependencies) {
         if (!this.tasks.has(depId)) {
@@ -327,21 +356,26 @@ export class TaskManager {
   }
 
   /**
+   * Check if a dependency is resolved (completed or cancelled)
+   * @param {string} depId - Dependency task ID
+   * @returns {boolean} True if dependency is resolved or doesn't exist
+   * @private
+   */
+  _isDependencyResolved(depId) {
+    const dep = this.tasks.get(depId);
+    // If dependency doesn't exist, treat as resolved (shouldn't happen with validation)
+    if (!dep) return true;
+    return dep.status === 'completed' || dep.status === 'cancelled';
+  }
+
+  /**
    * Get tasks that are ready to start (all dependencies completed)
    * @returns {Task[]} Array of ready tasks
    */
   getReadyTasks() {
     return Array.from(this.tasks.values()).filter(task => {
       if (task.status !== 'pending') return false;
-
-      // Check all dependencies are completed or cancelled
-      for (const depId of task.dependencies) {
-        const dep = this.tasks.get(depId);
-        if (dep && dep.status !== 'completed' && dep.status !== 'cancelled') {
-          return false;
-        }
-      }
-      return true;
+      return task.dependencies.every(depId => this._isDependencyResolved(depId));
     });
   }
 
@@ -352,14 +386,7 @@ export class TaskManager {
   getBlockedTasks() {
     return Array.from(this.tasks.values()).filter(task => {
       if (task.status !== 'pending') return false;
-
-      for (const depId of task.dependencies) {
-        const dep = this.tasks.get(depId);
-        if (dep && dep.status !== 'completed' && dep.status !== 'cancelled') {
-          return true;
-        }
-      }
-      return false;
+      return task.dependencies.some(depId => !this._isDependencyResolved(depId));
     });
   }
 
@@ -379,10 +406,7 @@ export class TaskManager {
 
       // Add blocking info for pending tasks
       if (task.status === 'pending' && task.dependencies.length > 0) {
-        const blockers = task.dependencies.filter(depId => {
-          const dep = this.tasks.get(depId);
-          return dep && dep.status !== 'completed' && dep.status !== 'cancelled';
-        });
+        const blockers = task.dependencies.filter(depId => !this._isDependencyResolved(depId));
         if (blockers.length > 0) {
           line += ` (blocked by: ${blockers.join(', ')})`;
         }
@@ -405,10 +429,7 @@ export class TaskManager {
     }
 
     const taskLines = tasks.map(task => {
-      const blockers = task.dependencies.filter(depId => {
-        const dep = this.tasks.get(depId);
-        return dep && dep.status !== 'completed' && dep.status !== 'cancelled';
-      });
+      const blockers = task.dependencies.filter(depId => !this._isDependencyResolved(depId));
 
       let line = `  <task id="${task.id}" status="${task.status}"`;
       if (task.priority) line += ` priority="${task.priority}"`;
