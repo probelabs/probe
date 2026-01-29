@@ -2704,6 +2704,10 @@ Follow these instructions carefully:
           if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
             validTools.push('delegate');
           }
+          // Task tool (require both enableTasks flag AND allowedTools permission)
+          if (this.enableTasks && this.allowedTools.isEnabled('task')) {
+            validTools.push('task');
+          }
         }
 
         // Try parsing with hybrid parser that supports both native and MCP tools

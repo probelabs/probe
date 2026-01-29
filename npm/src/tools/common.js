@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { resolve, isAbsolute } from 'path';
 import { editSchema, createSchema } from './edit.js';
+import { taskSchema } from '../agent/tasks/taskTool.js';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
@@ -347,6 +348,7 @@ export const DEFAULT_VALID_TOOLS = [
 	'searchFiles',
 	'implement',
 	'bash',
+	'task',
 	'attempt_completion'
 ];
 
@@ -380,6 +382,7 @@ function getValidParamsForTool(toolName) {
 		listSkills: listSkillsSchema,
 		useSkill: useSkillSchema,
 		bash: bashSchema,
+		task: taskSchema,
 		attempt_completion: attemptCompletionSchema,
 		edit: editSchema,
 		create: createSchema
