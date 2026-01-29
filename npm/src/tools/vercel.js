@@ -119,14 +119,18 @@ function parseDelegatedTargets(rawResponse) {
 function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, allowTests }) {
 	return [
 		'You are a code-search subagent. Your ONLY job is to return ALL relevant code locations.',
-		'Use ONLY the search tool. Do NOT answer the question or explain anything.',
+		'Available tools: search, extract, listFiles.',
+		'- Use search to find code matching the query',
+		'- Use extract to verify code snippets and ensure targets are relevant',
+		'- Use listFiles to understand directory structure if needed',
 		'Return ONLY valid JSON with this shape: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}.',
 		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
 		`Search query: ${searchQuery}`,
 		`Search path(s): ${searchPath}`,
 		`Options: exact=${exact ? 'true' : 'false'}, language=${language || 'auto'}, allow_tests=${allowTests ? 'true' : 'false'}.`,
 		'Run additional searches only if needed to capture all relevant locations.',
-		'Deduplicate targets.'
+		'Deduplicate targets.',
+		'Do NOT answer the question or explain anything - ONLY return the JSON targets.'
 	].join('\n');
 }
 
@@ -231,7 +235,7 @@ export const searchTool = (options = {}) => {
 					bashConfig: null,
 					architectureFileName: options.architectureFileName || null,
 					promptType: 'code-searcher',
-					allowedTools: ['search', 'attempt_completion'],
+					allowedTools: ['search', 'extract', 'listFiles', 'attempt_completion'],
 					searchDelegate: false,
 					schema: CODE_SEARCH_SCHEMA
 				});
