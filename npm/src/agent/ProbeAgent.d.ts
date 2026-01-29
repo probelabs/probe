@@ -76,6 +76,8 @@ export interface ProbeAgentOptions {
   skillDirs?: string[];
   /** Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation) */
   completionPrompt?: string;
+  /** Enable task management system for tracking multi-step progress */
+  enableTasks?: boolean;
 }
 
 /**

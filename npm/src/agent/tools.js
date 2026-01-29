@@ -71,6 +71,17 @@ export function createTools(configOptions) {
 }
 
 // Export tool definitions and schemas
+// Export task tool from tasks module
+export {
+  taskSchema,
+  taskToolDefinition,
+  taskSystemPrompt,
+  taskGuidancePrompt,
+  createTaskCompletionBlockedMessage,
+  createTaskTool,
+  TaskManager
+} from './tasks/index.js';
+
 export {
   DEFAULT_SYSTEM_MESSAGE,
   searchSchema,

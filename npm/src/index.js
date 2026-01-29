@@ -49,6 +49,13 @@ import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions 
 import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
 import { StorageAdapter, InMemoryStorageAdapter } from './agent/storage/index.js';
 import { HookManager, HOOK_TYPES } from './agent/hooks/index.js';
+import {
+	TaskManager,
+	taskSchema,
+	taskToolDefinition,
+	taskSystemPrompt,
+	createTaskTool
+} from './agent/tasks/index.js';
 
 export {
 	search,
@@ -103,5 +110,11 @@ export {
 	editToolDefinition,
 	createToolDefinition,
 	// Export parser function
-	parseXmlToolCall
+	parseXmlToolCall,
+	// Export task management
+	TaskManager,
+	taskSchema,
+	taskToolDefinition,
+	taskSystemPrompt,
+	createTaskTool
 };

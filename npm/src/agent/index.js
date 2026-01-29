@@ -140,6 +140,8 @@ function parseArgs() {
     disableTools: false, // Convenience flag to disable all tools
     disableSkills: false, // Disable skill discovery and activation
     skillDirs: null, // Comma-separated list of repo-relative skill directories
+    // Task management
+    enableTasks: false, // Enable task tracking for progress management
     // Bash tool configuration
     enableBash: false,
     bashAllow: null,
@@ -214,6 +216,8 @@ function parseArgs() {
       config.disableSkills = true;
     } else if (arg === '--skills-dir' && i + 1 < args.length) {
       config.skillDirs = args[++i].split(',').map(dir => dir.trim()).filter(Boolean);
+    } else if (arg === '--allow-tasks') {
+      config.enableTasks = true;
     } else if (arg === '--enable-bash') {
       config.enableBash = true;
     } else if (arg === '--bash-allow' && i + 1 < args.length) {
@@ -278,6 +282,7 @@ Options:
                                    Convenience flag equivalent to --allowed-tools none
   --skills-dir <dirs>              Comma-separated list of repo-relative skill directories to scan
   --no-skills                      Disable skill discovery and activation
+  --allow-tasks                    Enable task management for tracking multi-step progress
   --verbose                        Enable verbose output
   --outline                        Use outline-xml format for code search results
   --mcp                           Run as MCP server
@@ -407,6 +412,11 @@ class ProbeAgentMcpServer {
               architecture_file: {
                 type: 'string',
                 description: 'Optional architecture context filename in repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present).',
+              },
+              enable_tasks: {
+                type: 'boolean',
+                description: 'Optional: Enable task management for tracking multi-step progress. When enabled, the agent can create, track, and complete tasks.',
+                default: false
               }
             },
             required: ['query']
@@ -535,7 +545,8 @@ class ProbeAgentMcpServer {
             maxResponseTokens: args.max_response_tokens,
             disableMermaidValidation: !!args.no_mermaid_validation,
             allowedTools: args.allowed_tools,
-            disableTools: args.disable_tools
+            disableTools: args.disable_tools,
+            enableTasks: !!args.enable_tasks
           };
 
           this.agent = new ProbeAgent(agentConfig);
@@ -833,7 +844,8 @@ async function main() {
       enableSkills: !config.disableSkills,
       skillDirs: config.skillDirs,
       enableBash: config.enableBash,
-      bashConfig: bashConfig
+      bashConfig: bashConfig,
+      enableTasks: config.enableTasks
     };
 
     const agent = new ProbeAgent(agentConfig);

@@ -69,6 +69,14 @@ import { createSkillToolInstances } from './skills/tools.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
+import {
+  TaskManager,
+  createTaskTool,
+  taskToolDefinition,
+  taskSystemPrompt,
+  taskGuidancePrompt,
+  createTaskCompletionBlockedMessage
+} from './tasks/index.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -118,6 +126,7 @@ export class ProbeAgent {
    * @param {string} [options.mcpConfigPath] - Path to MCP configuration file
    * @param {Object} [options.mcpConfig] - MCP configuration object (overrides mcpConfigPath)
    * @param {Array} [options.mcpServers] - Deprecated, use mcpConfig instead
+   * @param {boolean} [options.enableTasks=false] - Enable task management system for tracking progress
    * @param {Object} [options.storageAdapter] - Custom storage adapter for history management
    * @param {Object} [options.hooks] - Hook callbacks for events (e.g., {'tool:start': callback})
    * @param {Array<string>|null} [options.allowedTools] - List of allowed tool names. Use ['*'] for all tools (default), [] or null for no tools (raw AI mode), or specific tool names like ['search', 'query', 'extract']. Supports exclusion with '!' prefix (e.g., ['*', '!bash'])
@@ -254,6 +263,10 @@ export class ProbeAgent {
     this.mcpServers = options.mcpServers || null; // Deprecated, keep for backward compatibility
     this.mcpBridge = null;
     this._mcpInitialized = false; // Track if MCP initialization has been attempted
+
+    // Task management configuration
+    this.enableTasks = !!options.enableTasks;
+    this.taskManager = null; // Initialized per-request in answer()
 
     // Retry configuration
     this.retryConfig = options.retry || {};
@@ -579,6 +592,9 @@ export class ProbeAgent {
 
     // Store wrapped tools for ACP system
     this.wrappedTools = wrappedTools;
+
+    // Note: Task tool is registered dynamically in answer() when enableTasks is true
+    // This is because TaskManager is created per-request (request-scoped)
 
     // Log available tools in debug mode
     if (this.debug) {
@@ -1987,6 +2003,11 @@ ${extractGuidance}
       toolDefinitions += `${bashToolDefinition}\n`;
     }
 
+    // Task tool (require both enableTasks flag AND allowedTools permission)
+    if (this.enableTasks && isToolAllowed('task')) {
+      toolDefinitions += `${taskToolDefinition}\n`;
+    }
+
     // Always include attempt_completion (unless explicitly disabled in raw AI mode)
     if (isToolAllowed('attempt_completion')) {
       toolDefinitions += `${attemptCompletionToolDefinition}\n`;
@@ -2061,8 +2082,7 @@ Available Tools:
 - listFiles: List files and directories in a specified location.
 - searchFiles: Find files matching a glob pattern with recursive search capability.
 ${this.enableSkills ? '- listSkills: List available agent skills discovered in the repository.\n- useSkill: Load and activate a specific skill\'s instructions.\n' : ''}- readImage: Read and load an image file for AI analysis.
-${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n- edit: Edit files using exact string replacement.\n- create: Create new files with specified content.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}${this.enableBash ? '- bash: Execute bash commands for system operations.\n' : ''}
-- attempt_completion: Finalize the task and provide the result to the user.
+${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n- edit: Edit files using exact string replacement.\n- create: Create new files with specified content.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}${this.enableBash ? '- bash: Execute bash commands for system operations.\n' : ''}${this.enableTasks ? '- task: Manage tasks for tracking progress (create, update, complete, delete, list).\n' : ''}- attempt_completion: Finalize the task and provide the result to the user.
 - attempt_complete: Quick completion using previous response (shorthand).
 `;
 
@@ -2124,6 +2144,11 @@ Follow these instructions carefully:
       if (skillsXml) {
         systemMessage += `\n# Available Skills\n${skillsXml}\n\nTo use a skill, call the useSkill tool with its name.\n`;
       }
+    }
+
+    // Add task management system prompt if enabled
+    if (this.enableTasks) {
+      systemMessage += `\n${taskSystemPrompt}\n`;
     }
 
     // Add MCP tools if available (filtered by allowedTools)
@@ -2199,6 +2224,39 @@ Follow these instructions carefully:
       // Track initial history length for storage
       const oldHistoryLength = this.history.length;
 
+      // START CHECKPOINT: Initialize task management for this request
+      if (this.enableTasks) {
+        try {
+          // Create fresh TaskManager for each request (request-scoped)
+          this.taskManager = new TaskManager({ debug: this.debug });
+
+          // Register task tool for this request
+          const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
+          if (isToolAllowed('task')) {
+            this.toolImplementations.task = createTaskTool({
+              taskManager: this.taskManager,
+              tracer: this.tracer,
+              debug: this.debug
+            });
+          }
+
+          // Record telemetry for task initialization
+          if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
+            this.tracer.recordTaskEvent('session_started', {
+              'task.enabled': true
+            });
+          }
+
+          if (this.debug) {
+            console.log('[DEBUG] Task management initialized for this request');
+          }
+        } catch (taskInitError) {
+          // Log error but don't fail the request - task management is optional
+          console.error('[ProbeAgent] Failed to initialize task management:', taskInitError.message);
+          this.taskManager = null;
+        }
+      }
+
       // Emit user message hook
       await this.hooks.emit(HOOK_TYPES.MESSAGE_USER, {
         sessionId: this.sessionId,
@@ -2211,6 +2269,14 @@ Follow these instructions carefully:
 
       // Create user message with optional image support
       let userMessage = { role: 'user', content: message.trim() };
+
+      // START CHECKPOINT: Inject task guidance if tasks are enabled
+      if (this.enableTasks) {
+        userMessage.content = userMessage.content + '\n\n' + taskGuidancePrompt;
+        if (this.debug) {
+          console.log('[DEBUG] Task guidance injected into user message');
+        }
+      }
 
       // If schema is provided, prepend JSON format requirement to user message
       if (options.schema && !options._schemaFormatted) {
@@ -2518,9 +2584,16 @@ Follow these instructions carefully:
             };
 
             if (this.tracer) {
+              // Prepare input preview for tracing (truncate if very long)
+              const inputPreview = message.length > 1000
+                ? message.substring(0, 1000) + '... [truncated]'
+                : message;
+
               await this.tracer.withSpan('ai.request', executeAIRequest, {
                 'ai.model': this.model,
                 'ai.provider': this.clientApiProvider || 'auto',
+                'ai.input': inputPreview,
+                'ai.input_length': message.length,
                 'iteration': currentIteration,
                 'max_tokens': maxResponseTokens,
                 'temperature': 0.3,
@@ -2638,6 +2711,10 @@ Follow these instructions carefully:
           if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
             validTools.push('delegate');
           }
+          // Task tool (require both enableTasks flag AND allowedTools permission)
+          if (this.enableTasks && this.allowedTools.isEnabled('task')) {
+            validTools.push('task');
+          }
         }
 
         // Try parsing with hybrid parser that supports both native and MCP tools
@@ -2652,6 +2729,40 @@ Follow these instructions carefully:
 
           if (toolName === 'attempt_completion') {
             completionAttempted = true;
+
+            // END CHECKPOINT: Block completion if there are incomplete tasks
+            if (this.enableTasks && this.taskManager && this.taskManager.hasIncompleteTasks()) {
+              const taskSummary = this.taskManager.getTaskSummary();
+              const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
+              const incompleteTasks = this.taskManager.getIncompleteTasks();
+
+              // Record telemetry for blocked completion
+              if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
+                this.tracer.recordTaskEvent('completion_blocked', {
+                  'task.incomplete_count': incompleteTasks.length,
+                  'task.incomplete_ids': incompleteTasks.map(t => t.id).join(', '),
+                  'task.iteration': currentIteration
+                });
+              }
+
+              if (this.debug) {
+                console.log('[DEBUG] Task checkpoint: Blocking completion due to incomplete tasks');
+                console.log('[DEBUG] Incomplete tasks:', taskSummary);
+              }
+
+              // Add reminder message and continue the loop
+              currentMessages.push({
+                role: 'assistant',
+                content: assistantResponseContent
+              });
+              currentMessages.push({
+                role: 'user',
+                content: blockedMessage
+              });
+
+              completionAttempted = false; // Reset to allow more iterations
+              continue; // Skip the break and continue the loop
+            }
 
             // Handle attempt_complete shorthand - use previous response
             if (params.result === '__PREVIOUS_RESPONSE__') {
@@ -2810,6 +2921,7 @@ Follow these instructions carefully:
                       provider: this.apiType,           // Inherit AI provider (string identifier)
                       model: this.model,                // Inherit model
                       searchDelegate: this.searchDelegate,
+                      enableTasks: this.enableTasks,    // Inherit task management (subagent gets isolated TaskManager)
                       debug: this.debug,
                       tracer: this.tracer
                     };
