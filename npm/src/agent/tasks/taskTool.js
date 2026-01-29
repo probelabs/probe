@@ -127,17 +127,20 @@ You have access to a task tracking tool to organize your work on complex request
 
 ## When to Create Tasks
 
-CREATE TASKS when:
-- The request requires multiple distinct steps or investigations
-- You need to search multiple areas of the codebase
-- The request involves implementing or modifying code
-- You need to analyze dependencies between different components
-- The request is complex enough that tracking progress would be helpful
+CREATE TASKS when the request has **multiple distinct deliverables or goals**:
+- "Fix bug A AND add feature B" → Two separate tasks
+- "Investigate auth, payments, AND notifications" → Three independent areas
+- "Implement X, then add tests, then update docs" → Sequential phases with different outputs
+- User explicitly asks for a plan or task breakdown
 
-SKIP TASKS when:
-- Simple factual questions ("What does function X do?")
-- Single-file lookups
-- Quick explanations that require one search
+SKIP TASKS for single-goal requests, even if they require multiple searches:
+- "How does ranking work?" → Just investigate and answer (one goal)
+- "What does function X do?" → Just look it up (one goal)
+- "Explain the authentication flow" → Just trace and explain (one goal)
+- "Find where errors are logged" → Just search and report (one goal)
+
+**Key insight**: Multiple *internal steps* (search, read, analyze) are NOT the same as multiple *goals*.
+A single investigation with many steps is still ONE task, not many.
 
 MODIFY TASKS when (during execution):
 - You discover the problem is more complex than expected → Add new tasks
@@ -233,10 +236,12 @@ If you created tasks, you MUST resolve them all before completing.
  * Task guidance to inject at start of request
  */
 export const taskGuidancePrompt = `<task_guidance>
-Before starting, assess if this request needs task tracking:
-- Multi-step investigation? → Create tasks to track each step
-- Code changes required? → Create tasks for find, implement, test phases
-- Simple question? → Skip tasks, answer directly
+Does this request have MULTIPLE DISTINCT GOALS?
+- "Do A AND B AND C" (multiple goals) → Create tasks for each goal
+- "Investigate/explain/find X" (single goal) → Skip tasks, just answer directly
+
+Multiple internal steps (search, read, analyze) for ONE goal = NO tasks needed.
+Only create tasks when there are separate deliverables the user is asking for.
 
 If creating tasks, use the task tool with action="create" first.
 </task_guidance>`;
