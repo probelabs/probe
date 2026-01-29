@@ -583,4 +583,136 @@ describe('TaskManager', () => {
       expect(updated.priority).toBeNull();
     });
   });
+
+  describe('XML Escaping (Security)', () => {
+    test('should escape XML special characters in task title', () => {
+      manager.createTask({ title: 'Test <script>alert("xss")</script>' });
+      const output = manager.formatTasksForPrompt();
+
+      expect(output).toContain('&lt;script&gt;');
+      expect(output).toContain('&quot;xss&quot;');
+      expect(output).not.toContain('<script>');
+    });
+
+    test('should escape ampersands in task title', () => {
+      manager.createTask({ title: 'Task & another task' });
+      const output = manager.formatTasksForPrompt();
+
+      expect(output).toContain('Task &amp; another task');
+    });
+
+    test('should escape quotes in attributes', () => {
+      manager.createTask({ title: 'Normal task', priority: 'high' });
+      // The priority attribute value should be properly escaped
+      const output = manager.formatTasksForPrompt();
+      expect(output).toContain('priority="high"');
+    });
+
+    test('should handle task with all special characters', () => {
+      manager.createTask({
+        title: '<tag attr="value">content & more</tag>',
+        priority: 'high'
+      });
+      const output = manager.formatTasksForPrompt();
+
+      expect(output).toContain('&lt;tag');
+      expect(output).toContain('&gt;');
+      expect(output).toContain('&amp;');
+      expect(output).toContain('&quot;');
+    });
+  });
+
+  describe('Import Security (Prototype Pollution Prevention)', () => {
+    test('should reject null import data', () => {
+      expect(() => manager.import(null)).toThrow(/Invalid import data/);
+    });
+
+    test('should reject non-object import data', () => {
+      expect(() => manager.import('string')).toThrow(/Invalid import data/);
+      expect(() => manager.import(123)).toThrow(/Invalid import data/);
+    });
+
+    test('should reject import with __proto__ property', () => {
+      const maliciousData = {
+        tasks: [],
+        taskCounter: 0,
+        __proto__: { malicious: true }
+      };
+      // Note: This is tricky because __proto__ is special in JS
+      // We need to use Object.defineProperty or similar
+      const data = Object.create(null);
+      data.tasks = [];
+      data.taskCounter = 0;
+      Object.defineProperty(data, '__proto__', {
+        value: { malicious: true },
+        enumerable: true
+      });
+
+      expect(() => manager.import(data)).toThrow(/prototype pollution/);
+    });
+
+    test('should reject import with constructor property', () => {
+      const maliciousData = {
+        tasks: [],
+        taskCounter: 0,
+        constructor: function() {}
+      };
+
+      expect(() => manager.import(maliciousData)).toThrow(/prototype pollution/);
+    });
+
+    test('should reject import with non-array tasks', () => {
+      expect(() => manager.import({ tasks: {}, taskCounter: 0 })).toThrow(/tasks must be an array/);
+      expect(() => manager.import({ tasks: 'string', taskCounter: 0 })).toThrow(/tasks must be an array/);
+    });
+
+    test('should reject import with invalid taskCounter', () => {
+      expect(() => manager.import({ tasks: [], taskCounter: 'invalid' })).toThrow(/taskCounter must be/);
+      expect(() => manager.import({ tasks: [], taskCounter: -1 })).toThrow(/taskCounter must be/);
+      expect(() => manager.import({ tasks: [], taskCounter: 1.5 })).toThrow(/taskCounter must be/);
+    });
+
+    test('should reject import with invalid task entry format', () => {
+      expect(() => manager.import({
+        tasks: [['task-1']], // missing task object
+        taskCounter: 1
+      })).toThrow(/task entry must be/);
+
+      expect(() => manager.import({
+        tasks: [[123, { title: 'test' }]], // id not a string
+        taskCounter: 1
+      })).toThrow(/task id must be a string/);
+    });
+
+    test('should reject task with __proto__ in import', () => {
+      const task = Object.create(null);
+      task.id = 'task-1';
+      task.title = 'Test';
+      task.status = 'pending';
+      task.dependencies = [];
+      Object.defineProperty(task, '__proto__', {
+        value: { malicious: true },
+        enumerable: true
+      });
+
+      expect(() => manager.import({
+        tasks: [['task-1', task]],
+        taskCounter: 1
+      })).toThrow(/prototype pollution.*task/);
+    });
+
+    test('should accept valid import data', () => {
+      manager.createTask({ title: 'Task 1' });
+      manager.createTask({ title: 'Task 2', dependencies: ['task-1'] });
+
+      const exported = manager.export();
+
+      const newManager = new TaskManager();
+      newManager.import(exported);
+
+      expect(newManager.listTasks().length).toBe(2);
+      expect(newManager.getTask('task-1').title).toBe('Task 1');
+      expect(newManager.getTask('task-2').dependencies).toEqual(['task-1']);
+    });
+  });
 });

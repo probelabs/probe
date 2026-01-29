@@ -419,6 +419,23 @@ export class TaskManager {
   }
 
   /**
+   * Escape XML special characters to prevent injection
+   * @param {string} str - String to escape
+   * @returns {string} Escaped string
+   * @private
+   */
+  _escapeXml(str) {
+    if (typeof str !== 'string') return String(str);
+    return str.replace(/[<>&'"]/g, c => ({
+      '<': '&lt;',
+      '>': '&gt;',
+      '&': '&amp;',
+      "'": '&apos;',
+      '"': '&quot;'
+    }[c]));
+  }
+
+  /**
    * Format tasks for inclusion in AI prompts
    * @returns {string} XML-formatted task list
    */
@@ -431,10 +448,10 @@ export class TaskManager {
     const taskLines = tasks.map(task => {
       const blockers = task.dependencies.filter(depId => !this._isDependencyResolved(depId));
 
-      let line = `  <task id="${task.id}" status="${task.status}"`;
-      if (task.priority) line += ` priority="${task.priority}"`;
-      if (blockers.length > 0) line += ` blocked_by="${blockers.join(',')}"`;
-      line += `>${task.title}</task>`;
+      let line = `  <task id="${this._escapeXml(task.id)}" status="${this._escapeXml(task.status)}"`;
+      if (task.priority) line += ` priority="${this._escapeXml(task.priority)}"`;
+      if (blockers.length > 0) line += ` blocked_by="${this._escapeXml(blockers.join(','))}"`;
+      line += `>${this._escapeXml(task.title)}</task>`;
 
       return line;
     });
@@ -468,8 +485,42 @@ export class TaskManager {
   /**
    * Import tasks from exported data
    * @param {Object} data - Exported task data
+   * @throws {Error} If data is invalid or malformed
    */
   import(data) {
+    // Validate data structure to prevent prototype pollution
+    if (!data || typeof data !== 'object') {
+      throw new Error('Invalid import data: must be an object');
+    }
+    if (Object.prototype.hasOwnProperty.call(data, '__proto__') ||
+        Object.prototype.hasOwnProperty.call(data, 'constructor')) {
+      throw new Error('Invalid import data: prototype pollution attempt detected');
+    }
+    if (!Array.isArray(data.tasks)) {
+      throw new Error('Invalid import data: tasks must be an array');
+    }
+    if (typeof data.taskCounter !== 'number' || !Number.isInteger(data.taskCounter) || data.taskCounter < 0) {
+      throw new Error('Invalid import data: taskCounter must be a non-negative integer');
+    }
+
+    // Validate each task entry
+    for (const entry of data.tasks) {
+      if (!Array.isArray(entry) || entry.length !== 2) {
+        throw new Error('Invalid import data: each task entry must be a [id, task] tuple');
+      }
+      const [id, task] = entry;
+      if (typeof id !== 'string') {
+        throw new Error('Invalid import data: task id must be a string');
+      }
+      if (!task || typeof task !== 'object') {
+        throw new Error('Invalid import data: task must be an object');
+      }
+      if (Object.prototype.hasOwnProperty.call(task, '__proto__') ||
+          Object.prototype.hasOwnProperty.call(task, 'constructor')) {
+        throw new Error('Invalid import data: prototype pollution attempt detected in task');
+      }
+    }
+
     this.tasks = new Map(data.tasks);
     this.taskCounter = data.taskCounter;
   }

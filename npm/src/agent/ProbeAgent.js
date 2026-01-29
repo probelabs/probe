@@ -2910,6 +2910,7 @@ Follow these instructions carefully:
                       provider: this.apiType,           // Inherit AI provider (string identifier)
                       model: this.model,                // Inherit model
                       searchDelegate: this.searchDelegate,
+                      enableTasks: this.enableTasks,    // Inherit task management (subagent gets isolated TaskManager)
                       debug: this.debug,
                       tracer: this.tracer
                     };

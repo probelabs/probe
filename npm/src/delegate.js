@@ -185,6 +185,7 @@ const delegationManager = new DelegationManager();
  * @param {boolean} [options.disableTools=false] - Disable all tools for the subagent
  * @param {boolean} [options.searchDelegate] - Use delegated search in the subagent
  * @param {Object|string} [options.schema] - Optional JSON schema to enforce response format
+ * @param {boolean} [options.enableTasks=false] - Enable task management for the subagent (isolated instance)
  * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({
@@ -206,7 +207,8 @@ export async function delegate({
 	allowedTools = null,
 	disableTools = false,
 	searchDelegate = undefined,
-	schema = null
+	schema = null,
+	enableTasks = false
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -246,6 +248,8 @@ export async function delegate({
 		// IMPORTANT: We pass both path and cwd set to the same value (workspace root)
 		// to prevent path doubling issues. The parent's navigation context should not
 		// affect the subagent's path resolution - subagents always work from workspace root.
+		// Note: enableTasks creates an isolated TaskManager for the subagent.
+		// Tasks do not propagate back to the parent - each subagent has its own scope.
 		const subagent = new ProbeAgent({
 			sessionId,
 			promptType,               // Clean prompt, not inherited from parent
@@ -265,7 +269,8 @@ export async function delegate({
 			architectureFileName,
 			allowedTools,
 			disableTools,
-			searchDelegate
+			searchDelegate,
+			enableTasks // Inherit from parent (subagent gets isolated TaskManager)
 		});
 
 		if (debug) {
