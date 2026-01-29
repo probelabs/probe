@@ -118,19 +118,29 @@ function parseDelegatedTargets(rawResponse) {
 
 function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, allowTests }) {
 	return [
-		'You are a code-search subagent. Your ONLY job is to return ALL relevant code locations.',
-		'Available tools: search, extract, listFiles.',
-		'- Use search to find code matching the query',
-		'- Use extract to verify code snippets and ensure targets are relevant',
-		'- Use listFiles to understand directory structure if needed',
-		'Return ONLY valid JSON with this shape: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}.',
-		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
-		`Search query: ${searchQuery}`,
+		'You are a code-search subagent. Your job is to find ALL relevant code locations for the given query.',
+		'',
+		'The query may be complex - it could be a natural language question, a multi-part request, or a simple keyword.',
+		'Break down complex queries into multiple searches to cover all aspects.',
+		'',
+		'Available tools:',
+		'- search: Find code matching keywords or patterns. Run multiple searches for different aspects of complex queries.',
+		'- extract: Verify code snippets to ensure targets are actually relevant before including them.',
+		'- listFiles: Understand directory structure to find where relevant code might live.',
+		'',
+		'Strategy for complex queries:',
+		'1. Analyze the query - identify key concepts, entities, and relationships',
+		'2. Run focused searches for each concept (e.g., "error handling" + "authentication" separately)',
+		'3. Use extract to verify relevance of promising results',
+		'4. Combine all relevant targets in your final response',
+		'',
+		`Query: ${searchQuery}`,
 		`Search path(s): ${searchPath}`,
 		`Options: exact=${exact ? 'true' : 'false'}, language=${language || 'auto'}, allow_tests=${allowTests ? 'true' : 'false'}.`,
-		'Run additional searches only if needed to capture all relevant locations.',
-		'Deduplicate targets.',
-		'Do NOT answer the question or explain anything - ONLY return the JSON targets.'
+		'',
+		'Return ONLY valid JSON: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}',
+		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
+		'Deduplicate targets. Do NOT explain or answer - ONLY return the JSON targets.'
 	].join('\n');
 }
 
