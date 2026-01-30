@@ -325,6 +325,17 @@ describe('categorizeError', () => {
     expect(result).toBeInstanceOf(ProbeError);
     expect(result.message).toBe('null');
   });
+
+  test('should handle numeric error codes', () => {
+    // Some errors have numeric codes (like HTTP status codes)
+    const error = new Error('Vague query format detected');
+    error.code = 400; // numeric code, not string
+    const result = categorizeError(error);
+
+    // Should not throw, should return a categorized error
+    expect(result).toBeInstanceOf(ProbeError);
+    expect(result.message).toBe('Vague query format detected');
+  });
 });
 
 describe('formatErrorForAI', () => {

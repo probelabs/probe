@@ -172,7 +172,8 @@ export function categorizeError(error) {
 
   const message = error?.message || String(error);
   const lowerMessage = message.toLowerCase();
-  const errorCode = error?.code?.toLowerCase() || '';
+  // error.code could be a string (like 'ENOENT') or a number (like 429)
+  const errorCode = error?.code != null ? String(error.code).toLowerCase() : '';
 
   // Path-related errors
   if (lowerMessage.includes('path does not exist') ||
