@@ -100,7 +100,7 @@ describe('ProbeAgent.clone() - Realistic Integration', () => {
       // 14. Another tool reminder (should be stripped)
       {
         role: 'user',
-        content: 'Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information.\n\nRemember: Use proper XML format with BOTH opening and closing tags:\n\n<tool_name>\n<parameter>value</parameter>\n</tool_name>\n\nOr for quick completion if your previous response was already correct and complete:\n<attempt_complete>\n\nIMPORTANT: When using <attempt_complete>, this must be the ONLY content in your response.'
+        content: 'Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information.\n\nRemember: Use proper XML format with BOTH opening and closing tags:\n\n<tool_name>\n<parameter>value</parameter>\n</tool_name>\n\nTo complete with a direct answer:\n<attempt_completion>Your final answer here</attempt_completion>\n\nOr if your previous response already contains a complete, direct answer (not a thinking block or JSON):\n<attempt_complete></attempt_complete>\n\nNote: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant message as the final answer.'
       },
 
       // 15. Assistant completes
