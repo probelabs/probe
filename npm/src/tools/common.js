@@ -557,6 +557,70 @@ export function createMessagePreview(message, charsPerSide = 200) {
 }
 
 /**
+ * Detect if the response contains an XML-style tool tag that wasn't recognized
+ * This helps identify when the AI tried to use a tool that's not in the validTools list
+ *
+ * @param {string} xmlString - The XML string to search
+ * @param {string[]} validTools - List of valid tool names that would have been recognized
+ * @returns {string|null} - The unrecognized tool name, or null if no unrecognized tools found
+ */
+export function detectUnrecognizedToolCall(xmlString, validTools) {
+	if (!xmlString || typeof xmlString !== 'string') {
+		return null;
+	}
+
+	// Common tool names that AI might try to use (these should appear as top-level tags)
+	const knownToolNames = [
+		'search', 'query', 'extract', 'listFiles', 'searchFiles',
+		'listSkills', 'useSkill', 'readImage', 'implement', 'edit',
+		'create', 'delegate', 'bash', 'task', 'attempt_completion',
+		'attempt_complete', 'read_file', 'write_file', 'run_command',
+		'grep', 'find', 'cat', 'list_directory'
+	];
+
+	// Look for XML tags that match known tool patterns
+	// Only consider a tag as a tool call if:
+	// 1. It's not in the validTools list (wouldn't have been parsed)
+	// 2. It appears as a top-level tag (not nested inside another tool)
+	for (const toolName of knownToolNames) {
+		if (validTools.includes(toolName)) {
+			continue; // Skip valid tools - these would have been parsed
+		}
+
+		const openTag = `<${toolName}>`;
+		const closeTag = `</${toolName}>`;
+
+		// Check if this tool tag exists
+		const openIndex = xmlString.indexOf(openTag);
+		if (openIndex === -1) {
+			continue;
+		}
+
+		// Check if this tag is nested inside a valid tool tag
+		let isNested = false;
+		for (const validTool of validTools) {
+			const validOpenTag = `<${validTool}>`;
+			const validCloseTag = `</${validTool}>`;
+			const validOpenIndex = xmlString.indexOf(validOpenTag);
+			const validCloseIndex = xmlString.indexOf(validCloseTag);
+
+			// If the unrecognized tool tag is between a valid tool's open and close tags, it's nested (a parameter)
+			if (validOpenIndex !== -1 && validCloseIndex !== -1 &&
+			    validOpenIndex < openIndex && openIndex < validCloseIndex) {
+				isNested = true;
+				break;
+			}
+		}
+
+		if (!isNested) {
+			return toolName;
+		}
+	}
+
+	return null;
+}
+
+/**
  * Parse targets string into array of file specifications
  * Handles both space-separated and comma-separated targets for extract tool
  *

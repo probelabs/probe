@@ -37,7 +37,7 @@ import {
   attemptCompletionSchema,
   parseXmlToolCallWithThinking
 } from './tools.js';
-import { createMessagePreview } from '../tools/common.js';
+import { createMessagePreview, detectUnrecognizedToolCall } from '../tools/common.js';
 import {
   createWrappedTools,
   listFilesToolInstance,
@@ -69,6 +69,7 @@ import { createSkillToolInstances } from './skills/tools.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
+import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
 import {
   TaskManager,
   createTaskTool,
@@ -2019,7 +2020,81 @@ ${extractGuidance}
       toolDefinitions += `${delegateToolDefinition}\n`;
     }
 
-    // Build XML tool guidelines
+    // Build XML tool guidelines with dynamic examples based on allowed tools
+    // Build examples only for allowed tools
+    let toolExamples = '';
+    if (isToolAllowed('search')) {
+      toolExamples += `
+<search>
+<query>error handling</query>
+<path>src/search</path>
+</search>
+`;
+    }
+    if (isToolAllowed('extract')) {
+      toolExamples += `
+<extract>
+<targets>src/config.js:15-25</targets>
+</extract>
+`;
+    }
+    if (isToolAllowed('attempt_completion')) {
+      toolExamples += `
+<attempt_completion>
+The configuration is loaded from src/config.js lines 15-25 which contains the database settings.
+</attempt_completion>
+`;
+    }
+
+    // Build available tools list dynamically based on allowedTools
+    let availableToolsList = '';
+    if (isToolAllowed('search')) {
+      availableToolsList += `- search: Search code using keyword queries${this.searchDelegate ? ' (returns extracted code blocks via a dedicated subagent)' : ''}.\n`;
+    }
+    if (isToolAllowed('query')) {
+      availableToolsList += '- query: Search code using structural AST patterns.\n';
+    }
+    if (isToolAllowed('extract')) {
+      availableToolsList += '- extract: Extract specific code blocks or lines from files.\n';
+    }
+    if (isToolAllowed('listFiles')) {
+      availableToolsList += '- listFiles: List files and directories in a specified location.\n';
+    }
+    if (isToolAllowed('searchFiles')) {
+      availableToolsList += '- searchFiles: Find files matching a glob pattern with recursive search capability.\n';
+    }
+    if (this.enableSkills && isToolAllowed('listSkills')) {
+      availableToolsList += '- listSkills: List available agent skills discovered in the repository.\n';
+    }
+    if (this.enableSkills && isToolAllowed('useSkill')) {
+      availableToolsList += '- useSkill: Load and activate a specific skill\'s instructions.\n';
+    }
+    if (isToolAllowed('readImage')) {
+      availableToolsList += '- readImage: Read and load an image file for AI analysis.\n';
+    }
+    if (this.allowEdit && isToolAllowed('implement')) {
+      availableToolsList += '- implement: Implement a feature or fix a bug using aider.\n';
+    }
+    if (this.allowEdit && isToolAllowed('edit')) {
+      availableToolsList += '- edit: Edit files using exact string replacement.\n';
+    }
+    if (this.allowEdit && isToolAllowed('create')) {
+      availableToolsList += '- create: Create new files with specified content.\n';
+    }
+    if (this.enableDelegate && isToolAllowed('delegate')) {
+      availableToolsList += '- delegate: Delegate big distinct tasks to specialized probe subagents.\n';
+    }
+    if (this.enableBash && isToolAllowed('bash')) {
+      availableToolsList += '- bash: Execute bash commands for system operations.\n';
+    }
+    if (this.enableTasks && isToolAllowed('task')) {
+      availableToolsList += '- task: Manage tasks for tracking progress (create, update, complete, delete, list).\n';
+    }
+    if (isToolAllowed('attempt_completion')) {
+      availableToolsList += '- attempt_completion: Finalize the task and provide the result to the user.\n';
+      availableToolsList += '- attempt_complete: Quick completion using previous response (shorthand).\n';
+    }
+
     let xmlToolGuidelines = `
 # Tool Use Formatting
 
@@ -2034,20 +2109,7 @@ Structure (note the closing tags):
 ...
 </tool_name>
 
-Examples:
-<search>
-<query>error handling</query>
-<path>src/search</path>
-</search>
-
-<extract>
-<targets>src/config.js:15-25</targets>
-</extract>
-
-<attempt_completion>
-The configuration is loaded from src/config.js lines 15-25 which contains the database settings.
-</attempt_completion>
-
+Examples:${toolExamples}
 # Special Case: Quick Completion
 If your previous response was already correct and complete, you may respond with just:
 <attempt_complete>
@@ -2076,15 +2138,7 @@ I need to find code related to error handling in the search module. The most app
 10. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
 
 Available Tools:
-- search: Search code using keyword queries${this.searchDelegate ? ' (returns extracted code blocks via a dedicated subagent)' : ''}.
-- query: Search code using structural AST patterns.
-- extract: Extract specific code blocks or lines from files.
-- listFiles: List files and directories in a specified location.
-- searchFiles: Find files matching a glob pattern with recursive search capability.
-${this.enableSkills ? '- listSkills: List available agent skills discovered in the repository.\n- useSkill: Load and activate a specific skill\'s instructions.\n' : ''}- readImage: Read and load an image file for AI analysis.
-${this.allowEdit ? '- implement: Implement a feature or fix a bug using aider.\n- edit: Edit files using exact string replacement.\n- create: Create new files with specified content.\n' : ''}${this.enableDelegate ? '- delegate: Delegate big distinct tasks to specialized probe subagents.\n' : ''}${this.enableBash ? '- bash: Execute bash commands for system operations.\n' : ''}${this.enableTasks ? '- task: Manage tasks for tracking progress (create, update, complete, delete, list).\n' : ''}- attempt_completion: Finalize the task and provide the result to the user.
-- attempt_complete: Quick completion using previous response (shorthand).
-`;
+${availableToolsList}`;
 
     // Common instructions
     const commonInstructions = `<instructions>
@@ -2843,7 +2897,6 @@ Follow these instructions carefully:
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
               } catch (error) {
                 console.error(`Error executing MCP tool ${toolName}:`, error);
-                const toolResultContent = `Error executing MCP tool ${toolName}: ${error.message}`;
 
                 // Log MCP tool error in debug mode
                 if (this.debug) {
@@ -2853,7 +2906,9 @@ Follow these instructions carefully:
                   console.error(`[DEBUG] ========================================\n`);
                 }
 
-                currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
+                // Format error with structured information for AI
+                const errorXml = formatErrorForAI(error);
+                currentMessages.push({ role: 'user', content: `<tool_result>\n${errorXml}\n</tool_result>` });
               }
             } else if (this.toolImplementations[toolName]) {
               // Execute native tool
@@ -3024,9 +3079,11 @@ Follow these instructions carefully:
               } catch (error) {
                 console.error(`[ERROR] Tool execution failed for ${toolName}:`, error);
                 currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+                // Format error with structured information for AI
+                const errorXml = formatErrorForAI(error);
                 currentMessages.push({
-                  role: 'user', 
-                  content: `<tool_result>\nError: ${error.message}\n</tool_result>`
+                  role: 'user',
+                  content: `<tool_result>\n${errorXml}\n</tool_result>`
                 });
               }
             } else {
@@ -3040,7 +3097,7 @@ Follow these instructions carefully:
 
               currentMessages.push({
                 role: 'user',
-                content: `<tool_result>\nError: Unknown tool '${toolName}'. Available tools: ${allAvailableTools.join(', ')}\n</tool_result>`
+                content: `<tool_result>\n<error type="parameter_error" recoverable="true">\n<message>Unknown tool '${toolName}'</message>\n<suggestion>Available tools: ${allAvailableTools.join(', ')}. Please use one of these tools.</suggestion>\n</error>\n</tool_result>`
               });
             }
           }
@@ -3064,8 +3121,22 @@ Follow these instructions carefully:
           // Add assistant response and ask for tool usage
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
 
-          // Standard reminder - schema was already provided in initial message
-          const reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
+          // Check if the AI tried to use a tool that's not in the valid tools list
+          const unrecognizedTool = detectUnrecognizedToolCall(assistantResponseContent, validTools);
+
+          let reminderContent;
+          if (unrecognizedTool) {
+            // AI tried to use a tool that's not available - provide clear error
+            if (this.debug) {
+              console.log(`[DEBUG] Detected unrecognized tool '${unrecognizedTool}' in assistant response.`);
+            }
+            const toolError = new ParameterError(`Tool '${unrecognizedTool}' is not available in this context.`, {
+              suggestion: `Available tools: ${validTools.join(', ')}. Please use one of these tools instead.`
+            });
+            reminderContent = `<tool_result>\n${formatErrorForAI(toolError)}\n</tool_result>`;
+          } else {
+            // Standard reminder - no tool call detected at all
+            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
 Remember: Use proper XML format with BOTH opening and closing tags:
 
@@ -3073,17 +3144,24 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 <parameter>value</parameter>
 </tool_name>
 
+Available tools: ${validTools.join(', ')}
+
 Or for quick completion if your previous response was already correct and complete:
 <attempt_complete>
 
 IMPORTANT: When using <attempt_complete>, this must be the ONLY content in your response. No additional text, explanations, or other content should be included. This tag signals to reuse your previous response as the final answer.`;
+          }
 
           currentMessages.push({
             role: 'user',
             content: reminderContent
           });
           if (this.debug) {
-            console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
+            if (unrecognizedTool) {
+              console.log(`[DEBUG] Unrecognized tool '${unrecognizedTool}' used. Providing error feedback.`);
+            } else {
+              console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
+            }
           }
         }
 
