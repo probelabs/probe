@@ -3146,10 +3146,13 @@ Remember: Use proper XML format with BOTH opening and closing tags:
 
 Available tools: ${validTools.join(', ')}
 
-Or for quick completion if your previous response was already correct and complete:
-<attempt_complete>
+To complete with a direct answer:
+<attempt_completion>Your final answer here</attempt_completion>
 
-IMPORTANT: When using <attempt_complete>, this must be the ONLY content in your response. No additional text, explanations, or other content should be included. This tag signals to reuse your previous response as the final answer.`;
+Or if your previous response already contains a complete, direct answer (not a thinking block or JSON):
+<attempt_complete></attempt_complete>
+
+Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant message as the final answer. Only use this if that message was already a valid, complete response to the user's question.`;
           }
 
           currentMessages.push({
@@ -4062,9 +4065,9 @@ Convert your previous response content into actual JSON data that follows this s
       return true;
     }
 
-    // Empty attempt_complete reminders
-    if (content.includes('When using <attempt_complete>') &&
-        content.includes('this must be the ONLY content in your response')) {
+    // Empty attempt_complete reminders (legacy and new format)
+    if (content.includes('<attempt_complete></attempt_complete>') &&
+        content.includes('reuses your PREVIOUS assistant message')) {
       return true;
     }
 
