@@ -241,22 +241,22 @@ export function categorizeError(error) {
     });
   }
 
-  // API errors - authentication
+  // Parameter validation errors (check before API auth to catch 'invalid parameter' first)
+  if (lowerMessage.includes('invalid parameter') ||
+      lowerMessage.includes('missing parameter') ||
+      lowerMessage.includes('required') ||
+      lowerMessage.includes('must be')) {
+    return new ParameterError(message, {
+      originalError: error
+    });
+  }
+
+  // API errors - authentication (after parameter errors to avoid catching 'invalid parameter')
   if (lowerMessage.includes('invalid') && (lowerMessage.includes('api') || lowerMessage.includes('key') || lowerMessage.includes('auth'))) {
     return new ApiError(message, {
       originalError: error,
       recoverable: false,
       suggestion: 'API authentication error. Please check the API key configuration.'
-    });
-  }
-
-  // Parameter validation errors
-  if (lowerMessage.includes('required') ||
-      lowerMessage.includes('must be') ||
-      lowerMessage.includes('invalid parameter') ||
-      lowerMessage.includes('missing parameter')) {
-    return new ParameterError(message, {
-      originalError: error
     });
   }
 

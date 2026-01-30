@@ -289,6 +289,16 @@ describe('categorizeError', () => {
     expect(result.recoverable).toBe(true);
   });
 
+  test('should prioritize parameter errors over API auth errors', () => {
+    // 'invalid parameter' should be ParameterError, not ApiError
+    // even though 'invalid' + 'api' could match the API auth pattern
+    const error = new Error('invalid api parameter: path must be a string');
+    const result = categorizeError(error);
+
+    expect(result).toBeInstanceOf(ParameterError);
+    expect(result.recoverable).toBe(true);
+  });
+
   test('should categorize network errors as ApiError', () => {
     const testCases = [
       { code: 'ECONNRESET', message: 'Connection reset' },
@@ -410,6 +420,13 @@ describe('detectUnrecognizedToolCall', () => {
 
   test('should ignore non-tool tags like thinking', () => {
     const response = '<thinking>Let me analyze this...</thinking>';
+    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
+    expect(result).toBeNull();
+  });
+
+  test('should not detect tool names appearing as text inside valid tool parameters', () => {
+    // 'grep' and 'bash' are in knownToolNames, but they appear as text values, not as tool tags
+    const response = '<search><query>grep pattern in bash scripts</query></search>';
     const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
     expect(result).toBeNull();
   });
