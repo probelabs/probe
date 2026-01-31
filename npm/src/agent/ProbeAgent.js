@@ -70,6 +70,7 @@ import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
 import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
+import { truncateIfNeeded, getMaxOutputTokens } from './outputTruncator.js';
 import {
   TaskManager,
   createTaskTool,
@@ -145,6 +146,7 @@ export class ProbeAgent {
    * @param {boolean} [options.fallback.stopOnSuccess=true] - Stop on first success
    * @param {number} [options.fallback.maxTotalAttempts=10] - Maximum total attempts across all providers
    * @param {string} [options.completionPrompt] - Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation)
+   * @param {number} [options.maxOutputTokens] - Maximum tokens for tool output before truncation (default: 20000, can also be set via PROBE_MAX_OUTPUT_TOKENS env var)
    */
   constructor(options = {}) {
     // Basic configuration
@@ -236,6 +238,9 @@ export class ProbeAgent {
 
     // Initialize token counter
     this.tokenCounter = new TokenCounter();
+
+    // Maximum output tokens for tool results (truncate if exceeded)
+    this.maxOutputTokens = getMaxOutputTokens(options.maxOutputTokens);
 
     if (this.debug) {
       console.log(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
@@ -2882,7 +2887,16 @@ Follow these instructions carefully:
                 // Execute MCP tool through the bridge
                 const executionResult = await this.mcpBridge.mcpTools[toolName].execute(params);
 
-                const toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
+                let toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
+
+                // Truncate if output exceeds token limit
+                const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
+                if (truncateResult.truncated) {
+                  toolResultContent = truncateResult.content;
+                  if (this.debug) {
+                    console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath}`);
+                  }
+                }
 
                 // Log MCP tool result in debug mode
                 if (this.debug) {
@@ -3059,10 +3073,20 @@ Follow these instructions carefully:
                 
                 // Add assistant response and tool result to conversation
                 currentMessages.push({ role: 'assistant', content: assistantResponseContent });
-                
-                const toolResultContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2);
+
+                let toolResultContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2);
+
+                // Truncate if output exceeds token limit
+                const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
+                if (truncateResult.truncated) {
+                  toolResultContent = truncateResult.content;
+                  if (this.debug) {
+                    console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath}`);
+                  }
+                }
+
                 const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
-                
+
                 currentMessages.push({
                   role: 'user',
                   content: toolResultMessage
