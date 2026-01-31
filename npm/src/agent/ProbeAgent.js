@@ -2890,12 +2890,20 @@ Follow these instructions carefully:
                 let toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
 
                 // Truncate if output exceeds token limit
-                const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
-                if (truncateResult.truncated) {
-                  toolResultContent = truncateResult.content;
-                  if (this.debug) {
-                    console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath}`);
+                try {
+                  const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
+                  if (truncateResult.truncated) {
+                    toolResultContent = truncateResult.content;
+                    if (this.debug) {
+                      console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath || 'N/A'}`);
+                      if (truncateResult.error) {
+                        console.log(`[DEBUG] Truncation file error: ${truncateResult.error}`);
+                      }
+                    }
                   }
+                } catch (truncateError) {
+                  // If truncation fails entirely, log and continue with original content
+                  console.error(`[WARN] Tool output truncation failed: ${truncateError.message}`);
                 }
 
                 // Log MCP tool result in debug mode
@@ -3077,12 +3085,20 @@ Follow these instructions carefully:
                 let toolResultContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2);
 
                 // Truncate if output exceeds token limit
-                const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
-                if (truncateResult.truncated) {
-                  toolResultContent = truncateResult.content;
-                  if (this.debug) {
-                    console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath}`);
+                try {
+                  const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
+                  if (truncateResult.truncated) {
+                    toolResultContent = truncateResult.content;
+                    if (this.debug) {
+                      console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath || 'N/A'}`);
+                      if (truncateResult.error) {
+                        console.log(`[DEBUG] Truncation file error: ${truncateResult.error}`);
+                      }
+                    }
                   }
+                } catch (truncateError) {
+                  // If truncation fails entirely, log and continue with original content
+                  console.error(`[WARN] Tool output truncation failed: ${truncateError.message}`);
                 }
 
                 const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;

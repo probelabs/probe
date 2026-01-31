@@ -49,6 +49,45 @@ describe('getMaxOutputTokens', () => {
   test('should handle string numbers in constructor', () => {
     expect(getMaxOutputTokens('12000')).toBe(12000);
   });
+
+  // Edge case tests for invalid inputs
+  test('should return default for NaN constructor value', () => {
+    delete process.env.PROBE_MAX_OUTPUT_TOKENS;
+    expect(getMaxOutputTokens(NaN)).toBe(20000);
+    expect(getMaxOutputTokens('invalid')).toBe(20000);
+  });
+
+  test('should return default for negative constructor value', () => {
+    delete process.env.PROBE_MAX_OUTPUT_TOKENS;
+    expect(getMaxOutputTokens(-1)).toBe(20000);
+    expect(getMaxOutputTokens(-1000)).toBe(20000);
+  });
+
+  test('should return default for zero constructor value', () => {
+    delete process.env.PROBE_MAX_OUTPUT_TOKENS;
+    expect(getMaxOutputTokens(0)).toBe(20000);
+  });
+
+  test('should return default for invalid env variable', () => {
+    process.env.PROBE_MAX_OUTPUT_TOKENS = 'invalid';
+    expect(getMaxOutputTokens(undefined)).toBe(20000);
+  });
+
+  test('should return default for negative env variable', () => {
+    process.env.PROBE_MAX_OUTPUT_TOKENS = '-100';
+    expect(getMaxOutputTokens(undefined)).toBe(20000);
+  });
+
+  test('should return default for zero env variable', () => {
+    process.env.PROBE_MAX_OUTPUT_TOKENS = '0';
+    expect(getMaxOutputTokens(undefined)).toBe(20000);
+  });
+
+  test('should fall through to env when constructor is invalid', () => {
+    process.env.PROBE_MAX_OUTPUT_TOKENS = '5000';
+    // Invalid constructor should fall through to valid env
+    expect(getMaxOutputTokens('invalid')).toBe(5000);
+  });
 });
 
 describe('truncateIfNeeded', () => {
@@ -171,6 +210,44 @@ describe('truncateIfNeeded', () => {
 
     expect(result.truncated).toBe(true);
     expect(result.originalTokens).toBe(20001);
+
+    // Cleanup
+    await rm(result.tempFilePath);
+  });
+
+  // Edge case tests for invalid maxTokens
+  test('should use default limit for invalid maxTokens (NaN)', async () => {
+    const content = 'Short content';
+    const result = await truncateIfNeeded(content, tokenCounter, sessionId, NaN);
+
+    // Should use default 20000, so short content should not be truncated
+    expect(result.truncated).toBe(false);
+  });
+
+  test('should use default limit for negative maxTokens', async () => {
+    const content = 'Short content';
+    const result = await truncateIfNeeded(content, tokenCounter, sessionId, -100);
+
+    // Should use default 20000, so short content should not be truncated
+    expect(result.truncated).toBe(false);
+  });
+
+  test('should use default limit for zero maxTokens', async () => {
+    const content = 'Short content';
+    const result = await truncateIfNeeded(content, tokenCounter, sessionId, 0);
+
+    // Should use default 20000, so short content should not be truncated
+    expect(result.truncated).toBe(false);
+  });
+
+  test('should not have error field when file write succeeds', async () => {
+    const content = 'A'.repeat(200);
+    const maxTokens = 10;
+
+    const result = await truncateIfNeeded(content, tokenCounter, sessionId, maxTokens);
+
+    expect(result.truncated).toBe(true);
+    expect(result.error).toBeUndefined();
 
     // Cleanup
     await rm(result.tempFilePath);
