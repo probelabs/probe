@@ -31,16 +31,18 @@ export const bashTool = (options = {}) => {
     bashConfig = {},
     debug = false,
     cwd,
-    allowedFolders = []
+    allowedFolders = [],
+    tracer = null
   } = options;
 
-  // Create permission checker
+  // Create permission checker with tracer for telemetry
   const permissionChecker = new BashPermissionChecker({
     allow: bashConfig.allow,
     deny: bashConfig.deny,
     disableDefaultAllow: bashConfig.disableDefaultAllow,
     disableDefaultDeny: bashConfig.disableDefaultDeny,
-    debug
+    debug,
+    tracer
   });
 
   // Determine default working directory

@@ -244,6 +244,19 @@ export class SimpleAppTracer {
     });
   }
 
+  /**
+   * Record bash tool events
+   * Tracks command permission checks, allowed/denied commands, and execution
+   */
+  recordBashEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`bash.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
   setAttributes(attributes) {
     // For simplicity, just log attributes when no active span
     if (this.telemetry && this.telemetry.enableConsole) {

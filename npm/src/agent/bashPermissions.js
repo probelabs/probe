@@ -85,9 +85,11 @@ export class BashPermissionChecker {
    * @param {boolean} [config.disableDefaultAllow] - Disable default allow list
    * @param {boolean} [config.disableDefaultDeny] - Disable default deny list
    * @param {boolean} [config.debug] - Enable debug logging
+   * @param {Object} [config.tracer] - Optional tracer for telemetry
    */
   constructor(config = {}) {
     this.debug = config.debug || false;
+    this.tracer = config.tracer || null;
     
     // Build allow patterns
     this.allowPatterns = [];
@@ -122,6 +124,27 @@ export class BashPermissionChecker {
     if (this.debug) {
       console.log(`[BashPermissions] Total patterns - Allow: ${this.allowPatterns.length}, Deny: ${this.denyPatterns.length}`);
     }
+
+    // Record initialization event
+    this.recordBashEvent('permissions.initialized', {
+      allowPatternCount: this.allowPatterns.length,
+      denyPatternCount: this.denyPatterns.length,
+      hasCustomAllowPatterns: !!(config.allow && config.allow.length > 0),
+      hasCustomDenyPatterns: !!(config.deny && config.deny.length > 0),
+      disableDefaultAllow: !!config.disableDefaultAllow,
+      disableDefaultDeny: !!config.disableDefaultDeny
+    });
+  }
+
+  /**
+   * Record a bash telemetry event if tracer is available
+   * @param {string} eventType - Event type (e.g., 'permission.checked', 'permission.denied')
+   * @param {Object} data - Event data
+   */
+  recordBashEvent(eventType, data = {}) {
+    if (this.tracer && typeof this.tracer.recordBashEvent === 'function') {
+      this.tracer.recordBashEvent(eventType, data);
+    }
   }
 
   /**
@@ -131,11 +154,17 @@ export class BashPermissionChecker {
    */
   check(command) {
     if (!command || typeof command !== 'string') {
-      return {
+      const result = {
         allowed: false,
         reason: 'Invalid or empty command',
         command: command
       };
+      this.recordBashEvent('permission.denied', {
+        command: String(command),
+        reason: result.reason,
+        isComplex: false
+      });
+      return result;
     }
 
     // Check if this is a complex command
@@ -150,19 +179,32 @@ export class BashPermissionChecker {
     const parsed = parseCommand(command);
 
     if (parsed.error) {
-      return {
+      const result = {
         allowed: false,
         reason: parsed.error,
         command: command
       };
+      this.recordBashEvent('permission.denied', {
+        command,
+        reason: result.reason,
+        isComplex: false,
+        parseError: true
+      });
+      return result;
     }
 
     if (!parsed.command) {
-      return {
+      const result = {
         allowed: false,
         reason: 'No valid command found',
         command: command
       };
+      this.recordBashEvent('permission.denied', {
+        command,
+        reason: result.reason,
+        isComplex: false
+      });
+      return result;
     }
 
     if (this.debug) {
@@ -173,24 +215,39 @@ export class BashPermissionChecker {
     // Check deny patterns first (deny takes precedence)
     if (matchesAnyPattern(parsed, this.denyPatterns)) {
       const matchedPatterns = this.denyPatterns.filter(pattern => matchesPattern(parsed, pattern));
-      return {
+      const result = {
         allowed: false,
         reason: `Command matches deny pattern: ${matchedPatterns[0]}`,
         command: command,
         parsed: parsed,
         matchedPatterns: matchedPatterns
       };
+      this.recordBashEvent('permission.denied', {
+        command,
+        parsedCommand: parsed.command,
+        reason: 'matches_deny_pattern',
+        matchedPattern: matchedPatterns[0],
+        isComplex: false
+      });
+      return result;
     }
 
     // Check allow patterns
     if (this.allowPatterns.length > 0) {
       if (!matchesAnyPattern(parsed, this.allowPatterns)) {
-        return {
+        const result = {
           allowed: false,
           reason: 'Command not in allow list',
           command: command,
           parsed: parsed
         };
+        this.recordBashEvent('permission.denied', {
+          command,
+          parsedCommand: parsed.command,
+          reason: 'not_in_allow_list',
+          isComplex: false
+        });
+        return result;
       }
     }
 
@@ -205,6 +262,12 @@ export class BashPermissionChecker {
     if (this.debug) {
       console.log(`[BashPermissions] ALLOWED - command passed all checks`);
     }
+
+    this.recordBashEvent('permission.allowed', {
+      command,
+      parsedCommand: parsed.command,
+      isComplex: false
+    });
 
     return result;
   }
@@ -235,13 +298,20 @@ export class BashPermissionChecker {
         if (this.debug) {
           console.log(`[BashPermissions] DENIED - matches complex deny pattern: ${pattern}`);
         }
-        return {
+        const result = {
           allowed: false,
           reason: `Command matches deny pattern: ${pattern}`,
           command: command,
           isComplex: true,
           matchedPatterns: [pattern]
         };
+        this.recordBashEvent('permission.denied', {
+          command,
+          reason: 'matches_deny_pattern',
+          matchedPattern: pattern,
+          isComplex: true
+        });
+        return result;
       }
     }
 
@@ -251,12 +321,18 @@ export class BashPermissionChecker {
         if (this.debug) {
           console.log(`[BashPermissions] ALLOWED - matches complex allow pattern: ${pattern}`);
         }
-        return {
+        const result = {
           allowed: true,
           command: command,
           isComplex: true,
           matchedPattern: pattern
         };
+        this.recordBashEvent('permission.allowed', {
+          command,
+          matchedPattern: pattern,
+          isComplex: true
+        });
+        return result;
       }
     }
 
@@ -264,6 +340,11 @@ export class BashPermissionChecker {
     if (this.debug) {
       console.log(`[BashPermissions] DENIED - no matching complex pattern found`);
     }
+    this.recordBashEvent('permission.denied', {
+      command,
+      reason: 'no_matching_complex_pattern',
+      isComplex: true
+    });
     return {
       allowed: false,
       reason: 'Complex shell commands require explicit allow patterns (e.g., "cd * && git *")',
