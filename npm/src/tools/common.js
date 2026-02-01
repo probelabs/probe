@@ -625,17 +625,20 @@ export function detectUnrecognizedToolCall(xmlString, validTools) {
 	// Only match specific wrapper patterns to avoid false positives with normal text
 	const allToolNames = [...new Set([...knownToolNames, ...validTools])];
 	for (const toolName of allToolNames) {
+		// Escape regex metacharacters in tool name to prevent regex errors
+		const escapedToolName = toolName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
 		// Match specific wrapper patterns that indicate a tool call attempt:
 		// 1. <tool_name>toolName</tool_name> - common Claude API-style wrapper
 		// 2. <function>toolName</function> - function call style
 		// 3. <name>toolName</name> - generic name wrapper
 		// 4. <call><name>toolName - partial wrapper patterns
 		const wrapperPatterns = [
-			new RegExp(`<tool_name>\\s*${toolName}\\s*</tool_name>`, 'i'),
-			new RegExp(`<function>\\s*${toolName}\\s*</function>`, 'i'),
-			new RegExp(`<name>\\s*${toolName}\\s*</name>`, 'i'),
+			new RegExp(`<tool_name>\\s*${escapedToolName}\\s*</tool_name>`, 'i'),
+			new RegExp(`<function>\\s*${escapedToolName}\\s*</function>`, 'i'),
+			new RegExp(`<name>\\s*${escapedToolName}\\s*</name>`, 'i'),
 			// Also check for tool name immediately after api_call or call opening tag
-			new RegExp(`<(?:api_call|call)[^>]*>[\\s\\S]*?<tool_name>\\s*${toolName}`, 'i')
+			new RegExp(`<(?:api_call|call)[^>]*>[\\s\\S]*?<tool_name>\\s*${escapedToolName}`, 'i')
 		];
 
 		for (const pattern of wrapperPatterns) {

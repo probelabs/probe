@@ -2849,7 +2849,9 @@ Follow these instructions carefully:
 
                 if (hasWrappedToolPattern) {
                   // Previous response was a broken tool call attempt - don't reuse it
-                  const wrappedToolName = wrappedToolError.split(':')[1];
+                  // Safely extract tool name from 'wrapped_tool:toolName' format
+                  const colonIndex = wrappedToolError.indexOf(':');
+                  const wrappedToolName = colonIndex !== -1 ? wrappedToolError.slice(colonIndex + 1) : 'unknown';
                   if (this.debug) {
                     console.log(`[DEBUG] Previous response contains wrapped tool '${wrappedToolName}' - rejecting for __PREVIOUS_RESPONSE__`);
                   }
