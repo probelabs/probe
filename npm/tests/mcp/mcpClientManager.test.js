@@ -3,7 +3,7 @@
  */
 
 import { jest } from '@jest/globals';
-import { MCPClientManager, createTransport } from '../../src/agent/mcp/client.js';
+import { MCPClientManager, createTransport, isMethodAllowed } from '../../src/agent/mcp/client.js';
 import { validateTimeout, parseEnabledServers, DEFAULT_TIMEOUT, MAX_TIMEOUT } from '../../src/agent/mcp/config.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -561,6 +561,559 @@ describe('validateTimeout Function', () => {
   test('should convert numeric strings to numbers', () => {
     expect(validateTimeout('5000')).toBe(5000);
     expect(validateTimeout('30000')).toBe(30000);
+  });
+});
+
+describe('isMethodAllowed Function', () => {
+  describe('Basic Functionality', () => {
+    test('should allow all methods when no filter specified', () => {
+      expect(isMethodAllowed('any_method', null, null)).toBe(true);
+      expect(isMethodAllowed('another_method', null, null)).toBe(true);
+      expect(isMethodAllowed('search_code', undefined, undefined)).toBe(true);
+    });
+
+    test('should allow all methods with empty arrays', () => {
+      expect(isMethodAllowed('any_method', [], [])).toBe(true);
+      expect(isMethodAllowed('any_method', [], null)).toBe(true);
+      expect(isMethodAllowed('any_method', null, [])).toBe(true);
+    });
+  });
+
+  describe('Allowlist Mode (allowedMethods)', () => {
+    test('should only allow methods in allowedMethods array', () => {
+      const allowed = ['search_code', 'extract_code'];
+
+      expect(isMethodAllowed('search_code', allowed, null)).toBe(true);
+      expect(isMethodAllowed('extract_code', allowed, null)).toBe(true);
+      expect(isMethodAllowed('delete_code', allowed, null)).toBe(false);
+      expect(isMethodAllowed('other_method', allowed, null)).toBe(false);
+    });
+
+    test('should be case-sensitive', () => {
+      const allowed = ['Search_Code'];
+
+      expect(isMethodAllowed('Search_Code', allowed, null)).toBe(true);
+      expect(isMethodAllowed('search_code', allowed, null)).toBe(false);
+      expect(isMethodAllowed('SEARCH_CODE', allowed, null)).toBe(false);
+    });
+  });
+
+  describe('Blocklist Mode (blockedMethods)', () => {
+    test('should block only methods in blockedMethods array', () => {
+      const blocked = ['dangerous_delete', 'risky_operation'];
+
+      expect(isMethodAllowed('safe_read', null, blocked)).toBe(true);
+      expect(isMethodAllowed('safe_write', null, blocked)).toBe(true);
+      expect(isMethodAllowed('dangerous_delete', null, blocked)).toBe(false);
+      expect(isMethodAllowed('risky_operation', null, blocked)).toBe(false);
+    });
+  });
+
+  describe('Wildcard Pattern Matching', () => {
+    test('should support prefix wildcards', () => {
+      const allowed = ['*_read', '*_query'];
+
+      expect(isMethodAllowed('file_read', allowed, null)).toBe(true);
+      expect(isMethodAllowed('db_read', allowed, null)).toBe(true);
+      expect(isMethodAllowed('system_query', allowed, null)).toBe(true);
+      expect(isMethodAllowed('file_write', allowed, null)).toBe(false);
+      expect(isMethodAllowed('read', allowed, null)).toBe(false); // No prefix
+    });
+
+    test('should support suffix wildcards', () => {
+      const allowed = ['search_*', 'query_*'];
+
+      expect(isMethodAllowed('search_files', allowed, null)).toBe(true);
+      expect(isMethodAllowed('search_code', allowed, null)).toBe(true);
+      expect(isMethodAllowed('query_database', allowed, null)).toBe(true);
+      expect(isMethodAllowed('find_files', allowed, null)).toBe(false);
+      expect(isMethodAllowed('search', allowed, null)).toBe(false); // No suffix
+    });
+
+    test('should support middle wildcards', () => {
+      const allowed = ['get_*_info', 'read_*_data'];
+
+      expect(isMethodAllowed('get_user_info', allowed, null)).toBe(true);
+      expect(isMethodAllowed('get_system_info', allowed, null)).toBe(true);
+      expect(isMethodAllowed('read_file_data', allowed, null)).toBe(true);
+      expect(isMethodAllowed('get_user_data', allowed, null)).toBe(false);
+    });
+
+    test('should support multiple wildcards', () => {
+      const allowed = ['*_get_*'];
+
+      expect(isMethodAllowed('user_get_info', allowed, null)).toBe(true);
+      expect(isMethodAllowed('file_get_content', allowed, null)).toBe(true);
+      expect(isMethodAllowed('get_info', allowed, null)).toBe(false); // Missing prefix
+    });
+
+    test('should support wildcard in blockedMethods', () => {
+      const blocked = ['dangerous_*', '*_delete'];
+
+      expect(isMethodAllowed('safe_read', null, blocked)).toBe(true);
+      expect(isMethodAllowed('dangerous_operation', null, blocked)).toBe(false);
+      expect(isMethodAllowed('dangerous_delete', null, blocked)).toBe(false);
+      expect(isMethodAllowed('file_delete', null, blocked)).toBe(false);
+      expect(isMethodAllowed('safe_delete', null, blocked)).toBe(false);
+    });
+
+    test('should match single asterisk to any string including empty', () => {
+      const allowed = ['*'];
+
+      // Single asterisk should match any method
+      expect(isMethodAllowed('any_method', allowed, null)).toBe(true);
+      expect(isMethodAllowed('', allowed, null)).toBe(true);
+    });
+  });
+
+  describe('Special Characters in Patterns', () => {
+    test('should escape regex special characters in patterns', () => {
+      // Test that special regex characters are properly escaped
+      const allowed = ['method.name', 'query[0]', 'test+plus'];
+
+      expect(isMethodAllowed('method.name', allowed, null)).toBe(true);
+      expect(isMethodAllowed('methodXname', allowed, null)).toBe(false); // . should not match any char
+      expect(isMethodAllowed('query[0]', allowed, null)).toBe(true);
+      expect(isMethodAllowed('test+plus', allowed, null)).toBe(true);
+    });
+  });
+
+  describe('Priority: allowedMethods over blockedMethods', () => {
+    test('should use allowedMethods when both are provided', () => {
+      const allowed = ['safe_method'];
+      const blocked = ['safe_method']; // Same method in both lists
+
+      // allowedMethods should take priority - safe_method should be allowed
+      expect(isMethodAllowed('safe_method', allowed, blocked)).toBe(true);
+      expect(isMethodAllowed('other_method', allowed, blocked)).toBe(false);
+    });
+  });
+});
+
+describe('Method Filtering Integration', () => {
+  let manager;
+
+  beforeEach(() => {
+    manager = new MCPClientManager({ debug: false });
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.disconnect();
+    }
+  });
+
+  test('should filter tools during server connection with allowedMethods', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true,
+          allowedMethods: ['foobar', 'echo'] // Only allow these two
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      const tools = manager.getTools();
+      const toolNames = Object.keys(tools);
+
+      // Should have foobar and echo, but not calculator
+      expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
+      expect(toolNames.some(n => n.includes('echo'))).toBe(true);
+      expect(toolNames.some(n => n.includes('calculator'))).toBe(false);
+    } else {
+      console.warn('Mock server connection failed - skipping integration assertions');
+    }
+  }, 10000);
+
+  test('should filter tools during server connection with blockedMethods', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true,
+          blockedMethods: ['calculator'] // Block calculator
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      const tools = manager.getTools();
+      const toolNames = Object.keys(tools);
+
+      // Should have foobar and echo, but not calculator
+      expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
+      expect(toolNames.some(n => n.includes('echo'))).toBe(true);
+      expect(toolNames.some(n => n.includes('calculator'))).toBe(false);
+    } else {
+      console.warn('Mock server connection failed - skipping integration assertions');
+    }
+  }, 10000);
+
+  test('should register all tools when no method filter specified', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+          // No allowedMethods or blockedMethods
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      const tools = manager.getTools();
+      const toolNames = Object.keys(tools);
+
+      // Should have all tools: foobar, echo, and calculator
+      expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
+      expect(toolNames.some(n => n.includes('echo'))).toBe(true);
+      expect(toolNames.some(n => n.includes('calculator'))).toBe(true);
+    } else {
+      console.warn('Mock server connection failed - skipping integration assertions');
+    }
+  }, 10000);
+
+  test('should warn about unmatched allowedMethods patterns', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true,
+          allowedMethods: ['foobar', 'nonexistent_method', 'another_missing']
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      // Check that warning was logged about unmatched patterns
+      const warnCalls = consoleSpy.mock.calls.filter(call =>
+        call[0].includes('[MCP WARN]') && call[0].includes('did not match')
+      );
+      expect(warnCalls.length).toBeGreaterThan(0);
+
+      // Check that available methods were listed
+      const availableCalls = consoleSpy.mock.calls.filter(call =>
+        call[0].includes('[MCP WARN]') && call[0].includes('Available methods')
+      );
+      expect(availableCalls.length).toBeGreaterThan(0);
+    }
+
+    consoleSpy.mockRestore();
+  }, 10000);
+
+  test('should warn about unmatched blockedMethods patterns', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true,
+          blockedMethods: ['nonexistent_method', 'missing_*']
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      // Check that warning was logged about unmatched patterns
+      const warnCalls = consoleSpy.mock.calls.filter(call =>
+        call[0].includes('[MCP WARN]') && call[0].includes('did not match')
+      );
+      expect(warnCalls.length).toBeGreaterThan(0);
+
+      // Check that available methods were listed
+      const availableCalls = consoleSpy.mock.calls.filter(call =>
+        call[0].includes('[MCP WARN]') && call[0].includes('Available methods')
+      );
+      expect(availableCalls.length).toBeGreaterThan(0);
+    }
+
+    consoleSpy.mockRestore();
+  }, 10000);
+
+  test('should not warn when all patterns match', async () => {
+    const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true,
+          allowedMethods: ['foobar', 'echo'] // These exist in mock server
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      // Check that NO warning was logged about unmatched patterns
+      const warnCalls = consoleSpy.mock.calls.filter(call =>
+        call[0].includes('[MCP WARN]') && call[0].includes('did not match')
+      );
+      expect(warnCalls.length).toBe(0);
+    }
+
+    consoleSpy.mockRestore();
+  }, 10000);
+});
+
+describe('MCP Telemetry', () => {
+  let manager;
+  let mockTracer;
+
+  beforeEach(() => {
+    // Create mock tracer that records all events
+    mockTracer = {
+      events: [],
+      recordMcpEvent: jest.fn((eventType, data) => {
+        mockTracer.events.push({ eventType, data });
+      })
+    };
+    manager = new MCPClientManager({ debug: false, tracer: mockTracer });
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.disconnect();
+    }
+  });
+
+  test('should record initialization.started event', async () => {
+    await manager.initialize({ mcpServers: {} });
+
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'initialization.started',
+      expect.objectContaining({
+        serverCount: 0
+      })
+    );
+  });
+
+  test('should record initialization.completed event', async () => {
+    await manager.initialize({ mcpServers: {} });
+
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'initialization.completed',
+      expect.objectContaining({
+        connected: 0,
+        total: 0,
+        toolCount: 0,
+        tools: []
+      })
+    );
+  });
+
+  test('should record events during server connection attempt', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Should have recorded server.connecting event
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'server.connecting',
+      expect.objectContaining({
+        serverName: 'test-server',
+        transport: 'stdio'
+      })
+    );
+  });
+
+  test('should record tools.discovered event on successful connection', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'tools.discovered',
+        expect.objectContaining({
+          serverName: 'mock-test',
+          toolCount: expect.any(Number)
+        })
+      );
+    }
+  }, 10000);
+
+  test('should record tools.filtered event when method filtering is used', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true,
+          allowedMethods: ['foobar'] // Filter to only one tool
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      // tools.filtered is only recorded when filteredCount > 0
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'tools.filtered',
+        expect.objectContaining({
+          serverName: 'mock-test',
+          filteredCount: expect.any(Number),
+          filteredTools: expect.any(Array),
+          allowedMethods: ['foobar'],
+          blockedMethods: []
+        })
+      );
+    }
+  }, 10000);
+
+  test('should record server.connected event on successful connection', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'server.connected',
+        expect.objectContaining({
+          serverName: 'mock-test',
+          transport: 'stdio',
+          totalToolCount: expect.any(Number),
+          registeredCount: expect.any(Number),
+          filteredCount: expect.any(Number),
+          registeredTools: expect.any(Array)
+        })
+      );
+    }
+  }, 10000);
+
+  test('should record server.connection_failed event on failed connection', async () => {
+    const config = {
+      mcpServers: {
+        'invalid-server': {
+          command: 'nonexistent-command-that-will-fail',
+          args: [],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    await manager.initialize(config);
+
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'server.connection_failed',
+      expect.objectContaining({
+        serverName: 'invalid-server',
+        error: expect.any(String)
+      })
+    );
+  }, 10000);
+
+  test('should record disconnection events', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      // Clear previous events to focus on disconnection
+      mockTracer.events = [];
+      mockTracer.recordMcpEvent.mockClear();
+
+      await manager.disconnect();
+
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'disconnection.started',
+        expect.objectContaining({
+          serverCount: 1
+        })
+      );
+
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'disconnection.completed',
+        expect.objectContaining({
+          serverCount: expect.any(Number),
+          serverNames: expect.any(Array)
+        })
+      );
+    }
+  }, 10000);
+
+  test('should work without tracer (null tracer)', async () => {
+    const managerWithoutTracer = new MCPClientManager({ debug: false });
+
+    // Should not throw when tracer is null
+    await expect(managerWithoutTracer.initialize({ mcpServers: {} })).resolves.not.toThrow();
+    await managerWithoutTracer.disconnect();
+  });
+
+  test('should handle tracer without recordMcpEvent method', async () => {
+    const invalidTracer = { someOtherMethod: () => {} };
+    const managerWithInvalidTracer = new MCPClientManager({ debug: false, tracer: invalidTracer });
+
+    // Should not throw when tracer doesn't have recordMcpEvent
+    await expect(managerWithInvalidTracer.initialize({ mcpServers: {} })).resolves.not.toThrow();
+    await managerWithInvalidTracer.disconnect();
   });
 });
 

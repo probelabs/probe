@@ -7,7 +7,8 @@ import {
   loadMCPConfiguration,
   parseEnabledServers,
   createSampleConfig,
-  saveConfig
+  saveConfig,
+  validateMethodFilter
 } from '../../src/agent/mcp/config.js';
 import { join } from 'path';
 import { mkdtemp, writeFile, rm } from 'fs/promises';
@@ -354,6 +355,157 @@ describe('MCP Configuration', () => {
       expect(config.mcpServers['bad-env'].env).toEqual({
         ENV: 'invalid json'
       });
+    });
+  });
+
+  describe('Method Filtering Configuration', () => {
+    afterEach(() => {
+      // Clean up environment variables used in method filter tests
+      delete process.env.MCP_SERVERS_FILTER_ALLOWLIST;
+      delete process.env.MCP_SERVERS_FILTER_BLOCKLIST;
+      delete process.env.MCP_SERVERS_FILTER_COMMAND;
+      delete process.env.MCP_SERVERS_FILTER_ENABLED;
+    });
+
+    test('should parse allowedMethods correctly', () => {
+      const config = {
+        mcpServers: {
+          'test-server': {
+            command: 'node',
+            args: ['test.js'],
+            enabled: true,
+            allowedMethods: ['method1', 'method2']
+          }
+        }
+      };
+
+      const servers = parseEnabledServers(config);
+
+      expect(servers).toHaveLength(1);
+      expect(servers[0].allowedMethods).toEqual(['method1', 'method2']);
+      expect(servers[0].blockedMethods).toBeNull();
+    });
+
+    test('should parse blockedMethods correctly', () => {
+      const config = {
+        mcpServers: {
+          'test-server': {
+            command: 'node',
+            args: ['test.js'],
+            enabled: true,
+            blockedMethods: ['dangerous_method', 'risky_*']
+          }
+        }
+      };
+
+      const servers = parseEnabledServers(config);
+
+      expect(servers).toHaveLength(1);
+      expect(servers[0].allowedMethods).toBeNull();
+      expect(servers[0].blockedMethods).toEqual(['dangerous_method', 'risky_*']);
+    });
+
+    test('should prefer allowedMethods when both are specified', () => {
+      const config = {
+        mcpServers: {
+          'test-server': {
+            command: 'node',
+            args: ['test.js'],
+            enabled: true,
+            allowedMethods: ['method1'],
+            blockedMethods: ['method2']
+          }
+        }
+      };
+
+      const servers = parseEnabledServers(config);
+
+      expect(servers).toHaveLength(1);
+      expect(servers[0].allowedMethods).toEqual(['method1']);
+      expect(servers[0].blockedMethods).toBeNull();
+    });
+
+    test('should allow all methods when no filter specified', () => {
+      const config = {
+        mcpServers: {
+          'test-server': {
+            command: 'node',
+            args: ['test.js'],
+            enabled: true
+          }
+        }
+      };
+
+      const servers = parseEnabledServers(config);
+
+      expect(servers).toHaveLength(1);
+      expect(servers[0].allowedMethods).toBeNull();
+      expect(servers[0].blockedMethods).toBeNull();
+    });
+
+    test('should handle environment variable for allowedMethods (ALLOWLIST)', () => {
+      process.env.MCP_SERVERS_FILTER_ALLOWLIST = 'method1,method2,method3';
+      process.env.MCP_SERVERS_FILTER_COMMAND = 'node';
+      process.env.MCP_SERVERS_FILTER_ENABLED = 'true';
+
+      const config = loadMCPConfiguration();
+
+      expect(config.mcpServers['filter'].allowedMethods).toEqual(['method1', 'method2', 'method3']);
+    });
+
+    test('should handle environment variable for blockedMethods (BLOCKLIST)', () => {
+      process.env.MCP_SERVERS_FILTER_BLOCKLIST = 'dangerous_*,risky_method';
+      process.env.MCP_SERVERS_FILTER_COMMAND = 'node';
+      process.env.MCP_SERVERS_FILTER_ENABLED = 'true';
+
+      const config = loadMCPConfiguration();
+
+      expect(config.mcpServers['filter'].blockedMethods).toEqual(['dangerous_*', 'risky_method']);
+    });
+
+    test('should filter out non-string values from allowedMethods', () => {
+      const result = validateMethodFilter({
+        allowedMethods: ['valid', 123, null, 'another_valid', '', undefined]
+      }, 'test-server');
+
+      expect(result.allowedMethods).toEqual(['valid', 'another_valid']);
+    });
+
+    test('should filter out non-string values from blockedMethods', () => {
+      const result = validateMethodFilter({
+        blockedMethods: ['valid', 123, null, 'another_valid', '', undefined]
+      }, 'test-server');
+
+      expect(result.blockedMethods).toEqual(['valid', 'another_valid']);
+    });
+
+    test('should handle non-array allowedMethods gracefully', () => {
+      const result = validateMethodFilter({
+        allowedMethods: 'not-an-array'
+      }, 'test-server');
+
+      expect(result.allowedMethods).toBeNull();
+      expect(result.blockedMethods).toBeNull();
+    });
+
+    test('should handle empty allowedMethods array', () => {
+      const result = validateMethodFilter({
+        allowedMethods: []
+      }, 'test-server');
+
+      // Empty array results in null (no valid methods = no filter)
+      expect(result.allowedMethods).toBeNull();
+      expect(result.blockedMethods).toBeNull();
+    });
+
+    test('should include method filter examples in sample config', () => {
+      const config = createSampleConfig();
+
+      expect(config.mcpServers).toHaveProperty('filtered-server-example');
+      expect(config.mcpServers['filtered-server-example'].allowedMethods).toEqual(['safe_read', 'safe_query']);
+
+      expect(config.mcpServers).toHaveProperty('blocklist-server-example');
+      expect(config.mcpServers['blocklist-server-example'].blockedMethods).toEqual(['dangerous_delete', 'dangerous_*']);
     });
   });
 });

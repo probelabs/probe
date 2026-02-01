@@ -231,6 +231,32 @@ export class SimpleAppTracer {
     });
   }
 
+  /**
+   * Record MCP (Model Context Protocol) events
+   * Tracks server connections, tool discovery, method filtering, and tool execution
+   */
+  recordMcpEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`mcp.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
+  /**
+   * Record bash tool events
+   * Tracks command permission checks, allowed/denied commands, and execution
+   */
+  recordBashEvent(eventType, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`bash.${eventType}`, {
+      'session.id': this.sessionId,
+      ...data
+    });
+  }
+
   setAttributes(attributes) {
     // For simplicity, just log attributes when no active span
     if (this.telemetry && this.telemetry.enableConsole) {

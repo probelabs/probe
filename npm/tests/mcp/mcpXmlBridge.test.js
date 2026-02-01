@@ -379,6 +379,69 @@ describe('MCPXmlBridge', () => {
     });
   });
 
+  describe('getXmlToolDefinitions Filtering', () => {
+    beforeEach(() => {
+      // Set up mock XML definitions
+      bridge.xmlDefinitions = {
+        'search_code': '## search_code\nSearch for code patterns',
+        'extract_code': '## extract_code\nExtract code from files',
+        'query_code': '## query_code\nQuery code structures'
+      };
+    });
+
+    test('should return all definitions when filterToolNames is null', () => {
+      const result = bridge.getXmlToolDefinitions(null);
+
+      expect(result).toContain('## search_code');
+      expect(result).toContain('## extract_code');
+      expect(result).toContain('## query_code');
+    });
+
+    test('should return all definitions when filterToolNames is undefined', () => {
+      const result = bridge.getXmlToolDefinitions();
+
+      expect(result).toContain('## search_code');
+      expect(result).toContain('## extract_code');
+      expect(result).toContain('## query_code');
+    });
+
+    test('should filter to only specified tool names', () => {
+      const result = bridge.getXmlToolDefinitions(['search_code', 'extract_code']);
+
+      expect(result).toContain('## search_code');
+      expect(result).toContain('## extract_code');
+      expect(result).not.toContain('## query_code');
+    });
+
+    test('should return single tool definition', () => {
+      const result = bridge.getXmlToolDefinitions(['search_code']);
+
+      expect(result).toContain('## search_code');
+      expect(result).not.toContain('## extract_code');
+      expect(result).not.toContain('## query_code');
+    });
+
+    test('should return empty string when no tools match filter', () => {
+      const result = bridge.getXmlToolDefinitions(['nonexistent_tool']);
+
+      expect(result).toBe('');
+    });
+
+    test('should return empty string when filter is empty array', () => {
+      const result = bridge.getXmlToolDefinitions([]);
+
+      expect(result).toBe('');
+    });
+
+    test('should handle partial matches correctly', () => {
+      const result = bridge.getXmlToolDefinitions(['search_code', 'nonexistent_tool']);
+
+      expect(result).toContain('## search_code');
+      expect(result).not.toContain('## extract_code');
+      expect(result).not.toContain('## query_code');
+    });
+  });
+
   describe('Tool Execution', () => {
     test('should throw error when executing non-existent tool', async () => {
       const xmlString = `

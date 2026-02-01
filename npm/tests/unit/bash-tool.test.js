@@ -257,6 +257,150 @@ describe('Bash Command Executor', () => {
   });
 });
 
+describe('Bash Permission Telemetry', () => {
+  test('should record permission.allowed event when command is allowed', () => {
+    const recordedEvents = [];
+    const mockTracer = {
+      recordBashEvent: (eventType, data) => {
+        recordedEvents.push({ eventType, data });
+      }
+    };
+
+    const checker = new BashPermissionChecker({
+      debug: false,
+      tracer: mockTracer
+    });
+
+    // Clear initialization event
+    recordedEvents.length = 0;
+
+    const result = checker.check('ls -la');
+    expect(result.allowed).toBe(true);
+
+    // Should have recorded an allowed event
+    const allowedEvent = recordedEvents.find(e => e.eventType === 'permission.allowed');
+    expect(allowedEvent).toBeDefined();
+    expect(allowedEvent.data.command).toBe('ls -la');
+    expect(allowedEvent.data.parsedCommand).toBe('ls');
+    expect(allowedEvent.data.isComplex).toBe(false);
+  });
+
+  test('should record permission.denied event when command matches deny pattern', () => {
+    const recordedEvents = [];
+    const mockTracer = {
+      recordBashEvent: (eventType, data) => {
+        recordedEvents.push({ eventType, data });
+      }
+    };
+
+    const checker = new BashPermissionChecker({
+      debug: false,
+      tracer: mockTracer
+    });
+
+    // Clear initialization event
+    recordedEvents.length = 0;
+
+    const result = checker.check('rm -rf /');
+    expect(result.allowed).toBe(false);
+
+    // Should have recorded a denied event
+    const deniedEvent = recordedEvents.find(e => e.eventType === 'permission.denied');
+    expect(deniedEvent).toBeDefined();
+    expect(deniedEvent.data.command).toBe('rm -rf /');
+    expect(deniedEvent.data.reason).toBe('matches_deny_pattern');
+  });
+
+  test('should record permission.denied event when command not in allow list', () => {
+    const recordedEvents = [];
+    const mockTracer = {
+      recordBashEvent: (eventType, data) => {
+        recordedEvents.push({ eventType, data });
+      }
+    };
+
+    const checker = new BashPermissionChecker({
+      debug: false,
+      tracer: mockTracer,
+      disableDefaultDeny: true // Disable deny list so we test allow list logic
+    });
+
+    // Clear initialization event
+    recordedEvents.length = 0;
+
+    const result = checker.check('unknown-command --flag');
+    expect(result.allowed).toBe(false);
+
+    // Should have recorded a denied event with "not_in_allow_list" reason
+    const deniedEvent = recordedEvents.find(e => e.eventType === 'permission.denied');
+    expect(deniedEvent).toBeDefined();
+    expect(deniedEvent.data.command).toBe('unknown-command --flag');
+    expect(deniedEvent.data.reason).toBe('not_in_allow_list');
+  });
+
+  test('should record permission.denied event for complex commands', () => {
+    const recordedEvents = [];
+    const mockTracer = {
+      recordBashEvent: (eventType, data) => {
+        recordedEvents.push({ eventType, data });
+      }
+    };
+
+    const checker = new BashPermissionChecker({
+      debug: false,
+      tracer: mockTracer
+    });
+
+    // Clear initialization event
+    recordedEvents.length = 0;
+
+    const result = checker.check('ls | grep test');
+    expect(result.allowed).toBe(false);
+    expect(result.isComplex).toBe(true);
+
+    // Should have recorded a denied event with complex flag
+    const deniedEvent = recordedEvents.find(e => e.eventType === 'permission.denied');
+    expect(deniedEvent).toBeDefined();
+    expect(deniedEvent.data.command).toBe('ls | grep test');
+    expect(deniedEvent.data.isComplex).toBe(true);
+    expect(deniedEvent.data.reason).toBe('no_matching_complex_pattern');
+  });
+
+  test('should record permissions.initialized event on construction', () => {
+    const recordedEvents = [];
+    const mockTracer = {
+      recordBashEvent: (eventType, data) => {
+        recordedEvents.push({ eventType, data });
+      }
+    };
+
+    new BashPermissionChecker({
+      debug: false,
+      tracer: mockTracer,
+      allow: ['custom:*'],
+      deny: ['blocked:*']
+    });
+
+    const initEvent = recordedEvents.find(e => e.eventType === 'permissions.initialized');
+    expect(initEvent).toBeDefined();
+    expect(initEvent.data.hasCustomAllowPatterns).toBe(true);
+    expect(initEvent.data.hasCustomDenyPatterns).toBe(true);
+    expect(initEvent.data.allowPatternCount).toBeGreaterThan(0);
+    expect(initEvent.data.denyPatternCount).toBeGreaterThan(0);
+  });
+
+  test('should work without tracer (backward compatibility)', () => {
+    const checker = new BashPermissionChecker({
+      debug: false
+      // No tracer provided
+    });
+
+    // Should not throw
+    const result = checker.check('ls -la');
+    expect(result.allowed).toBe(true);
+  });
+});
+
 describe('Security Tests (Updated)', () => {
   let checker;
 

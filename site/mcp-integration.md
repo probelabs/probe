@@ -336,6 +336,116 @@ Enable debug mode for detailed logging:
 }
 ```
 
+### Method Filtering
+
+You can control which tools from an MCP server are available by using allowlists or blocklists. This is useful for restricting access to specific capabilities or blocking potentially dangerous operations.
+
+#### Allowlist Mode (Whitelist)
+
+Only the specified methods will be registered and available:
+
+```json
+{
+  "mcpServers": {
+    "code-search": {
+      "command": "npx",
+      "args": ["-y", "@probelabs/probe@latest"],
+      "enabled": true,
+      "allowedMethods": ["search_code", "extract_code"]
+    }
+  }
+}
+```
+
+#### Blocklist Mode (Blacklist)
+
+All methods except the specified ones will be available:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "enabled": true,
+      "blockedMethods": ["write_file", "delete_file"]
+    }
+  }
+}
+```
+
+#### Wildcard Patterns
+
+Both `allowedMethods` and `blockedMethods` support wildcard patterns using `*`:
+
+```json
+{
+  "mcpServers": {
+    "example-server": {
+      "command": "node",
+      "args": ["server.js"],
+      "enabled": true,
+      "blockedMethods": ["dangerous_*", "*_delete", "admin_*_write"]
+    }
+  }
+}
+```
+
+Pattern examples:
+- `dangerous_*` - Matches `dangerous_delete`, `dangerous_execute`, etc.
+- `*_read` - Matches `file_read`, `db_read`, etc.
+- `prefix_*_suffix` - Matches `prefix_anything_suffix`
+
+#### Environment Variable Configuration
+
+You can also configure method filtering via environment variables:
+
+```bash
+# Allowlist (comma-separated)
+MCP_SERVERS_MYSERVER_ALLOWLIST=search_code,extract_code
+
+# Blocklist (comma-separated)
+MCP_SERVERS_MYSERVER_BLOCKLIST=dangerous_*,risky_method
+```
+
+#### Filtering Rules
+
+1. **Mutual Exclusivity**: If both `allowedMethods` and `blockedMethods` are specified, only `allowedMethods` is used (with a warning)
+2. **No Filter**: If neither is specified, all methods are allowed (backward compatible)
+3. **Validation**: Non-string values and empty strings are filtered out with warnings
+4. **Pattern Matching**: Unmatched patterns trigger warnings showing available methods, helping you identify typos in your configuration
+
+#### Debugging Method Filters
+
+Enable debug mode to see which methods are filtered:
+
+```json
+{
+  "mcpServers": {
+    "example-server": {
+      "command": "node",
+      "args": ["server.js"],
+      "enabled": true,
+      "allowedMethods": ["safe_read", "safe_query"]
+    }
+  },
+  "settings": {
+    "debug": true
+  }
+}
+```
+
+Or set the environment variable:
+
+```bash
+DEBUG_MCP=1
+```
+
+This will show:
+- Which methods are filtered out during registration
+- Warnings when patterns don't match any available methods
+- A list of available methods from the server
+
 ## Implementation Details
 
 ### Server Architecture
