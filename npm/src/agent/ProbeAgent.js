@@ -2843,22 +2843,20 @@ Follow these instructions carefully:
                 const prevContent = lastAssistantMessage.content;
 
                 // Check for patterns indicating a failed/wrapped tool call attempt
-                // Don't reuse responses that contain broken XML tool call formats
-                const hasBadToolPatterns =
-                  /<tool_name>/i.test(prevContent) ||
-                  /<api_call>/i.test(prevContent) ||
-                  /<function\s*>/i.test(prevContent) ||
-                  /<call\s+name=/i.test(prevContent);
+                // Use detectUnrecognizedToolCall for consistent detection logic
+                const wrappedToolError = detectUnrecognizedToolCall(prevContent, validTools);
+                const hasWrappedToolPattern = wrappedToolError && wrappedToolError.startsWith('wrapped_tool:');
 
-                if (hasBadToolPatterns) {
+                if (hasWrappedToolPattern) {
                   // Previous response was a broken tool call attempt - don't reuse it
+                  const wrappedToolName = wrappedToolError.split(':')[1];
                   if (this.debug) {
-                    console.log(`[DEBUG] Previous response contains broken tool call format - rejecting for __PREVIOUS_RESPONSE__`);
+                    console.log(`[DEBUG] Previous response contains wrapped tool '${wrappedToolName}' - rejecting for __PREVIOUS_RESPONSE__`);
                   }
                   currentMessages.push({ role: 'assistant', content: assistantResponseContent });
                   currentMessages.push({
                     role: 'user',
-                    content: `Your previous response contained an incorrectly formatted tool call (wrapped in <api_call>, <tool_name>, <function>, or similar tags). This cannot be used as a final answer.
+                    content: `Your previous response contained an incorrectly formatted tool call (${wrappedToolName} wrapped in XML tags). This cannot be used as a final answer.
 
 Please provide your final answer using the CORRECT format:
 

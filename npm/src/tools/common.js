@@ -617,18 +617,31 @@ export function detectUnrecognizedToolCall(xmlString, validTools) {
 		}
 	}
 
-	// Check if any valid tool name appears as text content inside other XML tags
+	// Check if any valid tool name appears inside specific wrapper patterns
 	// This catches cases where AI wraps tools in arbitrary tags like:
 	// <api_call><tool_name>attempt_completion</tool_name>...</api_call>
 	// <function>search</function>
 	// <call name="extract">...</call>
+	// Only match specific wrapper patterns to avoid false positives with normal text
 	const allToolNames = [...new Set([...knownToolNames, ...validTools])];
 	for (const toolName of allToolNames) {
-		// Look for tool name appearing as text content between XML tags (not as a tag itself)
-		// Pattern: >toolName< (with optional whitespace)
-		const textPattern = new RegExp(`>\\s*${toolName}\\s*<`, 'i');
-		if (textPattern.test(xmlString)) {
-			return `wrapped_tool:${toolName}`;
+		// Match specific wrapper patterns that indicate a tool call attempt:
+		// 1. <tool_name>toolName</tool_name> - common Claude API-style wrapper
+		// 2. <function>toolName</function> - function call style
+		// 3. <name>toolName</name> - generic name wrapper
+		// 4. <call><name>toolName - partial wrapper patterns
+		const wrapperPatterns = [
+			new RegExp(`<tool_name>\\s*${toolName}\\s*</tool_name>`, 'i'),
+			new RegExp(`<function>\\s*${toolName}\\s*</function>`, 'i'),
+			new RegExp(`<name>\\s*${toolName}\\s*</name>`, 'i'),
+			// Also check for tool name immediately after api_call or call opening tag
+			new RegExp(`<(?:api_call|call)[^>]*>[\\s\\S]*?<tool_name>\\s*${toolName}`, 'i')
+		];
+
+		for (const pattern of wrapperPatterns) {
+			if (pattern.test(xmlString)) {
+				return `wrapped_tool:${toolName}`;
+			}
 		}
 	}
 
