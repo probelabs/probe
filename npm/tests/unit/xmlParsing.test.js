@@ -1,5 +1,5 @@
 import { parseXmlToolCall, parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
-import { DEFAULT_VALID_TOOLS, buildToolTagPattern } from '../../src/tools/common.js';
+import { DEFAULT_VALID_TOOLS, buildToolTagPattern, detectUnrecognizedToolCall } from '../../src/tools/common.js';
 
 describe('Shared Tool List', () => {
   test('DEFAULT_VALID_TOOLS should include bash', () => {
@@ -976,6 +976,137 @@ I need to rename this function to follow the naming convention.
           old_string: 'const getUserName = () => {}',
           new_string: 'const getUsername = () => {}'
         }
+      });
+    });
+  });
+
+  describe('Wrapped tool call detection (Issue: api_call infinite loop)', () => {
+    describe('detectUnrecognizedToolCall with wrapped tools', () => {
+      test('should detect tool name wrapped in <api_call><tool_name> tags', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `<api_call>
+<tool_name>attempt_completion</tool_name>
+<parameters>
+<final_answer>{"intent": "code_help"}</final_answer>
+</parameters>
+</api_call>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBe('wrapped_tool:attempt_completion');
+      });
+
+      test('should detect tool name wrapped in <function> tags', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `<function>search</function>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBe('wrapped_tool:search');
+      });
+
+      test('should detect tool name in <name> tags inside other structures', () => {
+        const validTools = ['extract', 'query'];
+        const xmlString = `<call>
+<name>extract</name>
+<args>file.js</args>
+</call>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBe('wrapped_tool:extract');
+      });
+
+      test('should return null for properly formatted tool call', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `<attempt_completion>
+Task completed successfully
+</attempt_completion>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBeNull();
+      });
+
+      test('should return null for response with no tool references', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `Here is my analysis of the code.
+The function works correctly.`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBeNull();
+      });
+
+      test('should detect wrapped tool even with thinking tags', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `<thinking>
+Let me complete this task
+</thinking>
+
+<api_call>
+<tool_name>attempt_completion</tool_name>
+<parameters>
+<result>Done</result>
+</parameters>
+</api_call>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBe('wrapped_tool:attempt_completion');
+      });
+
+      test('should return unrecognized tool name for unknown tool as tag', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `<query><pattern>test</pattern></query>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        // query is a known tool name but not in validTools, so it should be detected
+        expect(result).toBe('query');
+      });
+
+      test('should handle case insensitivity in wrapped tool detection', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `<api_call>
+<tool_name>ATTEMPT_COMPLETION</tool_name>
+</api_call>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBe('wrapped_tool:attempt_completion');
+      });
+
+      test('should detect wrapped tool with whitespace around name', () => {
+        const validTools = ['search', 'attempt_completion'];
+        const xmlString = `<function>  search  </function>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBe('wrapped_tool:search');
+      });
+
+      test('should handle real-world api_call format from trace', () => {
+        const validTools = ['search', 'query', 'extract', 'attempt_completion'];
+        const xmlString = `<thinking>
+The user is asking to investigate the GraphQL layer in tyk-analytics.
+</thinking>
+
+<api_call>
+<tool_name>attempt_completion</tool_name>
+<parameters>
+<final_answer>
+{
+  "intent": "code_help",
+  "topic": "Should the GraphQL layer be updated"
+}
+</final_answer>
+</parameters>
+</api_call>`;
+
+        const result = detectUnrecognizedToolCall(xmlString, validTools);
+
+        expect(result).toBe('wrapped_tool:attempt_completion');
       });
     });
   });
