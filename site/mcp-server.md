@@ -283,6 +283,40 @@ If you have a custom build of the Probe binary, you can specify its path:
 }
 ```
 
+### Method Filtering
+
+You can control which tools from an MCP server are available using allowlists or blocklists:
+
+```json
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@probelabs/probe@latest"],
+      "enabled": true,
+      "allowedMethods": ["search_code", "extract_code"]
+    }
+  }
+}
+```
+
+Or block specific methods:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "enabled": true,
+      "blockedMethods": ["write_file", "delete_file", "dangerous_*"]
+    }
+  }
+}
+```
+
+Wildcard patterns like `dangerous_*` and `*_delete` are supported. For detailed documentation on method filtering, see the [MCP Integration](./mcp-integration.md#method-filtering) page.
+
 ## Troubleshooting
 
 If you encounter issues with the MCP server:
