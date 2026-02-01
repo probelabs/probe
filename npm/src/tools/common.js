@@ -617,6 +617,21 @@ export function detectUnrecognizedToolCall(xmlString, validTools) {
 		}
 	}
 
+	// Check if any valid tool name appears as text content inside other XML tags
+	// This catches cases where AI wraps tools in arbitrary tags like:
+	// <api_call><tool_name>attempt_completion</tool_name>...</api_call>
+	// <function>search</function>
+	// <call name="extract">...</call>
+	const allToolNames = [...new Set([...knownToolNames, ...validTools])];
+	for (const toolName of allToolNames) {
+		// Look for tool name appearing as text content between XML tags (not as a tag itself)
+		// Pattern: >toolName< (with optional whitespace)
+		const textPattern = new RegExp(`>\\s*${toolName}\\s*<`, 'i');
+		if (textPattern.test(xmlString)) {
+			return `wrapped_tool:${toolName}`;
+		}
+	}
+
 	return null;
 }
 

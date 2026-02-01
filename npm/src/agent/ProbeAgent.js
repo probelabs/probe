@@ -2542,6 +2542,11 @@ Follow these instructions carefully:
         }
       }
 
+      // Circuit breaker for repeated format errors
+      let lastFormatErrorType = null;
+      let sameFormatErrorCount = 0;
+      const MAX_REPEATED_FORMAT_ERRORS = 3;
+
       // Tool iteration loop (only for non-CLI engines like Vercel/Anthropic/OpenAI)
       while (currentIteration < maxIterations && !completionAttempted) {
         currentIteration++;
@@ -2835,7 +2840,39 @@ Follow these instructions carefully:
               );
 
               if (lastAssistantMessage) {
-                finalResult = lastAssistantMessage.content;
+                const prevContent = lastAssistantMessage.content;
+
+                // Check for patterns indicating a failed/wrapped tool call attempt
+                // Don't reuse responses that contain broken XML tool call formats
+                const hasBadToolPatterns =
+                  /<tool_name>/i.test(prevContent) ||
+                  /<api_call>/i.test(prevContent) ||
+                  /<function\s*>/i.test(prevContent) ||
+                  /<call\s+name=/i.test(prevContent);
+
+                if (hasBadToolPatterns) {
+                  // Previous response was a broken tool call attempt - don't reuse it
+                  if (this.debug) {
+                    console.log(`[DEBUG] Previous response contains broken tool call format - rejecting for __PREVIOUS_RESPONSE__`);
+                  }
+                  currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+                  currentMessages.push({
+                    role: 'user',
+                    content: `Your previous response contained an incorrectly formatted tool call (wrapped in <api_call>, <tool_name>, <function>, or similar tags). This cannot be used as a final answer.
+
+Please provide your final answer using the CORRECT format:
+
+<attempt_completion>
+Your complete answer here
+</attempt_completion>
+
+Use the tool tag directly - NO wrapper tags like <api_call> or <tool_name>.`
+                  });
+                  completionAttempted = false;
+                  continue; // Don't use broken response, continue the loop
+                }
+
+                finalResult = prevContent;
                 if (this.debug) console.log(`[DEBUG] Using previous response as completion: ${finalResult.substring(0, 100)}...`);
               } else {
                 finalResult = 'Error: No previous response found to use as completion.';
@@ -3165,7 +3202,32 @@ Follow these instructions carefully:
           const unrecognizedTool = detectUnrecognizedToolCall(assistantResponseContent, validTools);
 
           let reminderContent;
-          if (unrecognizedTool) {
+          if (unrecognizedTool && unrecognizedTool.startsWith('wrapped_tool:')) {
+            // AI wrapped a valid tool name in arbitrary XML tags - provide clear format error
+            const wrappedToolName = unrecognizedTool.split(':')[1];
+            if (this.debug) {
+              console.log(`[DEBUG] Detected wrapped tool '${wrappedToolName}' in assistant response - wrong XML format.`);
+            }
+            const toolError = new ParameterError(
+              `Tool '${wrappedToolName}' found but in WRONG FORMAT - do not wrap tools in other XML tags.`,
+              {
+                suggestion: `Use the tool tag DIRECTLY without any wrapper:
+
+CORRECT FORMAT:
+<${wrappedToolName}>
+<param>value</param>
+</${wrappedToolName}>
+
+WRONG (what you did - do not wrap in other tags):
+<api_call><tool_name>${wrappedToolName}</tool_name>...</api_call>
+<function>${wrappedToolName}</function>
+<call name="${wrappedToolName}">...</call>
+
+Remove ALL wrapper tags and use <${wrappedToolName}> directly as the outermost tag.`
+              }
+            );
+            reminderContent = `<tool_result>\n${formatErrorForAI(toolError)}\n</tool_result>`;
+          } else if (unrecognizedTool) {
             // AI tried to use a tool that's not available - provide clear error
             if (this.debug) {
               console.log(`[DEBUG] Detected unrecognized tool '${unrecognizedTool}' in assistant response.`);
@@ -3175,6 +3237,33 @@ Follow these instructions carefully:
             });
             reminderContent = `<tool_result>\n${formatErrorForAI(toolError)}\n</tool_result>`;
           } else {
+            // No tool call detected at all - check if this is the last iteration
+            // On the last iteration, if the AI gave a substantive response without using
+            // attempt_completion, accept it as the final answer rather than losing the content
+            if (currentIteration >= maxIterations) {
+              // Clean up the response - remove thinking tags
+              let cleanedResponse = assistantResponseContent;
+              // Remove <thinking>...</thinking> blocks
+              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+              // Also remove unclosed thinking tags
+              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*$/gi, '').trim();
+
+              // Only use if there's substantial content (not just a failed tool call attempt)
+              const hasSubstantialContent = cleanedResponse.length > 50 &&
+                !cleanedResponse.includes('<api_call>') &&
+                !cleanedResponse.includes('<tool_name>') &&
+                !cleanedResponse.includes('<function>');
+
+              if (hasSubstantialContent) {
+                if (this.debug) {
+                  console.log(`[DEBUG] Max iterations reached - accepting AI response as final answer (${cleanedResponse.length} chars)`);
+                }
+                finalResult = cleanedResponse;
+                completionAttempted = true;
+                break;
+              }
+            }
+
             // Standard reminder - no tool call detected at all
             reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
 
@@ -3205,6 +3294,25 @@ Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant messa
             } else {
               console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
             }
+          }
+
+          // Circuit breaker: track repeated format errors and break early
+          if (unrecognizedTool) {
+            if (unrecognizedTool === lastFormatErrorType) {
+              sameFormatErrorCount++;
+              if (sameFormatErrorCount >= MAX_REPEATED_FORMAT_ERRORS) {
+                console.error(`[ERROR] Same format error '${unrecognizedTool}' repeated ${sameFormatErrorCount} times. Breaking loop early to prevent infinite iteration.`);
+                finalResult = `Error: Unable to complete request. The AI model repeatedly used incorrect tool call format (${unrecognizedTool}). Please try rephrasing your question or using a different model.`;
+                break;
+              }
+            } else {
+              lastFormatErrorType = unrecognizedTool;
+              sameFormatErrorCount = 1;
+            }
+          } else {
+            // Reset counter if it's a different kind of "no tool call" situation
+            lastFormatErrorType = null;
+            sameFormatErrorCount = 0;
           }
         }
 
