@@ -10,6 +10,47 @@ import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/webso
 import { loadMCPConfiguration, parseEnabledServers, DEFAULT_TIMEOUT } from './config.js';
 
 /**
+ * Check if a method is allowed based on server's method filter configuration
+ * Supports wildcard patterns (e.g., "*_read", "search_*", "prefix_*_suffix")
+ * @param {string} methodName - The method name to check
+ * @param {string[]|null} allowedMethods - Array of allowed method patterns (null = all allowed)
+ * @param {string[]|null} blockedMethods - Array of blocked method patterns (null = none blocked)
+ * @returns {boolean} Whether the method is allowed
+ */
+export function isMethodAllowed(methodName, allowedMethods, blockedMethods) {
+  /**
+   * Check if a method name matches a pattern
+   * Supports * wildcard which matches any characters
+   * @param {string} name - Method name to check
+   * @param {string} pattern - Pattern to match against (may contain *)
+   * @returns {boolean} Whether the name matches the pattern
+   */
+  const matchesPattern = (name, pattern) => {
+    if (!pattern.includes('*')) {
+      return name === pattern;
+    }
+    // Convert pattern to regex: escape special chars, replace * with .*
+    const regexPattern = pattern
+      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')  // Escape special regex chars
+      .replace(/\*/g, '.*');                    // Replace * with .*
+    return new RegExp(`^${regexPattern}$`).test(name);
+  };
+
+  // If allowedMethods is specified (whitelist mode), only those methods are allowed
+  if (allowedMethods && allowedMethods.length > 0) {
+    return allowedMethods.some(pattern => matchesPattern(methodName, pattern));
+  }
+
+  // If blockedMethods is specified (blacklist mode), all methods except those are allowed
+  if (blockedMethods && blockedMethods.length > 0) {
+    return !blockedMethods.some(pattern => matchesPattern(methodName, pattern));
+  }
+
+  // No filter specified - all methods are allowed
+  return true;
+}
+
+/**
  * Create transport based on configuration
  * @param {Object} serverConfig - Server configuration
  * @returns {Object} Transport instance
@@ -223,10 +264,24 @@ export class MCPClientManager {
 
       // Fetch and register tools
       const toolsResponse = await client.listTools();
-      const toolCount = toolsResponse?.tools?.length || 0;
+      const totalToolCount = toolsResponse?.tools?.length || 0;
+      let registeredCount = 0;
+      let filteredCount = 0;
 
       if (toolsResponse && toolsResponse.tools) {
+        const { allowedMethods, blockedMethods } = serverConfig;
+        const allToolNames = toolsResponse.tools.map(t => t.name);
+
         for (const tool of toolsResponse.tools) {
+          // Apply method filtering based on server config
+          if (!isMethodAllowed(tool.name, allowedMethods, blockedMethods)) {
+            filteredCount++;
+            if (this.debug) {
+              console.error(`[MCP DEBUG]     Filtered out tool: ${tool.name} (not allowed by method filter)`);
+            }
+            continue;
+          }
+
           // Add server prefix to avoid conflicts
           const qualifiedName = `${name}_${tool.name}`;
           this.tools.set(qualifiedName, {
@@ -234,14 +289,46 @@ export class MCPClientManager {
             serverName: name,
             originalName: tool.name
           });
+          registeredCount++;
 
           if (this.debug) {
             console.error(`[MCP DEBUG]     Registered tool: ${qualifiedName}`);
           }
         }
+
+        // Check for unmatched patterns in allowedMethods and warn users
+        if (allowedMethods && allowedMethods.length > 0) {
+          const unmatchedPatterns = allowedMethods.filter(pattern => {
+            // Check if this pattern matches at least one tool
+            return !allToolNames.some(toolName => isMethodAllowed(toolName, [pattern], null));
+          });
+
+          if (unmatchedPatterns.length > 0) {
+            console.error(`[MCP WARN] Server '${name}': The following allowedMethods patterns did not match any tools: ${unmatchedPatterns.join(', ')}`);
+            console.error(`[MCP WARN] Available methods from '${name}': ${allToolNames.join(', ')}`);
+          }
+        }
+
+        // Check for unmatched patterns in blockedMethods and warn users
+        if (blockedMethods && blockedMethods.length > 0) {
+          const unmatchedPatterns = blockedMethods.filter(pattern => {
+            // Check if this pattern matches at least one tool
+            return !allToolNames.some(toolName => !isMethodAllowed(toolName, null, [pattern]));
+          });
+
+          if (unmatchedPatterns.length > 0) {
+            console.error(`[MCP WARN] Server '${name}': The following blockedMethods patterns did not match any tools: ${unmatchedPatterns.join(', ')}`);
+            console.error(`[MCP WARN] Available methods from '${name}': ${allToolNames.join(', ')}`);
+          }
+        }
       }
 
-      console.error(`[MCP INFO] Connected to ${name}: ${toolCount} tool${toolCount !== 1 ? 's' : ''} loaded`);
+      // Log connection result with filtering info
+      if (filteredCount > 0) {
+        console.error(`[MCP INFO] Connected to ${name}: ${registeredCount} tool${registeredCount !== 1 ? 's' : ''} loaded (${filteredCount} filtered out)`);
+      } else {
+        console.error(`[MCP INFO] Connected to ${name}: ${registeredCount} tool${registeredCount !== 1 ? 's' : ''} loaded`);
+      }
 
       return true;
     } catch (error) {
@@ -405,5 +492,6 @@ export async function createMCPManager(options = {}) {
 export default {
   MCPClientManager,
   createMCPManager,
-  createTransport
+  createTransport,
+  isMethodAllowed
 };

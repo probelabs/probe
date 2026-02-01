@@ -30,6 +30,61 @@ export function validateTimeout(value) {
 }
 
 /**
+ * Validate and normalize method filter configuration
+ * @param {Object} serverConfig - Server configuration
+ * @param {string} serverName - Server name for logging
+ * @returns {Object} Object with allowedMethods and blockedMethods (null if not configured)
+ */
+export function validateMethodFilter(serverConfig, serverName = 'unknown') {
+  const result = { allowedMethods: null, blockedMethods: null };
+  const debug = process.env.DEBUG === '1' || process.env.DEBUG_MCP === '1';
+
+  // Check if both are specified - allowedMethods takes precedence
+  if (serverConfig.allowedMethods && serverConfig.blockedMethods) {
+    console.error(`[MCP WARN] Server '${serverName}' has both allowedMethods and blockedMethods - using allowedMethods only`);
+  }
+
+  // Process allowedMethods
+  if (serverConfig.allowedMethods) {
+    if (!Array.isArray(serverConfig.allowedMethods)) {
+      console.error(`[MCP WARN] Server '${serverName}' allowedMethods must be an array, ignoring`);
+    } else {
+      const validMethods = serverConfig.allowedMethods.filter(m => typeof m === 'string' && m.length > 0);
+      if (validMethods.length !== serverConfig.allowedMethods.length) {
+        console.error(`[MCP WARN] Server '${serverName}' allowedMethods contains non-string values, skipping those`);
+      }
+      if (validMethods.length > 0) {
+        result.allowedMethods = validMethods;
+        if (debug) {
+          console.error(`[MCP DEBUG] Server '${serverName}' allowedMethods: ${validMethods.join(', ')}`);
+        }
+      }
+    }
+    return result; // If allowedMethods is specified (even if invalid), don't process blockedMethods
+  }
+
+  // Process blockedMethods (only if allowedMethods not specified)
+  if (serverConfig.blockedMethods) {
+    if (!Array.isArray(serverConfig.blockedMethods)) {
+      console.error(`[MCP WARN] Server '${serverName}' blockedMethods must be an array, ignoring`);
+    } else {
+      const validMethods = serverConfig.blockedMethods.filter(m => typeof m === 'string' && m.length > 0);
+      if (validMethods.length !== serverConfig.blockedMethods.length) {
+        console.error(`[MCP WARN] Server '${serverName}' blockedMethods contains non-string values, skipping those`);
+      }
+      if (validMethods.length > 0) {
+        result.blockedMethods = validMethods;
+        if (debug) {
+          console.error(`[MCP DEBUG] Server '${serverName}' blockedMethods: ${validMethods.join(', ')}`);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+/**
  * Default MCP configuration structure
  */
 const DEFAULT_CONFIG = {
@@ -187,6 +242,16 @@ function mergeWithEnvironment(config) {
             console.error(`[MCP WARN] Invalid timeout value for ${normalizedName}: ${value}`);
           }
           break;
+        case 'ALLOWLIST':
+          // Comma-separated list of allowed method names (supports wildcards)
+          // e.g., MCP_SERVERS_MYSERVER_ALLOWLIST=method1,method2,prefix_*
+          config.mcpServers[normalizedName].allowedMethods = value.split(',').map(m => m.trim()).filter(Boolean);
+          break;
+        case 'BLOCKLIST':
+          // Comma-separated list of blocked method names (supports wildcards)
+          // e.g., MCP_SERVERS_MYSERVER_BLOCKLIST=dangerous_*,risky_method
+          config.mcpServers[normalizedName].blockedMethods = value.split(',').map(m => m.trim()).filter(Boolean);
+          break;
       }
     }
   }
@@ -256,6 +321,11 @@ export function parseEnabledServers(config) {
       server.timeout = validatedTimeout;
     }
 
+    // Validate and normalize method filter configuration
+    const methodFilter = validateMethodFilter(serverConfig, name);
+    server.allowedMethods = methodFilter.allowedMethods;
+    server.blockedMethods = methodFilter.blockedMethods;
+
     servers.push(server);
   }
 
@@ -321,6 +391,22 @@ export function createSampleConfig() {
         enabled: false,
         timeout: 120000,
         description: 'Example server with custom 2-minute timeout (overrides global setting)'
+      },
+      'filtered-server-example': {
+        command: 'npx',
+        args: ['-y', '@example/mcp-server'],
+        transport: 'stdio',
+        enabled: false,
+        allowedMethods: ['safe_read', 'safe_query'],
+        description: 'Example server with method allowlist - only safe_read and safe_query are available'
+      },
+      'blocklist-server-example': {
+        command: 'npx',
+        args: ['-y', '@example/mcp-server'],
+        transport: 'stdio',
+        enabled: false,
+        blockedMethods: ['dangerous_delete', 'dangerous_*'],
+        description: 'Example server with method blocklist - all methods except dangerous ones (supports wildcards)'
       }
     },
     // Global settings (apply to all servers unless overridden per-server)
@@ -356,6 +442,7 @@ export default {
   createSampleConfig,
   saveConfig,
   validateTimeout,
+  validateMethodFilter,
   DEFAULT_TIMEOUT,
   MAX_TIMEOUT
 };

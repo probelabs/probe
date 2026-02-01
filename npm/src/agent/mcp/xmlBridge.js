@@ -211,11 +211,20 @@ export class MCPXmlBridge {
   }
 
   /**
-   * Get all XML tool definitions for inclusion in system prompt
+   * Get XML tool definitions for inclusion in system prompt
+   * @param {Array<string>|null} filterToolNames - Optional list of tool names to include (if null, include all)
    * @returns {string} Combined XML tool definitions
    */
-  getXmlToolDefinitions() {
-    return Object.values(this.xmlDefinitions).join('\n\n');
+  getXmlToolDefinitions(filterToolNames = null) {
+    if (filterToolNames === null) {
+      return Object.values(this.xmlDefinitions).join('\n\n');
+    }
+
+    // Filter definitions based on provided tool names
+    return Object.entries(this.xmlDefinitions)
+      .filter(([name]) => filterToolNames.includes(name))
+      .map(([, def]) => def)
+      .join('\n\n');
   }
 
   /**
