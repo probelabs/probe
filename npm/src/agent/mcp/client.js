@@ -158,6 +158,18 @@ export class MCPClientManager {
     this.tools = new Map();
     this.debug = options.debug || process.env.DEBUG_MCP === '1';
     this.config = null;
+    this.tracer = options.tracer || null;
+  }
+
+  /**
+   * Record an MCP telemetry event if tracer is available
+   * @param {string} eventType - Event type (e.g., 'server.connect', 'tool.discovered')
+   * @param {Object} data - Event data
+   */
+  recordMcpEvent(eventType, data = {}) {
+    if (this.tracer && typeof this.tracer.recordMcpEvent === 'function') {
+      this.tracer.recordMcpEvent(eventType, data);
+    }
   }
 
   /**
@@ -169,12 +181,24 @@ export class MCPClientManager {
     this.config = config || loadMCPConfiguration();
     const servers = parseEnabledServers(this.config);
 
+    // Record initialization start
+    this.recordMcpEvent('initialization.started', {
+      serverCount: servers.length,
+      serverNames: servers.map(s => s.name)
+    });
+
     // Always log the number of servers found
     console.error(`[MCP INFO] Found ${servers.length} enabled MCP server${servers.length !== 1 ? 's' : ''}`);
 
     if (servers.length === 0) {
       console.error('[MCP INFO] No MCP servers configured or enabled');
       console.error('[MCP INFO] 0 MCP tools available');
+      this.recordMcpEvent('initialization.completed', {
+        connected: 0,
+        total: 0,
+        toolCount: 0,
+        tools: []
+      });
       return {
         connected: 0,
         total: 0,
@@ -219,10 +243,19 @@ export class MCPClientManager {
       });
     }
 
+    // Record initialization completion
+    const toolNames = Array.from(this.tools.keys());
+    this.recordMcpEvent('initialization.completed', {
+      connected: connectedCount,
+      total: servers.length,
+      toolCount: this.tools.size,
+      tools: toolNames
+    });
+
     return {
       connected: connectedCount,
       total: servers.length,
-      tools: Array.from(this.tools.keys())
+      tools: toolNames
     };
   }
 
@@ -232,6 +265,14 @@ export class MCPClientManager {
    */
   async connectToServer(serverConfig) {
     const { name } = serverConfig;
+
+    // Record connection attempt
+    this.recordMcpEvent('server.connecting', {
+      serverName: name,
+      transport: serverConfig.transport,
+      hasAllowedMethods: !!(serverConfig.allowedMethods && serverConfig.allowedMethods.length > 0),
+      hasBlockedMethods: !!(serverConfig.blockedMethods && serverConfig.blockedMethods.length > 0)
+    });
 
     try {
       if (this.debug) {
@@ -267,15 +308,25 @@ export class MCPClientManager {
       const totalToolCount = toolsResponse?.tools?.length || 0;
       let registeredCount = 0;
       let filteredCount = 0;
+      const registeredTools = [];
+      const filteredTools = [];
 
       if (toolsResponse && toolsResponse.tools) {
         const { allowedMethods, blockedMethods } = serverConfig;
         const allToolNames = toolsResponse.tools.map(t => t.name);
 
+        // Record tools discovered from server
+        this.recordMcpEvent('tools.discovered', {
+          serverName: name,
+          toolCount: totalToolCount,
+          tools: allToolNames
+        });
+
         for (const tool of toolsResponse.tools) {
           // Apply method filtering based on server config
           if (!isMethodAllowed(tool.name, allowedMethods, blockedMethods)) {
             filteredCount++;
+            filteredTools.push(tool.name);
             if (this.debug) {
               console.error(`[MCP DEBUG]     Filtered out tool: ${tool.name} (not allowed by method filter)`);
             }
@@ -290,10 +341,22 @@ export class MCPClientManager {
             originalName: tool.name
           });
           registeredCount++;
+          registeredTools.push(qualifiedName);
 
           if (this.debug) {
             console.error(`[MCP DEBUG]     Registered tool: ${qualifiedName}`);
           }
+        }
+
+        // Record method filtering results if any filtering was applied
+        if (filteredCount > 0) {
+          this.recordMcpEvent('tools.filtered', {
+            serverName: name,
+            filteredCount,
+            filteredTools,
+            allowedMethods: allowedMethods || [],
+            blockedMethods: blockedMethods || []
+          });
         }
 
         // Check for unmatched patterns in allowedMethods and warn users
@@ -330,12 +393,30 @@ export class MCPClientManager {
         console.error(`[MCP INFO] Connected to ${name}: ${registeredCount} tool${registeredCount !== 1 ? 's' : ''} loaded`);
       }
 
+      // Record successful connection
+      this.recordMcpEvent('server.connected', {
+        serverName: name,
+        transport: serverConfig.transport,
+        totalToolCount,
+        registeredCount,
+        filteredCount,
+        registeredTools
+      });
+
       return true;
     } catch (error) {
       console.error(`[MCP ERROR] Error connecting to ${name}:`, error.message);
       if (this.debug) {
         console.error(`[MCP DEBUG] Full error details:`, error);
       }
+
+      // Record connection failure
+      this.recordMcpEvent('server.connection_failed', {
+        serverName: name,
+        transport: serverConfig.transport,
+        error: error.message
+      });
+
       return false;
     }
   }
@@ -348,13 +429,31 @@ export class MCPClientManager {
   async callTool(toolName, args) {
     const tool = this.tools.get(toolName);
     if (!tool) {
+      this.recordMcpEvent('tool.call_failed', {
+        toolName,
+        error: 'Unknown tool'
+      });
       throw new Error(`Unknown tool: ${toolName}`);
     }
 
     const clientInfo = this.clients.get(tool.serverName);
     if (!clientInfo) {
+      this.recordMcpEvent('tool.call_failed', {
+        toolName,
+        serverName: tool.serverName,
+        error: 'Server not connected'
+      });
       throw new Error(`Server ${tool.serverName} not connected`);
     }
+
+    const startTime = Date.now();
+
+    // Record tool call start
+    this.recordMcpEvent('tool.call_started', {
+      toolName,
+      serverName: tool.serverName,
+      originalToolName: tool.originalName
+    });
 
     try {
       if (this.debug) {
@@ -383,16 +482,39 @@ export class MCPClientManager {
         timeoutPromise
       ]);
 
+      const durationMs = Date.now() - startTime;
+
       if (this.debug) {
         console.error(`[MCP DEBUG] Tool ${toolName} executed successfully`);
       }
 
+      // Record successful tool call
+      this.recordMcpEvent('tool.call_completed', {
+        toolName,
+        serverName: tool.serverName,
+        originalToolName: tool.originalName,
+        durationMs
+      });
+
       return result;
     } catch (error) {
+      const durationMs = Date.now() - startTime;
+
       console.error(`[MCP ERROR] Error calling tool ${toolName}:`, error.message);
       if (this.debug) {
         console.error(`[MCP DEBUG] Full error details:`, error);
       }
+
+      // Record failed tool call
+      this.recordMcpEvent('tool.call_failed', {
+        toolName,
+        serverName: tool.serverName,
+        originalToolName: tool.originalName,
+        error: error.message,
+        durationMs,
+        isTimeout: error.message.includes('timeout')
+      });
+
       throw error;
     }
   }
@@ -444,6 +566,7 @@ export class MCPClientManager {
    */
   async disconnect() {
     const disconnectPromises = [];
+    const serverNames = Array.from(this.clients.keys());
 
     if (this.clients.size === 0) {
       if (this.debug) {
@@ -451,6 +574,12 @@ export class MCPClientManager {
       }
       return;
     }
+
+    // Record disconnection start
+    this.recordMcpEvent('disconnection.started', {
+      serverCount: this.clients.size,
+      serverNames
+    });
 
     if (this.debug) {
       console.error(`[MCP DEBUG] Disconnecting from ${this.clients.size} MCP server${this.clients.size !== 1 ? 's' : ''}...`);
@@ -463,9 +592,16 @@ export class MCPClientManager {
             if (this.debug) {
               console.error(`[MCP DEBUG] Disconnected from ${name}`);
             }
+            this.recordMcpEvent('server.disconnected', {
+              serverName: name
+            });
           })
           .catch(error => {
             console.error(`[MCP ERROR] Error disconnecting from ${name}:`, error.message);
+            this.recordMcpEvent('server.disconnect_failed', {
+              serverName: name,
+              error: error.message
+            });
           })
       );
     }
@@ -473,6 +609,12 @@ export class MCPClientManager {
     await Promise.all(disconnectPromises);
     this.clients.clear();
     this.tools.clear();
+
+    // Record disconnection completion
+    this.recordMcpEvent('disconnection.completed', {
+      serverCount: serverNames.length,
+      serverNames
+    });
 
     if (this.debug) {
       console.error('[MCP DEBUG] All MCP connections closed');

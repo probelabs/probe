@@ -884,6 +884,239 @@ describe('Method Filtering Integration', () => {
   }, 10000);
 });
 
+describe('MCP Telemetry', () => {
+  let manager;
+  let mockTracer;
+
+  beforeEach(() => {
+    // Create mock tracer that records all events
+    mockTracer = {
+      events: [],
+      recordMcpEvent: jest.fn((eventType, data) => {
+        mockTracer.events.push({ eventType, data });
+      })
+    };
+    manager = new MCPClientManager({ debug: false, tracer: mockTracer });
+  });
+
+  afterEach(async () => {
+    if (manager) {
+      await manager.disconnect();
+    }
+  });
+
+  test('should record initialization.started event', async () => {
+    await manager.initialize({ mcpServers: {} });
+
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'initialization.started',
+      expect.objectContaining({
+        serverCount: 0
+      })
+    );
+  });
+
+  test('should record initialization.completed event', async () => {
+    await manager.initialize({ mcpServers: {} });
+
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'initialization.completed',
+      expect.objectContaining({
+        connected: 0,
+        total: 0,
+        toolCount: 0,
+        tools: []
+      })
+    );
+  });
+
+  test('should record events during server connection attempt', async () => {
+    const config = {
+      mcpServers: {
+        'test-server': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    await manager.initialize(config);
+
+    // Should have recorded server.connecting event
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'server.connecting',
+      expect.objectContaining({
+        serverName: 'test-server',
+        transport: 'stdio'
+      })
+    );
+  });
+
+  test('should record tools.discovered event on successful connection', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'tools.discovered',
+        expect.objectContaining({
+          serverName: 'mock-test',
+          toolCount: expect.any(Number)
+        })
+      );
+    }
+  }, 10000);
+
+  test('should record tools.filtered event when method filtering is used', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true,
+          allowedMethods: ['foobar'] // Filter to only one tool
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      // tools.filtered is only recorded when filteredCount > 0
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'tools.filtered',
+        expect.objectContaining({
+          serverName: 'mock-test',
+          filteredCount: expect.any(Number),
+          filteredTools: expect.any(Array),
+          allowedMethods: ['foobar'],
+          blockedMethods: []
+        })
+      );
+    }
+  }, 10000);
+
+  test('should record server.connected event on successful connection', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'server.connected',
+        expect.objectContaining({
+          serverName: 'mock-test',
+          transport: 'stdio',
+          totalToolCount: expect.any(Number),
+          registeredCount: expect.any(Number),
+          filteredCount: expect.any(Number),
+          registeredTools: expect.any(Array)
+        })
+      );
+    }
+  }, 10000);
+
+  test('should record server.connection_failed event on failed connection', async () => {
+    const config = {
+      mcpServers: {
+        'invalid-server': {
+          command: 'nonexistent-command-that-will-fail',
+          args: [],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    await manager.initialize(config);
+
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'server.connection_failed',
+      expect.objectContaining({
+        serverName: 'invalid-server',
+        error: expect.any(String)
+      })
+    );
+  }, 10000);
+
+  test('should record disconnection events', async () => {
+    const config = {
+      mcpServers: {
+        'mock-test': {
+          command: 'node',
+          args: [join(__dirname, 'mockMcpServer.js')],
+          transport: 'stdio',
+          enabled: true
+        }
+      }
+    };
+
+    const result = await manager.initialize(config);
+
+    if (result.connected > 0) {
+      // Clear previous events to focus on disconnection
+      mockTracer.events = [];
+      mockTracer.recordMcpEvent.mockClear();
+
+      await manager.disconnect();
+
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'disconnection.started',
+        expect.objectContaining({
+          serverCount: 1
+        })
+      );
+
+      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+        'disconnection.completed',
+        expect.objectContaining({
+          serverCount: expect.any(Number),
+          serverNames: expect.any(Array)
+        })
+      );
+    }
+  }, 10000);
+
+  test('should work without tracer (null tracer)', async () => {
+    const managerWithoutTracer = new MCPClientManager({ debug: false });
+
+    // Should not throw when tracer is null
+    await expect(managerWithoutTracer.initialize({ mcpServers: {} })).resolves.not.toThrow();
+    await managerWithoutTracer.disconnect();
+  });
+
+  test('should handle tracer without recordMcpEvent method', async () => {
+    const invalidTracer = { someOtherMethod: () => {} };
+    const managerWithInvalidTracer = new MCPClientManager({ debug: false, tracer: invalidTracer });
+
+    // Should not throw when tracer doesn't have recordMcpEvent
+    await expect(managerWithInvalidTracer.initialize({ mcpServers: {} })).resolves.not.toThrow();
+    await managerWithInvalidTracer.disconnect();
+  });
+});
+
 describe('HTTP Transport', () => {
   test('should handle HTTP transport methods', async () => {
     const config = {

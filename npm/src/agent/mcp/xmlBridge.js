@@ -127,6 +127,7 @@ export function parseXmlMcpToolCall(xmlString, mcpToolNames = []) {
 export class MCPXmlBridge {
   constructor(options = {}) {
     this.debug = options.debug || false;
+    this.tracer = options.tracer || null;
     this.mcpTools = {};
     this.mcpManager = null;
     this.xmlDefinitions = {};
@@ -179,8 +180,8 @@ export class MCPXmlBridge {
         console.error('[MCP DEBUG] Initializing MCP client manager...');
       }
 
-      // Initialize the MCP client manager
-      this.mcpManager = new MCPClientManager({ debug: this.debug });
+      // Initialize the MCP client manager with tracer support
+      this.mcpManager = new MCPClientManager({ debug: this.debug, tracer: this.tracer });
       const result = await this.mcpManager.initialize(mcpConfigs);
 
       // Get tools from the manager
