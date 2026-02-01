@@ -91,6 +91,45 @@ const MAX_TOOL_ITERATIONS = (() => {
 })();
 const MAX_HISTORY_MESSAGES = 100;
 
+/**
+ * Extract tool name from wrapped_tool:toolName format
+ * @param {string} wrappedToolError - Error string in format 'wrapped_tool:toolName'
+ * @returns {string} The extracted tool name or 'unknown' if format is invalid
+ */
+function extractWrappedToolName(wrappedToolError) {
+  if (!wrappedToolError || typeof wrappedToolError !== 'string') {
+    return 'unknown';
+  }
+  const colonIndex = wrappedToolError.indexOf(':');
+  return colonIndex !== -1 ? wrappedToolError.slice(colonIndex + 1) : 'unknown';
+}
+
+/**
+ * Check if an error indicates a wrapped tool format error
+ * @param {string|null} error - Error from detectUnrecognizedToolCall
+ * @returns {boolean} True if it's a wrapped tool error
+ */
+function isWrappedToolError(error) {
+  return error && typeof error === 'string' && error.startsWith('wrapped_tool:');
+}
+
+/**
+ * Create error message for wrapped tool format issues
+ * @param {string} wrappedToolName - The tool name that was incorrectly wrapped
+ * @returns {string} User-friendly error message with correct format instructions
+ */
+function createWrappedToolErrorMessage(wrappedToolName) {
+  return `Your response contained an incorrectly formatted tool call (${wrappedToolName} wrapped in XML tags). This cannot be used.
+
+Please use the CORRECT format:
+
+<${wrappedToolName}>
+Your content here
+</${wrappedToolName}>
+
+Do NOT wrap in other tags like <api_call>, <tool_name>, <function>, etc.`;
+}
+
 // Supported image file extensions (imported from shared config)
 
 // Maximum image file size (20MB) to prevent OOM attacks
@@ -2845,28 +2884,17 @@ Follow these instructions carefully:
                 // Check for patterns indicating a failed/wrapped tool call attempt
                 // Use detectUnrecognizedToolCall for consistent detection logic
                 const wrappedToolError = detectUnrecognizedToolCall(prevContent, validTools);
-                const hasWrappedToolPattern = wrappedToolError && wrappedToolError.startsWith('wrapped_tool:');
 
-                if (hasWrappedToolPattern) {
+                if (isWrappedToolError(wrappedToolError)) {
                   // Previous response was a broken tool call attempt - don't reuse it
-                  // Safely extract tool name from 'wrapped_tool:toolName' format
-                  const colonIndex = wrappedToolError.indexOf(':');
-                  const wrappedToolName = colonIndex !== -1 ? wrappedToolError.slice(colonIndex + 1) : 'unknown';
+                  const wrappedToolName = extractWrappedToolName(wrappedToolError);
                   if (this.debug) {
                     console.log(`[DEBUG] Previous response contains wrapped tool '${wrappedToolName}' - rejecting for __PREVIOUS_RESPONSE__`);
                   }
                   currentMessages.push({ role: 'assistant', content: assistantResponseContent });
                   currentMessages.push({
                     role: 'user',
-                    content: `Your previous response contained an incorrectly formatted tool call (${wrappedToolName} wrapped in XML tags). This cannot be used as a final answer.
-
-Please provide your final answer using the CORRECT format:
-
-<attempt_completion>
-Your complete answer here
-</attempt_completion>
-
-Use the tool tag directly - NO wrapper tags like <api_call> or <tool_name>.`
+                    content: createWrappedToolErrorMessage(wrappedToolName)
                   });
                   completionAttempted = false;
                   continue; // Don't use broken response, continue the loop
@@ -3202,9 +3230,9 @@ Use the tool tag directly - NO wrapper tags like <api_call> or <tool_name>.`
           const unrecognizedTool = detectUnrecognizedToolCall(assistantResponseContent, validTools);
 
           let reminderContent;
-          if (unrecognizedTool && unrecognizedTool.startsWith('wrapped_tool:')) {
+          if (isWrappedToolError(unrecognizedTool)) {
             // AI wrapped a valid tool name in arbitrary XML tags - provide clear format error
-            const wrappedToolName = unrecognizedTool.split(':')[1];
+            const wrappedToolName = extractWrappedToolName(unrecognizedTool);
             if (this.debug) {
               console.log(`[DEBUG] Detected wrapped tool '${wrappedToolName}' in assistant response - wrong XML format.`);
             }
@@ -3297,16 +3325,22 @@ Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant messa
           }
 
           // Circuit breaker: track repeated format errors and break early
+          // For wrapped_tool errors, track them as a category (any wrapped_tool counts)
+          // For other errors, track the exact error type
           if (unrecognizedTool) {
-            if (unrecognizedTool === lastFormatErrorType) {
+            const isWrapped = isWrappedToolError(unrecognizedTool);
+            const errorCategory = isWrapped ? 'wrapped_tool' : unrecognizedTool;
+
+            if (errorCategory === lastFormatErrorType) {
               sameFormatErrorCount++;
               if (sameFormatErrorCount >= MAX_REPEATED_FORMAT_ERRORS) {
-                console.error(`[ERROR] Same format error '${unrecognizedTool}' repeated ${sameFormatErrorCount} times. Breaking loop early to prevent infinite iteration.`);
-                finalResult = `Error: Unable to complete request. The AI model repeatedly used incorrect tool call format (${unrecognizedTool}). Please try rephrasing your question or using a different model.`;
+                const errorDesc = isWrapped ? 'wrapped tool format' : unrecognizedTool;
+                console.error(`[ERROR] Format error category '${errorCategory}' repeated ${sameFormatErrorCount} times. Breaking loop early to prevent infinite iteration.`);
+                finalResult = `Error: Unable to complete request. The AI model repeatedly used incorrect tool call format (${errorDesc}). Please try rephrasing your question or using a different model.`;
                 break;
               }
             } else {
-              lastFormatErrorType = unrecognizedTool;
+              lastFormatErrorType = errorCategory;
               sameFormatErrorCount = 1;
             }
           } else {
