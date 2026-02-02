@@ -279,7 +279,7 @@ export class BashPermissionChecker {
    * @returns {string[]} Array of component commands
    */
   _splitComplexCommand(command) {
-    // Split by &&, ||, and | operators while respecting quotes
+    // Split by &&, ||, and | operators while respecting quotes and escape sequences
     const components = [];
     let current = '';
     let inQuotes = false;
@@ -290,7 +290,28 @@ export class BashPermissionChecker {
       const char = command[i];
       const nextChar = command[i + 1] || '';
 
-      // Handle quotes
+      // Handle escape sequences outside quotes
+      if (!inQuotes && char === '\\') {
+        // Keep the backslash and the next character
+        current += char;
+        if (nextChar) {
+          current += nextChar;
+          i += 2;
+        } else {
+          i++;
+        }
+        continue;
+      }
+
+      // Handle escape sequences inside double quotes (single quotes don't support escaping)
+      if (inQuotes && quoteChar === '"' && char === '\\' && nextChar) {
+        // Keep both the backslash and the escaped character
+        current += char + nextChar;
+        i += 2;
+        continue;
+      }
+
+      // Start of quoted section
       if (!inQuotes && (char === '"' || char === "'")) {
         inQuotes = true;
         quoteChar = char;
@@ -298,6 +319,8 @@ export class BashPermissionChecker {
         i++;
         continue;
       }
+
+      // End of quoted section
       if (inQuotes && char === quoteChar) {
         inQuotes = false;
         quoteChar = '';

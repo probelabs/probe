@@ -847,6 +847,87 @@ describe('Component-based Complex Command Evaluation', () => {
       const result = checker.check('echo "test && echo done');
       expect(result.allowed).toBe(false);
     });
+
+    test('should handle escaped quotes inside double-quoted strings', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Escaped quotes should not end the quoted section
+      // echo "he said \"hello && goodbye\"" should be a simple command
+      const result = checker.check('echo "he said \\"hello\\""');
+      expect(result.isComplex).toBe(false);
+      expect(result.allowed).toBe(true);
+    });
+
+    test('should handle escaped quotes with operators after', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // echo "test \"quoted\"" && echo "done" - two components with escaped quotes
+      const result = checker.check('echo "test \\"quoted\\"" && echo "done"');
+      expect(result.isComplex).toBe(true);
+      expect(result.allowed).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+      expect(result.components.length).toBe(2);
+    });
+
+    test('should not allow bypass via escaped quote injection', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Attempt to bypass by making && appear after an "escaped" quote
+      // This should NOT treat the && as an operator if properly inside quotes
+      const result = checker.check('echo "test\\" && malicious"');
+      // The backslash escapes the quote, so we're still inside the string
+      // and && is part of the string content
+      expect(result.isComplex).toBe(false);
+    });
+
+    test('should handle single quotes without escape processing', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // In bash single quotes, backslash is literal (not an escape character)
+      // So 'test\' is: 'test\' -> string containing "test\"
+      // Then && is an operator, then 'done' is another single-quoted string
+      const result = checker.check("echo 'test\\' && echo 'done'");
+      // The && is outside the single-quoted sections, so this IS complex
+      expect(result.isComplex).toBe(true);
+      // Should be allowed since both components are echo
+      expect(result.allowed).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should correctly parse single-quoted strings with backslash', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // A properly closed single-quoted string with backslash inside
+      // 'test\\' is: quote, t, e, s, t, \, \, quote end - backslash is literal
+      const result = checker.check("echo 'contains \\\\ backslash'");
+      expect(result.isComplex).toBe(false);
+      expect(result.allowed).toBe(true);
+    });
   });
 
   describe('Security: Denial of service prevention', () => {

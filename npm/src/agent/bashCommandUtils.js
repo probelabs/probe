@@ -44,35 +44,44 @@ export function parseSimpleCommand(command) {
     let result = '';
     let inQuotes = false;
     let quoteChar = '';
-    let escaped = false;
 
     for (let i = 0; i < str.length; i++) {
       const char = str[i];
+      const nextChar = str[i + 1];
 
-      if (escaped) {
-        escaped = false;
-        if (!inQuotes) result += char;
+      // Handle escape sequences outside quotes
+      if (!inQuotes && char === '\\') {
+        // Skip the backslash and the next character
+        result += char;
+        if (nextChar !== undefined) {
+          result += nextChar;
+          i++;
+        }
         continue;
       }
 
-      if (char === '\\') {
-        escaped = true;
-        if (!inQuotes) result += char;
+      // Handle escape sequences inside double quotes (single quotes don't support escaping)
+      if (inQuotes && quoteChar === '"' && char === '\\' && nextChar !== undefined) {
+        // Skip both the backslash and the escaped character (stays inside quotes)
+        i++;
         continue;
       }
 
+      // Start of quoted section
       if (!inQuotes && (char === '"' || char === "'")) {
         inQuotes = true;
         quoteChar = char;
         continue;
       }
 
+      // End of quoted section
       if (inQuotes && char === quoteChar) {
         inQuotes = false;
         quoteChar = '';
         continue;
       }
 
+      // Only add characters that are outside quotes
       if (!inQuotes) {
         result += char;
       }
@@ -117,22 +126,25 @@ export function parseSimpleCommand(command) {
   let current = '';
   let inQuotes = false;
   let quoteChar = '';
-  let escaped = false;
 
   for (let i = 0; i < trimmed.length; i++) {
     const char = trimmed[i];
     const nextChar = i + 1 < trimmed.length ? trimmed[i + 1] : '';
-    
-    if (escaped) {
-      // Handle escaped characters
-      current += char;
-      escaped = false;
+
+    // Handle escapes outside quotes
+    if (!inQuotes && char === '\\' && nextChar) {
+      // Add the escaped character (skip the backslash)
+      current += nextChar;
+      i++; // Skip next character
       continue;
     }
 
-    if (char === '\\' && !inQuotes) {
-      // Escape next character
-      escaped = true;
+    // Handle escapes inside double quotes (single quotes don't process escapes)
+    if (inQuotes && quoteChar === '"' && char === '\\' && nextChar) {
+      // In double quotes, backslash escapes certain characters
+      // Add the escaped character to current
+      current += nextChar;
+      i++; // Skip next character
       continue;
     }
 
