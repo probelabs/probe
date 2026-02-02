@@ -38,7 +38,53 @@ export function parseSimpleCommand(command) {
     };
   }
 
+  // Strip quoted content before checking for complex operators
+  // This prevents detecting operators inside quotes (e.g., echo "a && b")
+  const stripQuotedContent = (str) => {
+    let result = '';
+    let inQuotes = false;
+    let quoteChar = '';
+    let escaped = false;
+
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+
+      if (escaped) {
+        escaped = false;
+        if (!inQuotes) result += char;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        if (!inQuotes) result += char;
+        continue;
+      }
+
+      if (!inQuotes && (char === '"' || char === "'")) {
+        inQuotes = true;
+        quoteChar = char;
+        continue;
+      }
+
+      if (inQuotes && char === quoteChar) {
+        inQuotes = false;
+        quoteChar = '';
+        continue;
+      }
+
+      if (!inQuotes) {
+        result += char;
+      }
+    }
+
+    return result;
+  };
+
   // Check for complex shell constructs that we don't support
+  // Use stripped version (without quoted content) for operator detection
+  const strippedForOperators = stripQuotedContent(trimmed);
+
   const complexPatterns = [
     /\|/,           // Pipes
     /&&/,           // Logical AND
@@ -54,7 +100,7 @@ export function parseSimpleCommand(command) {
   ];
 
   for (const pattern of complexPatterns) {
-    if (pattern.test(trimmed)) {
+    if (pattern.test(strippedForOperators)) {
       return {
         success: false,
         error: 'Complex shell commands with pipes, operators, or redirections are not supported for security reasons',

@@ -273,7 +273,76 @@ export class BashPermissionChecker {
   }
 
   /**
+   * Split a complex command into component commands by operators
+   * @private
+   * @param {string} command - Complex command to split
+   * @returns {string[]} Array of component commands
+   */
+  _splitComplexCommand(command) {
+    // Split by &&, ||, and | operators while respecting quotes
+    const components = [];
+    let current = '';
+    let inQuotes = false;
+    let quoteChar = '';
+    let i = 0;
+
+    while (i < command.length) {
+      const char = command[i];
+      const nextChar = command[i + 1] || '';
+
+      // Handle quotes
+      if (!inQuotes && (char === '"' || char === "'")) {
+        inQuotes = true;
+        quoteChar = char;
+        current += char;
+        i++;
+        continue;
+      }
+      if (inQuotes && char === quoteChar) {
+        inQuotes = false;
+        quoteChar = '';
+        current += char;
+        i++;
+        continue;
+      }
+
+      // Check for operators only outside quotes
+      if (!inQuotes) {
+        // Check for && or ||
+        if ((char === '&' && nextChar === '&') || (char === '|' && nextChar === '|')) {
+          if (current.trim()) {
+            components.push(current.trim());
+          }
+          current = '';
+          i += 2; // Skip both characters
+          continue;
+        }
+        // Check for single pipe |
+        if (char === '|') {
+          if (current.trim()) {
+            components.push(current.trim());
+          }
+          current = '';
+          i++;
+          continue;
+        }
+      }
+
+      current += char;
+      i++;
+    }
+
+    // Add the last component
+    if (current.trim()) {
+      components.push(current.trim());
+    }
+
+    return components;
+  }
+
+  /**
    * Check a complex command against complex patterns in allow/deny lists
+   * Also supports auto-allowing commands where all components are individually allowed
    * @private
    * @param {string} command - Complex command to check
    * @returns {Object} Permission result
@@ -336,7 +405,102 @@ export class BashPermissionChecker {
       }
     }
 
-    // No matching complex pattern found - reject complex command
+    // No explicit complex pattern matched - try component-based evaluation
+    // Split the command by &&, ||, and | operators and check each component
+    const components = this._splitComplexCommand(command);
+
+    if (this.debug) {
+      console.log(`[BashPermissions] Checking ${components.length} command components: ${JSON.stringify(components)}`);
+    }
+
+    if (components.length > 1) {
+      // Check each component individually
+      const componentResults = [];
+      let allAllowed = true;
+      let deniedComponent = null;
+      let deniedReason = null;
+
+      for (const component of components) {
+        // Parse the component as a simple command
+        const parsed = parseCommand(component);
+
+        if (parsed.error || parsed.isComplex) {
+          // Component itself is complex or has an error - can't auto-allow
+          if (this.debug) {
+            console.log(`[BashPermissions] Component "${component}" is complex or has error: ${parsed.error}`);
+          }
+          allAllowed = false;
+          deniedComponent = component;
+          deniedReason = parsed.error || 'Component contains nested complex constructs';
+          break;
+        }
+
+        // Check against deny patterns
+        if (matchesAnyPattern(parsed, this.denyPatterns)) {
+          if (this.debug) {
+            console.log(`[BashPermissions] Component "${component}" matches deny pattern`);
+          }
+          allAllowed = false;
+          deniedComponent = component;
+          deniedReason = 'Component matches deny pattern';
+          break;
+        }
+
+        // Check against allow patterns
+        if (!matchesAnyPattern(parsed, this.allowPatterns)) {
+          if (this.debug) {
+            console.log(`[BashPermissions] Component "${component}" not in allow list`);
+          }
+          allAllowed = false;
+          deniedComponent = component;
+          deniedReason = 'Component not in allow list';
+          break;
+        }
+
+        componentResults.push({ component, parsed, allowed: true });
+      }
+
+      if (allAllowed) {
+        if (this.debug) {
+          console.log(`[BashPermissions] ALLOWED - all ${components.length} components passed individual checks`);
+        }
+        const result = {
+          allowed: true,
+          command: command,
+          isComplex: true,
+          allowedByComponents: true,
+          components: componentResults
+        };
+        this.recordBashEvent('permission.allowed', {
+          command,
+          isComplex: true,
+          allowedByComponents: true,
+          componentCount: components.length
+        });
+        return result;
+      } else {
+        if (this.debug) {
+          console.log(`[BashPermissions] DENIED - component "${deniedComponent}" failed: ${deniedReason}`);
+        }
+        const result = {
+          allowed: false,
+          reason: `Component "${deniedComponent}" not allowed: ${deniedReason}`,
+          command: command,
+          isComplex: true,
+          failedComponent: deniedComponent
+        };
+        this.recordBashEvent('permission.denied', {
+          command,
+          reason: 'component_not_allowed',
+          failedComponent: deniedComponent,
+          componentReason: deniedReason,
+          isComplex: true
+        });
+        return result;
+      }
+    }
+
+    // No matching complex pattern found and couldn't split into components - reject
     if (this.debug) {
       console.log(`[BashPermissions] DENIED - no matching complex pattern found`);
     }

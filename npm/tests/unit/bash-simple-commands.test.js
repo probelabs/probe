@@ -220,10 +220,18 @@ describe('Simplified Permission Checker', () => {
   });
 
   describe('Complex Command Handling', () => {
-    test('should reject complex commands without matching patterns', () => {
+    test('should allow complex commands when all components are in allow list', () => {
+      // With default patterns, ls and grep are both allowed
       const result = checker.check('ls | grep test');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should reject complex commands when components are not in allow list', () => {
+      // customcmd and othercmd are not in any allow list
+      const result = checker.check('customcmd | othercmd');
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Complex shell commands require explicit allow patterns');
       expect(result.isComplex).toBe(true);
     });
 
@@ -339,15 +347,36 @@ describe('Bash Tool Integration with Simplified Architecture', () => {
     expect(typeof tool.execute).toBe('function');
   });
 
-  test('should reject complex commands without matching patterns in tool execution', async () => {
+  test('should allow complex commands when all components are in allow list in tool execution', async () => {
     const tool = bashTool({
       enableBash: true,
-      bashConfig: { allow: ['ls:*'], deny: [] }
+      bashConfig: {
+        allow: ['ls', 'grep'],  // Both components allowed
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      }
     });
 
+    // The permission check should pass and command should execute
     const result = await tool.execute({ command: 'ls | grep test' });
+    // Should not contain permission denied since both components are allowed
+    expect(result).not.toContain('Permission denied');
+  });
+
+  test('should reject complex commands when components are not allowed in tool execution', async () => {
+    const tool = bashTool({
+      enableBash: true,
+      bashConfig: {
+        allow: ['ls'],  // Only ls allowed, not grep
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      }
+    });
+
+    const result = await tool.execute({ command: 'ls | unknowncmd test' });
     expect(result).toContain('Permission denied');
-    expect(result).toContain('Complex shell commands require explicit allow patterns');
   });
 
   test('should allow complex commands with matching patterns in tool execution', async () => {
@@ -402,6 +431,453 @@ describe('Bash Tool Integration with Simplified Architecture', () => {
   });
 });
 
+describe('Component-based Complex Command Evaluation', () => {
+  describe('Auto-allow when all components are allowed', () => {
+    test('should allow piped commands when both components are in allow list', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'grep'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls | grep test');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should allow && chained commands when all components are allowed', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['cd', 'git'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('cd /project && git status');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should allow || chained commands when all components are allowed', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['make', 'echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('make || echo "build failed"');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should allow multi-operator chains when all components are allowed', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git', 'npm', 'echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('git pull && npm install && npm test || echo "failed"');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should allow gh piped to tail (original bug case)', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['gh', 'tail'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('gh run view 21026947516 --repo TykTechnologies/tyk-analytics --job 60454942726 --log | tail -n 100');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+  });
+
+  describe('Deny when any component is not allowed', () => {
+    test('should deny piped command when first component is not allowed', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['grep'],  // ls not allowed
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls | grep test');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+      expect(result.failedComponent).toBe('ls');
+    });
+
+    test('should deny piped command when second component is not allowed', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls'],  // grep not allowed
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls | grep test');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+      expect(result.failedComponent).toBe('grep test');
+    });
+
+    test('should deny when any component matches deny list', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'rm'],
+        deny: ['rm'],  // rm explicitly denied
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls -la && rm -rf /tmp/test');
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  describe('Explicit complex patterns take precedence', () => {
+    test('should use explicit complex pattern over component evaluation', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['cd * && git *'],  // Explicit complex pattern
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('cd /project && git status');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.matchedPattern).toBe('cd * && git *');  // Matched by explicit pattern
+      expect(result.allowedByComponents).toBeUndefined();  // Not via component evaluation
+    });
+
+    test('should deny via complex deny pattern even if components would allow', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'grep'],  // Both components allowed
+        deny: ['ls | grep secret*'],  // But this specific combination denied
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls | grep secret');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('deny pattern');
+    });
+  });
+
+  describe('Quote handling in component splitting', () => {
+    test('should not treat operators inside quotes as complex', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // The && is inside quotes, so this is a simple command
+      const result = checker.check('echo "a && b"');
+      // Correctly detected as simple (not complex) because && is inside quotes
+      expect(result.isComplex).toBe(false);
+      expect(result.allowed).toBe(true);
+    });
+
+    test('should handle complex commands with quoted arguments', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git', 'echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('git commit -m "feat: new feature" && echo "done"');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+  });
+
+  describe('Security: Edge cases and attack vectors', () => {
+    test('should reject if any component contains nested complex constructs', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo', 'ls'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Nested command substitution inside a component
+      const result = checker.check('echo hello && ls $(pwd)');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should reject commands with redirection in any component', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'cat'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Redirection in second component
+      const result = checker.check('ls && cat > /tmp/out');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should reject commands with input redirection in any component', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'cat'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls && cat < /etc/passwd');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should reject if component contains backtick command substitution', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo', 'ls'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('echo hello && ls `pwd`');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should reject if component has background execution', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['sleep', 'echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('sleep 10 & && echo done');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should deny when one component is in deny list even if other is allowed', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'echo', 'rm'],
+        deny: ['rm:-rf:*', 'rm:-f:*'],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls && rm -rf /tmp/test');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('should handle empty components gracefully', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Double pipe would create empty component
+      const result = checker.check('ls || || echo');
+      // Should still be complex and handle gracefully
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should handle whitespace-heavy commands correctly', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'grep'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('   ls   -la   |    grep   test   ');
+      expect(result.allowed).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should reject unknown commands even in long chains', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'grep', 'cat', 'head'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // One unknown command in the middle
+      const result = checker.check('ls | grep test | malicious | head -10');
+      expect(result.allowed).toBe(false);
+      expect(result.failedComponent).toBe('malicious');
+    });
+
+    test('should handle very long command chains', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const longChain = Array(20).fill('echo test').join(' && ');
+      const result = checker.check(longChain);
+      expect(result.allowed).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should handle mixed operators correctly', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['cmd1', 'cmd2', 'cmd3', 'cmd4'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('cmd1 && cmd2 || cmd3 | cmd4');
+      expect(result.allowed).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+      expect(result.components.length).toBe(4);
+    });
+
+    test('should not be fooled by operator-like strings in arguments', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // These should be split properly even though args contain operator chars
+      const result = checker.check('echo "test && fail" && echo "pass || next"');
+      expect(result.allowed).toBe(true);
+      expect(result.components.length).toBe(2);
+    });
+
+    test('should reject semicolon-separated commands (not supported for component eval)', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'pwd'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Semicolon is complex but not split for component eval
+      const result = checker.check('ls ; pwd');
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should handle single quotes correctly in splitting', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check("echo 'test && test' && echo 'done'");
+      expect(result.allowed).toBe(true);
+      expect(result.components.length).toBe(2);
+    });
+
+    test('should reject if allow list is empty (strict mode)', () => {
+      const checker = new BashPermissionChecker({
+        allow: [],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('ls | grep test');
+      // With empty allow list but no patterns, all components fail
+      expect(result.allowed).toBe(false);
+    });
+
+    test('should properly escape special regex chars in command matching', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Commands with special regex characters
+      const result = checker.check('echo "test[0]" && echo "test.*"');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('should deny dangerous commands even through component evaluation', () => {
+      // Using default deny patterns
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'rm'],  // rm allowed in allow list
+        // default deny includes rm:-rf:*
+      });
+
+      // Should be denied because rm -rf matches deny pattern
+      const result = checker.check('ls && rm -rf /');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('should handle unbalanced quotes in one component', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Unbalanced quote should cause component parsing to fail
+      const result = checker.check('echo "test && echo done');
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  describe('Security: Denial of service prevention', () => {
+    test('should handle pathologically nested quotes', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const result = checker.check('echo "\'\\"test\\"\'\"');
+      // Should handle without hanging, result doesn't matter as much as not crashing
+      expect(result).toBeDefined();
+    });
+
+    test('should handle very long single component', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      const longArg = 'a'.repeat(10000);
+      const result = checker.check(`echo ${longArg} && echo done`);
+      expect(result.allowed).toBe(true);
+    });
+  });
+});
+
 describe('Architecture Alignment Tests', () => {
   test('should ensure parser and executor handle same command format', () => {
     const testCommands = [
@@ -444,18 +920,43 @@ describe('Architecture Alignment Tests', () => {
       // Parser should reject complex commands (returns null)
       expect(parserResult).toBeNull();
       expect(isComplex).toBe(true);
-
-      // Permission checker without complex patterns should reject
-      const checkerWithoutPatterns = new BashPermissionChecker({
-        allow: ['*'], // Only simple wildcard, no complex patterns
-        deny: [],
-        disableDefaultAllow: true,
-        disableDefaultDeny: true
-      });
-      const rejectResult = checkerWithoutPatterns.check(command);
-      expect(rejectResult.allowed).toBe(false);
-      expect(rejectResult.reason).toContain('Complex shell commands require explicit allow patterns');
     }
+  });
+
+  test('should allow complex commands via component evaluation when all components match wildcard', () => {
+    // With wildcard allow pattern, component evaluation will allow piped/chained commands
+    const checkerWithWildcard = new BashPermissionChecker({
+      allow: ['*'], // Wildcard allows any simple command
+      deny: [],
+      disableDefaultAllow: true,
+      disableDefaultDeny: true
+    });
+
+    // Commands where all components can be parsed as simple commands
+    const result1 = checkerWithWildcard.check('ls | grep test');
+    expect(result1.allowed).toBe(true);
+    expect(result1.allowedByComponents).toBe(true);
+
+    const result2 = checkerWithWildcard.check('make && make test');
+    expect(result2.allowed).toBe(true);
+    expect(result2.allowedByComponents).toBe(true);
+  });
+
+  test('should reject complex commands with constructs that cannot be split into simple components', () => {
+    const checkerWithWildcard = new BashPermissionChecker({
+      allow: ['*'],
+      deny: [],
+      disableDefaultAllow: true,
+      disableDefaultDeny: true
+    });
+
+    // Command substitution cannot be split into simple components
+    const result1 = checkerWithWildcard.check('echo $(date)');
+    expect(result1.allowed).toBe(false);
+
+    // Redirection cannot be split into simple components
+    const result2 = checkerWithWildcard.check('ls > output.txt');
+    expect(result2.allowed).toBe(false);
   });
 
   test('should allow complex commands when matching patterns are configured', () => {
