@@ -2587,6 +2587,11 @@ Follow these instructions carefully:
       let sameFormatErrorCount = 0;
       const MAX_REPEATED_FORMAT_ERRORS = 3;
 
+      // Circuit breaker for repeated identical responses without tool calls
+      let lastNoToolResponse = null;
+      let sameResponseCount = 0;
+      const MAX_REPEATED_IDENTICAL_RESPONSES = 3;
+
       // Tool iteration loop (only for non-CLI engines like Vercel/Anthropic/OpenAI)
       while (currentIteration < maxIterations && !completionAttempted) {
         currentIteration++;
@@ -3224,6 +3229,36 @@ Follow these instructions carefully:
             break;
           }
 
+          // Check for repeated identical responses - if AI gives same response 3 times,
+          // accept it as the final answer instead of continuing the loop
+          if (lastNoToolResponse !== null && assistantResponseContent === lastNoToolResponse) {
+            sameResponseCount++;
+            if (sameResponseCount >= MAX_REPEATED_IDENTICAL_RESPONSES) {
+              // Clean up the response - remove thinking tags
+              let cleanedResponse = assistantResponseContent;
+              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*$/gi, '').trim();
+
+              const hasSubstantialContent = cleanedResponse.length > 50 &&
+                !cleanedResponse.includes('<api_call>') &&
+                !cleanedResponse.includes('<tool_name>') &&
+                !cleanedResponse.includes('<function>');
+
+              if (hasSubstantialContent) {
+                if (this.debug) {
+                  console.log(`[DEBUG] Same response repeated ${sameResponseCount} times - accepting as final answer (${cleanedResponse.length} chars)`);
+                }
+                finalResult = cleanedResponse;
+                completionAttempted = true;
+                break;
+              }
+            }
+          } else {
+            // Different response, reset counter
+            lastNoToolResponse = assistantResponseContent;
+            sameResponseCount = 1;
+          }
+
           // Add assistant response and ask for tool usage
           currentMessages.push({ role: 'assistant', content: assistantResponseContent });
 
@@ -3313,10 +3348,56 @@ Or if your previous response already contains a complete, direct answer (not a t
 Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant message as the final answer. Only use this if that message was already a valid, complete response to the user's question.`;
           }
 
-          currentMessages.push({
-            role: 'user',
-            content: reminderContent
-          });
+          // Check if we should replace the previous reminder instead of appending
+          // After pushing assistant message, the previous user message (if a reminder) is at length - 2
+          // Message pattern: [..., prev_assistant, prev_user_reminder, current_assistant]
+          const prevUserMsgIndex = currentMessages.length - 2;
+          const prevUserMsg = currentMessages[prevUserMsgIndex];
+          const isExistingReminder = prevUserMsg && prevUserMsg.role === 'user' &&
+            (prevUserMsg.content.includes('Please use one of the available tools') ||
+             prevUserMsg.content.includes('<tool_result>'));
+
+          if (isExistingReminder && sameResponseCount > 1) {
+            // Replace the previous reminder with updated content and remove duplicated assistant message
+            // This prevents context bloat from repeated identical exchanges
+            // Pattern: [..., prev_assistant, prev_user_reminder, current_assistant] -> [..., current_assistant, new_reminder]
+            const prevAssistantIndex = prevUserMsgIndex - 1;
+
+            // Validate the expected pattern before splicing:
+            // 1. prevAssistantIndex must be valid (>= 0)
+            // 2. If there's a system message at index 0, don't remove it (prevAssistantIndex > 0)
+            // 3. Must be an assistant message at prevAssistantIndex
+            // 4. After removal, array should have at least 2 messages (current assistant + new reminder)
+            const hasSystemMessage = currentMessages.length > 0 && currentMessages[0].role === 'system';
+            const minValidIndex = hasSystemMessage ? 1 : 0;
+            const canSafelyRemove = prevAssistantIndex >= minValidIndex &&
+              currentMessages[prevAssistantIndex] &&
+              currentMessages[prevAssistantIndex].role === 'assistant' &&
+              (currentMessages.length - 2) >= (hasSystemMessage ? 2 : 1); // After removal: at least system+assistant or just assistant
+
+            if (canSafelyRemove) {
+              // Remove the duplicate assistant and old reminder (2 messages starting at prevAssistantIndex)
+              currentMessages.splice(prevAssistantIndex, 2);
+              if (this.debug) {
+                console.log(`[DEBUG] Removed duplicate assistant+reminder pair (iteration ${currentIteration}, same response #${sameResponseCount})`);
+              }
+            } else if (this.debug) {
+              console.log(`[DEBUG] Skipped deduplication: pattern validation failed (prevAssistantIndex=${prevAssistantIndex}, arrayLength=${currentMessages.length})`);
+            }
+
+            // Add iteration context to help the AI understand this is a repeated attempt
+            const iterationHint = `\n\n(Attempt #${sameResponseCount}: Your previous ${sameResponseCount} responses were identical. If you have a complete answer, use <attempt_complete></attempt_complete> to finalize it.)`;
+            currentMessages.push({
+              role: 'user',
+              content: reminderContent + iterationHint
+            });
+          } else {
+            currentMessages.push({
+              role: 'user',
+              content: reminderContent
+            });
+          }
+
           if (this.debug) {
             if (unrecognizedTool) {
               console.log(`[DEBUG] Unrecognized tool '${unrecognizedTool}' used. Providing error feedback.`);
