@@ -49,11 +49,17 @@ describe('Delegate Tool Configuration', () => {
         maxIterations: 30,
         parentSessionId: undefined,
         path: undefined, // No cwd or allowedFolders configured
+        allowedFolders: undefined,
         provider: undefined,
         model: undefined,
         tracer: undefined,
         enableBash: false,
-        bashConfig: undefined
+        bashConfig: undefined,
+        architectureFileName: undefined,
+        searchDelegate: undefined,
+        enableMcp: false,
+        mcpConfig: null,
+        mcpConfigPath: null
       });
 
       expect(result).toBe('Mock delegate response');

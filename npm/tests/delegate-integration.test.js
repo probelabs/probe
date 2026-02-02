@@ -92,11 +92,17 @@ describe('Delegate Tool Integration', () => {
         maxIterations: 30,
         parentSessionId: undefined,
         path: undefined,
+        allowedFolders: undefined,
         provider: undefined,
         model: undefined,
         tracer: undefined,
         enableBash: false,
-        bashConfig: undefined
+        bashConfig: undefined,
+        architectureFileName: undefined,
+        searchDelegate: undefined,
+        enableMcp: false,
+        mcpConfig: null,
+        mcpConfigPath: null
       });
 
       expect(result).toBe('Security analysis complete: Found 3 vulnerabilities');
