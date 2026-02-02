@@ -3362,12 +3362,27 @@ Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant messa
             // This prevents context bloat from repeated identical exchanges
             // Pattern: [..., prev_assistant, prev_user_reminder, current_assistant] -> [..., current_assistant, new_reminder]
             const prevAssistantIndex = prevUserMsgIndex - 1;
-            if (prevAssistantIndex >= 0 && currentMessages[prevAssistantIndex].role === 'assistant') {
+
+            // Validate the expected pattern before splicing:
+            // 1. prevAssistantIndex must be valid (>= 0)
+            // 2. If there's a system message at index 0, don't remove it (prevAssistantIndex > 0)
+            // 3. Must be an assistant message at prevAssistantIndex
+            // 4. After removal, array should have at least 2 messages (current assistant + new reminder)
+            const hasSystemMessage = currentMessages.length > 0 && currentMessages[0].role === 'system';
+            const minValidIndex = hasSystemMessage ? 1 : 0;
+            const canSafelyRemove = prevAssistantIndex >= minValidIndex &&
+              currentMessages[prevAssistantIndex] &&
+              currentMessages[prevAssistantIndex].role === 'assistant' &&
+              (currentMessages.length - 2) >= (hasSystemMessage ? 2 : 1); // After removal: at least system+assistant or just assistant
+
+            if (canSafelyRemove) {
               // Remove the duplicate assistant and old reminder (2 messages starting at prevAssistantIndex)
               currentMessages.splice(prevAssistantIndex, 2);
               if (this.debug) {
                 console.log(`[DEBUG] Removed duplicate assistant+reminder pair (iteration ${currentIteration}, same response #${sameResponseCount})`);
               }
+            } else if (this.debug) {
+              console.log(`[DEBUG] Skipped deduplication: pattern validation failed (prevAssistantIndex=${prevAssistantIndex}, arrayLength=${currentMessages.length})`);
             }
 
             // Add iteration context to help the AI understand this is a repeated attempt

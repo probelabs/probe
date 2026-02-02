@@ -58,7 +58,7 @@ describe('Repeated Response Handling', () => {
 
   /**
    * Simulates the message deduplication logic from ProbeAgent
-   * This must match the implementation in ProbeAgent.js lines 3351-3384
+   * This must match the implementation in ProbeAgent.js lines 3351-3392
    */
   function addReminderMessage(currentMessages, reminderContent) {
     // Check if we should replace the previous reminder
@@ -70,7 +70,20 @@ describe('Repeated Response Handling', () => {
 
     if (isExistingReminder && sameResponseCount > 1) {
       const prevAssistantIndex = prevUserMsgIndex - 1;
-      if (prevAssistantIndex >= 0 && currentMessages[prevAssistantIndex].role === 'assistant') {
+
+      // Validate the expected pattern before splicing:
+      // 1. prevAssistantIndex must be valid (>= 0)
+      // 2. If there's a system message at index 0, don't remove it (prevAssistantIndex > 0)
+      // 3. Must be an assistant message at prevAssistantIndex
+      // 4. After removal, array should have at least 2 messages
+      const hasSystemMessage = currentMessages.length > 0 && currentMessages[0].role === 'system';
+      const minValidIndex = hasSystemMessage ? 1 : 0;
+      const canSafelyRemove = prevAssistantIndex >= minValidIndex &&
+        currentMessages[prevAssistantIndex] &&
+        currentMessages[prevAssistantIndex].role === 'assistant' &&
+        (currentMessages.length - 2) >= (hasSystemMessage ? 2 : 1);
+
+      if (canSafelyRemove) {
         // Remove the duplicate assistant and old reminder
         currentMessages.splice(prevAssistantIndex, 2);
       }
@@ -552,6 +565,66 @@ describe('Repeated Response Handling', () => {
 
       expect(mockMessages).toHaveLength(1);
       expect(mockMessages[0].content).toBe(reminderContent);
+    });
+
+    test('should NOT remove system message at index 0 during deduplication', () => {
+      const systemMessage = { role: 'system', content: 'System instructions' };
+      const reminderContent = 'Please use one of the available tools';
+      const assistantContent = 'Response that repeats with sufficient length.';
+
+      // Setup: system + assistant + reminder + assistant
+      mockMessages.push(systemMessage);
+      mockMessages.push({ role: 'assistant', content: assistantContent });
+      processNoToolResponse(assistantContent);
+      addReminderMessage(mockMessages, reminderContent);
+      mockMessages.push({ role: 'assistant', content: assistantContent });
+      processNoToolResponse(assistantContent);
+      addReminderMessage(mockMessages, reminderContent);
+
+      // System message must still be at index 0
+      expect(mockMessages[0]).toBe(systemMessage);
+      expect(mockMessages[0].role).toBe('system');
+    });
+
+    test('should skip deduplication if it would leave array too small', () => {
+      const reminderContent = 'Please use one of the available tools';
+      const assistantContent = 'Response content.';
+
+      // Only have: assistant + reminder
+      mockMessages.push({ role: 'assistant', content: assistantContent });
+      processNoToolResponse(assistantContent);
+      addReminderMessage(mockMessages, reminderContent);
+
+      // After pushing second assistant, we have: assistant + reminder + assistant
+      mockMessages.push({ role: 'assistant', content: assistantContent });
+      processNoToolResponse(assistantContent);
+
+      const lengthBefore = mockMessages.length;
+      addReminderMessage(mockMessages, reminderContent);
+
+      // Should have added the iteration hint but still kept the messages
+      expect(mockMessages[mockMessages.length - 1].content).toContain('Attempt #2');
+    });
+
+    test('should validate message role before splicing', () => {
+      const reminderContent = 'Please use one of the available tools';
+      const assistantContent = 'Response content that is long enough.';
+
+      // Create non-standard pattern: user + user + assistant (not assistant + reminder + assistant)
+      mockMessages.push({ role: 'user', content: 'First user message' });
+      mockMessages.push({ role: 'user', content: reminderContent }); // This looks like a reminder but prev is user
+      mockMessages.push({ role: 'assistant', content: assistantContent });
+      processNoToolResponse(assistantContent);
+
+      // Now add another assistant with same content
+      mockMessages.push({ role: 'assistant', content: assistantContent });
+      processNoToolResponse(assistantContent);
+
+      const lengthBefore = mockMessages.length;
+      addReminderMessage(mockMessages, reminderContent);
+
+      // The first user message should still exist
+      expect(mockMessages[0].content).toBe('First user message');
     });
   });
 

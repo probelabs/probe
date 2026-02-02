@@ -100,7 +100,15 @@ This is the actual answer that should be preserved and is long enough to pass th
 
       if (isExistingReminder && sameResponseCount > 1) {
         const prevAssistantIndex = prevUserMsgIndex - 1;
-        if (prevAssistantIndex >= 0 && messages[prevAssistantIndex].role === 'assistant') {
+        // Validate bounds before splicing
+        const hasSystemMessage = messages.length > 0 && messages[0].role === 'system';
+        const minValidIndex = hasSystemMessage ? 1 : 0;
+        const canSafelyRemove = prevAssistantIndex >= minValidIndex &&
+          messages[prevAssistantIndex] &&
+          messages[prevAssistantIndex].role === 'assistant' &&
+          (messages.length - 2) >= (hasSystemMessage ? 2 : 1);
+
+        if (canSafelyRemove) {
           // Remove duplicate assistant and old reminder
           messages.splice(prevAssistantIndex, 2);
         }
@@ -136,7 +144,15 @@ This is the actual answer that should be preserved and is long enough to pass th
 
       if (isExistingReminder && sameResponseCount > 1) {
         const prevAssistantIndex = prevUserMsgIndex - 1;
-        if (prevAssistantIndex >= 0 && messages[prevAssistantIndex].role === 'assistant') {
+        // Validate bounds before splicing
+        const hasSystemMessage = messages.length > 0 && messages[0].role === 'system';
+        const minValidIndex = hasSystemMessage ? 1 : 0;
+        const canSafelyRemove = prevAssistantIndex >= minValidIndex &&
+          messages[prevAssistantIndex] &&
+          messages[prevAssistantIndex].role === 'assistant' &&
+          (messages.length - 2) >= (hasSystemMessage ? 2 : 1);
+
+        if (canSafelyRemove) {
           messages.splice(prevAssistantIndex, 2);
         }
         messages.push({ role: 'user', content: 'New reminder' });
