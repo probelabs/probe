@@ -724,6 +724,8 @@ fn test_filter_code_block_with_ast() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Create term matches for a block
@@ -814,6 +816,8 @@ fn test_filter_tokenized_block() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Import the function from probe crate
@@ -900,6 +904,8 @@ fn test_filter_tokenized_block() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Test with only keywordGamma (lowercased since tokenization lowercases)

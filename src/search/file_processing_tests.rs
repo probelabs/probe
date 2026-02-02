@@ -55,6 +55,8 @@ pub fn create_test_query_plan(terms: &[&str]) -> QueryPlan {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     }
 }
 

@@ -454,6 +454,8 @@ fn test_required_terms_query() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Use the term indices directly

@@ -233,26 +233,23 @@ pub fn filter_tokenized_block(
 
         if !has_all_required {
             // Check for special cases in compound words
-            let missing_required: Vec<_> = plan
+            let missing_required: Vec<usize> = plan
                 .required_terms_indices
                 .iter()
                 .filter(|idx| !matched_terms.contains(idx))
+                .copied()
                 .collect();
 
             let mut check_special_cases = false;
-            for &idx in &missing_required {
-                // Find the term for this index
-                if let Some(term) = plan
-                    .term_indices
-                    .iter()
-                    .find(|(_, &i)| i == *idx)
-                    .map(|(t, _)| t)
-                {
-                    if crate::search::tokenization::is_special_case(term)
-                        && tokenized_content.contains(&term.to_lowercase())
-                    {
-                        matched_terms.insert(*idx);
-                        check_special_cases = true;
+            for idx in &missing_required {
+                // PHASE 5 OPTIMIZATION: Use pre-computed special case info
+                if plan.special_case_indices.contains(idx) {
+                    // Use pre-computed lowercase term for O(n) lookup (but avoid is_special_case call)
+                    if let Some(term_lower) = plan.special_case_terms_lower.get(idx) {
+                        if tokenized_content.iter().any(|t| t == term_lower) {
+                            matched_terms.insert(*idx);
+                            check_special_cases = true;
+                        }
                     }
                 }
             }
@@ -268,21 +265,28 @@ pub fn filter_tokenized_block(
         return true;
     }
 
-    // Special handling for compound words like "whitelist"
-    // Check if any term in the plan is a compound of tokens in the content
-    for (term, &idx) in &plan.term_indices {
+    // PHASE 5 OPTIMIZATION: Use pre-computed special case indices
+    // Skip the expensive is_special_case() calls by using pre-computed data
+    for &idx in &plan.special_case_indices {
         // Skip if we already matched this term
         if matched_terms.contains(&idx) {
             continue;
         }
 
-        // Check if this term is a special case that should be treated as a single token
-        if crate::search::tokenization::is_special_case(term) {
-            // If the tokenized content contains this special case term, add it to matched terms
-            if tokenized_content.contains(&term.to_lowercase()) {
+        // Use pre-computed lowercase term
+        if let Some(term_lower) = plan.special_case_terms_lower.get(&idx) {
+            if tokenized_content.iter().any(|t| t == term_lower) {
                 matched_terms.insert(idx);
                 if debug_mode {
-                    println!("DEBUG: Special case term '{term}' matched in tokenized content");
+                    // Find the original term for debug output
+                    if let Some(term) = plan
+                        .term_indices
+                        .iter()
+                        .find(|(_, &i)| i == idx)
+                        .map(|(t, _)| t)
+                    {
+                        println!("DEBUG: Special case term '{term}' matched in tokenized content");
+                    }
                 }
             }
         }

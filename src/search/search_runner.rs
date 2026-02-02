@@ -937,8 +937,18 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     // Track total files available for accurate skipped file count
     let total_ranked_files = ranked_files.len();
 
+    // Use dynamic batch size: min of BATCH_SIZE and estimated_files_needed
+    // This prevents processing way more files than needed when limits are strict
+    let effective_batch_size = BATCH_SIZE.min(estimated_files_needed);
+    if debug_mode {
+        println!(
+            "DEBUG: Using batch size {} (BATCH_SIZE={}, estimated_files_needed={})",
+            effective_batch_size, BATCH_SIZE, estimated_files_needed
+        );
+    }
+
     // Process files in batches
-    for batch in ranked_files.chunks(BATCH_SIZE) {
+    for batch in ranked_files.chunks(effective_batch_size) {
         if !should_continue {
             break;
         }
