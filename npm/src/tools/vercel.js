@@ -469,7 +469,7 @@ export const extractTool = (options = {}) => {
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig, architectureFileName } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null } = options;
 
 	return tool({
 		name: 'delegate',
@@ -558,7 +558,10 @@ export const delegateTool = (options = {}) => {
 				enableBash,
 				bashConfig,
 				architectureFileName,
-				searchDelegate
+				searchDelegate,
+				enableMcp,
+				mcpConfig,
+				mcpConfigPath
 			});
 
 			return result;

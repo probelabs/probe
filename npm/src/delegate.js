@@ -186,6 +186,9 @@ const delegationManager = new DelegationManager();
  * @param {boolean} [options.searchDelegate] - Use delegated search in the subagent
  * @param {Object|string} [options.schema] - Optional JSON schema to enforce response format
  * @param {boolean} [options.enableTasks=false] - Enable task management for the subagent (isolated instance)
+ * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration (inherited from parent)
+ * @param {Object} [options.mcpConfig] - MCP configuration object (inherited from parent)
+ * @param {string} [options.mcpConfigPath] - Path to MCP configuration file (inherited from parent)
  * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({
@@ -208,7 +211,10 @@ export async function delegate({
 	disableTools = false,
 	searchDelegate = undefined,
 	schema = null,
-	enableTasks = false
+	enableTasks = false,
+	enableMcp = false,
+	mcpConfig = null,
+	mcpConfigPath = null
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -270,7 +276,10 @@ export async function delegate({
 			allowedTools,
 			disableTools,
 			searchDelegate,
-			enableTasks // Inherit from parent (subagent gets isolated TaskManager)
+			enableTasks, // Inherit from parent (subagent gets isolated TaskManager)
+			enableMcp,   // Inherit from parent (subagent creates own MCPXmlBridge)
+			mcpConfig,   // Inherit from parent
+			mcpConfigPath // Inherit from parent
 		});
 
 		if (debug) {
