@@ -288,11 +288,12 @@ export class MCPClientManager {
       });
 
       // Race between the actual call and timeout
+      // Pass timeout to SDK's callTool to override its default 60s timeout
       const result = await Promise.race([
         clientInfo.client.callTool({
           name: tool.originalName,
           arguments: args
-        }),
+        }, undefined, { timeout }),
         timeoutPromise
       ]);
 
