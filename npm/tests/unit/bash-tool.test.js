@@ -115,10 +115,18 @@ describe('Bash Permission Checker', () => {
       expect(result.reason).toContain('deny pattern');
     });
 
-    test('should deny complex commands immediately', () => {
+    test('should allow complex commands when all components are in allow list', () => {
+      // ls and grep are both in default allow list
       const result = checker.check('ls | grep test');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('should deny complex commands when components are not allowed', () => {
+      // unknowncmd is not in any allow list
+      const result = checker.check('unknowncmd | othercmd');
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Complex shell commands');
       expect(result.isComplex).toBe(true);
     });
 
@@ -354,16 +362,45 @@ describe('Bash Permission Telemetry', () => {
     // Clear initialization event
     recordedEvents.length = 0;
 
+    // ls and grep are in default allow list, so this will be allowed via component evaluation
     const result = checker.check('ls | grep test');
+    expect(result.allowed).toBe(true);
+    expect(result.isComplex).toBe(true);
+
+    // Should have recorded an allowed event with component flag
+    const allowedEvent = recordedEvents.find(e => e.eventType === 'permission.allowed');
+    expect(allowedEvent).toBeDefined();
+    expect(allowedEvent.data.command).toBe('ls | grep test');
+    expect(allowedEvent.data.isComplex).toBe(true);
+    expect(allowedEvent.data.allowedByComponents).toBe(true);
+  });
+
+  test('should record permission.denied event for complex commands with unknown components', () => {
+    const recordedEvents = [];
+    const mockTracer = {
+      recordBashEvent: (eventType, data) => {
+        recordedEvents.push({ eventType, data });
+      }
+    };
+
+    const checker = new BashPermissionChecker({
+      debug: false,
+      tracer: mockTracer
+    });
+
+    // Clear initialization event
+    recordedEvents.length = 0;
+
+    // unknowncmd is not in any allow list
+    const result = checker.check('unknowncmd | othercmd');
     expect(result.allowed).toBe(false);
     expect(result.isComplex).toBe(true);
 
-    // Should have recorded a denied event with complex flag
+    // Should have recorded a denied event
     const deniedEvent = recordedEvents.find(e => e.eventType === 'permission.denied');
     expect(deniedEvent).toBeDefined();
-    expect(deniedEvent.data.command).toBe('ls | grep test');
+    expect(deniedEvent.data.command).toBe('unknowncmd | othercmd');
     expect(deniedEvent.data.isComplex).toBe(true);
-    expect(deniedEvent.data.reason).toBe('no_matching_complex_pattern');
   });
 
   test('should record permissions.initialized event on construction', () => {
@@ -462,21 +499,37 @@ describe('Security Tests (Updated)', () => {
       }
     });
 
-    test('should ensure complex commands are universally rejected', () => {
-      const complexCommands = [
-        'ls | grep test',
-        'make && make test',
+    test('should allow complex commands via component evaluation when components are allowed', () => {
+      // Commands where all components are in default allow list
+      const allowedComplexCommands = [
+        'ls | grep test',   // ls and grep both allowed
+        'echo hello && pwd' // echo and pwd both allowed
+      ];
+
+      for (const command of allowedComplexCommands) {
+        const permResult = checker.check(command);
+        expect(permResult.allowed).toBe(true);
+        expect(permResult.isComplex).toBe(true);
+        expect(permResult.allowedByComponents).toBe(true);
+
+        // Parser still rejects (for direct execution) but permission check passes
+        const execArray = parseCommandForExecution(command);
+        expect(execArray).toBeNull();
+      }
+    });
+
+    test('should reject complex commands with constructs that cannot be split', () => {
+      // Commands with command substitution, redirection cannot be split into simple components
+      const unsplittableCommands = [
         'echo $(date)',
         'ls > output.txt'
       ];
 
-      for (const command of complexCommands) {
-        // Permission checker should reject
+      for (const command of unsplittableCommands) {
         const permResult = checker.check(command);
         expect(permResult.allowed).toBe(false);
-        expect(permResult.reason).toContain('Complex shell commands');
+        expect(permResult.isComplex).toBe(true);
 
-        // Parser should also reject
         const execArray = parseCommandForExecution(command);
         expect(execArray).toBeNull();
       }
