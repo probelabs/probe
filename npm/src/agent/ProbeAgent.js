@@ -210,7 +210,8 @@ export class ProbeAgent {
     this.maxIterations = options.maxIterations || null;
     this.disableMermaidValidation = !!options.disableMermaidValidation;
     this.disableJsonValidation = !!options.disableJsonValidation;
-    this.enableSkills = options.disableSkills ? false : (options.enableSkills !== undefined ? !!options.enableSkills : true);
+    // Skills are disabled by default; enable via allowSkills or enableSkills
+    this.enableSkills = options.disableSkills ? false : !!(options.allowSkills || options.enableSkills);
     if (Array.isArray(options.skillDirs)) {
       this.skillDirs = options.skillDirs;
     } else if (typeof options.skillDirs === 'string') {

@@ -138,7 +138,7 @@ function parseArgs() {
     noMermaidValidation: false, // New flag to disable mermaid validation
     allowedTools: null, // Tool filtering: ['*'] = all, [] = none, ['tool1', 'tool2'] = specific
     disableTools: false, // Convenience flag to disable all tools
-    disableSkills: false, // Disable skill discovery and activation
+    allowSkills: false, // Enable skill discovery and activation (disabled by default)
     skillDirs: null, // Comma-separated list of repo-relative skill directories
     // Task management
     enableTasks: false, // Enable task tracking for progress management
@@ -212,8 +212,8 @@ function parseArgs() {
     } else if (arg === '--disable-tools') {
       // Convenience flag to disable all tools (raw AI mode)
       config.disableTools = true;
-    } else if (arg === '--no-skills') {
-      config.disableSkills = true;
+    } else if (arg === '--allow-skills') {
+      config.allowSkills = true;
     } else if (arg === '--skills-dir' && i + 1 < args.length) {
       config.skillDirs = args[++i].split(',').map(dir => dir.trim()).filter(Boolean);
     } else if (arg === '--allow-tasks') {
@@ -280,8 +280,8 @@ Options:
                                    Supports exclusion: '*,!bash' (all except bash)
   --disable-tools                  Disable all tools (raw AI mode, no code analysis)
                                    Convenience flag equivalent to --allowed-tools none
+  --allow-skills                   Enable skill discovery and activation (disabled by default)
   --skills-dir <dirs>              Comma-separated list of repo-relative skill directories to scan
-  --no-skills                      Disable skill discovery and activation
   --allow-tasks                    Enable task management for tracking multi-step progress
   --verbose                        Enable verbose output
   --outline                        Use outline-xml format for code search results
@@ -841,7 +841,7 @@ async function main() {
       disableMermaidValidation: config.noMermaidValidation,
       allowedTools: config.allowedTools,
       disableTools: config.disableTools,
-      enableSkills: !config.disableSkills,
+      allowSkills: config.allowSkills,
       skillDirs: config.skillDirs,
       enableBash: config.enableBash,
       bashConfig: bashConfig,
