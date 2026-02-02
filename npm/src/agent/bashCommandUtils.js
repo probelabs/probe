@@ -1,10 +1,36 @@
 /**
  * Unified command parsing utilities for bash tool
- * 
+ *
  * This module provides a single source of truth for parsing shell commands.
  * It supports only simple commands (no pipes, operators, or substitutions)
  * to align with the executor's capabilities.
- * 
+ *
+ * ## Escape Handling Architecture
+ *
+ * There are THREE different escape handling behaviors in the bash permission system,
+ * each serving a distinct purpose:
+ *
+ * 1. **stripQuotedContent()** (in parseSimpleCommand): SKIPS both backslash AND next char
+ *    - Purpose: Detect operators (|, &&, ||) that exist OUTSIDE quoted strings
+ *    - Output is never used for execution, only for operator detection
+ *    - Example: `echo "a && b"` → strips quoted content → no `&&` detected outside quotes
+ *
+ * 2. **parseSimpleCommand()** main loop: STRIPS backslash, KEEPS escaped char
+ *    - Purpose: Extract actual argument values that would be passed to the command
+ *    - Matches bash behavior where `\"` inside double quotes becomes `"`
+ *    - Example: `echo "he said \"hi\""` → args: ['he said "hi"']
+ *
+ * 3. **_splitComplexCommand()** (in bashPermissions.js): PRESERVES both backslash AND next char
+ *    - Purpose: Split complex commands by operators while preserving escape sequences
+ *    - Output is passed to parseCommand() which will then interpret the escapes
+ *    - Example: `echo "test\" && b" && cmd` → components passed to parseCommand for final parsing
+ *
+ * This design ensures:
+ * - Commands with operators inside quotes (e.g., `echo "a && b"`) are NOT incorrectly
+ *   flagged as complex commands
+ * - Escaped quotes (e.g., `\"`) don't prematurely end quoted sections
+ * - Each component gets proper escape interpretation in the final parsing step
+ *
  * @module bashCommandUtils
  */
 
@@ -40,8 +66,11 @@ export function parseSimpleCommand(command) {
 
   // Strip quoted content before checking for complex operators
   // This prevents detecting operators inside quotes (e.g., echo "a && b")
-  // Note: This function is ONLY used to detect operators, not for actual parsing.
-  // The result is used to check for |, &&, ||, etc. outside of quoted strings.
+  //
+  // IMPORTANT: This function is ONLY used to detect operators, NOT for argument parsing.
+  // It REMOVES both backslash AND escaped character from the output, unlike parseSimpleCommand
+  // which interprets escapes. This is intentional - we only care about finding operators
+  // that exist outside of quoted strings. See module header for architecture details.
   const stripQuotedContent = (str) => {
     let result = '';
     let inQuotes = false;
