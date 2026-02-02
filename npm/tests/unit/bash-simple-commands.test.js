@@ -736,10 +736,15 @@ describe('Component-based Complex Command Evaluation', () => {
         disableDefaultDeny: true
       });
 
-      const longChain = Array(20).fill('echo test').join(' && ');
+      // 20 components is an arbitrary but reasonable stress test count
+      // representing more components than typical real-world usage (2-5 usually)
+      // while not being so large as to slow down tests
+      const COMPONENT_COUNT = 20;
+      const longChain = Array(COMPONENT_COUNT).fill('echo test').join(' && ');
       const result = checker.check(longChain);
       expect(result.allowed).toBe(true);
       expect(result.allowedByComponents).toBe(true);
+      expect(result.components.length).toBe(COMPONENT_COUNT);
     });
 
     test('should handle mixed operators correctly', () => {
@@ -882,7 +887,7 @@ describe('Component-based Complex Command Evaluation', () => {
     test('should not allow bypass via escaped quote injection', () => {
       const checker = new BashPermissionChecker({
         allow: ['echo'],
-        deny: [],
+        deny: ['malicious'],  // Explicitly deny malicious command
         disableDefaultAllow: true,
         disableDefaultDeny: true
       });
@@ -891,8 +896,13 @@ describe('Component-based Complex Command Evaluation', () => {
       // This should NOT treat the && as an operator if properly inside quotes
       const result = checker.check('echo "test\\" && malicious"');
       // The backslash escapes the quote, so we're still inside the string
-      // and && is part of the string content
+      // and && is part of the string content - this is a SIMPLE command
       expect(result.isComplex).toBe(false);
+      // CRITICAL: The command should be ALLOWED because it's just echo with a string argument
+      // If the parser incorrectly split on &&, it would try to run "malicious" which is denied
+      expect(result.allowed).toBe(true);
+      // Verify the parsed command is echo (not malicious)
+      expect(result.parsed.command).toBe('echo');
     });
 
     test('should handle single quotes without escape processing', () => {
@@ -926,6 +936,92 @@ describe('Component-based Complex Command Evaluation', () => {
       // 'test\\' is: quote, t, e, s, t, \, \, quote end - backslash is literal
       const result = checker.check("echo 'contains \\\\ backslash'");
       expect(result.isComplex).toBe(false);
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe('Edge cases in command splitting', () => {
+    test('should handle command with only operators', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['*'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Just operators - should result in no valid components
+      const result = checker.check('&& || |');
+      expect(result.isComplex).toBe(true);
+      expect(result.allowed).toBe(false);
+    });
+
+    test('should handle command ending with operator', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Trailing operator
+      const result = checker.check('echo test &&');
+      expect(result.isComplex).toBe(true);
+      // Should have 1 component (echo test), second is empty
+      expect(result.allowed).toBe(false);  // Empty second component fails
+    });
+
+    test('should handle command starting with operator', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Leading operator
+      const result = checker.check('&& echo test');
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should handle multiple consecutive operators', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Multiple consecutive operators create empty components
+      const result = checker.check('echo a && && echo b');
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should handle unicode in commands', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Unicode characters
+      const result = checker.check('echo "héllo 世界" && echo "done"');
+      expect(result.isComplex).toBe(true);
+      expect(result.allowed).toBe(true);
+      expect(result.components.length).toBe(2);
+    });
+
+    test('should handle newlines in quoted strings', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        deny: [],
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Newline inside quotes should not affect parsing
+      const result = checker.check('echo "line1\nline2" && echo done');
+      expect(result.isComplex).toBe(true);
       expect(result.allowed).toBe(true);
     });
   });

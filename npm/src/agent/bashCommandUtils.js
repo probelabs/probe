@@ -40,6 +40,8 @@ export function parseSimpleCommand(command) {
 
   // Strip quoted content before checking for complex operators
   // This prevents detecting operators inside quotes (e.g., echo "a && b")
+  // Note: This function is ONLY used to detect operators, not for actual parsing.
+  // The result is used to check for |, &&, ||, etc. outside of quoted strings.
   const stripQuotedContent = (str) => {
     let result = '';
     let inQuotes = false;
@@ -49,18 +51,15 @@ export function parseSimpleCommand(command) {
       const char = str[i];
       const nextChar = str[i + 1];
 
-      // Handle escape sequences outside quotes
-      if (!inQuotes && char === '\\') {
-        // Skip the backslash and the next character
-        result += char;
-        if (nextChar !== undefined) {
-          result += nextChar;
-          i++;
-        }
+      // Handle escape sequences outside quotes - skip both chars (not operators)
+      if (!inQuotes && char === '\\' && nextChar !== undefined) {
+        // Skip the backslash and next char - they can't be operators
+        i++;
         continue;
       }
 
-      // Handle escape sequences inside double quotes (single quotes don't support escaping)
+      // Handle escape sequences inside double quotes
+      // In bash, only ", $, `, \, and newline are escapable in double quotes
       if (inQuotes && quoteChar === '"' && char === '\\' && nextChar !== undefined) {
         // Skip both the backslash and the escaped character (stays inside quotes)
         i++;

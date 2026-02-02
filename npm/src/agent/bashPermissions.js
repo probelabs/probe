@@ -274,12 +274,19 @@ export class BashPermissionChecker {
 
   /**
    * Split a complex command into component commands by operators
+   *
+   * Note: This function intentionally PRESERVES escape sequences in the output
+   * because the resulting components will be passed to parseCommand() which
+   * handles escape interpretation. This is different from stripQuotedContent()
+   * in bashCommandUtils.js which removes quoted content for operator detection.
+   *
    * @private
    * @param {string} command - Complex command to split
-   * @returns {string[]} Array of component commands
+   * @returns {string[]} Array of component commands (with escapes preserved)
    */
   _splitComplexCommand(command) {
     // Split by &&, ||, and | operators while respecting quotes and escape sequences
+    // IMPORTANT: Preserves backslashes so parseCommand() can interpret them correctly
     const components = [];
     let current = '';
     let inQuotes = false;
