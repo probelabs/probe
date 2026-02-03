@@ -402,8 +402,8 @@ CRITICAL: Do NOT guess keywords. Actually run searches and see what returns resu
 			enableBash: false,
 			promptType: 'code-researcher',
 			// Full tool access for exploration and experimentation
-			maxIterations: 15,
-			timeout: 180
+			maxIterations: 15
+			// timeout removed - inherit default from delegate (300s)
 		});
 
 		const plan = parsePlanningResult(stripResultTags(result));
@@ -472,8 +472,8 @@ IMPORTANT: When completing, use the FULL format: <attempt_completion><result>YOU
 			enableBash: false,
 			promptType: 'code-researcher',
 			allowedTools: [],
-			maxIterations: 5,
-			timeout: 180
+			maxIterations: 5
+			// timeout removed - inherit default from delegate (300s)
 		});
 
 		return stripResultTags(result);
