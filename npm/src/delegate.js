@@ -28,6 +28,10 @@ class DelegationManager {
 		this.sessionDelegations = new Map();
 		this.globalActive = 0;
 
+		// Queue for waiting delegations (FIFO)
+		// Each entry: { resolve: Function, parentSessionId: string|null }
+		this.waitQueue = [];
+
 		// Start periodic cleanup of stale sessions (every 5 minutes)
 		// Wrapped in try-catch to prevent interval errors from crashing the process
 		this.cleanupInterval = setInterval(() => {
@@ -47,6 +51,7 @@ class DelegationManager {
 	/**
 	 * Check limits and increment counters (synchronous, atomic in Node.js event loop)
 	 * @param {string|null|undefined} parentSessionId - Parent session ID for tracking
+	 * @returns {boolean} true if acquired, false if would need to wait
 	 */
 	tryAcquire(parentSessionId) {
 		// Validate parentSessionId parameter
@@ -54,9 +59,9 @@ class DelegationManager {
 			throw new TypeError('parentSessionId must be a string, null, or undefined');
 		}
 
-		// Check global limit
+		// Check global limit - return false instead of throwing
 		if (this.globalActive >= this.maxConcurrent) {
-			throw new Error(`Maximum concurrent delegations (${this.maxConcurrent}) reached. Please wait for some delegations to complete.`);
+			return false;
 		}
 
 		// Check per-session limit
@@ -70,6 +75,16 @@ class DelegationManager {
 		}
 
 		// Increment counters (atomic in single-threaded Node.js)
+		this._incrementCounters(parentSessionId);
+
+		return true;
+	}
+
+	/**
+	 * Internal helper to increment counters
+	 * @private
+	 */
+	_incrementCounters(parentSessionId) {
 		this.globalActive++;
 
 		if (parentSessionId) {
@@ -84,12 +99,38 @@ class DelegationManager {
 				});
 			}
 		}
-
-		return true;
 	}
 
 	/**
-	 * Decrement counters (synchronous, atomic in Node.js event loop)
+	 * Acquire a delegation slot, waiting in queue if necessary
+	 * @param {string|null|undefined} parentSessionId - Parent session ID for tracking
+	 * @param {boolean} debug - Enable debug logging
+	 * @returns {Promise<boolean>} Resolves when slot is acquired
+	 */
+	async acquire(parentSessionId, debug = false) {
+		// Try immediate acquisition first
+		if (this.tryAcquire(parentSessionId)) {
+			return true;
+		}
+
+		// Need to wait in queue
+		if (debug) {
+			console.error(`[DelegationManager] Slot unavailable (${this.globalActive}/${this.maxConcurrent}), queuing... (queue size: ${this.waitQueue.length})`);
+		}
+
+		// Create a promise that will be resolved when a slot becomes available
+		return new Promise((resolve) => {
+			this.waitQueue.push({
+				resolve,
+				parentSessionId,
+				debug,
+				queuedAt: Date.now()
+			});
+		});
+	}
+
+	/**
+	 * Decrement counters and process queue (synchronous, atomic in Node.js event loop)
 	 */
 	release(parentSessionId, debug = false) {
 		this.globalActive = Math.max(0, this.globalActive - 1);
@@ -107,7 +148,48 @@ class DelegationManager {
 		}
 
 		if (debug) {
-			console.error(`[DELEGATE] Released. Global active: ${this.globalActive}`);
+			console.error(`[DELEGATE] Released. Global active: ${this.globalActive}, queue size: ${this.waitQueue.length}`);
+		}
+
+		// Process next item in queue if there's capacity
+		this._processQueue(debug);
+	}
+
+	/**
+	 * Process the wait queue - grant slot to next waiting delegation
+	 * @private
+	 */
+	_processQueue(debug = false) {
+		while (this.waitQueue.length > 0 && this.globalActive < this.maxConcurrent) {
+			const next = this.waitQueue.shift();
+			if (!next) break;
+
+			const { resolve, parentSessionId, queuedAt } = next;
+
+			// Check per-session limit before granting
+			if (parentSessionId) {
+				const sessionData = this.sessionDelegations.get(parentSessionId);
+				const sessionCount = sessionData?.count || 0;
+
+				if (sessionCount >= this.maxPerSession) {
+					// Can't grant to this session, resolve with error
+					// But we handle this by re-throwing in acquire
+					if (debug) {
+						console.error(`[DelegationManager] Session limit reached for queued item, skipping`);
+					}
+					continue;
+				}
+			}
+
+			// Grant the slot
+			this._incrementCounters(parentSessionId);
+
+			if (debug) {
+				const waitTime = Date.now() - queuedAt;
+				console.error(`[DelegationManager] Granted slot from queue (waited ${waitTime}ms). Active: ${this.globalActive}/${this.maxConcurrent}`);
+			}
+
+			resolve(true);
 		}
 	}
 
@@ -119,7 +201,8 @@ class DelegationManager {
 			globalActive: this.globalActive,
 			maxConcurrent: this.maxConcurrent,
 			maxPerSession: this.maxPerSession,
-			sessionCount: this.sessionDelegations.size
+			sessionCount: this.sessionDelegations.size,
+			queueSize: this.waitQueue.length
 		};
 	}
 
@@ -235,8 +318,8 @@ export async function delegate({
 	let acquired = false;
 
 	try {
-		// Check limits and acquire delegation slot inside try block for proper cleanup
-		delegationManager.tryAcquire(parentSessionId);
+		// Acquire delegation slot (waits in queue if necessary)
+		await delegationManager.acquire(parentSessionId, debug);
 		acquired = true;
 
 		if (debug) {
@@ -247,7 +330,7 @@ export async function delegate({
 			console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
 			console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
 			console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
-			console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
+			console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize}`);
 			console.error(`[DELEGATE] Using ProbeAgent SDK with ${promptType} prompt`);
 		}
 		// Create a new ProbeAgent instance for the delegated task
