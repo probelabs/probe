@@ -47,7 +47,7 @@ export const bashSchema = z.object({
 });
 
 export const analyzeAllSchema = z.object({
-	question: z.string().describe('Free-form question to answer (e.g., "What features are customers using?", "List all API endpoints"). The AI will automatically plan the search strategy, process all matching data, and synthesize a comprehensive answer.'),
+	question: z.string().min(1).describe('Free-form question to answer (e.g., "What features are customers using?", "List all API endpoints"). The AI will automatically plan the search strategy, process all matching data, and synthesize a comprehensive answer.'),
 	path: z.string().optional().default('.').describe('Directory path to search in')
 });
 
@@ -298,30 +298,9 @@ Description: Intelligent bulk data analysis tool. Process ALL data matching your
 
 **WARNING:** Makes multiple LLM calls - slower and costlier than search.
 
-## Two Usage Modes:
-
-### INTELLIGENT MODE (Recommended)
-Just ask a question - the AI figures out the best strategy:
-<analyze_all>
-<question>What features are customers using in this product?</question>
-<path>./docs</path>
-</analyze_all>
-
-### LEGACY MODE
-Specify exact parameters if you know what you want:
-<analyze_all>
-<query>feature AND (customer OR user)</query>
-<analysis_prompt>Extract all feature names mentioned</analysis_prompt>
-<aggregation>list_unique</aggregation>
-<path>./docs</path>
-</analyze_all>
-
 Parameters:
-- question: (intelligent mode) Free-form question to answer
-- query: (legacy mode) Search query (Elasticsearch syntax)
-- analysis_prompt: (legacy mode) What to extract from each chunk
-- aggregation: (legacy mode) summarize | list_unique | count | group_by
-- path: (optional) Directory to search in
+- question: (required) Free-form question to answer - the AI determines the best search strategy automatically
+- path: (optional) Directory to search in (default: current directory)
 
 <examples>
 

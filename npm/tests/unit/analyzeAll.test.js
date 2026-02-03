@@ -10,74 +10,57 @@ import {
 
 describe('analyzeAll schemas and definitions', () => {
   describe('analyzeAllSchema', () => {
-    test('should validate required query field', () => {
+    test('should validate required question field', () => {
       const result = analyzeAllSchema.safeParse({
-        analysis_prompt: 'test prompt'
+        path: './src'
       });
       expect(result.success).toBe(false);
     });
 
-    test('should validate required analysis_prompt field', () => {
+    test('should accept valid minimal input with just question', () => {
       const result = analyzeAllSchema.safeParse({
-        query: 'test query'
-      });
-      expect(result.success).toBe(false);
-    });
-
-    test('should accept valid minimal input', () => {
-      const result = analyzeAllSchema.safeParse({
-        query: 'test query',
-        analysis_prompt: 'Extract all items'
+        question: 'What features are available?'
       });
       expect(result.success).toBe(true);
       expect(result.data.path).toBe('.'); // Default value
-      expect(result.data.aggregation).toBe('summarize'); // Default value
     });
 
-    test('should accept all valid aggregation types', () => {
-      const validAggregations = ['summarize', 'list_unique', 'count', 'group_by'];
-
-      validAggregations.forEach(aggregation => {
-        const result = analyzeAllSchema.safeParse({
-          query: 'test',
-          analysis_prompt: 'test',
-          aggregation
-        });
-        expect(result.success).toBe(true);
-        expect(result.data.aggregation).toBe(aggregation);
-      });
-    });
-
-    test('should reject invalid aggregation type', () => {
+    test('should accept question with custom path', () => {
       const result = analyzeAllSchema.safeParse({
-        query: 'test',
-        analysis_prompt: 'test',
-        aggregation: 'invalid_type'
+        question: 'List all API endpoints',
+        path: './src/api'
+      });
+      expect(result.success).toBe(true);
+      expect(result.data.question).toBe('List all API endpoints');
+      expect(result.data.path).toBe('./src/api');
+    });
+
+    test('should reject empty question', () => {
+      const result = analyzeAllSchema.safeParse({
+        question: ''
       });
       expect(result.success).toBe(false);
     });
 
-    test('should accept custom path', () => {
+    test('should use default path when not provided', () => {
       const result = analyzeAllSchema.safeParse({
-        query: 'test',
-        analysis_prompt: 'test',
-        path: './src/components'
+        question: 'What tools exist?'
       });
       expect(result.success).toBe(true);
-      expect(result.data.path).toBe('./src/components');
+      expect(result.data.path).toBe('.');
     });
   });
 
   describe('analyzeAllDescription', () => {
     test('should describe the tool purpose', () => {
-      expect(analyzeAllDescription).toContain('map-reduce');
+      expect(analyzeAllDescription.toLowerCase()).toContain('map-reduce');
     });
 
-    test('should mention it processes ALL data', () => {
+    test('should mention it analyzes ALL data', () => {
       expect(analyzeAllDescription.toUpperCase()).toContain('ALL');
     });
 
-    test('should warn about cost/performance', () => {
+    test('should warn about performance', () => {
       expect(analyzeAllDescription.toLowerCase()).toContain('slower');
     });
   });
@@ -91,17 +74,18 @@ describe('analyzeAll schemas and definitions', () => {
       expect(analyzeAllToolDefinition).toContain('## analyze_all');
     });
 
-    test('should describe parameters', () => {
-      expect(analyzeAllToolDefinition).toContain('query');
-      expect(analyzeAllToolDefinition).toContain('analysis_prompt');
-      expect(analyzeAllToolDefinition).toContain('aggregation');
+    test('should describe the question parameter', () => {
+      expect(analyzeAllToolDefinition).toContain('question');
     });
 
-    test('should list aggregation options', () => {
-      expect(analyzeAllToolDefinition).toContain('summarize');
-      expect(analyzeAllToolDefinition).toContain('list_unique');
-      expect(analyzeAllToolDefinition).toContain('count');
-      expect(analyzeAllToolDefinition).toContain('group_by');
+    test('should describe the path parameter', () => {
+      expect(analyzeAllToolDefinition).toContain('path');
+    });
+
+    test('should describe the 3-phase approach', () => {
+      expect(analyzeAllToolDefinition).toContain('PLANNING');
+      expect(analyzeAllToolDefinition).toContain('PROCESSING');
+      expect(analyzeAllToolDefinition).toContain('SYNTHESIS');
     });
 
     test('should include warning about cost', () => {
@@ -110,6 +94,7 @@ describe('analyzeAll schemas and definitions', () => {
 
     test('should include usage examples', () => {
       expect(analyzeAllToolDefinition).toContain('<analyze_all>');
+      expect(analyzeAllToolDefinition).toContain('<question>');
     });
   });
 });
