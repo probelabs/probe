@@ -94,8 +94,8 @@ export async function search(options) {
 
 	// Set default maxTokens if not provided
 	if (!options.maxTokens) {
-		options.maxTokens = 10000;
-		cliArgs.push('--max-tokens', '10000');
+		options.maxTokens = 20000;
+		cliArgs.push('--max-tokens', '20000');
 	}
 
 	// Set default timeout if not provided

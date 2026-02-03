@@ -4,6 +4,7 @@ import {
   queryTool,
   extractTool,
   delegateTool,
+  analyzeAllTool,
   bashTool,
   editTool,
   createTool,
@@ -14,6 +15,7 @@ import {
   querySchema,
   extractSchema,
   delegateSchema,
+  analyzeAllSchema,
   bashSchema,
   editSchema,
   createSchema,
@@ -21,6 +23,7 @@ import {
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  analyzeAllToolDefinition,
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,
@@ -52,6 +55,9 @@ export function createTools(configOptions) {
   }
   if (configOptions.enableDelegate && isToolAllowed('delegate')) {
     tools.delegateTool = delegateTool(configOptions);
+  }
+  if (isToolAllowed('analyze_all')) {
+    tools.analyzeAllTool = analyzeAllTool(configOptions);
   }
 
   // Add bash tool if enabled
@@ -88,6 +94,7 @@ export {
   querySchema,
   extractSchema,
   delegateSchema,
+  analyzeAllSchema,
   bashSchema,
   editSchema,
   createSchema,
@@ -96,6 +103,7 @@ export {
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  analyzeAllToolDefinition,
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,

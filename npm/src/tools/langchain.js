@@ -16,7 +16,7 @@ export function createSearchTool(options = {}) {
 		name: 'search',
 		description: searchDescription,
 		schema: searchSchema,
-		func: async ({ query: searchQuery, path, allow_tests, exact, maxResults, maxTokens = 10000, language }) => {
+		func: async ({ query: searchQuery, path, allow_tests, exact, maxResults, maxTokens = 20000, language }) => {
 			try {
 				const results = await search({
 					query: searchQuery,

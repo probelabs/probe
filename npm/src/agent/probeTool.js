@@ -196,9 +196,18 @@ export function createWrappedTools(baseTools) {
   // Wrap delegate tool
   if (baseTools.delegateTool) {
     wrappedTools.delegateToolInstance = wrapToolWithEmitter(
-      baseTools.delegateTool, 
-      'delegate', 
+      baseTools.delegateTool,
+      'delegate',
       baseTools.delegateTool.execute
+    );
+  }
+
+  // Wrap analyze_all tool
+  if (baseTools.analyzeAllTool) {
+    wrappedTools.analyzeAllToolInstance = wrapToolWithEmitter(
+      baseTools.analyzeAllTool,
+      'analyze_all',
+      baseTools.analyzeAllTool.execute
     );
   }
 

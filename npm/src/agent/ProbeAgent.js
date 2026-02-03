@@ -24,6 +24,7 @@ import {
   queryToolDefinition,
   extractToolDefinition,
   delegateToolDefinition,
+  analyzeAllToolDefinition,
   bashToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
@@ -560,6 +561,9 @@ export class ProbeAgent {
     }
     if (this.enableDelegate && wrappedTools.delegateToolInstance && isToolAllowed('delegate')) {
       this.toolImplementations.delegate = wrappedTools.delegateToolInstance;
+    }
+    if (wrappedTools.analyzeAllToolInstance && isToolAllowed('analyze_all')) {
+      this.toolImplementations.analyze_all = wrappedTools.analyzeAllToolInstance;
     }
 
     // File browsing tools
@@ -2065,6 +2069,11 @@ ${extractGuidance}
       toolDefinitions += `${delegateToolDefinition}\n`;
     }
 
+    // Analyze All tool for bulk data processing
+    if (isToolAllowed('analyze_all')) {
+      toolDefinitions += `${analyzeAllToolDefinition}\n`;
+    }
+
     // Build XML tool guidelines with dynamic examples based on allowed tools
     // Build examples only for allowed tools
     let toolExamples = '';
@@ -2128,6 +2137,9 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
     }
     if (this.enableDelegate && isToolAllowed('delegate')) {
       availableToolsList += '- delegate: Delegate big distinct tasks to specialized probe subagents.\n';
+    }
+    if (isToolAllowed('analyze_all')) {
+      availableToolsList += '- analyze_all: Process ALL data matching a query using map-reduce (for aggregate questions needing 100% coverage).\n';
     }
     if (this.enableBash && isToolAllowed('bash')) {
       availableToolsList += '- bash: Execute bash commands for system operations.\n';
@@ -2642,11 +2654,11 @@ Follow these instructions carefully:
         if (!maxResponseTokens) {
           // Use model-based defaults if not explicitly configured
           maxResponseTokens = 4000;
-          if (this.model.includes('opus') || this.model.includes('sonnet') || this.model.startsWith('gpt-4-')) {
+          if (this.model && this.model.includes('opus') || this.model && this.model.includes('sonnet') || this.model && this.model.startsWith('gpt-4-')) {
             maxResponseTokens = 8192;
-          } else if (this.model.startsWith('gpt-4o')) {
+          } else if (this.model && this.model.startsWith('gpt-4o')) {
             maxResponseTokens = 8192;
-          } else if (this.model.startsWith('gemini')) {
+          } else if (this.model && this.model.startsWith('gemini')) {
             maxResponseTokens = 32000;
           }
         }

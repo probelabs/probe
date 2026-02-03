@@ -46,6 +46,11 @@ export const bashSchema = z.object({
 	env: z.record(z.string()).optional().describe('Additional environment variables (optional)')
 });
 
+export const analyzeAllSchema = z.object({
+	question: z.string().min(1).describe('Free-form question to answer (e.g., "What features are customers using?", "List all API endpoints"). The AI will automatically plan the search strategy, process all matching data, and synthesize a comprehensive answer.'),
+	path: z.string().optional().default('.').describe('Directory path to search in')
+});
+
 // Schema for the attempt_completion tool - flexible validation for direct XML response
 export const attemptCompletionSchema = {
 	// Custom validation that requires result parameter but allows direct XML response
@@ -273,6 +278,52 @@ I have refactored the search module according to the requirements and verified t
 </attempt_completion>
 `;
 
+export const analyzeAllToolDefinition = `
+## analyze_all
+Description: Intelligent bulk data analysis tool. Process ALL data matching your question using a 3-phase approach:
+1. **PLANNING**: AI analyzes your question and determines the optimal search strategy
+2. **PROCESSING**: Map-reduce processes all matching data in parallel chunks
+3. **SYNTHESIS**: Comprehensive answer with evidence and organization
+
+**Use this for questions requiring 100% data coverage:**
+- "What features are customers using?"
+- "List all API endpoints in the codebase"
+- "Summarize the error handling patterns"
+- "Count all TODO comments and their contexts"
+
+**Do NOT use for:**
+- Simple searches where a sample is sufficient
+- Finding a specific function or class
+- Quick exploration (use search instead)
+
+**WARNING:** Makes multiple LLM calls - slower and costlier than search.
+
+Parameters:
+- question: (required) Free-form question to answer - the AI determines the best search strategy automatically
+- path: (optional) Directory to search in (default: current directory)
+
+<examples>
+
+User: What are all the different tools available in this codebase?
+<analyze_all>
+<question>What are all the different tools available in this codebase and what do they do?</question>
+<path>./src</path>
+</analyze_all>
+
+User: I need to understand all the error handling patterns
+<analyze_all>
+<question>What error handling patterns are used throughout the codebase? Include examples.</question>
+</analyze_all>
+
+User: Count and categorize all the environment variables
+<analyze_all>
+<question>What environment variables are used? Categorize them by purpose.</question>
+<path>./src</path>
+</analyze_all>
+
+</examples>
+`;
+
 export const bashToolDefinition = `
 ## bash
 Description: Execute bash commands for system exploration and development tasks. This tool has built-in security with allow/deny lists. By default, only safe read-only commands are allowed for code exploration.
@@ -334,6 +385,7 @@ export const queryDescription = 'Search code using ast-grep structural pattern m
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
 export const bashDescription = 'Execute bash commands for system exploration and development tasks. Secure by default with built-in allow/deny lists.';
+export const analyzeAllDescription = 'Answer questions that require analyzing ALL matching data in the codebase. Use for aggregate questions like "What features exist?", "List all API endpoints", "Count TODO comments". The AI automatically plans the search strategy, processes all results via map-reduce, and synthesizes a comprehensive answer. WARNING: Slower than search - only use when you need complete coverage.';
 
 // Valid tool names that should be parsed as tool calls
 // This is the canonical list - all other tool lists should reference this
@@ -342,6 +394,7 @@ export const DEFAULT_VALID_TOOLS = [
 	'query',
 	'extract',
 	'delegate',
+	'analyze_all',
 	'listSkills',
 	'useSkill',
 	'listFiles',
@@ -379,6 +432,7 @@ function getValidParamsForTool(toolName) {
 		query: querySchema,
 		extract: extractSchema,
 		delegate: delegateSchema,
+		analyze_all: analyzeAllSchema,
 		listSkills: listSkillsSchema,
 		useSkill: useSkillSchema,
 		bash: bashSchema,
@@ -416,115 +470,125 @@ function getValidParamsForTool(toolName) {
 
 // Simple XML parser helper - safer string-based approach
 export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
-	// Look for each valid tool name specifically using string search
+	// Find the tool that appears EARLIEST in the string
+	// This prevents parameter tags (like <query> inside <analyze_all>) from being matched as tools
+	let earliestToolName = null;
+	let earliestOpenIndex = Infinity;
+
 	for (const toolName of validTools) {
 		const openTag = `<${toolName}>`;
-		const closeTag = `</${toolName}>`;
-
 		const openIndex = xmlString.indexOf(openTag);
-		if (openIndex === -1) {
-			continue; // Tool not found, try next tool
+		if (openIndex !== -1 && openIndex < earliestOpenIndex) {
+			earliestOpenIndex = openIndex;
+			earliestToolName = toolName;
 		}
-
-		// For attempt_completion, use lastIndexOf to find the LAST occurrence of closing tag
-		// This prevents issues where the content contains the closing tag string (e.g., in regex patterns)
-		// For other tools, use indexOf from the opening tag position
-		let closeIndex;
-		if (toolName === 'attempt_completion') {
-			// Find the last occurrence of the closing tag in the entire string
-			// This assumes attempt_completion doesn't have nested tags of the same name
-			closeIndex = xmlString.lastIndexOf(closeTag);
-			// Make sure the closing tag is after the opening tag
-			if (closeIndex !== -1 && closeIndex <= openIndex + openTag.length) {
-				closeIndex = -1; // Invalid, treat as no closing tag
-			}
-		} else {
-			closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
-		}
-
-		let hasClosingTag = closeIndex !== -1;
-
-		// If no closing tag found, use content until end of string
-		// This makes the parser more resilient to AI formatting errors
-		if (closeIndex === -1) {
-			closeIndex = xmlString.length;
-		}
-
-		// Extract the content between tags (or until end if no closing tag)
-		const innerContent = xmlString.substring(
-			openIndex + openTag.length,
-			closeIndex
-		);
-
-		const params = {};
-
-		// Get valid parameters for this specific tool from its schema
-		const validParams = getValidParamsForTool(toolName);
-
-		// Parse parameters using string-based approach for better safety
-		// Only look for parameters that are valid for this specific tool
-		for (const paramName of validParams) {
-			const paramOpenTag = `<${paramName}>`;
-			const paramCloseTag = `</${paramName}>`;
-
-			const paramOpenIndex = innerContent.indexOf(paramOpenTag);
-			if (paramOpenIndex === -1) {
-				continue; // Parameter not found
-			}
-
-			let paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
-
-			// Handle unclosed parameter tags - use content until next tag or end of content
-			if (paramCloseIndex === -1) {
-				// Find the next opening tag after this parameter
-				let nextTagIndex = innerContent.length;
-				for (const nextParam of validParams) {
-					const nextOpenTag = `<${nextParam}>`;
-					const nextIndex = innerContent.indexOf(nextOpenTag, paramOpenIndex + paramOpenTag.length);
-					if (nextIndex !== -1 && nextIndex < nextTagIndex) {
-						nextTagIndex = nextIndex;
-					}
-				}
-				paramCloseIndex = nextTagIndex;
-			}
-
-			let paramValue = innerContent.substring(
-				paramOpenIndex + paramOpenTag.length,
-				paramCloseIndex
-			).trim();
-
-			// Basic type inference (can be improved)
-			if (paramValue.toLowerCase() === 'true') {
-				paramValue = true;
-			} else if (paramValue.toLowerCase() === 'false') {
-				paramValue = false;
-			} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
-				// Check if it's potentially a number (handle integers and floats)
-				const num = Number(paramValue);
-				if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
-					paramValue = num;
-				}
-				// Keep as string if not a valid finite number
-			}
-
-			params[paramName] = paramValue;
-		}
-
-		// Special handling for attempt_completion - use entire inner content as result
-		if (toolName === 'attempt_completion') {
-			params['result'] = innerContent.trim();
-			// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
-			if (params.command) {
-				delete params.command;
-			}
-		}
-
-		// Return the first valid tool found
-		return { toolName, params };
 	}
 
 	// No valid tool found
-	return null;
+	if (earliestToolName === null) {
+		return null;
+	}
+
+	const toolName = earliestToolName;
+	const openTag = `<${toolName}>`;
+	const closeTag = `</${toolName}>`;
+	const openIndex = earliestOpenIndex;
+
+	// For attempt_completion, use lastIndexOf to find the LAST occurrence of closing tag
+	// This prevents issues where the content contains the closing tag string (e.g., in regex patterns)
+	// For other tools, use indexOf from the opening tag position
+	let closeIndex;
+	if (toolName === 'attempt_completion') {
+		// Find the last occurrence of the closing tag in the entire string
+		// This assumes attempt_completion doesn't have nested tags of the same name
+		closeIndex = xmlString.lastIndexOf(closeTag);
+		// Make sure the closing tag is after the opening tag
+		if (closeIndex !== -1 && closeIndex <= openIndex + openTag.length) {
+			closeIndex = -1; // Invalid, treat as no closing tag
+		}
+	} else {
+		closeIndex = xmlString.indexOf(closeTag, openIndex + openTag.length);
+	}
+
+	let hasClosingTag = closeIndex !== -1;
+
+	// If no closing tag found, use content until end of string
+	// This makes the parser more resilient to AI formatting errors
+	if (closeIndex === -1) {
+		closeIndex = xmlString.length;
+	}
+
+	// Extract the content between tags (or until end if no closing tag)
+	const innerContent = xmlString.substring(
+		openIndex + openTag.length,
+		closeIndex
+	);
+
+	const params = {};
+
+	// Get valid parameters for this specific tool from its schema
+	const validParams = getValidParamsForTool(toolName);
+
+	// Parse parameters using string-based approach for better safety
+	// Only look for parameters that are valid for this specific tool
+	for (const paramName of validParams) {
+		const paramOpenTag = `<${paramName}>`;
+		const paramCloseTag = `</${paramName}>`;
+
+		const paramOpenIndex = innerContent.indexOf(paramOpenTag);
+		if (paramOpenIndex === -1) {
+			continue; // Parameter not found
+		}
+
+		let paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
+
+		// Handle unclosed parameter tags - use content until next tag or end of content
+		if (paramCloseIndex === -1) {
+			// Find the next opening tag after this parameter
+			let nextTagIndex = innerContent.length;
+			for (const nextParam of validParams) {
+				const nextOpenTag = `<${nextParam}>`;
+				const nextIndex = innerContent.indexOf(nextOpenTag, paramOpenIndex + paramOpenTag.length);
+				if (nextIndex !== -1 && nextIndex < nextTagIndex) {
+					nextTagIndex = nextIndex;
+				}
+			}
+			paramCloseIndex = nextTagIndex;
+		}
+
+		let paramValue = innerContent.substring(
+			paramOpenIndex + paramOpenTag.length,
+			paramCloseIndex
+		).trim();
+
+		// Basic type inference (can be improved)
+		if (paramValue.toLowerCase() === 'true') {
+			paramValue = true;
+		} else if (paramValue.toLowerCase() === 'false') {
+			paramValue = false;
+		} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
+			// Check if it's potentially a number (handle integers and floats)
+			const num = Number(paramValue);
+			if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
+				paramValue = num;
+			}
+			// Keep as string if not a valid finite number
+		}
+
+		params[paramName] = paramValue;
+	}
+
+	// Special handling for attempt_completion - use entire inner content as result
+	if (toolName === 'attempt_completion') {
+		params['result'] = innerContent.trim();
+		// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
+		if (params.command) {
+			delete params.command;
+		}
+	}
+
+	// Return the parsed tool call
+	return { toolName, params };
 }
 
 /**
