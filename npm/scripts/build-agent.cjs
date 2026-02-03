@@ -46,7 +46,11 @@ async function buildAgent() {
         // Will bundle: glob, zod
       ],
       banner: {
-        js: '#!/usr/bin/env node'
+        js: [
+          '#!/usr/bin/env node',
+          'import { createRequire } from "node:module";',
+          'const require = createRequire(import.meta.url);'
+        ].join('\n')
       },
       minify: false, // Keep readable for debugging
       sourcemap: false,
