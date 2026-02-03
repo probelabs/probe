@@ -612,6 +612,10 @@ impl FilteringVocabularyCache {
             vec!["code".to_string(), "block".to_string()],
         );
         cache.insert(
+            "codeblocks".to_string(),
+            vec!["code".to_string(), "blocks".to_string()],
+        );
+        cache.insert(
             "textblock".to_string(),
             vec!["text".to_string(), "block".to_string()],
         );
@@ -700,6 +704,7 @@ impl FilteringVocabularyCache {
             "code",
             "context",
             "process",
+            "parse",
             "result",
             "index",
             "count",
@@ -1236,7 +1241,7 @@ pub fn is_special_case(word: &str) -> bool {
 /// Static pre-computed compound word splits for common programming terms
 /// This cache eliminates the need to call the decompound crate for known terms,
 /// providing significant performance improvements for frequently used compound words.
-static PRECOMPUTED_COMPOUND_SPLITS: Lazy<HashMap<String, Vec<String>>> = Lazy::new(|| {
+pub static PRECOMPUTED_COMPOUND_SPLITS: Lazy<HashMap<String, Vec<String>>> = Lazy::new(|| {
     let mut cache = HashMap::new();
 
     // Pre-compute splits for common programming compound words
@@ -1324,6 +1329,10 @@ static PRECOMPUTED_COMPOUND_SPLITS: Lazy<HashMap<String, Vec<String>>> = Lazy::n
     cache.insert(
         "filesystem".to_string(),
         vec!["file".to_string(), "system".to_string()],
+    );
+    cache.insert(
+        "parsefile".to_string(),
+        vec!["parse".to_string(), "file".to_string()],
     );
     cache.insert(
         "pathname".to_string(),
@@ -1748,6 +1757,20 @@ static PRECOMPUTED_COMPOUND_SPLITS: Lazy<HashMap<String, Vec<String>>> = Lazy::n
         vec!["status".to_string(), "check".to_string()],
     );
 
+    // Block and code processing (added for case-insensitive search fix)
+    cache.insert(
+        "codeblock".to_string(),
+        vec!["code".to_string(), "block".to_string()],
+    );
+    cache.insert(
+        "codeblocks".to_string(),
+        vec!["code".to_string(), "blocks".to_string()],
+    );
+    cache.insert(
+        "parsefile".to_string(),
+        vec!["parse".to_string(), "file".to_string()],
+    );
+
     cache
 });
 
@@ -1964,6 +1987,11 @@ pub fn split_camel_case_with_config(input: &str, config: SimdConfig) -> Vec<Stri
     // If input is all lowercase, try to identify potential camelCase boundaries
     // This is for handling cases where the input was already lowercased
     if input == lowercase && !input.contains('_') && input.len() > 3 {
+        // First, check the pre-computed compound splits cache (e.g., "codeblock" -> ["code", "block"])
+        if let Some(cached_splits) = PRECOMPUTED_COMPOUND_SPLITS.get(&lowercase) {
+            return cached_splits.clone();
+        }
+
         // Check for common patterns in identifiers
         let _potential_splits: Vec<String> = Vec::new();
 
@@ -1993,6 +2021,8 @@ pub fn split_camel_case_with_config(input: &str, config: SimdConfig) -> Vec<Stri
                 }
             }
         }
+        // Note: We don't use decompound here because it can produce unexpected results.
+        // The search pipeline has its own fallback via split_compound_word_for_filtering().
     }
 
     let chars: Vec<char> = input.chars().collect();
@@ -2854,6 +2884,14 @@ mod tests {
             split_camel_case("migrateEndpointMetaByType"),
             vec!["migrate", "endpoint", "meta", "by", "type"]
         );
+
+        // Test all-lowercase compound words (bug fix: these should be split using cache)
+        // Previously, searching for "codeblocks" wouldn't match "code_blocks" or "codeBlocks"
+        assert_eq!(split_camel_case("codeblock"), vec!["code", "block"]);
+        assert_eq!(split_camel_case("codeblocks"), vec!["code", "blocks"]);
+        assert_eq!(split_camel_case("parsefile"), vec!["parse", "file"]);
+        assert_eq!(split_camel_case("filename"), vec!["file", "name"]);
+        assert_eq!(split_camel_case("filepath"), vec!["file", "path"]);
     }
 
     #[test]
