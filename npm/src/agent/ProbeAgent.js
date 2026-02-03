@@ -2832,6 +2832,10 @@ Follow these instructions carefully:
           if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
             validTools.push('delegate');
           }
+          // Analyze All tool (for bulk data processing with map-reduce)
+          if (this.allowedTools.isEnabled('analyze_all')) {
+            validTools.push('analyze_all');
+          }
           // Task tool (require both enableTasks flag AND allowedTools permission)
           if (this.enableTasks && this.allowedTools.isEnabled('task')) {
             validTools.push('task');
