@@ -250,7 +250,7 @@ const delegationManager = new DelegationManager();
  *
  * @param {Object} options - Delegate options
  * @param {string} options.task - A complete, self-contained task for the subagent. Should be specific and focused on one area of expertise.
- * @param {number} [options.timeout=300] - Timeout in seconds (default: 5 minutes)
+ * @param {number} [options.timeout] - Timeout in seconds (default: DELEGATE_TIMEOUT env var or 300)
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @param {number} [options.currentIteration=0] - Current tool iteration count from parent agent
  * @param {number} [options.maxIterations=30] - Maximum tool iterations allowed
@@ -274,9 +274,12 @@ const delegationManager = new DelegationManager();
  * @param {string} [options.mcpConfigPath] - Path to MCP configuration file (inherited from parent)
  * @returns {Promise<string>} The response from the delegate agent
  */
+// Default timeout from environment variable or 300 seconds (5 minutes)
+const DEFAULT_DELEGATE_TIMEOUT = parseInt(process.env.DELEGATE_TIMEOUT, 10) || 300;
+
 export async function delegate({
 	task,
-	timeout = 300,
+	timeout = DEFAULT_DELEGATE_TIMEOUT,
 	debug = false,
 	currentIteration = 0,
 	maxIterations = 30,

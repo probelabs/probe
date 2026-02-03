@@ -182,6 +182,7 @@ Instructions:
 	try {
 		const result = await delegate({
 			task,
+			timeout: options.timeout,
 			debug: options.debug,
 			parentSessionId: options.sessionId,
 			path: options.path,
@@ -193,7 +194,6 @@ Instructions:
 			promptType: 'code-researcher',
 			allowedTools: ['extract'],
 			maxIterations: 5
-			// timeout removed - inherit default from delegate (300s)
 		});
 
 		return { chunk, result };
@@ -317,6 +317,7 @@ Organize all findings into clear categories with items listed under each.${compl
 	try {
 		const result = await delegate({
 			task: aggregationTask,
+			timeout: options.timeout,
 			debug: options.debug,
 			parentSessionId: options.sessionId,
 			path: options.path,
@@ -328,7 +329,6 @@ Organize all findings into clear categories with items listed under each.${compl
 			promptType: 'code-researcher',
 			allowedTools: [],
 			maxIterations: 5
-			// timeout removed - inherit default from delegate (300s)
 		});
 
 		return result;
@@ -392,6 +392,7 @@ CRITICAL: Do NOT guess keywords. Actually run searches and see what returns resu
 		// Planning phase - full agent with exploration capabilities
 		const result = await delegate({
 			task: planningTask,
+			timeout: options.timeout,
 			debug: options.debug,
 			parentSessionId: options.sessionId,
 			path: path,
@@ -403,7 +404,6 @@ CRITICAL: Do NOT guess keywords. Actually run searches and see what returns resu
 			promptType: 'code-researcher',
 			// Full tool access for exploration and experimentation
 			maxIterations: 15
-			// timeout removed - inherit default from delegate (300s)
 		});
 
 		const plan = parsePlanningResult(stripResultTags(result));
@@ -462,6 +462,7 @@ IMPORTANT: When completing, use the FULL format: <attempt_completion><result>YOU
 	try {
 		const result = await delegate({
 			task: synthesisTask,
+			timeout: options.timeout,
 			debug: options.debug,
 			parentSessionId: options.sessionId,
 			path: options.path,
@@ -473,7 +474,6 @@ IMPORTANT: When completing, use the FULL format: <attempt_completion><result>YOU
 			promptType: 'code-researcher',
 			allowedTools: [],
 			maxIterations: 5
-			// timeout removed - inherit default from delegate (300s)
 		});
 
 		return stripResultTags(result);
@@ -514,6 +514,7 @@ export async function analyzeAll(options) {
 		provider,
 		model,
 		tracer,
+		timeout, // Optional: delegation timeout in seconds (default: DELEGATE_TIMEOUT env var or 300)
 		chunkSizeTokens = DEFAULT_CHUNK_SIZE_TOKENS,
 		maxChunks = MAX_CHUNKS
 	} = options;
@@ -529,7 +530,8 @@ export async function analyzeAll(options) {
 		allowedFolders,
 		provider,
 		model,
-		tracer
+		tracer,
+		timeout // Pass through to delegate (undefined = use delegate default)
 	};
 
 	// ============================================================
