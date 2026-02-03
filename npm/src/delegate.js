@@ -157,9 +157,14 @@ class DelegationManager {
 
 	/**
 	 * Process the wait queue - grant slot to next waiting delegation
+	 * Uses setImmediate to avoid blocking the event loop when resolving promises.
 	 * @private
 	 */
 	_processQueue(debug = false) {
+		// Collect items to resolve in this batch
+		const toResolve = [];
+		const toRequeue = [];
+
 		while (this.waitQueue.length > 0 && this.globalActive < this.maxConcurrent) {
 			const next = this.waitQueue.shift();
 			if (!next) break;
@@ -172,11 +177,11 @@ class DelegationManager {
 				const sessionCount = sessionData?.count || 0;
 
 				if (sessionCount >= this.maxPerSession) {
-					// Can't grant to this session, resolve with error
-					// But we handle this by re-throwing in acquire
+					// Re-queue this item at the end - don't lose it
 					if (debug) {
-						console.error(`[DelegationManager] Session limit reached for queued item, skipping`);
+						console.error(`[DelegationManager] Session limit reached for queued item, re-queuing at end`);
 					}
+					toRequeue.push(next);
 					continue;
 				}
 			}
@@ -189,7 +194,23 @@ class DelegationManager {
 				console.error(`[DelegationManager] Granted slot from queue (waited ${waitTime}ms). Active: ${this.globalActive}/${this.maxConcurrent}`);
 			}
 
-			resolve(true);
+			toResolve.push(resolve);
+		}
+
+		// Re-queue items that couldn't be granted (session limit)
+		for (const item of toRequeue) {
+			this.waitQueue.push(item);
+		}
+
+		// Defer promise resolutions to next tick to avoid blocking the event loop
+		// This is critical: synchronous resolve() calls can block the event loop
+		// when many promises are resolved in a tight loop
+		if (toResolve.length > 0) {
+			setImmediate(() => {
+				for (const resolve of toResolve) {
+					resolve(true);
+				}
+			});
 		}
 	}
 
