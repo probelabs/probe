@@ -105,7 +105,7 @@ class DelegationManager {
 	 * Acquire a delegation slot, waiting in queue if necessary
 	 * @param {string|null|undefined} parentSessionId - Parent session ID for tracking
 	 * @param {boolean} debug - Enable debug logging
-	 * @returns {Promise<boolean>} Resolves when slot is acquired
+	 * @returns {Promise<boolean>} Resolves when slot is acquired, rejects on session limit error
 	 */
 	async acquire(parentSessionId, debug = false) {
 		// Try immediate acquisition first
@@ -119,9 +119,11 @@ class DelegationManager {
 		}
 
 		// Create a promise that will be resolved when a slot becomes available
-		return new Promise((resolve) => {
+		// or rejected if session limit is exceeded when processing queue
+		return new Promise((resolve, reject) => {
 			this.waitQueue.push({
 				resolve,
+				reject,
 				parentSessionId,
 				debug,
 				queuedAt: Date.now()
@@ -160,11 +162,13 @@ class DelegationManager {
 	 * @private
 	 */
 	_processQueue(debug = false) {
+		// Process queue items one at a time when slots are available
+		// Items are only removed when they can be granted or must be rejected
 		while (this.waitQueue.length > 0 && this.globalActive < this.maxConcurrent) {
 			const next = this.waitQueue.shift();
 			if (!next) break;
 
-			const { resolve, parentSessionId, queuedAt } = next;
+			const { resolve, reject, parentSessionId, queuedAt } = next;
 
 			// Check per-session limit before granting
 			if (parentSessionId) {
@@ -172,11 +176,13 @@ class DelegationManager {
 				const sessionCount = sessionData?.count || 0;
 
 				if (sessionCount >= this.maxPerSession) {
-					// Can't grant to this session, resolve with error
-					// But we handle this by re-throwing in acquire
+					// Session limit reached - reject with error (consistent with tryAcquire behavior)
+					// This is a hard limit, not something that will resolve by waiting longer
 					if (debug) {
-						console.error(`[DelegationManager] Session limit reached for queued item, skipping`);
+						console.error(`[DelegationManager] Session limit (${this.maxPerSession}) reached for queued item, rejecting`);
 					}
+					reject(new Error(`Maximum delegations per session (${this.maxPerSession}) reached for session ${parentSessionId}`));
+					// Continue to process next item in queue
 					continue;
 				}
 			}

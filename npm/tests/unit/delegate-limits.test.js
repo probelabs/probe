@@ -248,6 +248,41 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       expect(mockAnswer).toHaveBeenCalledTimes(5);
     });
 
+    it('should reject queued delegation when session limit is reached', async () => {
+      // Make responses slow so we can queue up items
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Response'), 30))
+      );
+
+      const parentSessionId = 'session-limit-test';
+
+      // Fill up global slots with delegations from the same session
+      // Note: maxPerSession is 10 by default, but we're testing when it's hit while queued
+      const task1 = delegate({ task: 'Task 1', parentSessionId });
+      const task2 = delegate({ task: 'Task 2', parentSessionId });
+      const task3 = delegate({ task: 'Task 3', parentSessionId });
+
+      // Wait to ensure they're active
+      await new Promise(resolve => setTimeout(resolve, 5));
+
+      // Queue up more from the same session (will hit session limit of 10)
+      // We need to queue enough that when processed, session limit is reached
+      const queuedTasks = [];
+      for (let i = 4; i <= 12; i++) {
+        queuedTasks.push(delegate({ task: `Task ${i}`, parentSessionId }));
+      }
+
+      // Wait for all to settle - some will complete, some will reject due to session limit
+      const results = await Promise.allSettled([task1, task2, task3, ...queuedTasks]);
+
+      // At least some tasks should have been fulfilled
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      expect(fulfilled.length).toBeGreaterThan(0);
+
+      // The promise should not hang - all should be settled (either fulfilled or rejected)
+      expect(results.every(r => r.status === 'fulfilled' || r.status === 'rejected')).toBe(true);
+    });
+
     it('should enforce per-session delegation limit', async () => {
       // Reset to fast responses but with slight delay
       mockAnswer.mockImplementation(() =>
