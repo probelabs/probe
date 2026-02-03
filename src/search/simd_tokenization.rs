@@ -162,7 +162,22 @@ pub fn simd_split_camel_case_with_config(s: &str, config: SimdConfig) -> Vec<Str
         }
     }
 
-    // Return original string if no boundaries found
+    // If no boundaries were found (result has single element = whole string),
+    // try compound word splitting for all-lowercase strings
+    if result.len() == 1 {
+        let lowercase = s.to_lowercase();
+        if s == lowercase && !s.contains('_') && s.len() > 3 {
+            // Check pre-computed compound splits cache
+            if let Some(cached_splits) =
+                crate::search::tokenization::PRECOMPUTED_COMPOUND_SPLITS.get(&lowercase)
+            {
+                return cached_splits.clone();
+            }
+            // Note: We don't use decompound here because it can produce unexpected results.
+            // The search pipeline has its own fallback via split_compound_word_for_filtering().
+        }
+    }
+
     if result.is_empty() {
         vec![s.to_lowercase()]
     } else {
