@@ -192,7 +192,8 @@ Instructions:
 			enableBash: false,
 			promptType: 'code-researcher',
 			allowedTools: ['extract'],
-			maxIterations: 5
+			maxIterations: 5,
+			delegationManager: options.delegationManager  // Per-instance delegation limits
 			// timeout removed - inherit default from delegate (300s)
 		});
 
@@ -327,7 +328,8 @@ Organize all findings into clear categories with items listed under each.${compl
 			enableBash: false,
 			promptType: 'code-researcher',
 			allowedTools: [],
-			maxIterations: 5
+			maxIterations: 5,
+			delegationManager: options.delegationManager  // Per-instance delegation limits
 			// timeout removed - inherit default from delegate (300s)
 		});
 
@@ -402,7 +404,8 @@ CRITICAL: Do NOT guess keywords. Actually run searches and see what returns resu
 			enableBash: false,
 			promptType: 'code-researcher',
 			// Full tool access for exploration and experimentation
-			maxIterations: 15
+			maxIterations: 15,
+			delegationManager: options.delegationManager  // Per-instance delegation limits
 			// timeout removed - inherit default from delegate (300s)
 		});
 
@@ -472,7 +475,8 @@ IMPORTANT: When completing, use the FULL format: <attempt_completion><result>YOU
 			enableBash: false,
 			promptType: 'code-researcher',
 			allowedTools: [],
-			maxIterations: 5
+			maxIterations: 5,
+			delegationManager: options.delegationManager  // Per-instance delegation limits
 			// timeout removed - inherit default from delegate (300s)
 		});
 
@@ -515,7 +519,8 @@ export async function analyzeAll(options) {
 		model,
 		tracer,
 		chunkSizeTokens = DEFAULT_CHUNK_SIZE_TOKENS,
-		maxChunks = MAX_CHUNKS
+		maxChunks = MAX_CHUNKS,
+		delegationManager = null  // Per-instance delegation limits
 	} = options;
 
 	if (!question) {
@@ -529,7 +534,8 @@ export async function analyzeAll(options) {
 		allowedFolders,
 		provider,
 		model,
-		tracer
+		tracer,
+		delegationManager  // Per-instance delegation limits
 	};
 
 	// ============================================================

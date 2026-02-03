@@ -470,7 +470,7 @@ export const extractTool = (options = {}) => {
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null } = options;
 
 	return tool({
 		name: 'delegate',
@@ -562,7 +562,8 @@ export const delegateTool = (options = {}) => {
 				searchDelegate,
 				enableMcp,
 				mcpConfig,
-				mcpConfigPath
+				mcpConfigPath,
+				delegationManager  // Per-instance delegation limits
 			});
 
 			return result;
@@ -584,7 +585,7 @@ export const delegateTool = (options = {}) => {
  * @returns {Object} Configured analyze_all tool
  */
 export const analyzeAllTool = (options = {}) => {
-	const { sessionId, debug = false } = options;
+	const { sessionId, debug = false, delegationManager = null } = options;
 
 	return tool({
 		name: 'analyze_all',
@@ -616,7 +617,8 @@ export const analyzeAllTool = (options = {}) => {
 					allowedFolders: options.allowedFolders,
 					provider: options.provider,
 					model: options.model,
-					tracer: options.tracer
+					tracer: options.tracer,
+					delegationManager  // Per-instance delegation limits
 				});
 
 				return result;

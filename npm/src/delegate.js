@@ -231,8 +231,12 @@ class DelegationManager {
 	}
 }
 
-// Singleton instance for the module
-const delegationManager = new DelegationManager();
+// Default singleton instance for backward compatibility
+// New code should create per-instance DelegationManager via ProbeAgent
+const defaultDelegationManager = new DelegationManager();
+
+// Export the class for per-instance usage
+export { DelegationManager };
 
 /**
  * Delegate a big distinct task to a probe subagent (used automatically by AI agents)
@@ -297,11 +301,15 @@ export async function delegate({
 	enableTasks = false,
 	enableMcp = false,
 	mcpConfig = null,
-	mcpConfigPath = null
+	mcpConfigPath = null,
+	delegationManager = null  // Optional per-instance manager, falls back to default singleton
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
 	}
+
+	// Use provided manager or fall back to default singleton
+	const manager = delegationManager || defaultDelegationManager;
 
 	const sessionId = randomUUID();
 	const startTime = Date.now();
@@ -319,11 +327,11 @@ export async function delegate({
 
 	try {
 		// Acquire delegation slot (waits in queue if necessary)
-		await delegationManager.acquire(parentSessionId, debug);
+		await manager.acquire(parentSessionId, debug);
 		acquired = true;
 
 		if (debug) {
-			const stats = delegationManager.getStats();
+			const stats = manager.getStats();
 			console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
 			console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
 			console.error(`[DELEGATE] Task: ${task}`);
@@ -443,7 +451,7 @@ export async function delegate({
 
 		// Release delegation slot
 		if (acquired) {
-			delegationManager.release(parentSessionId, debug);
+			manager.release(parentSessionId, debug);
 		}
 
 		return response;
@@ -459,7 +467,7 @@ export async function delegate({
 
 		// Release delegation slot on error (only if it was acquired)
 		if (acquired) {
-			delegationManager.release(parentSessionId, debug);
+			manager.release(parentSessionId, debug);
 		}
 
 		if (debug) {
@@ -506,16 +514,20 @@ export async function isDelegateAvailable() {
 
 /**
  * Get delegation statistics (for monitoring/debugging)
+ * Note: Returns stats from the default singleton manager.
+ * For per-instance stats, use manager.getStats() directly.
  *
  * @returns {Object} Current delegation stats
  */
 export function getDelegationStats() {
-	return delegationManager.getStats();
+	return defaultDelegationManager.getStats();
 }
 
 /**
  * Cleanup delegation manager (for testing or shutdown)
+ * Note: Cleans up the default singleton manager.
+ * For per-instance cleanup, use manager.cleanup() directly.
  */
 export async function cleanupDelegationManager() {
-	return delegationManager.cleanup();
+	return defaultDelegationManager.cleanup();
 }

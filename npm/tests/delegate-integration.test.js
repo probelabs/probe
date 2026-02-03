@@ -102,7 +102,8 @@ describe('Delegate Tool Integration', () => {
         searchDelegate: undefined,
         enableMcp: false,
         mcpConfig: null,
-        mcpConfigPath: null
+        mcpConfigPath: null,
+        delegationManager: null  // Per-instance delegation limits
       });
 
       expect(result).toBe('Security analysis complete: Found 3 vulnerabilities');

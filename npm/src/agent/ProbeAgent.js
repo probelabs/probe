@@ -72,6 +72,7 @@ import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFr
 import { handleContextLimitError } from './contextCompactor.js';
 import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
 import { truncateIfNeeded, getMaxOutputTokens } from './outputTruncator.js';
+import { DelegationManager } from '../delegate.js';
 import {
   TaskManager,
   createTaskTool,
@@ -315,6 +316,10 @@ export class ProbeAgent {
     this.enableTasks = !!options.enableTasks;
     this.taskManager = null; // Initialized per-request in answer()
 
+    // Per-instance delegation manager for concurrent delegation limits
+    // Each ProbeAgent instance has its own limits, not shared globally
+    this.delegationManager = new DelegationManager();
+
     // Retry configuration
     this.retryConfig = options.retry || {};
     this.retryManager = null; // Will be initialized lazily when needed
@@ -538,6 +543,7 @@ export class ProbeAgent {
       architectureFileName: this.architectureFileName,
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      delegationManager: this.delegationManager,  // Per-instance delegation limits
       isToolAllowed
     };
 
@@ -4368,6 +4374,18 @@ Convert your previous response content into actual JSON data that follows this s
         }
       } catch (error) {
         console.error('Error cleaning up MCP bridge:', error);
+      }
+    }
+
+    // Clean up delegation manager
+    if (this.delegationManager) {
+      try {
+        this.delegationManager.cleanup();
+        if (this.debug) {
+          console.log('[DEBUG] Delegation manager cleaned up');
+        }
+      } catch (error) {
+        console.error('Error cleaning up delegation manager:', error);
       }
     }
 
