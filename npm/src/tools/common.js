@@ -47,7 +47,7 @@ export const bashSchema = z.object({
 });
 
 export const analyzeAllSchema = z.object({
-	question: z.string().min(1).describe('Free-form question to answer (e.g., "What features are customers using?", "List all API endpoints"). The AI will automatically plan the search strategy, process all matching data, and synthesize a comprehensive answer.'),
+	question: z.string().min(1).describe('Free-form question to answer (e.g., "What features are customers using?", "List all API endpoints"). The AI will automatically explore the repository, test search strategies, and synthesize a comprehensive answer.'),
 	path: z.string().optional().default('.').describe('Directory path to search in')
 });
 
