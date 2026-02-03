@@ -13,9 +13,9 @@ import { search } from '../search.js';
 import { delegate } from '../delegate.js';
 
 // Default chunk size in tokens (should fit comfortably in LLM context)
-const DEFAULT_CHUNK_SIZE_TOKENS = 8000;
-// Maximum parallel workers for map phase
-const MAX_PARALLEL_WORKERS = 3;
+const DEFAULT_CHUNK_SIZE_TOKENS = 20000;
+// Process chunks sequentially to avoid delegation concurrency issues
+const SEQUENTIAL_PROCESSING = true;
 // Maximum chunks to process (safety limit)
 const MAX_CHUNKS = 50;
 // Rough estimate: 1 token ≈ 4 characters
@@ -192,8 +192,8 @@ Instructions:
 			enableBash: false,
 			promptType: 'code-researcher',
 			allowedTools: ['extract'],
-			maxIterations: 5,
-			timeout: 120
+			maxIterations: 5
+			// timeout removed - inherit default from delegate (300s)
 		});
 
 		return { chunk, result };
@@ -327,8 +327,8 @@ Organize all findings into clear categories with items listed under each.${compl
 			enableBash: false,
 			promptType: 'code-researcher',
 			allowedTools: [],
-			maxIterations: 5,
-			timeout: 120
+			maxIterations: 5
+			// timeout removed - inherit default from delegate (300s)
 		});
 
 		return result;
@@ -609,10 +609,13 @@ export async function analyzeAll(options) {
 			}
 		}
 
+		// Use sequential processing (maxWorkers=1) when SEQUENTIAL_PROCESSING is true
+		// This avoids "Maximum concurrent delegations reached" errors
+		const maxWorkers = SEQUENTIAL_PROCESSING ? 1 : 3;
 		const chunkResultsProcessed = await processChunksParallel(
 			chunks,
 			plan.extractionPrompt,
-			MAX_PARALLEL_WORKERS,
+			maxWorkers,
 			delegateOptions
 		);
 
