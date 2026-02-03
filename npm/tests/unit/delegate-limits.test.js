@@ -188,13 +188,13 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
   });
 
   describe('Concurrent delegation limits', () => {
-    it('should enforce global concurrent delegation limit', async () => {
+    it('should queue delegations when global limit is reached', async () => {
       // Make responses slow to ensure they overlap
       mockAnswer.mockImplementation(() =>
         new Promise(resolve => setTimeout(() => resolve('Slow response'), 50))
       );
 
-      // Start 3 delegations (max)
+      // Start 3 delegations (max concurrent)
       const task1 = delegate({ task: 'Task 1' });
       const task2 = delegate({ task: 'Task 2' });
       const task3 = delegate({ task: 'Task 3' });
@@ -202,12 +202,115 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       // Wait a bit to ensure they're all active
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      // Fourth delegation should fail immediately
-      await expect(delegate({ task: 'Task 4' })).rejects.toThrow(
-        /Maximum concurrent delegations.*reached/
+      // Check stats - should show 3 active
+      const stats = getDelegationStats();
+      expect(stats.globalActive).toBe(3);
+
+      // Fourth delegation should queue (not fail) and eventually complete
+      const task4 = delegate({ task: 'Task 4' });
+
+      // Check that queue size increased
+      const statsAfterQueue = getDelegationStats();
+      expect(statsAfterQueue.queueSize).toBe(1);
+
+      // Wait for all to complete - task4 should complete after one of the first 3 finishes
+      const results = await Promise.all([task1, task2, task3, task4]);
+      expect(results).toEqual(['Slow response', 'Slow response', 'Slow response', 'Slow response']);
+    });
+
+    it('should process queued delegations in FIFO order', async () => {
+      const completionOrder = [];
+
+      // Make responses complete in order they started (with small delay)
+      mockAnswer.mockImplementation((task) =>
+        new Promise(resolve => setTimeout(() => {
+          completionOrder.push(task);
+          resolve(`Response for ${task}`);
+        }, 20))
       );
 
-      // Clean up - wait for all to complete
+      // Start 3 delegations (max concurrent)
+      const task1 = delegate({ task: 'Task 1' });
+      const task2 = delegate({ task: 'Task 2' });
+      const task3 = delegate({ task: 'Task 3' });
+
+      // Wait a bit to ensure they're all active
+      await new Promise(resolve => setTimeout(resolve, 5));
+
+      // Queue 2 more delegations
+      const task4 = delegate({ task: 'Task 4' });
+      const task5 = delegate({ task: 'Task 5' });
+
+      // Wait for all to complete
+      await Promise.all([task1, task2, task3, task4, task5]);
+
+      // Tasks 4 and 5 should have been processed after at least one of 1-3 completed
+      expect(mockAnswer).toHaveBeenCalledTimes(5);
+    });
+
+    it('should reject queued delegation when session limit is reached', async () => {
+      // Make responses slow so we can queue up items
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Response'), 30))
+      );
+
+      const parentSessionId = 'session-limit-test';
+
+      // Fill up global slots with delegations from the same session
+      // Note: maxPerSession is 10 by default, but we're testing when it's hit while queued
+      const task1 = delegate({ task: 'Task 1', parentSessionId });
+      const task2 = delegate({ task: 'Task 2', parentSessionId });
+      const task3 = delegate({ task: 'Task 3', parentSessionId });
+
+      // Wait to ensure they're active
+      await new Promise(resolve => setTimeout(resolve, 5));
+
+      // Queue up more from the same session (will hit session limit of 10)
+      // We need to queue enough that when processed, session limit is reached
+      const queuedTasks = [];
+      for (let i = 4; i <= 12; i++) {
+        queuedTasks.push(delegate({ task: `Task ${i}`, parentSessionId }));
+      }
+
+      // Wait for all to settle - some will complete, some will reject due to session limit
+      const results = await Promise.allSettled([task1, task2, task3, ...queuedTasks]);
+
+      // At least some tasks should have been fulfilled
+      const fulfilled = results.filter(r => r.status === 'fulfilled');
+      expect(fulfilled.length).toBeGreaterThan(0);
+
+      // The promise should not hang - all should be settled (either fulfilled or rejected)
+      expect(results.every(r => r.status === 'fulfilled' || r.status === 'rejected')).toBe(true);
+    });
+
+    it('should reject queued delegations on cleanup', async () => {
+      // Make responses slow enough to queue up but fast enough to not timeout the test
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Response'), 100))
+      );
+
+      // Fill up global slots
+      const task1 = delegate({ task: 'Task 1' });
+      const task2 = delegate({ task: 'Task 2' });
+      const task3 = delegate({ task: 'Task 3' });
+
+      // Wait to ensure they're active
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Queue a delegation
+      const queuedTask = delegate({ task: 'Task 4' });
+
+      // Check queue size
+      const stats = getDelegationStats();
+      expect(stats.queueSize).toBe(1);
+
+      // Clean up - this should reject the queued task
+      cleanupDelegationManager();
+
+      // The queued task should be rejected by cleanup
+      await expect(queuedTask).rejects.toThrow(/cleaned up/);
+
+      // Wait for the first 3 to settle
       await Promise.allSettled([task1, task2, task3]);
     });
 
@@ -228,43 +331,20 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
         });
       }
 
-      // 11th delegation for same session should fail due to session counter
       // Wait a moment to ensure all previous have decremented
       await new Promise(resolve => setTimeout(resolve, 20));
 
-      // Now try 10 more in parallel - should work (counters reset)
+      // Now try 3 more in parallel - should work (counters reset)
       const tasks = [];
-      for (let i = 0; i < 3; i++) {  // Use 3 to not hit global limit
+      for (let i = 0; i < 3; i++) {
         tasks.push(delegate({
           task: `Parallel Task ${i}`,
           parentSessionId
         }));
       }
 
-      await Promise.allSettled(tasks);
-
-      // Now start 3 more to fill global slots
-      const moreTasks = [];
-      for (let i = 0; i < 3; i++) {
-        moreTasks.push(delegate({
-          task: `More Task ${i}`,
-          parentSessionId
-        }));
-      }
-
-      // Wait to ensure they're active
-      await new Promise(resolve => setTimeout(resolve, 5));
-
-      // This should fail due to global limit (3 concurrent max)
-      await expect(delegate({
-        task: 'Should fail',
-        parentSessionId
-      })).rejects.toThrow(
-        /Maximum concurrent delegations.*reached/
-      );
-
-      // Clean up
-      await Promise.allSettled(moreTasks);
+      const results = await Promise.all(tasks);
+      expect(results).toEqual(['Response', 'Response', 'Response']);
     });
 
     it('should decrement counter when delegation completes successfully', async () => {

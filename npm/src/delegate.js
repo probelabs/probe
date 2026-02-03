@@ -22,11 +22,17 @@ class DelegationManager {
 	constructor() {
 		this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
 		this.maxPerSession = parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
+		// Default queue timeout: 60 seconds. Set DELEGATION_QUEUE_TIMEOUT=0 to disable.
+		this.defaultQueueTimeout = parseInt(process.env.DELEGATION_QUEUE_TIMEOUT || '60000', 10);
 
 		// Track delegations per session with timestamp for potential TTL cleanup
 		// Map<string, { count: number, lastUpdated: number }>
 		this.sessionDelegations = new Map();
 		this.globalActive = 0;
+
+		// Queue for waiting delegations (FIFO)
+		// Each entry: { resolve, reject, parentSessionId, queuedAt, timeoutId }
+		this.waitQueue = [];
 
 		// Start periodic cleanup of stale sessions (every 5 minutes)
 		// Wrapped in try-catch to prevent interval errors from crashing the process
@@ -47,6 +53,7 @@ class DelegationManager {
 	/**
 	 * Check limits and increment counters (synchronous, atomic in Node.js event loop)
 	 * @param {string|null|undefined} parentSessionId - Parent session ID for tracking
+	 * @returns {boolean} true if acquired, false if would need to wait
 	 */
 	tryAcquire(parentSessionId) {
 		// Validate parentSessionId parameter
@@ -54,9 +61,9 @@ class DelegationManager {
 			throw new TypeError('parentSessionId must be a string, null, or undefined');
 		}
 
-		// Check global limit
+		// Check global limit - return false instead of throwing
 		if (this.globalActive >= this.maxConcurrent) {
-			throw new Error(`Maximum concurrent delegations (${this.maxConcurrent}) reached. Please wait for some delegations to complete.`);
+			return false;
 		}
 
 		// Check per-session limit
@@ -70,6 +77,16 @@ class DelegationManager {
 		}
 
 		// Increment counters (atomic in single-threaded Node.js)
+		this._incrementCounters(parentSessionId);
+
+		return true;
+	}
+
+	/**
+	 * Internal helper to increment counters
+	 * @private
+	 */
+	_incrementCounters(parentSessionId) {
 		this.globalActive++;
 
 		if (parentSessionId) {
@@ -84,12 +101,73 @@ class DelegationManager {
 				});
 			}
 		}
-
-		return true;
 	}
 
 	/**
-	 * Decrement counters (synchronous, atomic in Node.js event loop)
+	 * Acquire a delegation slot, waiting in queue if necessary
+	 * @param {string|null|undefined} parentSessionId - Parent session ID for tracking
+	 * @param {boolean} debug - Enable debug logging
+	 * @param {number|null} queueTimeout - Max time to wait in queue (ms). Defaults to this.defaultQueueTimeout. Set to 0 to disable.
+	 * @returns {Promise<boolean>} Resolves when slot is acquired, rejects on timeout or session limit error
+	 */
+	async acquire(parentSessionId, debug = false, queueTimeout = null) {
+		// Use instance default if not specified
+		const effectiveTimeout = queueTimeout !== null ? queueTimeout : this.defaultQueueTimeout;
+		// Try immediate acquisition first
+		if (this.tryAcquire(parentSessionId)) {
+			return true;
+		}
+
+		// Need to wait in queue
+		if (debug) {
+			console.error(`[DelegationManager] Slot unavailable (${this.globalActive}/${this.maxConcurrent}), queuing... (queue size: ${this.waitQueue.length}, timeout: ${effectiveTimeout}ms)`);
+		}
+
+		// Create a promise that will be resolved when a slot becomes available
+		// or rejected if session limit is exceeded or queue timeout expires
+		return new Promise((resolve, reject) => {
+			const entry = {
+				resolve: null,  // Will be wrapped below
+				reject: null,   // Will be wrapped below
+				parentSessionId,
+				debug,
+				queuedAt: Date.now(),
+				timeoutId: null
+			};
+
+			// Wrap resolve/reject to clear timeout and prevent double-settling
+			let settled = false;
+			entry.resolve = (value) => {
+				if (settled) return;
+				settled = true;
+				if (entry.timeoutId) clearTimeout(entry.timeoutId);
+				resolve(value);
+			};
+			entry.reject = (error) => {
+				if (settled) return;
+				settled = true;
+				if (entry.timeoutId) clearTimeout(entry.timeoutId);
+				reject(error);
+			};
+
+			// Set up queue timeout if enabled
+			if (effectiveTimeout > 0) {
+				entry.timeoutId = setTimeout(() => {
+					// Remove from queue if still there
+					const index = this.waitQueue.indexOf(entry);
+					if (index !== -1) {
+						this.waitQueue.splice(index, 1);
+					}
+					entry.reject(new Error(`Delegation queue timeout: waited ${effectiveTimeout}ms for an available slot`));
+				}, effectiveTimeout);
+			}
+
+			this.waitQueue.push(entry);
+		});
+	}
+
+	/**
+	 * Decrement counters and process queue (synchronous, atomic in Node.js event loop)
 	 */
 	release(parentSessionId, debug = false) {
 		this.globalActive = Math.max(0, this.globalActive - 1);
@@ -107,7 +185,52 @@ class DelegationManager {
 		}
 
 		if (debug) {
-			console.error(`[DELEGATE] Released. Global active: ${this.globalActive}`);
+			console.error(`[DELEGATE] Released. Global active: ${this.globalActive}, queue size: ${this.waitQueue.length}`);
+		}
+
+		// Process next item in queue if there's capacity
+		this._processQueue(debug);
+	}
+
+	/**
+	 * Process the wait queue - grant slot to next waiting delegation
+	 * @private
+	 */
+	_processQueue(debug = false) {
+		// Process queue items one at a time when slots are available
+		// Items are only removed when they can be granted or must be rejected
+		while (this.waitQueue.length > 0 && this.globalActive < this.maxConcurrent) {
+			const next = this.waitQueue.shift();
+			if (!next) break;
+
+			const { resolve, reject, parentSessionId, queuedAt } = next;
+
+			// Check per-session limit before granting
+			if (parentSessionId) {
+				const sessionData = this.sessionDelegations.get(parentSessionId);
+				const sessionCount = sessionData?.count || 0;
+
+				if (sessionCount >= this.maxPerSession) {
+					// Session limit reached - reject with error (consistent with tryAcquire behavior)
+					// This is a hard limit, not something that will resolve by waiting longer
+					if (debug) {
+						console.error(`[DelegationManager] Session limit (${this.maxPerSession}) reached for queued item, rejecting`);
+					}
+					reject(new Error(`Maximum delegations per session (${this.maxPerSession}) reached for session ${parentSessionId}`));
+					// Continue to process next item in queue
+					continue;
+				}
+			}
+
+			// Grant the slot
+			this._incrementCounters(parentSessionId);
+
+			if (debug) {
+				const waitTime = Date.now() - queuedAt;
+				console.error(`[DelegationManager] Granted slot from queue (waited ${waitTime}ms). Active: ${this.globalActive}/${this.maxConcurrent}`);
+			}
+
+			resolve(true);
 		}
 	}
 
@@ -119,7 +242,9 @@ class DelegationManager {
 			globalActive: this.globalActive,
 			maxConcurrent: this.maxConcurrent,
 			maxPerSession: this.maxPerSession,
-			sessionCount: this.sessionDelegations.size
+			defaultQueueTimeout: this.defaultQueueTimeout,
+			sessionCount: this.sessionDelegations.size,
+			queueSize: this.waitQueue.length
 		};
 	}
 
@@ -143,13 +268,30 @@ class DelegationManager {
 			clearInterval(this.cleanupInterval);
 			this.cleanupInterval = null;
 		}
+
+		// Clear all pending queue entries and their timeouts
+		for (const entry of this.waitQueue) {
+			if (entry.timeoutId) {
+				clearTimeout(entry.timeoutId);
+			}
+			// Reject pending entries so they don't hang
+			if (entry.reject) {
+				entry.reject(new Error('DelegationManager was cleaned up'));
+			}
+		}
+		this.waitQueue = [];
+
 		this.sessionDelegations.clear();
 		this.globalActive = 0;
 	}
 }
 
-// Singleton instance for the module
-const delegationManager = new DelegationManager();
+// Default singleton instance for backward compatibility
+// New code should create per-instance DelegationManager via ProbeAgent
+const defaultDelegationManager = new DelegationManager();
+
+// Export the class for per-instance usage
+export { DelegationManager };
 
 /**
  * Delegate a big distinct task to a probe subagent (used automatically by AI agents)
@@ -214,11 +356,15 @@ export async function delegate({
 	enableTasks = false,
 	enableMcp = false,
 	mcpConfig = null,
-	mcpConfigPath = null
+	mcpConfigPath = null,
+	delegationManager = null  // Optional per-instance manager, falls back to default singleton
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
 	}
+
+	// Use provided manager or fall back to default singleton
+	const manager = delegationManager || defaultDelegationManager;
 
 	const sessionId = randomUUID();
 	const startTime = Date.now();
@@ -235,19 +381,19 @@ export async function delegate({
 	let acquired = false;
 
 	try {
-		// Check limits and acquire delegation slot inside try block for proper cleanup
-		delegationManager.tryAcquire(parentSessionId);
+		// Acquire delegation slot (waits in queue if necessary)
+		await manager.acquire(parentSessionId, debug);
 		acquired = true;
 
 		if (debug) {
-			const stats = delegationManager.getStats();
+			const stats = manager.getStats();
 			console.error(`[DELEGATE] Starting delegation session ${sessionId}`);
 			console.error(`[DELEGATE] Parent session: ${parentSessionId || 'none'}`);
 			console.error(`[DELEGATE] Task: ${task}`);
 			console.error(`[DELEGATE] Current iteration: ${currentIteration}/${maxIterations}`);
 			console.error(`[DELEGATE] Remaining iterations for subagent: ${remainingIterations}`);
 			console.error(`[DELEGATE] Timeout configured: ${timeout} seconds`);
-			console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}`);
+			console.error(`[DELEGATE] Global active delegations: ${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize}`);
 			console.error(`[DELEGATE] Using ProbeAgent SDK with ${promptType} prompt`);
 		}
 		// Create a new ProbeAgent instance for the delegated task
@@ -360,7 +506,7 @@ export async function delegate({
 
 		// Release delegation slot
 		if (acquired) {
-			delegationManager.release(parentSessionId, debug);
+			manager.release(parentSessionId, debug);
 		}
 
 		return response;
@@ -376,7 +522,7 @@ export async function delegate({
 
 		// Release delegation slot on error (only if it was acquired)
 		if (acquired) {
-			delegationManager.release(parentSessionId, debug);
+			manager.release(parentSessionId, debug);
 		}
 
 		if (debug) {
@@ -423,16 +569,20 @@ export async function isDelegateAvailable() {
 
 /**
  * Get delegation statistics (for monitoring/debugging)
+ * Note: Returns stats from the default singleton manager.
+ * For per-instance stats, use manager.getStats() directly.
  *
  * @returns {Object} Current delegation stats
  */
 export function getDelegationStats() {
-	return delegationManager.getStats();
+	return defaultDelegationManager.getStats();
 }
 
 /**
  * Cleanup delegation manager (for testing or shutdown)
+ * Note: Cleans up the default singleton manager.
+ * For per-instance cleanup, use manager.cleanup() directly.
  */
 export async function cleanupDelegationManager() {
-	return delegationManager.cleanup();
+	return defaultDelegationManager.cleanup();
 }

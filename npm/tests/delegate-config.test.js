@@ -59,7 +59,8 @@ describe('Delegate Tool Configuration', () => {
         searchDelegate: undefined,
         enableMcp: false,
         mcpConfig: null,
-        mcpConfigPath: null
+        mcpConfigPath: null,
+        delegationManager: null  // Per-instance delegation limits
       });
 
       expect(result).toBe('Mock delegate response');
