@@ -25,12 +25,14 @@ import {
 	querySchema,
 	extractSchema,
 	delegateSchema,
+	analyzeAllSchema,
 	attemptCompletionSchema,
 	bashSchema,
 	searchToolDefinition,
 	queryToolDefinition,
 	extractToolDefinition,
 	delegateToolDefinition,
+	analyzeAllToolDefinition,
 	attemptCompletionToolDefinition,
 	bashToolDefinition,
 	parseXmlToolCall
@@ -41,7 +43,7 @@ import {
 	editToolDefinition,
 	createToolDefinition
 } from './tools/edit.js';
-import { searchTool, queryTool, extractTool, delegateTool } from './tools/vercel.js';
+import { searchTool, queryTool, extractTool, delegateTool, analyzeAllTool } from './tools/vercel.js';
 import { bashTool } from './tools/bash.js';
 import { editTool, createTool } from './tools/edit.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
@@ -85,6 +87,7 @@ export {
 	queryTool,
 	extractTool,
 	delegateTool,
+	analyzeAllTool,
 	bashTool,
 	editTool,
 	createTool,
@@ -96,6 +99,7 @@ export {
 	querySchema,
 	extractSchema,
 	delegateSchema,
+	analyzeAllSchema,
 	attemptCompletionSchema,
 	bashSchema,
 	editSchema,
@@ -105,6 +109,7 @@ export {
 	queryToolDefinition,
 	extractToolDefinition,
 	delegateToolDefinition,
+	analyzeAllToolDefinition,
 	attemptCompletionToolDefinition,
 	bashToolDefinition,
 	editToolDefinition,

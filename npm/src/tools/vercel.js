@@ -8,7 +8,8 @@ import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
-import { searchSchema, querySchema, extractSchema, delegateSchema, searchDescription, queryDescription, extractDescription, delegateDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
+import { analyzeAll } from './analyzeAll.js';
+import { searchSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 import { formatErrorForAI } from '../utils/error-types.js';
 
 const CODE_SEARCH_SCHEMA = {
@@ -156,7 +157,7 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 export const searchTool = (options = {}) => {
 	const {
 		sessionId,
-		maxTokens = 10000,
+		maxTokens = 20000,
 		debug = false,
 		outline = false,
 		searchDelegate = false
@@ -565,6 +566,64 @@ export const delegateTool = (options = {}) => {
 			});
 
 			return result;
+		}
+	});
+};
+
+/**
+ * Analyze All tool generator - intelligent 3-phase analysis using map-reduce
+ *
+ * @param {Object} [options] - Configuration options
+ * @param {string} [options.sessionId] - Session ID for caching
+ * @param {boolean} [options.debug=false] - Enable debug logging
+ * @param {string} [options.cwd] - Working directory
+ * @param {string[]} [options.allowedFolders] - Allowed folders
+ * @param {string} [options.provider] - AI provider
+ * @param {string} [options.model] - AI model
+ * @param {Object} [options.tracer] - Telemetry tracer
+ * @returns {Object} Configured analyze_all tool
+ */
+export const analyzeAllTool = (options = {}) => {
+	const { sessionId, debug = false } = options;
+
+	return tool({
+		name: 'analyze_all',
+		description: analyzeAllDescription,
+		inputSchema: analyzeAllSchema,
+		execute: async ({ question, path }) => {
+			try {
+				// Parse and resolve path if provided
+				let searchPath = path || '.';
+				if (path && options.cwd) {
+					const resolvedPaths = parseAndResolvePaths(path, options.cwd);
+					if (resolvedPaths.length > 0) {
+						searchPath = resolvedPaths[0];
+					}
+				}
+
+				if (debug) {
+					console.error(`[analyze_all] Starting analysis`);
+					console.error(`[analyze_all] Question: ${question}`);
+					console.error(`[analyze_all] Path: ${searchPath}`);
+				}
+
+				const result = await analyzeAll({
+					question,
+					path: searchPath,
+					sessionId,
+					debug,
+					cwd: options.cwd,
+					allowedFolders: options.allowedFolders,
+					provider: options.provider,
+					model: options.model,
+					tracer: options.tracer
+				});
+
+				return result;
+			} catch (error) {
+				console.error('Error executing analyze_all:', error);
+				return formatErrorForAI(error);
+			}
 		}
 	});
 };
