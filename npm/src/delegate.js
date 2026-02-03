@@ -22,6 +22,8 @@ class DelegationManager {
 	constructor() {
 		this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
 		this.maxPerSession = parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
+		// Default queue timeout: 60 seconds. Set DELEGATION_QUEUE_TIMEOUT=0 to disable.
+		this.defaultQueueTimeout = parseInt(process.env.DELEGATION_QUEUE_TIMEOUT || '60000', 10);
 
 		// Track delegations per session with timestamp for potential TTL cleanup
 		// Map<string, { count: number, lastUpdated: number }>
@@ -29,7 +31,7 @@ class DelegationManager {
 		this.globalActive = 0;
 
 		// Queue for waiting delegations (FIFO)
-		// Each entry: { resolve: Function, parentSessionId: string|null }
+		// Each entry: { resolve, reject, parentSessionId, queuedAt, timeoutId }
 		this.waitQueue = [];
 
 		// Start periodic cleanup of stale sessions (every 5 minutes)
@@ -105,9 +107,12 @@ class DelegationManager {
 	 * Acquire a delegation slot, waiting in queue if necessary
 	 * @param {string|null|undefined} parentSessionId - Parent session ID for tracking
 	 * @param {boolean} debug - Enable debug logging
-	 * @returns {Promise<boolean>} Resolves when slot is acquired, rejects on session limit error
+	 * @param {number|null} queueTimeout - Max time to wait in queue (ms). Defaults to this.defaultQueueTimeout. Set to 0 to disable.
+	 * @returns {Promise<boolean>} Resolves when slot is acquired, rejects on timeout or session limit error
 	 */
-	async acquire(parentSessionId, debug = false) {
+	async acquire(parentSessionId, debug = false, queueTimeout = null) {
+		// Use instance default if not specified
+		const effectiveTimeout = queueTimeout !== null ? queueTimeout : this.defaultQueueTimeout;
 		// Try immediate acquisition first
 		if (this.tryAcquire(parentSessionId)) {
 			return true;
@@ -115,19 +120,49 @@ class DelegationManager {
 
 		// Need to wait in queue
 		if (debug) {
-			console.error(`[DelegationManager] Slot unavailable (${this.globalActive}/${this.maxConcurrent}), queuing... (queue size: ${this.waitQueue.length})`);
+			console.error(`[DelegationManager] Slot unavailable (${this.globalActive}/${this.maxConcurrent}), queuing... (queue size: ${this.waitQueue.length}, timeout: ${effectiveTimeout}ms)`);
 		}
 
 		// Create a promise that will be resolved when a slot becomes available
-		// or rejected if session limit is exceeded when processing queue
+		// or rejected if session limit is exceeded or queue timeout expires
 		return new Promise((resolve, reject) => {
-			this.waitQueue.push({
-				resolve,
-				reject,
+			const entry = {
+				resolve: null,  // Will be wrapped below
+				reject: null,   // Will be wrapped below
 				parentSessionId,
 				debug,
-				queuedAt: Date.now()
-			});
+				queuedAt: Date.now(),
+				timeoutId: null
+			};
+
+			// Wrap resolve/reject to clear timeout and prevent double-settling
+			let settled = false;
+			entry.resolve = (value) => {
+				if (settled) return;
+				settled = true;
+				if (entry.timeoutId) clearTimeout(entry.timeoutId);
+				resolve(value);
+			};
+			entry.reject = (error) => {
+				if (settled) return;
+				settled = true;
+				if (entry.timeoutId) clearTimeout(entry.timeoutId);
+				reject(error);
+			};
+
+			// Set up queue timeout if enabled
+			if (effectiveTimeout > 0) {
+				entry.timeoutId = setTimeout(() => {
+					// Remove from queue if still there
+					const index = this.waitQueue.indexOf(entry);
+					if (index !== -1) {
+						this.waitQueue.splice(index, 1);
+					}
+					entry.reject(new Error(`Delegation queue timeout: waited ${effectiveTimeout}ms for an available slot`));
+				}, effectiveTimeout);
+			}
+
+			this.waitQueue.push(entry);
 		});
 	}
 
@@ -207,6 +242,7 @@ class DelegationManager {
 			globalActive: this.globalActive,
 			maxConcurrent: this.maxConcurrent,
 			maxPerSession: this.maxPerSession,
+			defaultQueueTimeout: this.defaultQueueTimeout,
 			sessionCount: this.sessionDelegations.size,
 			queueSize: this.waitQueue.length
 		};
@@ -232,6 +268,19 @@ class DelegationManager {
 			clearInterval(this.cleanupInterval);
 			this.cleanupInterval = null;
 		}
+
+		// Clear all pending queue entries and their timeouts
+		for (const entry of this.waitQueue) {
+			if (entry.timeoutId) {
+				clearTimeout(entry.timeoutId);
+			}
+			// Reject pending entries so they don't hang
+			if (entry.reject) {
+				entry.reject(new Error('DelegationManager was cleaned up'));
+			}
+		}
+		this.waitQueue = [];
+
 		this.sessionDelegations.clear();
 		this.globalActive = 0;
 	}

@@ -283,6 +283,37 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       expect(results.every(r => r.status === 'fulfilled' || r.status === 'rejected')).toBe(true);
     });
 
+    it('should reject queued delegations on cleanup', async () => {
+      // Make responses slow enough to queue up but fast enough to not timeout the test
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Response'), 100))
+      );
+
+      // Fill up global slots
+      const task1 = delegate({ task: 'Task 1' });
+      const task2 = delegate({ task: 'Task 2' });
+      const task3 = delegate({ task: 'Task 3' });
+
+      // Wait to ensure they're active
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Queue a delegation
+      const queuedTask = delegate({ task: 'Task 4' });
+
+      // Check queue size
+      const stats = getDelegationStats();
+      expect(stats.queueSize).toBe(1);
+
+      // Clean up - this should reject the queued task
+      cleanupDelegationManager();
+
+      // The queued task should be rejected by cleanup
+      await expect(queuedTask).rejects.toThrow(/cleaned up/);
+
+      // Wait for the first 3 to settle
+      await Promise.allSettled([task1, task2, task3]);
+    });
+
     it('should enforce per-session delegation limit', async () => {
       // Reset to fast responses but with slight delay
       mockAnswer.mockImplementation(() =>
