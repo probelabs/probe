@@ -42,6 +42,8 @@ fn test_multi_keyword_pattern_generation() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Generate patterns
@@ -117,6 +119,8 @@ fn test_excluded_term_pattern_generation() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Generate patterns
@@ -177,6 +181,8 @@ fn test_and_expression_pattern_generation() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Generate patterns
@@ -252,6 +258,8 @@ fn test_or_expression_pattern_generation() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Generate patterns
@@ -351,6 +359,8 @@ fn test_complex_expression_pattern_generation() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Generate patterns
@@ -445,6 +455,8 @@ fn test_pattern_deduplication() {
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     };
 
     // Generate patterns

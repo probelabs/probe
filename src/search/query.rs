@@ -1,4 +1,5 @@
 use probe_code::search::elastic_query;
+use probe_code::search::tokenization;
 // No term_exceptions import needed
 use lru::LruCache;
 use std::collections::{HashMap, HashSet};
@@ -51,6 +52,13 @@ pub struct QueryPlan {
     /// Flag indicating this is a universal query that should match all content
     /// (typically used when only filename filters are specified)
     pub is_universal_query: bool,
+
+    // PHASE 5 OPTIMIZATION: Pre-computed special case terms
+    /// Pre-computed: set of term indices that are special cases
+    /// This avoids repeated is_special_case() calls during filtering
+    pub special_case_indices: HashSet<usize>,
+    /// Pre-computed: lowercase versions of special case terms for O(1) lookup
+    pub special_case_terms_lower: HashMap<usize, String>,
 }
 
 impl std::fmt::Debug for QueryPlan {
@@ -66,6 +74,7 @@ impl std::fmt::Debug for QueryPlan {
             .field("required_terms_indices", &self.required_terms_indices)
             .field("has_only_excluded_terms", &self.has_only_excluded_terms)
             .field("is_universal_query", &self.is_universal_query)
+            .field("special_case_indices", &self.special_case_indices)
             .field("evaluation_cache", &"<LruCache>")
             .finish()
     }
@@ -187,6 +196,16 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
         .filter_map(|term| term_indices.get(term).cloned())
         .collect();
 
+    // PHASE 5 OPTIMIZATION: Pre-compute special case terms once
+    let mut special_case_indices = HashSet::new();
+    let mut special_case_terms_lower = HashMap::new();
+    for (term, &idx) in &term_indices {
+        if tokenization::is_special_case(term) {
+            special_case_indices.insert(idx);
+            special_case_terms_lower.insert(idx, term.to_lowercase());
+        }
+    }
+
     // Create evaluation cache with reasonable capacity
     let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
 
@@ -202,6 +221,8 @@ pub fn create_query_plan(query: &str, exact: bool) -> Result<QueryPlan, elastic_
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices,
+        special_case_terms_lower,
     })
 }
 
@@ -790,6 +811,16 @@ pub fn create_query_plan_from_ast(
         .filter_map(|term| term_indices.get(term).cloned())
         .collect();
 
+    // PHASE 5 OPTIMIZATION: Pre-compute special case terms once
+    let mut special_case_indices = HashSet::new();
+    let mut special_case_terms_lower = HashMap::new();
+    for (term, &idx) in &term_indices {
+        if tokenization::is_special_case(term) {
+            special_case_indices.insert(idx);
+            special_case_terms_lower.insert(idx, term.to_lowercase());
+        }
+    }
+
     // Create evaluation cache
     let evaluation_cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
 
@@ -813,6 +844,8 @@ pub fn create_query_plan_from_ast(
         has_only_excluded_terms,
         evaluation_cache,
         is_universal_query: false,
+        special_case_indices,
+        special_case_terms_lower,
     })
 }
 
@@ -845,5 +878,7 @@ pub fn create_universal_query_plan() -> QueryPlan {
         has_only_excluded_terms: false,
         evaluation_cache: Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap()))),
         is_universal_query: true, // This is a universal query that should match all content
+        special_case_indices: HashSet::new(),
+        special_case_terms_lower: HashMap::new(),
     }
 }
