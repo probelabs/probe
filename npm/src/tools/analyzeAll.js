@@ -339,6 +339,8 @@ Organize all findings into clear categories with items listed under each.${compl
 
 /**
  * PHASE 1: Planning - Analyze the question and determine optimal strategy
+ * Uses a full agent that can explore the repository to understand its structure
+ * before creating the search plan.
  * @param {string} question - The user's free-form question
  * @param {string} path - Path to search in
  * @param {Object} options - Delegate options
@@ -346,32 +348,48 @@ Organize all findings into clear categories with items listed under each.${compl
  */
 async function planAnalysis(question, path, options) {
 	if (options.debug) {
-		console.error(`[analyze_all] Phase 1: Planning analysis strategy...`);
+		console.error(`[analyze_all] Phase 1: Planning analysis strategy (with exploration)...`);
 	}
 
-	const planningTask = `Create an analysis plan for this question about a codebase:
+	const planningTask = `You are planning a bulk data analysis. Your goal is to find the BEST search strategy through exploration and experimentation.
 
-"${question}"
+QUESTION TO ANSWER: "${question}"
+SEARCH SCOPE: ${path}
 
-Search scope: ${path}
+YOUR TASK: Explore, experiment, then plan.
 
-Use attempt_completion to output your plan in this EXACT format:
+STEP 1: EXPLORE THE REPOSITORY STRUCTURE
+Use listFiles to understand:
+- What types of files exist? (code, markdown, configs, etc.)
+- What are the naming patterns? (e.g., "Playbook", "Debrief", "spec", "test")
+- What directories and subdirectories exist?
 
-SEARCH_QUERY: <elasticsearch query using OR for multiple terms, quotes for exact phrases>
+STEP 2: TEST DIFFERENT SEARCH QUERIES
+Run several experimental searches to find what works:
+- Try different keyword combinations related to the question
+- Test queries based on file naming patterns you discovered
+- Check which queries return relevant results vs empty results
+- Iterate until you find queries that actually return data
+
+For example, if looking for customer data:
+- First try: search for "customer" - see what comes back
+- If empty, try: search for "playbook" or "debrief" (common doc names)
+- Check the actual content to understand terminology used
+
+STEP 3: CREATE THE FINAL PLAN
+Based on your experiments, output the BEST search strategy.
+
+Use attempt_completion with this EXACT format:
+
+SEARCH_QUERY: <the query that WORKED in your experiments - use OR for multiple terms>
 AGGREGATION: <summarize | list_unique | count | group_by>
 EXTRACTION_PROMPT: <what to extract from each search result>
-REASONING: <brief explanation>
+REASONING: <what you discovered, what queries you tested, why the final query works>
 
-Example plan:
-SEARCH_QUERY: export OR function OR class OR tool
-AGGREGATION: list_unique
-EXTRACTION_PROMPT: Extract tool names and their purpose
-REASONING: Using list_unique to deduplicate tool definitions
-
-IMPORTANT: Use attempt_completion immediately with your plan. Do NOT try to search or answer the question - just create the analysis plan.`;
+CRITICAL: Do NOT guess keywords. Actually run searches and see what returns results!`;
 
 	try {
-		// Planning phase - attempt_completion only
+		// Planning phase - full agent with exploration capabilities
 		const result = await delegate({
 			task: planningTask,
 			debug: options.debug,
@@ -383,9 +401,9 @@ IMPORTANT: Use attempt_completion immediately with your plan. Do NOT try to sear
 			tracer: options.tracer,
 			enableBash: false,
 			promptType: 'code-researcher',
-			allowedTools: [], // attempt_completion only (default tool)
-			maxIterations: 3,
-			timeout: 60
+			// Full tool access for exploration and experimentation
+			maxIterations: 15,
+			timeout: 180
 		});
 
 		const plan = parsePlanningResult(stripResultTags(result));
