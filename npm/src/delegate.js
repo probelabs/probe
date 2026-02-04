@@ -194,9 +194,14 @@ class DelegationManager {
 
 	/**
 	 * Process the wait queue - grant slot to next waiting delegation
+	 * Uses setImmediate to avoid blocking the event loop when resolving promises.
 	 * @private
 	 */
 	_processQueue(debug = false) {
+		// Collect callbacks to invoke after the loop to avoid blocking the event loop
+		const toResolve = [];
+		const toReject = [];
+
 		// Process queue items one at a time when slots are available
 		// Items are only removed when they can be granted or must be rejected
 		while (this.waitQueue.length > 0 && this.globalActive < this.maxConcurrent) {
@@ -216,7 +221,7 @@ class DelegationManager {
 					if (debug) {
 						console.error(`[DelegationManager] Session limit (${this.maxPerSession}) reached for queued item, rejecting`);
 					}
-					reject(new Error(`Maximum delegations per session (${this.maxPerSession}) reached for session ${parentSessionId}`));
+					toReject.push({ reject, error: new Error(`Maximum delegations per session (${this.maxPerSession}) reached for session ${parentSessionId}`) });
 					// Continue to process next item in queue
 					continue;
 				}
@@ -230,7 +235,21 @@ class DelegationManager {
 				console.error(`[DelegationManager] Granted slot from queue (waited ${waitTime}ms). Active: ${this.globalActive}/${this.maxConcurrent}`);
 			}
 
-			resolve(true);
+			toResolve.push(resolve);
+		}
+
+		// Defer promise resolutions/rejections to next tick to avoid blocking the event loop.
+		// This is critical: synchronous resolve()/reject() calls in a tight loop can saturate
+		// the microtask queue and prevent other async operations from proceeding.
+		if (toResolve.length > 0 || toReject.length > 0) {
+			setImmediate(() => {
+				for (const resolve of toResolve) {
+					resolve(true);
+				}
+				for (const { reject, error } of toReject) {
+					reject(error);
+				}
+			});
 		}
 	}
 
@@ -293,6 +312,9 @@ const defaultDelegationManager = new DelegationManager();
 // Export the class for per-instance usage
 export { DelegationManager };
 
+// Default delegation timeout from environment variable or 300 seconds (5 minutes)
+const DEFAULT_DELEGATE_TIMEOUT = parseInt(process.env.DELEGATE_TIMEOUT, 10) || 300;
+
 /**
  * Delegate a big distinct task to a probe subagent (used automatically by AI agents)
  *
@@ -309,7 +331,7 @@ export { DelegationManager };
  *
  * @param {Object} options - Delegate options
  * @param {string} options.task - A complete, self-contained task for the subagent. Should be specific and focused on one area of expertise.
- * @param {number} [options.timeout=300] - Timeout in seconds (default: 5 minutes)
+ * @param {number} [options.timeout] - Timeout in seconds (default: DELEGATE_TIMEOUT env var or 300)
  * @param {boolean} [options.debug=false] - Enable debug logging
  * @param {number} [options.currentIteration=0] - Current tool iteration count from parent agent
  * @param {number} [options.maxIterations=30] - Maximum tool iterations allowed
@@ -335,7 +357,7 @@ export { DelegationManager };
  */
 export async function delegate({
 	task,
-	timeout = 300,
+	timeout = DEFAULT_DELEGATE_TIMEOUT,
 	debug = false,
 	currentIteration = 0,
 	maxIterations = 30,
