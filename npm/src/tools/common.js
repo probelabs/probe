@@ -11,7 +11,10 @@ import { taskSchema } from '../agent/tasks/taskTool.js';
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
 	query: z.string().describe('Search query with Elasticsearch syntax. Use quotes for exact matches, AND/OR for boolean logic, - for negation.'),
-	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.')
+	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.'),
+	exact: z.boolean().optional().default(false).describe('Default (false) enables stemming and keyword splitting for exploratory search - "getUserData" matches "get", "user", "data", etc. Set true for precise symbol lookup where "getUserData" matches only "getUserData". Use true when you know the exact symbol name.'),
+	session: z.string().optional().describe('Session ID for result caching and pagination. Pass the session ID from a previous search to get additional results (next page). Results already shown in a session are automatically excluded. Omit for a fresh search.'),
+	nextPage: z.boolean().optional().default(false).describe('Set to true when requesting the next page of results. Requires passing the same session ID from the previous search output.')
 });
 
 export const querySchema = z.object({
@@ -130,6 +133,9 @@ You need to focus on main keywords when constructing the query, and always use e
 Parameters:
 - query: (required) Search query. Free-form questions are accepted, but for best results prefer Elasticsearch-style syntax with quotes for exact matches ("functionName"), AND/OR for boolean logic, - for negation, + for important terms.
 - path: (optional, default: '.') Path to search in. All dependencies located in /dep folder, under language sub folders, like this: "/dep/go/github.com/owner/repo", "/dep/js/package_name", or "/dep/rust/cargo_name" etc.
+- exact: (optional, default: false) Set to true for precise symbol lookup without stemming/tokenization. Use when you know the exact symbol name (e.g., "getUserData" matches only "getUserData", not "get", "user", "data").
+- session: (optional) Session ID for pagination. Pass the session ID returned from a previous search to get the next page of results. Results already shown are automatically excluded.
+- nextPage: (optional, default: false) Set to true when requesting the next page of results. Requires passing the same session ID from the previous search.
 
 **Workflow:** Always start with search, then use extract for detailed context when needed.
 
