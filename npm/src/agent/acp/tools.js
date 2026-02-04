@@ -287,6 +287,18 @@ export class ACPToolManager {
             allow_tests: {
               type: 'boolean',
               description: 'Include test files in results (default: true)'
+            },
+            exact: {
+              type: 'boolean',
+              description: 'Default (false) enables stemming and keyword splitting for exploratory search. Set true for precise symbol lookup where the query matches only the exact term. Use true when you know the exact symbol name.'
+            },
+            session: {
+              type: 'string',
+              description: 'Session ID for result caching and pagination. Pass the session ID from a previous search to get additional results (next page). Results already shown in a session are automatically excluded.'
+            },
+            nextPage: {
+              type: 'boolean',
+              description: 'Set to true when requesting the next page of results. Requires passing the same session ID from the previous search output.'
             }
           },
           required: ['query']

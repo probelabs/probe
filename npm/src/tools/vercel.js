@@ -169,7 +169,7 @@ export const searchTool = (options = {}) => {
 			? `${searchDescription} (delegates code search to a subagent and returns extracted code blocks)`
 			: searchDescription,
 		inputSchema: searchSchema,
-		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language }) => {
+		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage }) => {
 			// Use parameter maxTokens if provided, otherwise use the default
 			const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
@@ -195,7 +195,8 @@ export const searchTool = (options = {}) => {
 				exact,
 				json: false,
 				maxTokens: effectiveMaxTokens,
-				session: sessionId, // Pass session ID if provided
+				session: session || sessionId, // Use explicit session param, or fall back to options sessionId
+				nextPage, // Pass nextPage parameter for pagination
 				language // Pass language parameter if provided
 			};
 
