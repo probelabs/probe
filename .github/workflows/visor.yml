@@ -34,3 +34,12 @@ jobs:
           # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Optional: Specify the AI model to use
           MODEL_NAME: 'glm-4.6'
+
+      - name: Upload telemetry traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemetry-traces-${{ github.run_id }}
+          path: debug-artifacts/*.jsonl
+          retention-days: 7
+          if-no-files-found: ignore

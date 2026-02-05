@@ -279,4 +279,370 @@ describe('SimpleAppTracer', () => {
       expect(result).toBe('executed');
     });
   });
+
+  describe('hashContent', () => {
+    test('should return a hex string hash', () => {
+      const hash = tracer.hashContent('test content');
+      expect(typeof hash).toBe('string');
+      expect(hash).toMatch(/^-?[0-9a-f]+$/);
+    });
+
+    test('should return different hashes for different content', () => {
+      const hash1 = tracer.hashContent('content 1');
+      const hash2 = tracer.hashContent('content 2');
+      expect(hash1).not.toBe(hash2);
+    });
+
+    test('should return same hash for same content', () => {
+      const hash1 = tracer.hashContent('same content');
+      const hash2 = tracer.hashContent('same content');
+      expect(hash1).toBe(hash2);
+    });
+
+    test('should handle empty string', () => {
+      const hash = tracer.hashContent('');
+      expect(hash).toBe('0');
+    });
+
+    test('should handle long content (uses first 1000 chars)', () => {
+      const longContent = 'a'.repeat(5000);
+      const hash = tracer.hashContent(longContent);
+      expect(typeof hash).toBe('string');
+    });
+  });
+
+  describe('recordConversationTurn', () => {
+    test('should record assistant conversation turn', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordConversationTurn('assistant', 'Hello, how can I help?', {
+        iteration: 1,
+        has_tool_call: false
+      });
+
+      expect(addEventSpy).toHaveBeenCalledWith('conversation.turn.assistant', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'conversation.role': 'assistant',
+        'conversation.content': 'Hello, how can I help?',
+        'conversation.content.length': 22,
+        iteration: 1,
+        has_tool_call: false
+      }));
+    });
+
+    test('should record tool_result conversation turn', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordConversationTurn('tool_result', 'Search results: file.js', {
+        iteration: 2,
+        tool_name: 'search',
+        tool_success: true
+      });
+
+      expect(addEventSpy).toHaveBeenCalledWith('conversation.turn.tool_result', expect.objectContaining({
+        'conversation.role': 'tool_result',
+        'conversation.content': 'Search results: file.js',
+        tool_name: 'search',
+        tool_success: true
+      }));
+    });
+
+    test('should truncate long content to 10000 chars', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+      const longContent = 'a'.repeat(15000);
+
+      tracer.recordConversationTurn('assistant', longContent, {});
+
+      expect(addEventSpy).toHaveBeenCalledWith('conversation.turn.assistant', expect.objectContaining({
+        'conversation.content': 'a'.repeat(10000),
+        'conversation.content.length': 15000
+      }));
+    });
+
+    test('should not record when tracer is disabled', () => {
+      const disabledTracer = new SimpleAppTracer(null, 'session-123');
+      const addEventSpy = jest.spyOn(disabledTracer, 'addEvent');
+
+      disabledTracer.recordConversationTurn('assistant', 'test', {});
+
+      expect(addEventSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('recordErrorEvent', () => {
+    test('should record wrapped_tool error', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordErrorEvent('wrapped_tool', {
+        message: 'Tool call wrapped in markdown',
+        context: { toolName: 'search', iteration: 1 }
+      });
+
+      expect(addEventSpy).toHaveBeenCalledWith('error.wrapped_tool', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'error.type': 'wrapped_tool',
+        'error.message': 'Tool call wrapped in markdown',
+        'error.recoverable': true
+      }));
+    });
+
+    test('should record unrecognized_tool error', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordErrorEvent('unrecognized_tool', {
+        message: 'Unknown tool: foo',
+        context: { toolName: 'foo', validTools: ['search', 'query'] }
+      });
+
+      expect(addEventSpy).toHaveBeenCalledWith('error.unrecognized_tool', expect.objectContaining({
+        'error.type': 'unrecognized_tool',
+        'error.message': 'Unknown tool: foo'
+      }));
+    });
+
+    test('should record circuit_breaker error as non-recoverable', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordErrorEvent('circuit_breaker', {
+        message: 'Format error limit exceeded',
+        recoverable: false,
+        context: { formatErrorCount: 3 }
+      });
+
+      expect(addEventSpy).toHaveBeenCalledWith('error.circuit_breaker', expect.objectContaining({
+        'error.type': 'circuit_breaker',
+        'error.recoverable': false
+      }));
+    });
+
+    test('should truncate long error messages', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+      const longMessage = 'error '.repeat(500);
+
+      tracer.recordErrorEvent('test_error', { message: longMessage });
+
+      const call = addEventSpy.mock.calls[0][1];
+      expect(call['error.message'].length).toBeLessThanOrEqual(1000);
+    });
+  });
+
+  describe('recordThinkingContent', () => {
+    test('should record AI thinking content', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+      const thinkingContent = 'Let me analyze this code...';
+
+      tracer.recordThinkingContent(thinkingContent, { iteration: 1 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('ai.thinking', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'ai.thinking.content': thinkingContent,
+        'ai.thinking.length': thinkingContent.length,
+        iteration: 1
+      }));
+    });
+
+    test('should not record when thinkingContent is empty', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordThinkingContent('', { iteration: 1 });
+
+      expect(addEventSpy).not.toHaveBeenCalled();
+    });
+
+    test('should not record when thinkingContent is null', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordThinkingContent(null, { iteration: 1 });
+
+      expect(addEventSpy).not.toHaveBeenCalled();
+    });
+
+    test('should truncate very long thinking content', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+      const longThinking = 'think '.repeat(20000);
+
+      tracer.recordThinkingContent(longThinking, {});
+
+      const call = addEventSpy.mock.calls[0][1];
+      expect(call['ai.thinking.content'].length).toBeLessThanOrEqual(50000);
+      expect(call['ai.thinking.length']).toBe(longThinking.length);
+    });
+  });
+
+  describe('recordToolDecision', () => {
+    test('should record tool decision with name and params', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordToolDecision('search', { query: 'test', path: './src' }, { iteration: 1 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('ai.tool_decision', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'ai.tool_decision.name': 'search',
+        'ai.tool_decision.params': '{"query":"test","path":"./src"}',
+        iteration: 1
+      }));
+    });
+
+    test('should handle null params', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordToolDecision('attempt_completion', null, {});
+
+      expect(addEventSpy).toHaveBeenCalledWith('ai.tool_decision', expect.objectContaining({
+        'ai.tool_decision.params': '{}'
+      }));
+    });
+  });
+
+  describe('recordToolResult', () => {
+    test('should record successful tool result', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+      const resultContent = 'Found 5 results';
+
+      tracer.recordToolResult('search', resultContent, true, 150, { iteration: 1 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('tool.result', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'tool.name': 'search',
+        'tool.result': resultContent,
+        'tool.result.length': resultContent.length,
+        'tool.duration_ms': 150,
+        'tool.success': true,
+        iteration: 1
+      }));
+    });
+
+    test('should record failed tool result', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordToolResult('bash', 'Error: command not found', false, 50, { iteration: 2 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('tool.result', expect.objectContaining({
+        'tool.name': 'bash',
+        'tool.success': false,
+        'tool.duration_ms': 50
+      }));
+    });
+
+    test('should handle object results', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+      const result = { matches: 3, files: ['a.js', 'b.js'] };
+
+      tracer.recordToolResult('search', result, true, 200, {});
+
+      expect(addEventSpy).toHaveBeenCalledWith('tool.result', expect.objectContaining({
+        'tool.result': JSON.stringify(result)
+      }));
+    });
+  });
+
+  describe('recordMcpToolStart', () => {
+    test('should record MCP tool start event', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordMcpToolStart('fetch', 'http-server', { url: 'http://example.com' }, { iteration: 1 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('mcp.tool.start', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'mcp.tool.name': 'fetch',
+        'mcp.tool.server': 'http-server',
+        'mcp.tool.params': '{"url":"http://example.com"}',
+        iteration: 1
+      }));
+    });
+  });
+
+  describe('recordMcpToolEnd', () => {
+    test('should record MCP tool success', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordMcpToolEnd('fetch', 'http-server', 'Response data', true, 300, null, { iteration: 1 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('mcp.tool.end', expect.objectContaining({
+        'mcp.tool.name': 'fetch',
+        'mcp.tool.server': 'http-server',
+        'mcp.tool.result': 'Response data',
+        'mcp.tool.success': true,
+        'mcp.tool.duration_ms': 300,
+        'mcp.tool.error': null
+      }));
+    });
+
+    test('should record MCP tool failure', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordMcpToolEnd('fetch', 'http-server', null, false, 100, 'Connection timeout', { iteration: 1 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('mcp.tool.end', expect.objectContaining({
+        'mcp.tool.success': false,
+        'mcp.tool.error': 'Connection timeout'
+      }));
+    });
+  });
+
+  describe('recordIterationEvent', () => {
+    test('should record iteration start event', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordIterationEvent('start', 1, { max_iterations: 10, message_count: 5 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('iteration.start', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'iteration': 1,
+        max_iterations: 10,
+        message_count: 5
+      }));
+    });
+
+    test('should record iteration end event', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordIterationEvent('end', 3, { completed: false, message_count: 8 });
+
+      expect(addEventSpy).toHaveBeenCalledWith('iteration.end', expect.objectContaining({
+        'iteration': 3,
+        completed: false,
+        message_count: 8
+      }));
+    });
+  });
+
+  describe('recordTokenTurn', () => {
+    test('should record token metrics', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordTokenTurn(1, {
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 200,
+        cacheWriteTokens: 100,
+        contextTokens: 1500,
+        maxContextTokens: 8000
+      });
+
+      expect(addEventSpy).toHaveBeenCalledWith('tokens.turn', expect.objectContaining({
+        'session.id': 'test-session-123',
+        'iteration': 1,
+        'tokens.input': 1000,
+        'tokens.output': 500,
+        'tokens.total': 1500,
+        'tokens.cache_read': 200,
+        'tokens.cache_write': 100,
+        'tokens.context_used': 1500,
+        'tokens.context_remaining': 6500
+      }));
+    });
+
+    test('should handle missing token data', () => {
+      const addEventSpy = jest.spyOn(tracer, 'addEvent');
+
+      tracer.recordTokenTurn(1, {});
+
+      expect(addEventSpy).toHaveBeenCalledWith('tokens.turn', expect.objectContaining({
+        'tokens.input': 0,
+        'tokens.output': 0,
+        'tokens.total': 0
+      }));
+    });
+  });
 });

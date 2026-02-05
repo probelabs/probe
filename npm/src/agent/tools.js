@@ -270,13 +270,16 @@ User: Analyze the diagram in docs/architecture.svg
  */
 export function parseXmlToolCallWithThinking(xmlString, validTools) {
   // Use the shared processing logic
-  const { cleanedXmlString, recoveryResult } = processXmlWithThinkingAndRecovery(xmlString, validTools);
-  
-  // If recovery found an attempt_complete pattern, return it
+  const { cleanedXmlString, recoveryResult, thinkingContent } = processXmlWithThinkingAndRecovery(xmlString, validTools);
+
+  // If recovery found an attempt_complete pattern, return it with thinking content
   if (recoveryResult) {
-    return recoveryResult;
+    return { ...recoveryResult, thinkingContent };
   }
 
   // Otherwise, use the original parseXmlToolCall function to parse the cleaned XML string
-  return parseXmlToolCall(cleanedXmlString, validTools);
+  const toolCall = parseXmlToolCall(cleanedXmlString, validTools);
+
+  // Return tool call with thinking content attached
+  return toolCall ? { ...toolCall, thinkingContent } : null;
 }

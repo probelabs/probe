@@ -264,6 +264,204 @@ export class SimpleAppTracer {
     }
   }
 
+  /**
+   * Hash content for deduplication/comparison purposes
+   * @param {string} content - The content to hash
+   * @returns {string} - Hex string hash
+   */
+  hashContent(content) {
+    let hash = 0;
+    const len = Math.min(content.length, 1000);
+    for (let i = 0; i < len; i++) {
+      hash = ((hash << 5) - hash) + content.charCodeAt(i);
+      hash |= 0; // Convert to 32-bit integer
+    }
+    return hash.toString(16);
+  }
+
+  /**
+   * Record a conversation turn (assistant response or tool result)
+   * @param {string} role - The role (assistant, tool_result)
+   * @param {string} content - The turn content
+   * @param {Object} metadata - Additional metadata
+   */
+  recordConversationTurn(role, content, metadata = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`conversation.turn.${role}`, {
+      'session.id': this.sessionId,
+      'conversation.role': role,
+      'conversation.content': content.substring(0, 10000),
+      'conversation.content.length': content.length,
+      'conversation.content.hash': this.hashContent(content),
+      ...metadata
+    });
+  }
+
+  /**
+   * Record error events with classification
+   * @param {string} errorType - The type of error (wrapped_tool, unrecognized_tool, no_tool_call, circuit_breaker, etc.)
+   * @param {Object} errorDetails - Error details including message, stack, context
+   */
+  recordErrorEvent(errorType, errorDetails = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`error.${errorType}`, {
+      'session.id': this.sessionId,
+      'error.type': errorType,
+      'error.message': errorDetails.message?.substring(0, 1000) || null,
+      'error.stack': errorDetails.stack?.substring(0, 2000) || null,
+      'error.recoverable': errorDetails.recoverable ?? true,
+      'error.context': JSON.stringify(errorDetails.context || {}).substring(0, 1000),
+      ...Object.fromEntries(
+        Object.entries(errorDetails)
+          .filter(([k]) => !['message', 'stack', 'context', 'recoverable'].includes(k))
+          .map(([k, v]) => [`error.${k}`, v])
+      )
+    });
+  }
+
+  /**
+   * Record AI thinking/reasoning content
+   * @param {string} thinkingContent - The thinking content from AI response
+   * @param {Object} metadata - Additional metadata
+   */
+  recordThinkingContent(thinkingContent, metadata = {}) {
+    if (!this.isEnabled() || !thinkingContent) return;
+
+    this.addEvent('ai.thinking', {
+      'session.id': this.sessionId,
+      'ai.thinking.content': thinkingContent.substring(0, 50000),
+      'ai.thinking.length': thinkingContent.length,
+      'ai.thinking.hash': this.hashContent(thinkingContent),
+      ...metadata
+    });
+  }
+
+  /**
+   * Record AI tool call decision
+   * @param {string} toolName - The tool name AI decided to call
+   * @param {Object} params - The parameters AI provided
+   * @param {Object} metadata - Additional metadata
+   */
+  recordToolDecision(toolName, params, metadata = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent('ai.tool_decision', {
+      'session.id': this.sessionId,
+      'ai.tool_decision.name': toolName,
+      'ai.tool_decision.params': JSON.stringify(params || {}).substring(0, 2000),
+      ...metadata
+    });
+  }
+
+  /**
+   * Record tool result after execution
+   * @param {string} toolName - The tool that was executed
+   * @param {string|Object} result - The tool result
+   * @param {boolean} success - Whether the tool succeeded
+   * @param {number} durationMs - Execution duration in milliseconds
+   * @param {Object} metadata - Additional metadata
+   */
+  recordToolResult(toolName, result, success, durationMs, metadata = {}) {
+    if (!this.isEnabled()) return;
+
+    const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+    this.addEvent('tool.result', {
+      'session.id': this.sessionId,
+      'tool.name': toolName,
+      'tool.result': resultStr.substring(0, 10000),
+      'tool.result.length': resultStr.length,
+      'tool.result.hash': this.hashContent(resultStr),
+      'tool.duration_ms': durationMs,
+      'tool.success': success,
+      ...metadata
+    });
+  }
+
+  /**
+   * Record MCP tool execution start
+   * @param {string} toolName - MCP tool name
+   * @param {string} serverName - MCP server name
+   * @param {Object} params - Tool parameters
+   * @param {Object} metadata - Additional metadata
+   */
+  recordMcpToolStart(toolName, serverName, params, metadata = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent('mcp.tool.start', {
+      'session.id': this.sessionId,
+      'mcp.tool.name': toolName,
+      'mcp.tool.server': serverName || 'unknown',
+      'mcp.tool.params': JSON.stringify(params || {}).substring(0, 2000),
+      ...metadata
+    });
+  }
+
+  /**
+   * Record MCP tool execution end
+   * @param {string} toolName - MCP tool name
+   * @param {string} serverName - MCP server name
+   * @param {string|Object} result - Tool result
+   * @param {boolean} success - Whether succeeded
+   * @param {number} durationMs - Execution duration
+   * @param {string} errorMessage - Error message if failed
+   * @param {Object} metadata - Additional metadata
+   */
+  recordMcpToolEnd(toolName, serverName, result, success, durationMs, errorMessage = null, metadata = {}) {
+    if (!this.isEnabled()) return;
+
+    const resultStr = typeof result === 'string' ? result : JSON.stringify(result || '');
+    this.addEvent('mcp.tool.end', {
+      'session.id': this.sessionId,
+      'mcp.tool.name': toolName,
+      'mcp.tool.server': serverName || 'unknown',
+      'mcp.tool.result': resultStr.substring(0, 10000),
+      'mcp.tool.result.length': resultStr.length,
+      'mcp.tool.duration_ms': durationMs,
+      'mcp.tool.success': success,
+      'mcp.tool.error': errorMessage,
+      ...metadata
+    });
+  }
+
+  /**
+   * Record iteration lifecycle event
+   * @param {string} eventType - start or end
+   * @param {number} iteration - Iteration number
+   * @param {Object} data - Additional data
+   */
+  recordIterationEvent(eventType, iteration, data = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent(`iteration.${eventType}`, {
+      'session.id': this.sessionId,
+      'iteration': iteration,
+      ...data
+    });
+  }
+
+  /**
+   * Record per-turn token breakdown
+   * @param {number} iteration - Iteration number
+   * @param {Object} tokenData - Token metrics
+   */
+  recordTokenTurn(iteration, tokenData = {}) {
+    if (!this.isEnabled()) return;
+
+    this.addEvent('tokens.turn', {
+      'session.id': this.sessionId,
+      'iteration': iteration,
+      'tokens.input': tokenData.inputTokens || 0,
+      'tokens.output': tokenData.outputTokens || 0,
+      'tokens.total': (tokenData.inputTokens || 0) + (tokenData.outputTokens || 0),
+      'tokens.cache_read': tokenData.cacheReadTokens || 0,
+      'tokens.cache_write': tokenData.cacheWriteTokens || 0,
+      'tokens.context_used': tokenData.contextTokens || 0,
+      'tokens.context_remaining': tokenData.maxContextTokens ? (tokenData.maxContextTokens - (tokenData.contextTokens || 0)) : null
+    });
+  }
+
   async withSpan(spanName, fn, attributes = {}) {
     if (!this.isEnabled()) {
       return fn();
