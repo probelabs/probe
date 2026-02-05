@@ -48,12 +48,17 @@ export const bashTool = (options = {}) => {
   });
 
   // Determine default working directory
+  // Priority: explicit bashConfig.workingDirectory > cwd (which defaults to workspaceRoot) > fallback
   const getDefaultWorkingDirectory = () => {
     if (bashConfig.workingDirectory) {
       return bashConfig.workingDirectory;
     }
     if (cwd) {
       return cwd;
+    }
+    // Use workspaceRoot (computed common prefix) for consistency with other tools
+    if (workspaceRoot) {
+      return workspaceRoot;
     }
     if (allowedFolders && allowedFolders.length > 0) {
       return allowedFolders[0];

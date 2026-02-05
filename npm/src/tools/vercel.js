@@ -587,7 +587,7 @@ export const delegateTool = (options = {}) => {
  * @returns {Object} Configured analyze_all tool
  */
 export const analyzeAllTool = (options = {}) => {
-	const { sessionId, debug = false, delegationManager = null } = options;
+	const { sessionId, debug = false, delegationManager = null, workspaceRoot } = options;
 
 	return tool({
 		name: 'analyze_all',
@@ -610,12 +610,16 @@ export const analyzeAllTool = (options = {}) => {
 					console.error(`[analyze_all] Path: ${searchPath}`);
 				}
 
+				// Use workspaceRoot (computed common prefix) for consistent path handling
+				const effectiveWorkspaceRoot = workspaceRoot || (options.allowedFolders && options.allowedFolders[0]) || options.cwd;
+
 				const result = await analyzeAll({
 					question,
 					path: searchPath,
 					sessionId,
 					debug,
 					cwd: options.cwd,
+					workspaceRoot: effectiveWorkspaceRoot,
 					allowedFolders: options.allowedFolders,
 					provider: options.provider,
 					model: options.model,

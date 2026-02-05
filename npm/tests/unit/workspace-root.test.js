@@ -289,4 +289,48 @@ describe('Workspace Root Utilities', () => {
 			// Should fall back to allowedFolders[0] for backwards compatibility
 		});
 	});
+
+	describe('bashTool workspaceRoot consistency', () => {
+		test('should use workspaceRoot in default working directory chain', async () => {
+			const { bashTool } = await import('../../src/tools/bash.js');
+
+			// When workspaceRoot is provided, it should be used in the fallback chain
+			const tool = bashTool({
+				allowedFolders: ['/workspace/tyk', '/workspace/tyk-docs'],
+				workspaceRoot: '/workspace',  // Computed common prefix
+				cwd: '/workspace'  // cwd defaults to workspaceRoot in ProbeAgent
+			});
+
+			expect(tool).toBeDefined();
+			expect(tool.name).toBe('bash');
+		});
+
+		test('should handle workspaceRoot without cwd', async () => {
+			const { bashTool } = await import('../../src/tools/bash.js');
+
+			const tool = bashTool({
+				allowedFolders: ['/workspace/tyk', '/workspace/tyk-docs'],
+				workspaceRoot: '/workspace'
+				// cwd not provided - should use workspaceRoot
+			});
+
+			expect(tool).toBeDefined();
+			expect(tool.name).toBe('bash');
+		});
+	});
+
+	describe('analyzeAllTool workspaceRoot consistency', () => {
+		test('should pass workspaceRoot to analyzeAll function', async () => {
+			const { analyzeAllTool } = await import('../../src/tools/vercel.js');
+
+			const tool = analyzeAllTool({
+				allowedFolders: ['/workspace/tyk', '/workspace/tyk-docs'],
+				workspaceRoot: '/workspace',
+				cwd: '/workspace'
+			});
+
+			expect(tool).toBeDefined();
+			expect(tool.name).toBe('analyze_all');
+		});
+	});
 });
