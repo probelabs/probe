@@ -4179,7 +4179,7 @@ Convert your previous response content into actual JSON data that follows this s
       allowEdit: this.allowEdit,
       enableDelegate: this.enableDelegate,
       architectureFileName: this.architectureFileName,
-      path: this.allowedFolders[0], // Use first allowed folder as primary path
+      // Pass allowedFolders which will recompute workspaceRoot correctly
       allowedFolders: [...this.allowedFolders],
       cwd: this.cwd, // Preserve explicit working directory
       provider: this.clientApiProvider,

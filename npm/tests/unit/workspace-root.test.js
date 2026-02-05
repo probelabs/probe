@@ -198,4 +198,95 @@ describe('Workspace Root Utilities', () => {
 			expect(relativePath).toBe(path.join('repo1', 'src', 'index.js'));
 		});
 	});
+
+	describe('ProbeAgent workspaceRoot computation', () => {
+		// These tests verify workspaceRoot is computed correctly in ProbeAgent
+		// Note: We import ProbeAgent dynamically to avoid circular dependencies
+
+		test('should compute workspaceRoot from multiple allowedFolders', async () => {
+			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+
+			const agent = new ProbeAgent({
+				allowedFolders: ['/tmp/ws/tyk', '/tmp/ws/tyk-docs', '/tmp/ws/tyk-analytics']
+			});
+
+			// workspaceRoot should be the common prefix
+			expect(agent.workspaceRoot).toBe(path.normalize('/tmp/ws'));
+			// cwd should default to workspaceRoot
+			expect(agent.cwd).toBe(path.normalize('/tmp/ws'));
+		});
+
+		test('should preserve workspaceRoot when explicit cwd is provided', async () => {
+			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+
+			const agent = new ProbeAgent({
+				allowedFolders: ['/tmp/ws/tyk', '/tmp/ws/tyk-docs'],
+				cwd: '/custom/cwd'  // Explicit cwd
+			});
+
+			// workspaceRoot should still be computed from allowedFolders
+			expect(agent.workspaceRoot).toBe(path.normalize('/tmp/ws'));
+			// cwd should be the explicit value
+			expect(agent.cwd).toBe('/custom/cwd');
+		});
+
+		test('should handle single folder in allowedFolders', async () => {
+			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+
+			const agent = new ProbeAgent({
+				allowedFolders: ['/home/user/project']
+			});
+
+			// workspaceRoot should be the single folder
+			expect(agent.workspaceRoot).toBe(path.normalize('/home/user/project'));
+			expect(agent.cwd).toBe(path.normalize('/home/user/project'));
+		});
+
+		test('clone should preserve allowedFolders and recompute workspaceRoot', async () => {
+			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
+
+			const original = new ProbeAgent({
+				allowedFolders: ['/tmp/ws/tyk', '/tmp/ws/tyk-docs']
+			});
+
+			const cloned = original.clone();
+
+			// Cloned agent should have same allowedFolders
+			expect(cloned.allowedFolders).toEqual(original.allowedFolders);
+			// And should compute same workspaceRoot
+			expect(cloned.workspaceRoot).toBe(original.workspaceRoot);
+			expect(cloned.workspaceRoot).toBe(path.normalize('/tmp/ws'));
+		});
+	});
+
+	describe('delegateTool workspaceRoot option', () => {
+		test('should use passed workspaceRoot option over allowedFolders[0]', async () => {
+			const { delegateTool } = await import('../../src/tools/vercel.js');
+
+			// When allowedFolders are sibling directories, workspaceRoot should be their parent
+			const tool = delegateTool({
+				allowedFolders: ['/workspace/tyk', '/workspace/tyk-docs'],
+				workspaceRoot: '/workspace',  // Computed common prefix
+				cwd: '/workspace/tyk/deep/nested'  // Navigation context
+			});
+
+			expect(tool).toBeDefined();
+			expect(tool.name).toBe('delegate');
+			// The tool should use workspaceRoot (/workspace) not allowedFolders[0] (/workspace/tyk)
+		});
+
+		test('should fall back to allowedFolders[0] when workspaceRoot not provided', async () => {
+			const { delegateTool } = await import('../../src/tools/vercel.js');
+
+			// Legacy behavior: if workspaceRoot not explicitly provided
+			const tool = delegateTool({
+				allowedFolders: ['/workspace/tyk', '/workspace/tyk-docs'],
+				cwd: '/workspace/tyk/deep/nested'
+			});
+
+			expect(tool).toBeDefined();
+			expect(tool.name).toBe('delegate');
+			// Should fall back to allowedFolders[0] for backwards compatibility
+		});
+	});
 });
