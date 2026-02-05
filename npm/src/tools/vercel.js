@@ -532,6 +532,10 @@ export const delegateTool = (options = {}) => {
 			// The workspace root (computed as common prefix of allowedFolders) is the security
 			// boundary and correct base for subagent operations. Parent navigation context
 			// should not leak to subagents.
+			//
+			// NOTE: This priority (workspaceRoot > allowedFolders[0], excluding cwd) is INTENTIONALLY
+			// different from other tools (bashTool uses workspaceRoot > cwd > allowedFolders[0]).
+			// This prevents parent's navigation state from leaking to subagents.
 			const effectiveWorkspaceRoot = workspaceRoot || (allowedFolders && allowedFolders[0]);
 			const effectivePath = path || effectiveWorkspaceRoot || cwd;
 
@@ -611,7 +615,8 @@ export const analyzeAllTool = (options = {}) => {
 				}
 
 				// Use workspaceRoot (computed common prefix) for consistent path handling
-				const effectiveWorkspaceRoot = workspaceRoot || (options.allowedFolders && options.allowedFolders[0]) || options.cwd;
+				// Priority: workspaceRoot > cwd > allowedFolders[0] (consistent with bashTool)
+				const effectiveWorkspaceRoot = workspaceRoot || options.cwd || (options.allowedFolders && options.allowedFolders[0]);
 
 				const result = await analyzeAll({
 					question,
