@@ -3,21 +3,25 @@
  * These tests verify the getCommonPrefix and toRelativePath functions
  */
 
-import { getCommonPrefix, toRelativePath } from '../../src/utils/path-validation.js';
+import { getCommonPrefix, toRelativePath, safeRealpath } from '../../src/utils/path-validation.js';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
+
+// Helper to compute expected resolved paths (accounts for symlinks like /tmp -> /private/tmp on macOS)
+const resolvePath = (p) => safeRealpath(p);
 
 describe('Workspace Root Utilities', () => {
 	describe('getCommonPrefix', () => {
 		test('should return single folder when array has one element', () => {
 			const result = getCommonPrefix(['/tmp/ws/tyk']);
-			expect(result).toBe(path.normalize('/tmp/ws/tyk'));
+			// safeRealpath resolves /tmp to /private/tmp on macOS
+			expect(result).toBe(resolvePath('/tmp/ws/tyk'));
 		});
 
 		test('should find common prefix of two sibling folders', () => {
 			const result = getCommonPrefix(['/tmp/ws/tyk', '/tmp/ws/tyk-docs']);
-			expect(result).toBe(path.normalize('/tmp/ws'));
+			expect(result).toBe(resolvePath('/tmp/ws'));
 		});
 
 		test('should find common prefix of multiple folders', () => {
@@ -26,17 +30,17 @@ describe('Workspace Root Utilities', () => {
 				'/tmp/ws/tyk-docs',
 				'/tmp/ws/tyk-analytics'
 			]);
-			expect(result).toBe(path.normalize('/tmp/ws'));
+			expect(result).toBe(resolvePath('/tmp/ws'));
 		});
 
 		test('should find common prefix of nested folders', () => {
 			const result = getCommonPrefix(['/tmp/ws/a/b', '/tmp/ws/a/c']);
-			expect(result).toBe(path.normalize('/tmp/ws/a'));
+			expect(result).toBe(resolvePath('/tmp/ws/a'));
 		});
 
 		test('should handle folders with one being parent of another', () => {
 			const result = getCommonPrefix(['/tmp/ws', '/tmp/ws/sub']);
-			expect(result).toBe(path.normalize('/tmp/ws'));
+			expect(result).toBe(resolvePath('/tmp/ws'));
 		});
 
 		test('should return first folder when no common prefix exists', () => {
@@ -64,7 +68,7 @@ describe('Workspace Root Utilities', () => {
 			const folder1 = path.join('/tmp', 'ws', 'a');
 			const folder2 = path.join('/tmp', 'ws', 'b');
 			const result = getCommonPrefix([folder1, folder2]);
-			expect(result).toBe(path.normalize('/tmp/ws'));
+			expect(result).toBe(resolvePath('/tmp/ws'));
 		});
 
 		// Platform-specific tests
@@ -166,7 +170,8 @@ describe('Workspace Root Utilities', () => {
 			];
 
 			const workspaceRoot = getCommonPrefix(allowedFolders);
-			expect(workspaceRoot).toBe(path.normalize('/tmp/visor-workspaces/dark-pig-qzh9'));
+			// safeRealpath resolves /tmp to /private/tmp on macOS
+			expect(workspaceRoot).toBe(resolvePath('/tmp/visor-workspaces/dark-pig-qzh9'));
 
 			// Converting allowed folders to relative paths
 			const relativeFolders = allowedFolders.map(f => toRelativePath(f, workspaceRoot));
@@ -177,7 +182,8 @@ describe('Workspace Root Utilities', () => {
 			const allowedFolders = ['/home/user/project'];
 
 			const workspaceRoot = getCommonPrefix(allowedFolders);
-			expect(workspaceRoot).toBe(path.normalize('/home/user/project'));
+			// safeRealpath resolves paths through system symlinks
+			expect(workspaceRoot).toBe(resolvePath('/home/user/project'));
 
 			// The folder itself becomes '.'
 			const relativeFolders = allowedFolders.map(f => toRelativePath(f, workspaceRoot));
@@ -191,7 +197,7 @@ describe('Workspace Root Utilities', () => {
 			];
 
 			const workspaceRoot = getCommonPrefix(allowedFolders);
-			expect(workspaceRoot).toBe(path.normalize('/workspace'));
+			expect(workspaceRoot).toBe(resolvePath('/workspace'));
 
 			// File path in repo1
 			const filePath = '/workspace/repo1/src/index.js';
@@ -211,10 +217,10 @@ describe('Workspace Root Utilities', () => {
 				allowedFolders: ['/tmp/ws/tyk', '/tmp/ws/tyk-docs', '/tmp/ws/tyk-analytics']
 			});
 
-			// workspaceRoot should be the common prefix
-			expect(agent.workspaceRoot).toBe(path.normalize('/tmp/ws'));
+			// workspaceRoot should be the common prefix (with symlinks resolved)
+			expect(agent.workspaceRoot).toBe(resolvePath('/tmp/ws'));
 			// cwd should default to workspaceRoot
-			expect(agent.cwd).toBe(path.normalize('/tmp/ws'));
+			expect(agent.cwd).toBe(resolvePath('/tmp/ws'));
 		});
 
 		test('should preserve workspaceRoot when explicit cwd is provided', async () => {
@@ -226,7 +232,7 @@ describe('Workspace Root Utilities', () => {
 			});
 
 			// workspaceRoot should still be computed from allowedFolders
-			expect(agent.workspaceRoot).toBe(path.normalize('/tmp/ws'));
+			expect(agent.workspaceRoot).toBe(resolvePath('/tmp/ws'));
 			// cwd should be the explicit value
 			expect(agent.cwd).toBe('/custom/cwd');
 		});
@@ -238,9 +244,9 @@ describe('Workspace Root Utilities', () => {
 				allowedFolders: ['/home/user/project']
 			});
 
-			// workspaceRoot should be the single folder
-			expect(agent.workspaceRoot).toBe(path.normalize('/home/user/project'));
-			expect(agent.cwd).toBe(path.normalize('/home/user/project'));
+			// workspaceRoot should be the single folder (with symlinks resolved)
+			expect(agent.workspaceRoot).toBe(resolvePath('/home/user/project'));
+			expect(agent.cwd).toBe(resolvePath('/home/user/project'));
 		});
 
 		test('clone should preserve allowedFolders and recompute workspaceRoot', async () => {
@@ -256,7 +262,7 @@ describe('Workspace Root Utilities', () => {
 			expect(cloned.allowedFolders).toEqual(original.allowedFolders);
 			// And should compute same workspaceRoot
 			expect(cloned.workspaceRoot).toBe(original.workspaceRoot);
-			expect(cloned.workspaceRoot).toBe(path.normalize('/tmp/ws'));
+			expect(cloned.workspaceRoot).toBe(resolvePath('/tmp/ws'));
 		});
 	});
 

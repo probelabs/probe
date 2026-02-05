@@ -9,19 +9,40 @@ import { PathError } from './error-types.js';
 
 /**
  * Safely resolve symlinks for a path.
- * Returns the real path if it exists, otherwise returns the normalized path.
+ * Returns the real path if it exists, otherwise finds the nearest existing
+ * ancestor directory and resolves it, then appends the remaining path components.
  * This is important for security to prevent symlink bypass attacks.
  *
  * @param {string} inputPath - Path to resolve
- * @returns {string} Resolved real path or normalized path if resolution fails
+ * @returns {string} Resolved real path or best-effort resolved path
  */
 export function safeRealpath(inputPath) {
 	try {
 		return realpathSync(inputPath);
 	} catch (error) {
-		// If path doesn't exist or can't be resolved, return normalized path
-		// This handles cases like paths that will be created later
-		return path.normalize(inputPath);
+		// If path doesn't exist, find the nearest existing ancestor
+		// and resolve it, then append the remaining components.
+		// This handles cases like non-existent nested paths where an ancestor
+		// may be a symlink (e.g., /var -> /private/var on macOS)
+		const normalized = path.normalize(inputPath);
+		const parts = normalized.split(path.sep);
+
+		// Try progressively shorter paths until we find one that exists
+		for (let i = parts.length - 1; i >= 0; i--) {
+			const ancestorPath = parts.slice(0, i).join(path.sep) || path.sep;
+			try {
+				const resolvedAncestor = realpathSync(ancestorPath);
+				// Found an existing ancestor - append remaining components
+				const remainingParts = parts.slice(i);
+				return path.join(resolvedAncestor, ...remainingParts);
+			} catch (ancestorError) {
+				// This ancestor doesn't exist either, try the next one up
+				continue;
+			}
+		}
+
+		// No existing ancestor found, return normalized path
+		return normalized;
 	}
 }
 
