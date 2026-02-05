@@ -5,6 +5,8 @@
  */
 
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
+import os from 'os';
+import path from 'path';
 
 // Mock external dependencies
 jest.mock('ai', () => ({
@@ -220,23 +222,27 @@ describe('Bash Tool - End-to-End Integration', () => {
     });
 
     test('should handle working directory restrictions', async () => {
+      const tempDir = os.tmpdir();
+      // Create a path that is definitely outside tempDir
+      const outsideDir = process.platform === 'win32' ? 'C:\\Windows' : '/usr';
+
       const tool = bashTool({
         debug: false,
-        allowedFolders: ['/tmp'],
+        allowedFolders: [tempDir],
         bashConfig: { timeout: 5000 }
       });
 
       // Should work within allowed folder
-      const result1 = await tool.execute({ 
-        command: 'pwd',
-        workingDirectory: '/tmp' 
+      const result1 = await tool.execute({
+        command: process.platform === 'win32' ? 'echo %CD%' : 'pwd',
+        workingDirectory: tempDir
       });
       expect(result1).not.toContain('not within allowed folders');
 
       // Should fail outside allowed folders
-      const result2 = await tool.execute({ 
-        command: 'pwd',
-        workingDirectory: '/usr' 
+      const result2 = await tool.execute({
+        command: process.platform === 'win32' ? 'echo %CD%' : 'pwd',
+        workingDirectory: outsideDir
       });
       expect(result2).toContain('not within allowed folders');
     });

@@ -471,7 +471,7 @@ export const extractTool = (options = {}) => {
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null } = options;
 
 	return tool({
 		name: 'delegate',
@@ -521,7 +521,7 @@ export const delegateTool = (options = {}) => {
 			// NOTE: Delegation intentionally uses DIFFERENT priority than other tools.
 			//
 			// Other tools (search, extract, query, bash) use: cwd || allowedFolders[0]
-			// Delegation uses: path || allowedFolders[0] || cwd
+			// Delegation uses: path || workspaceRoot || cwd
 			//
 			// This is intentional because:
 			// - Other tools operate within the parent's navigation context (cwd is correct)
@@ -529,10 +529,15 @@ export const delegateTool = (options = {}) => {
 			// - Using parent's cwd would cause "path doubling" (Issue #348) where paths like
 			//   /workspace/project/src/internal/build/src/internal/build/file.go get constructed
 			//
-			// The workspace root (allowedFolders[0]) is the security boundary and correct base
-			// for subagent operations. Parent navigation context should not leak to subagents.
-			const workspaceRoot = allowedFolders && allowedFolders[0];
-			const effectivePath = path || workspaceRoot || cwd;
+			// The workspace root (computed as common prefix of allowedFolders) is the security
+			// boundary and correct base for subagent operations. Parent navigation context
+			// should not leak to subagents.
+			//
+			// NOTE: This priority (workspaceRoot > allowedFolders[0], excluding cwd) is INTENTIONALLY
+			// different from other tools (bashTool uses workspaceRoot > cwd > allowedFolders[0]).
+			// This prevents parent's navigation state from leaking to subagents.
+			const effectiveWorkspaceRoot = workspaceRoot || (allowedFolders && allowedFolders[0]);
+			const effectivePath = path || effectiveWorkspaceRoot || cwd;
 
 			if (debug) {
 				console.error(`Executing delegate with task: "${task.substring(0, 100)}${task.length > 100 ? '...' : ''}"`);
@@ -586,7 +591,7 @@ export const delegateTool = (options = {}) => {
  * @returns {Object} Configured analyze_all tool
  */
 export const analyzeAllTool = (options = {}) => {
-	const { sessionId, debug = false, delegationManager = null } = options;
+	const { sessionId, debug = false, delegationManager = null, workspaceRoot } = options;
 
 	return tool({
 		name: 'analyze_all',
@@ -609,12 +614,17 @@ export const analyzeAllTool = (options = {}) => {
 					console.error(`[analyze_all] Path: ${searchPath}`);
 				}
 
+				// Use workspaceRoot (computed common prefix) for consistent path handling
+				// Priority: workspaceRoot > cwd > allowedFolders[0] (consistent with bashTool)
+				const effectiveWorkspaceRoot = workspaceRoot || options.cwd || (options.allowedFolders && options.allowedFolders[0]);
+
 				const result = await analyzeAll({
 					question,
 					path: searchPath,
 					sessionId,
 					debug,
 					cwd: options.cwd,
+					workspaceRoot: effectiveWorkspaceRoot,
 					allowedFolders: options.allowedFolders,
 					provider: options.provider,
 					model: options.model,

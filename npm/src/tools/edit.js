@@ -7,6 +7,7 @@ import { tool } from 'ai';
 import { promises as fs } from 'fs';
 import { dirname, resolve, isAbsolute, sep } from 'path';
 import { existsSync } from 'fs';
+import { toRelativePath, safeRealpath } from '../utils/path-validation.js';
 
 /**
  * Validates that a path is within allowed directories
@@ -17,15 +18,18 @@ import { existsSync } from 'fs';
 function isPathAllowed(filePath, allowedFolders) {
   if (!allowedFolders || allowedFolders.length === 0) {
     // If no restrictions, allow current directory and below
-    const resolvedPath = resolve(filePath);
-    const cwd = resolve(process.cwd());
+    // Use safeRealpath to resolve symlinks for security
+    const resolvedPath = safeRealpath(filePath);
+    const cwd = safeRealpath(process.cwd());
     // Ensure proper path separator to prevent path traversal
     return resolvedPath === cwd || resolvedPath.startsWith(cwd + sep);
   }
 
-  const resolvedPath = resolve(filePath);
+  // Use safeRealpath to resolve symlinks for security
+  // This prevents symlink bypass attacks (e.g., /tmp -> /private/tmp on macOS)
+  const resolvedPath = safeRealpath(filePath);
   return allowedFolders.some(folder => {
-    const allowedPath = resolve(folder);
+    const allowedPath = safeRealpath(folder);
     // Ensure proper path separator to prevent path traversal
     return resolvedPath === allowedPath || resolvedPath.startsWith(allowedPath + sep);
   });
@@ -37,10 +41,13 @@ function isPathAllowed(filePath, allowedFolders) {
  * @returns {Object} Parsed configuration
  */
 function parseFileToolOptions(options = {}) {
+  const allowedFolders = options.allowedFolders || [];
   return {
     debug: options.debug || false,
-    allowedFolders: options.allowedFolders || [],
-    cwd: options.cwd
+    allowedFolders,
+    cwd: options.cwd,
+    // Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > process.cwd()
+    workspaceRoot: options.workspaceRoot || options.cwd || (allowedFolders.length > 0 && allowedFolders[0]) || process.cwd()
   };
 }
 
@@ -54,7 +61,7 @@ function parseFileToolOptions(options = {}) {
  * @returns {Object} Configured edit tool
  */
 export const editTool = (options = {}) => {
-  const { debug, allowedFolders, cwd } = parseFileToolOptions(options);
+  const { debug, allowedFolders, cwd, workspaceRoot } = parseFileToolOptions(options);
 
   return tool({
     name: 'edit',
@@ -119,7 +126,8 @@ Important:
 
         // Check if path is allowed
         if (!isPathAllowed(resolvedPath, allowedFolders)) {
-          return `Error editing file: Permission denied - ${file_path} is outside allowed directories`;
+          const relativePath = toRelativePath(resolvedPath, workspaceRoot);
+          return `Error editing file: Permission denied - ${relativePath} is outside allowed directories`;
         }
 
         // Check if file exists
@@ -186,7 +194,7 @@ Important:
  * @returns {Object} Configured create tool
  */
 export const createTool = (options = {}) => {
-  const { debug, allowedFolders, cwd } = parseFileToolOptions(options);
+  const { debug, allowedFolders, cwd, workspaceRoot } = parseFileToolOptions(options);
 
   return tool({
     name: 'create',
@@ -243,7 +251,8 @@ Important:
 
         // Check if path is allowed
         if (!isPathAllowed(resolvedPath, allowedFolders)) {
-          return `Error creating file: Permission denied - ${file_path} is outside allowed directories`;
+          const relativePath = toRelativePath(resolvedPath, workspaceRoot);
+          return `Error creating file: Permission denied - ${relativePath} is outside allowed directories`;
         }
 
         // Check if file exists

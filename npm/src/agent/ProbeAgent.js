@@ -71,6 +71,7 @@ import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
 import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
+import { getCommonPrefix, toRelativePath, safeRealpath } from '../utils/path-validation.js';
 import { truncateIfNeeded, getMaxOutputTokens } from './outputTruncator.js';
 import { DelegationManager } from '../delegate.js';
 import {
@@ -269,8 +270,15 @@ export class ProbeAgent {
       this.allowedFolders = [process.cwd()];
     }
 
-    // Working directory for resolving relative paths (separate from allowedFolders security)
-    this.cwd = options.cwd || null;
+    // Compute workspace root as common prefix of all allowed folders
+    // This provides a single "root" for relative path resolution and default cwd
+    // IMPORTANT: workspaceRoot is NOT a security boundary - all security checks
+    // must be performed against this.allowedFolders, not workspaceRoot
+    this.workspaceRoot = getCommonPrefix(this.allowedFolders);
+
+    // Working directory for resolving relative paths
+    // If not explicitly provided, use workspace root for consistency
+    this.cwd = options.cwd || this.workspaceRoot;
 
     // API configuration
     this.clientApiProvider = options.provider || null;
@@ -289,6 +297,8 @@ export class ProbeAgent {
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
       console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
       console.log(`[DEBUG] Search delegation enabled: ${this.searchDelegate}`);
+      console.log(`[DEBUG] Workspace root: ${this.workspaceRoot}`);
+      console.log(`[DEBUG] Working directory (cwd): ${this.cwd}`);
     }
 
     // Initialize tools
@@ -732,8 +742,9 @@ export class ProbeAgent {
     const configOptions = {
       sessionId: this.sessionId,
       debug: this.debug,
-      // Use explicit cwd if set, otherwise fall back to first allowed folder
-      cwd: this.cwd || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd()),
+      // Use cwd (which defaults to workspaceRoot in constructor)
+      cwd: this.cwd,
+      workspaceRoot: this.workspaceRoot,
       allowedFolders: this.allowedFolders,
       outline: this.outline,
       searchDelegate: this.searchDelegate,
@@ -1612,7 +1623,8 @@ export class ProbeAgent {
       }
 
       // Security validation: check if path is within any allowed directory
-      // Use normalize() after resolve() to handle path traversal attempts (e.g., '/allowed/../etc/passwd')
+      // Use safeRealpath() to resolve symlinks and handle path traversal attempts (e.g., '/allowed/../etc/passwd')
+      // This prevents symlink bypass attacks (e.g., /tmp -> /private/tmp on macOS)
       const allowedDirs = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders : [process.cwd()];
 
       let absolutePath;
@@ -1620,20 +1632,20 @@ export class ProbeAgent {
 
       // If absolute path, check if it's within any allowed directory
       if (isAbsolute(imagePath)) {
-        // Normalize to resolve any '..' sequences
-        absolutePath = normalize(resolve(imagePath));
+        // Use safeRealpath to resolve symlinks for security
+        absolutePath = safeRealpath(resolve(imagePath));
         isPathAllowed = allowedDirs.some(dir => {
-          const normalizedDir = normalize(resolve(dir));
+          const resolvedDir = safeRealpath(dir);
           // Ensure the path is within the allowed directory (add separator to prevent prefix attacks)
-          return absolutePath === normalizedDir || absolutePath.startsWith(normalizedDir + sep);
+          return absolutePath === resolvedDir || absolutePath.startsWith(resolvedDir + sep);
         });
       } else {
         // For relative paths, try resolving against each allowed directory
         for (const dir of allowedDirs) {
-          const normalizedDir = normalize(resolve(dir));
-          const resolvedPath = normalize(resolve(dir, imagePath));
+          const resolvedDir = safeRealpath(dir);
+          const resolvedPath = safeRealpath(resolve(dir, imagePath));
           // Ensure the resolved path is within the allowed directory
-          if (resolvedPath === normalizedDir || resolvedPath.startsWith(normalizedDir + sep)) {
+          if (resolvedPath === resolvedDir || resolvedPath.startsWith(resolvedDir + sep)) {
             absolutePath = resolvedPath;
             isPathAllowed = true;
             break;
@@ -1870,7 +1882,8 @@ export class ProbeAgent {
       return this.architectureContext;
     }
 
-    const rootDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
+    // Use workspaceRoot for consistent path handling
+    const rootDirectory = this.workspaceRoot || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd());
     const configuredName =
       typeof this.architectureFileName === 'string' ? this.architectureFileName.trim() : '';
     const hasConfiguredName = !!configuredName;
@@ -2028,6 +2041,10 @@ export class ProbeAgent {
   }
 
   _getSkillsRepoRoot() {
+    // Use workspaceRoot for consistent path handling
+    if (this.workspaceRoot) {
+      return resolve(this.workspaceRoot);
+    }
     if (this.allowedFolders && this.allowedFolders.length > 0) {
       return resolve(this.allowedFolders[0]);
     }
@@ -2108,7 +2125,7 @@ ${extractGuidance}
     // Add repository structure if available
     if (this.fileList) {
       systemPrompt += `\n\n# Repository Structure\n`;
-      systemPrompt += `You are working with a repository located at: ${this.allowedFolders[0]}\n\n`;
+      systemPrompt += `You are working with a repository located at: ${this.workspaceRoot}\n\n`;
       systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
       systemPrompt += '```\n' + this.fileList + '\n```\n';
     }
@@ -2170,7 +2187,7 @@ ${extractGuidance}
     // Add repository structure if available
     if (this.fileList) {
       systemPrompt += `\n\n# Repository Structure\n`;
-      systemPrompt += `You are working with a repository located at: ${this.allowedFolders[0]}\n\n`;
+      systemPrompt += `You are working with a repository located at: ${this.workspaceRoot}\n\n`;
       systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
       systemPrompt += '```\n' + this.fileList + '\n```\n';
     }
@@ -2484,10 +2501,29 @@ Follow these instructions carefully:
       }
     }
 
-    // Add folder information
-    const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
+    // Add folder information using workspace root and relative paths
+    const searchDirectory = this.workspaceRoot;
     if (this.debug) {
-      console.log(`[DEBUG] Generating file list for base directory: ${searchDirectory}...`);
+      console.log(`[DEBUG] Generating file list for workspace root: ${searchDirectory}...`);
+    }
+
+    // Convert allowed folders to relative paths for cleaner AI context
+    // Add ./ prefix to make it clear these are relative paths
+    const relativeWorkspaces = this.allowedFolders.map(f => {
+      const rel = toRelativePath(f, this.workspaceRoot);
+      // Add ./ prefix if not already starting with . and not an absolute path
+      if (rel && rel !== '.' && !rel.startsWith('.') && !rel.startsWith('/')) {
+        return './' + rel;
+      }
+      return rel;
+    }).filter(f => f && f !== '.');
+
+    // Describe available paths in a user-friendly way
+    let workspaceDesc;
+    if (relativeWorkspaces.length === 0) {
+      workspaceDesc = '. (current directory)';
+    } else {
+      workspaceDesc = relativeWorkspaces.join(', ');
     }
 
     try {
@@ -2495,15 +2531,15 @@ Follow these instructions carefully:
         directory: searchDirectory,
         maxFiles: 100,
         respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
-        cwd: process.cwd()
+        cwd: this.workspaceRoot
       });
 
-      systemMessage += `\n# Repository Structure\n\nYou are working with a repository located at: ${searchDirectory}\n\nHere's an overview of the repository structure (showing up to 100 most relevant files):\n\n\`\`\`\n${files}\n\`\`\`\n\n`;
+      systemMessage += `\n# Repository Structure\n\nYou are working with a workspace. Available paths: ${workspaceDesc}\n\nHere's an overview of the repository structure (showing up to 100 most relevant files):\n\n\`\`\`\n${files}\n\`\`\`\n\n`;
     } catch (error) {
       if (this.debug) {
         console.log(`[DEBUG] Could not generate file list: ${error.message}`);
       }
-      systemMessage += `\n# Repository Structure\n\nYou are working with a repository located at: ${searchDirectory}\n\n`;
+      systemMessage += `\n# Repository Structure\n\nYou are working with a workspace. Available paths: ${workspaceDesc}\n\n`;
     }
 
     // Add architecture context if available
@@ -2511,7 +2547,15 @@ Follow these instructions carefully:
     systemMessage += this.getArchitectureSection();
 
     if (this.allowedFolders.length > 0) {
-      systemMessage += `\n**Important**: For security reasons, you can only search within these allowed folders: ${this.allowedFolders.join(', ')}\n\n`;
+      const relativeAllowed = this.allowedFolders.map(f => {
+        const rel = toRelativePath(f, this.workspaceRoot);
+        // Add ./ prefix if not already starting with . and not an absolute path
+        if (rel && rel !== '.' && !rel.startsWith('.') && !rel.startsWith('/')) {
+          return './' + rel;
+        }
+        return rel;
+      });
+      systemMessage += `\n**Important**: For security reasons, you can only access these paths: ${relativeAllowed.join(', ')}\n\n`;
     }
 
     return systemMessage;
@@ -3267,18 +3311,19 @@ Follow these instructions carefully:
               // Execute native tool
               try {
                 // Add sessionId and workingDirectory to params for tool execution
-                // Validate and resolve workingDirectory
-                // Priority: explicit cwd > first allowed folder > process.cwd()
-                let resolvedWorkingDirectory = this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
+                // Validate and resolve workingDirectory using safeRealpath for symlink security
+                // Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > process.cwd()
+                let resolvedWorkingDirectory = this.workspaceRoot || this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
                 if (params.workingDirectory) {
                   // Resolve relative paths against the current working directory context, not process.cwd()
-                  const requestedDir = isAbsolute(params.workingDirectory)
+                  // Use safeRealpath to resolve symlinks and prevent bypass attacks
+                  const requestedDir = safeRealpath(isAbsolute(params.workingDirectory)
                     ? resolve(params.workingDirectory)
-                    : resolve(resolvedWorkingDirectory, params.workingDirectory);
+                    : resolve(resolvedWorkingDirectory, params.workingDirectory));
                   // Check if the requested directory is within allowed folders
                   const isWithinAllowed = !this.allowedFolders || this.allowedFolders.length === 0 ||
                     this.allowedFolders.some(folder => {
-                      const resolvedFolder = resolve(folder);
+                      const resolvedFolder = safeRealpath(folder);
                       return requestedDir === resolvedFolder || requestedDir.startsWith(resolvedFolder + sep);
                     });
                   if (isWithinAllowed) {
@@ -3891,7 +3936,7 @@ Convert your previous response content into actual JSON data that follows this s
               
               const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
                 debug: this.debug,
-                path: this.allowedFolders[0],
+                path: this.workspaceRoot || this.allowedFolders[0],
                 provider: this.clientApiProvider,
                 model: this.model,
                 tracer: this.tracer
@@ -3981,7 +4026,7 @@ Convert your previous response content into actual JSON data that follows this s
 
               const { JsonFixingAgent } = await import('./schemaUtils.js');
               const jsonFixer = new JsonFixingAgent({
-                path: this.allowedFolders[0],
+                path: this.workspaceRoot || this.allowedFolders[0],
                 provider: this.clientApiProvider,
                 model: this.model,
                 debug: this.debug,
@@ -4069,7 +4114,7 @@ Convert your previous response content into actual JSON data that follows this s
 
             const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
               debug: this.debug,
-              path: this.allowedFolders[0],
+              path: this.workspaceRoot || this.allowedFolders[0],
               provider: this.clientApiProvider,
               model: this.model,
               tracer: this.tracer
@@ -4225,7 +4270,7 @@ Convert your previous response content into actual JSON data that follows this s
           
           const finalMermaidValidation = await validateAndFixMermaidResponse(finalResult, {
             debug: this.debug,
-            path: this.allowedFolders[0],
+            path: this.workspaceRoot || this.allowedFolders[0],
             provider: this.clientApiProvider,
             model: this.model,
             tracer: this.tracer
@@ -4423,7 +4468,7 @@ Convert your previous response content into actual JSON data that follows this s
       allowEdit: this.allowEdit,
       enableDelegate: this.enableDelegate,
       architectureFileName: this.architectureFileName,
-      path: this.allowedFolders[0], // Use first allowed folder as primary path
+      // Pass allowedFolders which will recompute workspaceRoot correctly
       allowedFolders: [...this.allowedFolders],
       cwd: this.cwd, // Preserve explicit working directory
       provider: this.clientApiProvider,

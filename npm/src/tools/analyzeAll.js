@@ -514,6 +514,7 @@ export async function analyzeAll(options) {
 		sessionId,
 		debug = false,
 		cwd,
+		workspaceRoot,
 		allowedFolders,
 		provider,
 		model,
@@ -527,10 +528,14 @@ export async function analyzeAll(options) {
 		throw new Error('The "question" parameter is required.');
 	}
 
+	// Use workspaceRoot (computed common prefix) for consistent path handling
+	// Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > path
+	const effectiveWorkspaceRoot = workspaceRoot || cwd || allowedFolders?.[0] || path;
+
 	const delegateOptions = {
 		debug,
 		sessionId,
-		path: allowedFolders?.[0] || cwd || path,
+		path: effectiveWorkspaceRoot,
 		allowedFolders,
 		provider,
 		model,

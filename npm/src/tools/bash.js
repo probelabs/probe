@@ -7,6 +7,7 @@ import { tool } from 'ai';
 import { resolve, isAbsolute, sep } from 'path';
 import { BashPermissionChecker } from '../agent/bashPermissions.js';
 import { executeBashCommand, formatExecutionResult, validateExecutionOptions } from '../agent/bashExecutor.js';
+import { toRelativePath, safeRealpath } from '../utils/path-validation.js';
 
 /**
  * Bash tool generator
@@ -32,8 +33,13 @@ export const bashTool = (options = {}) => {
     debug = false,
     cwd,
     allowedFolders = [],
+    workspaceRoot: providedWorkspaceRoot,
     tracer = null
   } = options;
+
+  // Compute workspaceRoot with proper fallback chain
+  // Priority: explicit workspaceRoot > cwd > allowedFolders[0] > process.cwd()
+  const workspaceRoot = providedWorkspaceRoot || cwd || (allowedFolders.length > 0 && allowedFolders[0]) || process.cwd();
 
   // Create permission checker with tracer for telemetry
   const permissionChecker = new BashPermissionChecker({
@@ -46,12 +52,17 @@ export const bashTool = (options = {}) => {
   });
 
   // Determine default working directory
+  // Priority: explicit bashConfig.workingDirectory > cwd (which defaults to workspaceRoot) > fallback
   const getDefaultWorkingDirectory = () => {
     if (bashConfig.workingDirectory) {
       return bashConfig.workingDirectory;
     }
     if (cwd) {
       return cwd;
+    }
+    // Use workspaceRoot (computed common prefix) for consistency with other tools
+    if (workspaceRoot) {
+      return workspaceRoot;
     }
     if (allowedFolders && allowedFolders.length > 0) {
       return allowedFolders[0];
@@ -154,16 +165,20 @@ For code exploration, try these safe alternatives:
 
         // Validate working directory is within allowed folders if specified
         if (allowedFolders && allowedFolders.length > 0) {
-          const resolvedWorkingDir = resolve(workingDir);
+          // Use safeRealpath to resolve symlinks for security
+          // This prevents symlink bypass attacks (e.g., /tmp -> /private/tmp on macOS)
+          const resolvedWorkingDir = safeRealpath(workingDir);
           const isAllowed = allowedFolders.some(folder => {
-            const resolvedFolder = resolve(folder);
+            const resolvedFolder = safeRealpath(folder);
             // Use exact match OR startsWith with separator to prevent bypass attacks
             // e.g., '/tmp-malicious' should NOT match allowed folder '/tmp'
             return resolvedWorkingDir === resolvedFolder || resolvedWorkingDir.startsWith(resolvedFolder + sep);
           });
 
           if (!isAllowed) {
-            return `Error: Working directory "${workingDir}" is not within allowed folders: ${allowedFolders.join(', ')}`;
+            const relativeDir = toRelativePath(workingDir, workspaceRoot);
+            const relativeAllowed = allowedFolders.map(f => toRelativePath(f, workspaceRoot));
+            return `Error: Working directory "${relativeDir}" is not within allowed folders: ${relativeAllowed.join(', ')}`;
           }
         }
 

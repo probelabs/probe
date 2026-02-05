@@ -427,7 +427,7 @@ describe('Delegation path inheritance (Issue #348)', () => {
       expect(agent.allowedFolders).toContain(workspaceRoot);
     });
 
-    test('should have null cwd when not explicitly provided', () => {
+    test('should default cwd to workspaceRoot when not explicitly provided', () => {
       const workspaceRoot = '/workspace/project';
 
       const agent = new ProbeAgent({
@@ -435,8 +435,8 @@ describe('Delegation path inheritance (Issue #348)', () => {
         // cwd not provided
       });
 
-      // cwd should be null (will fall back to allowedFolders[0] in initializeTools)
-      expect(agent.cwd).toBeNull();
+      // cwd should default to workspaceRoot (computed from allowedFolders)
+      expect(agent.cwd).toBe(agent.workspaceRoot);
       expect(agent.allowedFolders).toContain(workspaceRoot);
     });
 
