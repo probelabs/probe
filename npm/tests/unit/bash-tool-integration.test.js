@@ -4,6 +4,8 @@
  */
 
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
+import os from 'os';
+import path from 'path';
 
 // Mock the 'ai' package since it may not be available in test environment
 jest.mock('ai', () => ({
@@ -224,34 +226,39 @@ describe('Bash Tool Integration', () => {
   });
 
   describe('Folder Restrictions', () => {
+    // Use os.tmpdir() for cross-platform compatibility
+    const tempDir = os.tmpdir();
+
     test('should respect allowedFolders configuration', async () => {
       const restrictedTool = bashTool({
         debug: false,
-        allowedFolders: ['/tmp'],
+        allowedFolders: [tempDir],
         bashConfig: { timeout: 5000 }
       });
 
       // Should allow execution in allowed folder
-      let result = await restrictedTool.execute({ 
-        command: 'pwd',
-        workingDirectory: '/tmp'
+      let result = await restrictedTool.execute({
+        command: process.platform === 'win32' ? 'cd' : 'pwd',
+        workingDirectory: tempDir
       });
       expect(result).not.toContain('not within allowed folders');
 
       // Should deny execution outside allowed folders
+      // Use a path that's definitely outside temp dir
+      const outsideDir = process.platform === 'win32' ? 'C:\\Windows' : '/usr';
       result = await restrictedTool.execute({
-        command: 'pwd',
-        workingDirectory: '/usr'
+        command: process.platform === 'win32' ? 'cd' : 'pwd',
+        workingDirectory: outsideDir
       });
       expect(result).toContain('not within allowed folders');
     });
 
     test('should allow relative paths within allowed folders', async () => {
       const fs = await import('fs');
-      const path = await import('path');
+      const pathMod = await import('path');
 
       // Create a temporary subdirectory for testing
-      const testSubdir = path.join('/tmp', 'bash-tool-test-subdir');
+      const testSubdir = pathMod.join(tempDir, 'bash-tool-test-subdir');
       if (!fs.existsSync(testSubdir)) {
         fs.mkdirSync(testSubdir, { recursive: true });
       }
@@ -259,20 +266,19 @@ describe('Bash Tool Integration', () => {
       try {
         const restrictedTool = bashTool({
           debug: false,
-          allowedFolders: ['/tmp'],
+          allowedFolders: [tempDir],
           bashConfig: { timeout: 5000 }
         });
 
         // Should allow relative path that resolves within allowed folder
         const result = await restrictedTool.execute({
-          command: 'pwd',
+          command: process.platform === 'win32' ? 'cd' : 'pwd',
           workingDirectory: 'bash-tool-test-subdir'
         });
 
-        // The relative path 'bash-tool-test-subdir' should resolve to /tmp/bash-tool-test-subdir
-        // which is within the allowed folder /tmp
+        // The relative path 'bash-tool-test-subdir' should resolve within temp dir
         expect(result).not.toContain('not within allowed folders');
-        expect(result).toContain('/tmp/bash-tool-test-subdir');
+        expect(result).toContain('bash-tool-test-subdir');
       } finally {
         // Cleanup
         if (fs.existsSync(testSubdir)) {
@@ -282,16 +288,16 @@ describe('Bash Tool Integration', () => {
     });
 
     test('should reject paths that look similar but are outside allowed folders', async () => {
-      // Security test: /tmp-malicious should NOT match /tmp
+      // Security test: tempDir-malicious should NOT match tempDir
       const restrictedTool = bashTool({
         debug: false,
-        allowedFolders: ['/tmp'],
+        allowedFolders: [tempDir],
         bashConfig: { timeout: 5000 }
       });
 
       const result = await restrictedTool.execute({
-        command: 'pwd',
-        workingDirectory: '/tmp-malicious'
+        command: process.platform === 'win32' ? 'cd' : 'pwd',
+        workingDirectory: tempDir + '-malicious'
       });
 
       expect(result).toContain('not within allowed folders');
@@ -299,10 +305,10 @@ describe('Bash Tool Integration', () => {
 
     test('should reject relative paths with traversal that escape allowed folders', async () => {
       const fs = await import('fs');
-      const path = await import('path');
+      const pathMod = await import('path');
 
       // Create a test directory structure
-      const testSubdir = path.join('/tmp', 'bash-tool-traversal-test');
+      const testSubdir = pathMod.join(tempDir, 'bash-tool-traversal-test');
       if (!fs.existsSync(testSubdir)) {
         fs.mkdirSync(testSubdir, { recursive: true });
       }
@@ -316,7 +322,7 @@ describe('Bash Tool Integration', () => {
 
         // Attempt to escape using ../
         const result = await restrictedTool.execute({
-          command: 'pwd',
+          command: process.platform === 'win32' ? 'cd' : 'pwd',
           workingDirectory: '../'
         });
 

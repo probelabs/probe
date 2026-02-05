@@ -45,7 +45,8 @@ describe('Workspace Root Utilities', () => {
 
 		test('should return first folder when no common prefix exists', () => {
 			const result = getCommonPrefix(['/a/b', '/c/d']);
-			expect(result).toBe(path.normalize('/a/b'));
+			// safeRealpath resolves non-existent paths relative to system root
+			expect(result).toBe(resolvePath('/a/b'));
 		});
 
 		test('should handle empty array', () => {
@@ -162,16 +163,20 @@ describe('Workspace Root Utilities', () => {
 	});
 
 	describe('Integration: getCommonPrefix + toRelativePath', () => {
+		// Use actual temp directory for cross-platform tests
+		const tempBase = os.tmpdir();
+
 		test('should work together for typical Visor workspace', () => {
+			// Use paths relative to actual temp dir for cross-platform compatibility
 			const allowedFolders = [
-				'/tmp/visor-workspaces/dark-pig-qzh9/tyk',
-				'/tmp/visor-workspaces/dark-pig-qzh9/tyk-docs',
-				'/tmp/visor-workspaces/dark-pig-qzh9/tyk-analytics'
+				path.join(tempBase, 'visor-ws', 'tyk'),
+				path.join(tempBase, 'visor-ws', 'tyk-docs'),
+				path.join(tempBase, 'visor-ws', 'tyk-analytics')
 			];
 
 			const workspaceRoot = getCommonPrefix(allowedFolders);
-			// safeRealpath resolves /tmp to /private/tmp on macOS
-			expect(workspaceRoot).toBe(resolvePath('/tmp/visor-workspaces/dark-pig-qzh9'));
+			// Should resolve to the common prefix
+			expect(workspaceRoot).toBe(resolvePath(path.join(tempBase, 'visor-ws')));
 
 			// Converting allowed folders to relative paths
 			const relativeFolders = allowedFolders.map(f => toRelativePath(f, workspaceRoot));
@@ -179,11 +184,10 @@ describe('Workspace Root Utilities', () => {
 		});
 
 		test('should handle single folder workspace', () => {
-			const allowedFolders = ['/home/user/project'];
+			const allowedFolders = [path.join(tempBase, 'project')];
 
 			const workspaceRoot = getCommonPrefix(allowedFolders);
-			// safeRealpath resolves paths through system symlinks
-			expect(workspaceRoot).toBe(resolvePath('/home/user/project'));
+			expect(workspaceRoot).toBe(resolvePath(path.join(tempBase, 'project')));
 
 			// The folder itself becomes '.'
 			const relativeFolders = allowedFolders.map(f => toRelativePath(f, workspaceRoot));
@@ -192,15 +196,15 @@ describe('Workspace Root Utilities', () => {
 
 		test('should handle file paths within workspace', () => {
 			const allowedFolders = [
-				'/workspace/repo1',
-				'/workspace/repo2'
+				path.join(tempBase, 'workspace', 'repo1'),
+				path.join(tempBase, 'workspace', 'repo2')
 			];
 
 			const workspaceRoot = getCommonPrefix(allowedFolders);
-			expect(workspaceRoot).toBe(resolvePath('/workspace'));
+			expect(workspaceRoot).toBe(resolvePath(path.join(tempBase, 'workspace')));
 
 			// File path in repo1
-			const filePath = '/workspace/repo1/src/index.js';
+			const filePath = path.join(tempBase, 'workspace', 'repo1', 'src', 'index.js');
 			const relativePath = toRelativePath(filePath, workspaceRoot);
 			expect(relativePath).toBe(path.join('repo1', 'src', 'index.js'));
 		});
@@ -209,51 +213,68 @@ describe('Workspace Root Utilities', () => {
 	describe('ProbeAgent workspaceRoot computation', () => {
 		// These tests verify workspaceRoot is computed correctly in ProbeAgent
 		// Note: We import ProbeAgent dynamically to avoid circular dependencies
+		// Use actual temp directory for cross-platform compatibility
+		const tempBase = os.tmpdir();
 
 		test('should compute workspaceRoot from multiple allowedFolders', async () => {
 			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
 
+			const folders = [
+				path.join(tempBase, 'ws', 'tyk'),
+				path.join(tempBase, 'ws', 'tyk-docs'),
+				path.join(tempBase, 'ws', 'tyk-analytics')
+			];
 			const agent = new ProbeAgent({
-				allowedFolders: ['/tmp/ws/tyk', '/tmp/ws/tyk-docs', '/tmp/ws/tyk-analytics']
+				allowedFolders: folders
 			});
 
 			// workspaceRoot should be the common prefix (with symlinks resolved)
-			expect(agent.workspaceRoot).toBe(resolvePath('/tmp/ws'));
+			expect(agent.workspaceRoot).toBe(resolvePath(path.join(tempBase, 'ws')));
 			// cwd should default to workspaceRoot
-			expect(agent.cwd).toBe(resolvePath('/tmp/ws'));
+			expect(agent.cwd).toBe(resolvePath(path.join(tempBase, 'ws')));
 		});
 
 		test('should preserve workspaceRoot when explicit cwd is provided', async () => {
 			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
 
+			const folders = [
+				path.join(tempBase, 'ws', 'tyk'),
+				path.join(tempBase, 'ws', 'tyk-docs')
+			];
+			const customCwd = path.join(tempBase, 'custom-cwd');
 			const agent = new ProbeAgent({
-				allowedFolders: ['/tmp/ws/tyk', '/tmp/ws/tyk-docs'],
-				cwd: '/custom/cwd'  // Explicit cwd
+				allowedFolders: folders,
+				cwd: customCwd
 			});
 
 			// workspaceRoot should still be computed from allowedFolders
-			expect(agent.workspaceRoot).toBe(resolvePath('/tmp/ws'));
+			expect(agent.workspaceRoot).toBe(resolvePath(path.join(tempBase, 'ws')));
 			// cwd should be the explicit value
-			expect(agent.cwd).toBe('/custom/cwd');
+			expect(agent.cwd).toBe(customCwd);
 		});
 
 		test('should handle single folder in allowedFolders', async () => {
 			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
 
+			const folder = path.join(tempBase, 'project');
 			const agent = new ProbeAgent({
-				allowedFolders: ['/home/user/project']
+				allowedFolders: [folder]
 			});
 
 			// workspaceRoot should be the single folder (with symlinks resolved)
-			expect(agent.workspaceRoot).toBe(resolvePath('/home/user/project'));
-			expect(agent.cwd).toBe(resolvePath('/home/user/project'));
+			expect(agent.workspaceRoot).toBe(resolvePath(folder));
+			expect(agent.cwd).toBe(resolvePath(folder));
 		});
 
 		test('clone should preserve allowedFolders and recompute workspaceRoot', async () => {
 			const { ProbeAgent } = await import('../../src/agent/ProbeAgent.js');
 
+			const folders = [
+				path.join(tempBase, 'ws', 'tyk'),
+				path.join(tempBase, 'ws', 'tyk-docs')
+			];
 			const original = new ProbeAgent({
-				allowedFolders: ['/tmp/ws/tyk', '/tmp/ws/tyk-docs']
+				allowedFolders: folders
 			});
 
 			const cloned = original.clone();
@@ -262,7 +283,7 @@ describe('Workspace Root Utilities', () => {
 			expect(cloned.allowedFolders).toEqual(original.allowedFolders);
 			// And should compute same workspaceRoot
 			expect(cloned.workspaceRoot).toBe(original.workspaceRoot);
-			expect(cloned.workspaceRoot).toBe(resolvePath('/tmp/ws'));
+			expect(cloned.workspaceRoot).toBe(resolvePath(path.join(tempBase, 'ws')));
 		});
 	});
 
@@ -431,9 +452,14 @@ describe('Workspace Root Utilities', () => {
 		});
 
 		test('getCommonPrefix should handle non-existent paths gracefully', () => {
-			// Non-existent paths should fall back to normalized comparison
-			const result = getCommonPrefix(['/non/existent/a', '/non/existent/b']);
-			expect(result).toBe(path.normalize('/non/existent'));
+			// Non-existent paths should fall back to best-effort resolution
+			// Use paths relative to temp dir for cross-platform compatibility
+			const tempBase = os.tmpdir();
+			const result = getCommonPrefix([
+				path.join(tempBase, 'non-existent-test', 'a'),
+				path.join(tempBase, 'non-existent-test', 'b')
+			]);
+			expect(result).toBe(resolvePath(path.join(tempBase, 'non-existent-test')));
 		});
 	});
 });
