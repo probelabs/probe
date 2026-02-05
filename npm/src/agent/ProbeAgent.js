@@ -71,6 +71,7 @@ import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
 import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
+import { getCommonPrefix, toRelativePath } from '../utils/path-validation.js';
 import { truncateIfNeeded, getMaxOutputTokens } from './outputTruncator.js';
 import { DelegationManager } from '../delegate.js';
 import {
@@ -269,8 +270,13 @@ export class ProbeAgent {
       this.allowedFolders = [process.cwd()];
     }
 
-    // Working directory for resolving relative paths (separate from allowedFolders security)
-    this.cwd = options.cwd || null;
+    // Compute workspace root as common prefix of all allowed folders
+    // This provides a single "root" for relative path resolution
+    this.workspaceRoot = getCommonPrefix(this.allowedFolders);
+
+    // Working directory for resolving relative paths
+    // If not explicitly provided, use workspace root for consistency
+    this.cwd = options.cwd || this.workspaceRoot;
 
     // API configuration
     this.clientApiProvider = options.provider || null;
@@ -289,6 +295,8 @@ export class ProbeAgent {
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
       console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
       console.log(`[DEBUG] Search delegation enabled: ${this.searchDelegate}`);
+      console.log(`[DEBUG] Workspace root: ${this.workspaceRoot}`);
+      console.log(`[DEBUG] Working directory (cwd): ${this.cwd}`);
     }
 
     // Initialize tools
@@ -529,8 +537,9 @@ export class ProbeAgent {
     const configOptions = {
       sessionId: this.sessionId,
       debug: this.debug,
-      // Use explicit cwd if set, otherwise fall back to first allowed folder
-      cwd: this.cwd || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd()),
+      // Use cwd (which defaults to workspaceRoot in constructor)
+      cwd: this.cwd,
+      workspaceRoot: this.workspaceRoot,
       allowedFolders: this.allowedFolders,
       outline: this.outline,
       searchDelegate: this.searchDelegate,
@@ -2281,10 +2290,29 @@ Follow these instructions carefully:
       }
     }
 
-    // Add folder information
-    const searchDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
+    // Add folder information using workspace root and relative paths
+    const searchDirectory = this.workspaceRoot;
     if (this.debug) {
-      console.log(`[DEBUG] Generating file list for base directory: ${searchDirectory}...`);
+      console.log(`[DEBUG] Generating file list for workspace root: ${searchDirectory}...`);
+    }
+
+    // Convert allowed folders to relative paths for cleaner AI context
+    // Add ./ prefix to make it clear these are relative paths
+    const relativeWorkspaces = this.allowedFolders.map(f => {
+      const rel = toRelativePath(f, this.workspaceRoot);
+      // Add ./ prefix if not already starting with . and not an absolute path
+      if (rel && rel !== '.' && !rel.startsWith('.') && !rel.startsWith('/')) {
+        return './' + rel;
+      }
+      return rel;
+    }).filter(f => f && f !== '.');
+
+    // Describe available paths in a user-friendly way
+    let workspaceDesc;
+    if (relativeWorkspaces.length === 0) {
+      workspaceDesc = '. (current directory)';
+    } else {
+      workspaceDesc = relativeWorkspaces.join(', ');
     }
 
     try {
@@ -2292,15 +2320,15 @@ Follow these instructions carefully:
         directory: searchDirectory,
         maxFiles: 100,
         respectGitignore: !process.env.PROBE_NO_GITIGNORE || process.env.PROBE_NO_GITIGNORE === '',
-        cwd: process.cwd()
+        cwd: this.workspaceRoot
       });
 
-      systemMessage += `\n# Repository Structure\n\nYou are working with a repository located at: ${searchDirectory}\n\nHere's an overview of the repository structure (showing up to 100 most relevant files):\n\n\`\`\`\n${files}\n\`\`\`\n\n`;
+      systemMessage += `\n# Repository Structure\n\nYou are working with a workspace. Available paths: ${workspaceDesc}\n\nHere's an overview of the repository structure (showing up to 100 most relevant files):\n\n\`\`\`\n${files}\n\`\`\`\n\n`;
     } catch (error) {
       if (this.debug) {
         console.log(`[DEBUG] Could not generate file list: ${error.message}`);
       }
-      systemMessage += `\n# Repository Structure\n\nYou are working with a repository located at: ${searchDirectory}\n\n`;
+      systemMessage += `\n# Repository Structure\n\nYou are working with a workspace. Available paths: ${workspaceDesc}\n\n`;
     }
 
     // Add architecture context if available
@@ -2308,7 +2336,15 @@ Follow these instructions carefully:
     systemMessage += this.getArchitectureSection();
 
     if (this.allowedFolders.length > 0) {
-      systemMessage += `\n**Important**: For security reasons, you can only search within these allowed folders: ${this.allowedFolders.join(', ')}\n\n`;
+      const relativeAllowed = this.allowedFolders.map(f => {
+        const rel = toRelativePath(f, this.workspaceRoot);
+        // Add ./ prefix if not already starting with . and not an absolute path
+        if (rel && rel !== '.' && !rel.startsWith('.') && !rel.startsWith('/')) {
+          return './' + rel;
+        }
+        return rel;
+      });
+      systemMessage += `\n**Important**: For security reasons, you can only access these paths: ${relativeAllowed.join(', ')}\n\n`;
     }
 
     return systemMessage;

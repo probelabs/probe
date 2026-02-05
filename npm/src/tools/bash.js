@@ -7,6 +7,7 @@ import { tool } from 'ai';
 import { resolve, isAbsolute, sep } from 'path';
 import { BashPermissionChecker } from '../agent/bashPermissions.js';
 import { executeBashCommand, formatExecutionResult, validateExecutionOptions } from '../agent/bashExecutor.js';
+import { toRelativePath } from '../utils/path-validation.js';
 
 /**
  * Bash tool generator
@@ -32,6 +33,7 @@ export const bashTool = (options = {}) => {
     debug = false,
     cwd,
     allowedFolders = [],
+    workspaceRoot = cwd || process.cwd(),
     tracer = null
   } = options;
 
@@ -163,7 +165,9 @@ For code exploration, try these safe alternatives:
           });
 
           if (!isAllowed) {
-            return `Error: Working directory "${workingDir}" is not within allowed folders: ${allowedFolders.join(', ')}`;
+            const relativeDir = toRelativePath(workingDir, workspaceRoot);
+            const relativeAllowed = allowedFolders.map(f => toRelativePath(f, workspaceRoot));
+            return `Error: Working directory "${relativeDir}" is not within allowed folders: ${relativeAllowed.join(', ')}`;
           }
         }
 

@@ -7,6 +7,7 @@ import { tool } from 'ai';
 import { promises as fs } from 'fs';
 import { dirname, resolve, isAbsolute, sep } from 'path';
 import { existsSync } from 'fs';
+import { toRelativePath } from '../utils/path-validation.js';
 
 /**
  * Validates that a path is within allowed directories
@@ -40,7 +41,8 @@ function parseFileToolOptions(options = {}) {
   return {
     debug: options.debug || false,
     allowedFolders: options.allowedFolders || [],
-    cwd: options.cwd
+    cwd: options.cwd,
+    workspaceRoot: options.workspaceRoot || options.cwd || process.cwd()
   };
 }
 
@@ -54,7 +56,7 @@ function parseFileToolOptions(options = {}) {
  * @returns {Object} Configured edit tool
  */
 export const editTool = (options = {}) => {
-  const { debug, allowedFolders, cwd } = parseFileToolOptions(options);
+  const { debug, allowedFolders, cwd, workspaceRoot } = parseFileToolOptions(options);
 
   return tool({
     name: 'edit',
@@ -119,7 +121,8 @@ Important:
 
         // Check if path is allowed
         if (!isPathAllowed(resolvedPath, allowedFolders)) {
-          return `Error editing file: Permission denied - ${file_path} is outside allowed directories`;
+          const relativePath = toRelativePath(resolvedPath, workspaceRoot);
+          return `Error editing file: Permission denied - ${relativePath} is outside allowed directories`;
         }
 
         // Check if file exists
@@ -186,7 +189,7 @@ Important:
  * @returns {Object} Configured create tool
  */
 export const createTool = (options = {}) => {
-  const { debug, allowedFolders, cwd } = parseFileToolOptions(options);
+  const { debug, allowedFolders, cwd, workspaceRoot } = parseFileToolOptions(options);
 
   return tool({
     name: 'create',
@@ -243,7 +246,8 @@ Important:
 
         // Check if path is allowed
         if (!isPathAllowed(resolvedPath, allowedFolders)) {
-          return `Error creating file: Permission denied - ${file_path} is outside allowed directories`;
+          const relativePath = toRelativePath(resolvedPath, workspaceRoot);
+          return `Error creating file: Permission denied - ${relativePath} is outside allowed directories`;
         }
 
         // Check if file exists
