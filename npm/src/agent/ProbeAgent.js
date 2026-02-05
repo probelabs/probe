@@ -3234,6 +3234,8 @@ Follow these instructions carefully:
                   console.error(`[DEBUG] ========================================\n`);
                 }
 
+                // Add assistant message with tool call (matching native tool pattern)
+                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
               } catch (error) {
                 // Record MCP tool end event (failure)
@@ -3257,6 +3259,8 @@ Follow these instructions carefully:
 
                 // Format error with structured information for AI
                 const errorXml = formatErrorForAI(error);
+                // Add assistant message with tool call (matching native tool pattern)
+                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${errorXml}\n</tool_result>` });
               }
             } else if (this.toolImplementations[toolName]) {
