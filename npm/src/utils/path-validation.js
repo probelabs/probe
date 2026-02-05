@@ -4,8 +4,26 @@
  */
 
 import path from 'path';
-import { promises as fs } from 'fs';
+import { promises as fs, realpathSync } from 'fs';
 import { PathError } from './error-types.js';
+
+/**
+ * Safely resolve symlinks for a path.
+ * Returns the real path if it exists, otherwise returns the normalized path.
+ * This is important for security to prevent symlink bypass attacks.
+ *
+ * @param {string} inputPath - Path to resolve
+ * @returns {string} Resolved real path or normalized path if resolution fails
+ */
+function safeRealpath(inputPath) {
+	try {
+		return realpathSync(inputPath);
+	} catch (error) {
+		// If path doesn't exist or can't be resolved, return normalized path
+		// This handles cases like paths that will be created later
+		return path.normalize(inputPath);
+	}
+}
 
 /**
  * Validates and normalizes a path to be used as working directory (cwd).
@@ -94,11 +112,13 @@ export function getCommonPrefix(folders) {
 	}
 
 	if (folders.length === 1) {
-		return path.normalize(folders[0]);
+		// Resolve symlinks for security
+		return safeRealpath(folders[0]);
 	}
 
-	// Normalize all paths to handle mixed separators
-	const normalized = folders.map(f => path.normalize(f));
+	// Resolve symlinks and normalize all paths to handle mixed separators
+	// This prevents symlink bypass attacks where a symlink could point outside the workspace
+	const normalized = folders.map(f => safeRealpath(f));
 
 	// Split into segments
 	const segments = normalized.map(f => f.split(path.sep));
@@ -151,9 +171,10 @@ export function toRelativePath(absolutePath, workspaceRoot) {
 		return absolutePath;
 	}
 
-	// Normalize and remove any trailing separators for consistent comparison
-	let normalized = path.normalize(absolutePath);
-	let normalizedRoot = path.normalize(workspaceRoot);
+	// Resolve symlinks for security to prevent bypass attacks
+	// Use safeRealpath which falls back to normalized path if resolution fails
+	let normalized = safeRealpath(absolutePath);
+	let normalizedRoot = safeRealpath(workspaceRoot);
 
 	// Remove trailing separators (path.normalize doesn't always do this)
 	while (normalizedRoot.length > 1 && normalizedRoot.endsWith(path.sep)) {

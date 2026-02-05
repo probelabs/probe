@@ -6,6 +6,7 @@
 import { getCommonPrefix, toRelativePath } from '../../src/utils/path-validation.js';
 import path from 'path';
 import os from 'os';
+import fs from 'fs';
 
 describe('Workspace Root Utilities', () => {
 	describe('getCommonPrefix', () => {
@@ -331,6 +332,102 @@ describe('Workspace Root Utilities', () => {
 
 			expect(tool).toBeDefined();
 			expect(tool.name).toBe('analyze_all');
+		});
+	});
+
+	describe('Symlink Security', () => {
+		const testDir = path.join(os.tmpdir(), 'probe-symlink-test-' + Date.now());
+		const realDir = path.join(testDir, 'real');
+		const symlinkDir = path.join(testDir, 'symlink');
+		const testFile = path.join(realDir, 'file.js');
+		let resolvedRealDir;
+
+		beforeAll(() => {
+			// Create test directories and file
+			fs.mkdirSync(realDir, { recursive: true });
+			fs.writeFileSync(testFile, '// test file');
+			// Resolve realDir to handle systems where tmpdir is itself a symlink (e.g., macOS /var -> /private/var)
+			resolvedRealDir = fs.realpathSync(realDir);
+			// Create a symlink pointing to the real directory
+			try {
+				fs.symlinkSync(realDir, symlinkDir);
+			} catch (e) {
+				// Symlinks may not be supported on some systems/configurations
+				console.warn('Could not create symlink for tests:', e.message);
+			}
+		});
+
+		afterAll(() => {
+			// Clean up test directories
+			try {
+				if (fs.existsSync(testFile)) {
+					fs.unlinkSync(testFile);
+				}
+				if (fs.existsSync(symlinkDir)) {
+					fs.unlinkSync(symlinkDir);
+				}
+				if (fs.existsSync(realDir)) {
+					fs.rmdirSync(realDir);
+				}
+				if (fs.existsSync(testDir)) {
+					fs.rmdirSync(testDir);
+				}
+			} catch (e) {
+				// Ignore cleanup errors
+			}
+		});
+
+		test('getCommonPrefix should resolve symlinks to real paths', () => {
+			// Skip if symlink wasn't created
+			if (!fs.existsSync(symlinkDir)) {
+				console.warn('Skipping symlink test - symlink not available');
+				return;
+			}
+
+			// When using symlink, result should be the real path
+			const result = getCommonPrefix([symlinkDir]);
+			expect(result).toBe(resolvedRealDir);
+		});
+
+		test('getCommonPrefix should find common prefix when mixing symlink and real path', () => {
+			// Skip if symlink wasn't created
+			if (!fs.existsSync(symlinkDir)) {
+				console.warn('Skipping symlink test - symlink not available');
+				return;
+			}
+
+			// Both should resolve to the same real path
+			const result = getCommonPrefix([realDir, symlinkDir]);
+			// Since both resolve to realDir, the common prefix should be realDir
+			expect(result).toBe(resolvedRealDir);
+		});
+
+		test('toRelativePath should resolve symlinks for security', () => {
+			// Skip if symlink wasn't created
+			if (!fs.existsSync(symlinkDir)) {
+				console.warn('Skipping symlink test - symlink not available');
+				return;
+			}
+
+			// Use the actual file that exists (via symlink path)
+			const fileViaSymlink = path.join(symlinkDir, 'file.js');
+
+			// toRelativePath should resolve the symlink and recognize it's within workspace
+			// Need to use resolvedRealDir since toRelativePath also resolves symlinks
+			const result = toRelativePath(fileViaSymlink, resolvedRealDir);
+			expect(result).toBe('file.js');
+		});
+
+		test('toRelativePath should handle non-existent paths gracefully', () => {
+			// Non-existent path should still work (falls back to normalized path)
+			const result = toRelativePath('/non/existent/path/file.js', '/non/existent');
+			expect(result).toBe(path.join('path', 'file.js'));
+		});
+
+		test('getCommonPrefix should handle non-existent paths gracefully', () => {
+			// Non-existent paths should fall back to normalized comparison
+			const result = getCommonPrefix(['/non/existent/a', '/non/existent/b']);
+			expect(result).toBe(path.normalize('/non/existent'));
 		});
 	});
 });
