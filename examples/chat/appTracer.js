@@ -896,6 +896,204 @@ class AppTracer {
   }
 
   /**
+   * Get the current iteration span for a session
+   * @private
+   */
+  _getCurrentIterationSpan(sessionId) {
+    // Try to find the most recent iteration span
+    for (let i = 100; i >= 0; i--) {
+      const span = this.activeSpans.get(`${sessionId}_iteration_${i}`);
+      if (span) return span;
+    }
+    // Fall back to session span
+    return this.sessionSpans.get(sessionId);
+  }
+
+  /**
+   * Record AI thinking/reasoning content
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {string} thinkingContent - The thinking content from AI response
+   */
+  recordThinkingContent(sessionId, iterationNumber, thinkingContent) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span || !thinkingContent) return;
+
+    span.addEvent('ai.thinking', {
+      'app.ai.thinking.content': thinkingContent.substring(0, 20000),
+      'app.ai.thinking.length': thinkingContent.length,
+      'app.ai.thinking.hash': this._hashString(thinkingContent),
+      'app.iteration': iterationNumber,
+      'app.timestamp': Date.now()
+    });
+  }
+
+  /**
+   * Record tool execution result
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {string} toolName - Tool name
+   * @param {string|Object} result - Tool result
+   * @param {boolean} success - Whether succeeded
+   * @param {number} durationMs - Execution duration
+   */
+  recordToolResult(sessionId, iterationNumber, toolName, result, success, durationMs) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span) return;
+
+    const resultStr = typeof result === 'string' ? result : JSON.stringify(result || '');
+    span.addEvent('tool.result', {
+      'app.tool.name': toolName,
+      'app.tool.result': resultStr.substring(0, 20000),
+      'app.tool.result.length': resultStr.length,
+      'app.tool.result.hash': this._hashString(resultStr),
+      'app.tool.success': success,
+      'app.tool.duration_ms': durationMs,
+      'app.iteration': iterationNumber,
+      'app.timestamp': Date.now()
+    });
+  }
+
+  /**
+   * Record a conversation turn (assistant response or tool result)
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {string} role - The role (assistant, tool_result)
+   * @param {string} content - The turn content
+   * @param {Object} metadata - Additional metadata
+   */
+  recordConversationTurn(sessionId, iterationNumber, role, content, metadata = {}) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span) return;
+
+    span.addEvent(`conversation.${role}`, {
+      'app.conversation.role': role,
+      'app.conversation.content': content.substring(0, 20000),
+      'app.conversation.length': content.length,
+      'app.conversation.hash': this._hashString(content),
+      'app.iteration': iterationNumber,
+      'app.timestamp': Date.now(),
+      ...Object.fromEntries(
+        Object.entries(metadata).map(([k, v]) => [`app.${k}`, v])
+      )
+    });
+  }
+
+  /**
+   * Record AI tool call decision
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {string} toolName - Tool name AI decided to call
+   * @param {Object} params - Tool parameters
+   */
+  recordAIToolDecision(sessionId, iterationNumber, toolName, params) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span) return;
+
+    span.addEvent('ai.tool_decision', {
+      'app.ai.tool_decision.name': toolName,
+      'app.ai.tool_decision.params': JSON.stringify(params || {}).substring(0, 5000),
+      'app.ai.tool_decision.params_hash': this._hashString(JSON.stringify(params || {})),
+      'app.iteration': iterationNumber,
+      'app.timestamp': Date.now()
+    });
+  }
+
+  /**
+   * Record MCP tool execution start
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {string} toolName - MCP tool name
+   * @param {string} serverName - MCP server name
+   * @param {Object} params - Tool parameters
+   */
+  recordMcpToolStart(sessionId, iterationNumber, toolName, serverName, params) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span) return;
+
+    span.addEvent('mcp.tool.start', {
+      'app.mcp.tool.name': toolName,
+      'app.mcp.tool.server': serverName || 'unknown',
+      'app.mcp.tool.params': JSON.stringify(params || {}).substring(0, 2000),
+      'app.iteration': iterationNumber,
+      'app.timestamp': Date.now()
+    });
+  }
+
+  /**
+   * Record MCP tool execution end
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {string} toolName - MCP tool name
+   * @param {string} serverName - MCP server name
+   * @param {string|Object} result - Tool result
+   * @param {boolean} success - Whether succeeded
+   * @param {number} durationMs - Execution duration
+   * @param {string} errorMessage - Error message if failed
+   */
+  recordMcpToolEnd(sessionId, iterationNumber, toolName, serverName, result, success, durationMs, errorMessage = null) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span) return;
+
+    const resultStr = typeof result === 'string' ? result : JSON.stringify(result || '');
+    span.addEvent('mcp.tool.end', {
+      'app.mcp.tool.name': toolName,
+      'app.mcp.tool.server': serverName || 'unknown',
+      'app.mcp.tool.result': resultStr.substring(0, 10000),
+      'app.mcp.tool.result.length': resultStr.length,
+      'app.mcp.tool.duration_ms': durationMs,
+      'app.mcp.tool.success': success,
+      'app.mcp.tool.error': errorMessage,
+      'app.iteration': iterationNumber,
+      'app.timestamp': Date.now()
+    });
+  }
+
+  /**
+   * Record error classification event
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {string} errorType - Error type (wrapped_tool, unrecognized_tool, no_tool_call, circuit_breaker, etc.)
+   * @param {Object} errorDetails - Error details
+   */
+  recordErrorClassification(sessionId, iterationNumber, errorType, errorDetails = {}) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span) return;
+
+    span.addEvent(`error.${errorType}`, {
+      'app.error.type': errorType,
+      'app.error.message': errorDetails.message?.substring(0, 1000) || '',
+      'app.error.recoverable': errorDetails.recoverable ?? true,
+      'app.error.context': JSON.stringify(errorDetails.context || {}).substring(0, 1000),
+      'app.iteration': iterationNumber,
+      'app.timestamp': Date.now()
+    });
+  }
+
+  /**
+   * Record per-turn token breakdown
+   * @param {string} sessionId - Session ID
+   * @param {number} iterationNumber - Iteration number
+   * @param {Object} tokenData - Token metrics
+   */
+  recordTokenTurn(sessionId, iterationNumber, tokenData = {}) {
+    const span = this.activeSpans.get(`${sessionId}_iteration_${iterationNumber}`) || this._getCurrentIterationSpan(sessionId);
+    if (!span) return;
+
+    span.addEvent('tokens.turn', {
+      'app.iteration': iterationNumber,
+      'app.tokens.input': tokenData.inputTokens || 0,
+      'app.tokens.output': tokenData.outputTokens || 0,
+      'app.tokens.total': (tokenData.inputTokens || 0) + (tokenData.outputTokens || 0),
+      'app.tokens.cache_read': tokenData.cacheReadTokens || 0,
+      'app.tokens.cache_write': tokenData.cacheWriteTokens || 0,
+      'app.tokens.context_used': tokenData.contextTokens || 0,
+      'app.tokens.context_remaining': tokenData.maxContextTokens ? (tokenData.maxContextTokens - (tokenData.contextTokens || 0)) : null,
+      'app.timestamp': Date.now()
+    });
+  }
+
+  /**
    * Record a generic event (used by completionPrompt and other features)
    * This provides compatibility with SimpleAppTracer interface
    * Adds an event to the existing session span rather than creating a new span

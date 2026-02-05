@@ -54,7 +54,7 @@ describe('XML Tool Call Parsing', () => {
         const xmlString = '<search><query>test query</query></search>';
         const result = parseXmlToolCall(xmlString);
         
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'search',
           params: { query: 'test query' }
         });
@@ -64,7 +64,7 @@ describe('XML Tool Call Parsing', () => {
         const xmlString = '<extract><targets>src/test.js:10-20 other.js#func</targets><input_content>some diff</input_content></extract>';
         const result = parseXmlToolCall(xmlString);
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'extract',
           params: {
             targets: 'src/test.js:10-20 other.js#func',
@@ -77,7 +77,7 @@ describe('XML Tool Call Parsing', () => {
         const xmlString = '<attempt_completion>Task completed successfully</attempt_completion>';
         const result = parseXmlToolCall(xmlString);
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'attempt_completion',
           params: {
             result: 'Task completed successfully'
@@ -89,7 +89,7 @@ describe('XML Tool Call Parsing', () => {
         const xmlString = '<listFiles><recursive>true</recursive><includeHidden>false</includeHidden></listFiles>';
         const result = parseXmlToolCall(xmlString);
         
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'listFiles',
           params: {
             recursive: true,
@@ -112,7 +112,7 @@ describe('XML Tool Call Parsing', () => {
         testCases.forEach(({ tool, xml, expected }) => {
           const result = parseXmlToolCall(xml);
 
-          expect(result).toEqual({
+          expect(result).toMatchObject({
             toolName: tool,
             params: expected
           });
@@ -202,7 +202,7 @@ describe('XML Tool Call Parsing', () => {
         const xmlString = '<attempt_completion>done</attempt_completion>';
         const result = parseXmlToolCall(xmlString, singleTool);
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'attempt_completion',
           params: { result: 'done' }
         });
@@ -216,7 +216,7 @@ describe('XML Tool Call Parsing', () => {
 
         // With improved parser, it now handles unclosed parameter tags
         // The parser finds <search></search> and extracts the unclosed <query> param
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'search',
           params: { query: 'unclosed tag' }
         });
@@ -235,7 +235,7 @@ describe('XML Tool Call Parsing', () => {
 
         // With improved parser, it handles unclosed tool tags
         // Finds <search> (unclosed) with properly closed <query> parameter
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'search',
           params: { query: 'test' }
         });
@@ -250,7 +250,7 @@ describe('XML Tool Call Parsing', () => {
         `;
         const result = parseXmlToolCall(xmlString);
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           toolName: 'search',
           params: {
             query: 'test query',
@@ -274,7 +274,7 @@ describe('XML Tool Call Parsing', () => {
       
       const result = parseXmlToolCallWithThinking(xmlString);
       
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: { query: 'testing framework' }
       });
@@ -291,7 +291,7 @@ describe('XML Tool Call Parsing', () => {
 
       const result = parseXmlToolCallWithThinking(xmlString);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'extract',
         params: { targets: 'test.js' }
       });
@@ -330,10 +330,84 @@ describe('XML Tool Call Parsing', () => {
         Just thinking about the problem, no tool call needed yet.
         </thinking>
       `;
-      
+
       const result = parseXmlToolCallWithThinking(xmlString);
-      
+
       expect(result).toBeNull();
+    });
+
+    test('should return thinkingContent when present', () => {
+      const xmlString = `
+        <thinking>
+        I need to analyze this code carefully.
+        Let me think about the best approach.
+        </thinking>
+        <search>
+          <query>authentication</query>
+        </search>
+      `;
+
+      const result = parseXmlToolCallWithThinking(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'search',
+        params: { query: 'authentication' }
+      });
+      expect(result.thinkingContent).toBeDefined();
+      expect(result.thinkingContent).toContain('I need to analyze this code carefully');
+      expect(result.thinkingContent).toContain('best approach');
+    });
+
+    test('should return null thinkingContent when no thinking tags', () => {
+      const xmlString = `
+        <search>
+          <query>test query</query>
+        </search>
+      `;
+
+      const result = parseXmlToolCallWithThinking(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'search',
+        params: { query: 'test query' }
+      });
+      expect(result.thinkingContent).toBeNull();
+    });
+
+    test('should extract thinkingContent from multiple thinking blocks (first only)', () => {
+      const xmlString = `
+        <thinking>First thought block</thinking>
+        <thinking>Second thought block</thinking>
+        <extract>
+          <targets>file.js</targets>
+        </extract>
+      `;
+
+      const result = parseXmlToolCallWithThinking(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'extract',
+        params: { targets: 'file.js' }
+      });
+      // extractThinkingContent only captures first thinking block
+      expect(result.thinkingContent).toBe('First thought block');
+    });
+
+    test('should include thinkingContent with attempt_completion', () => {
+      const xmlString = `
+        <thinking>
+        The task is complete. I've analyzed all the files.
+        </thinking>
+        <attempt_completion>Task completed successfully</attempt_completion>
+      `;
+
+      const result = parseXmlToolCallWithThinking(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'attempt_completion',
+        params: { result: 'Task completed successfully' }
+      });
+      expect(result.thinkingContent).toContain('The task is complete');
     });
   });
 
@@ -353,7 +427,7 @@ describe('XML Tool Call Parsing', () => {
       
       const result = parseXmlToolCallWithThinking(aiResponse);
       
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: { query: 'authentication middleware' }
       });
@@ -394,7 +468,7 @@ describe('XML Tool Call Parsing', () => {
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'extract',
         params: {
           targets: 'src/components/Header.js:1-50'
@@ -416,7 +490,7 @@ describe('XML Tool Call Parsing', () => {
       const validToolsWithImplement = ['search', 'query', 'extract', 'implement', 'attempt_completion'];
       const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithImplement);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'implement',
         params: { task: 'Add user authentication' }
       });
@@ -453,7 +527,7 @@ describe('XML Tool Call Parsing', () => {
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'attempt_completion',
         params: {
           result: `\`\`\`json
@@ -480,7 +554,7 @@ All tests are passing.`;
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'attempt_completion',
         params: {
           result: `The task has been completed successfully.
@@ -496,7 +570,7 @@ Task completed with all requirements met.
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'attempt_completion',
         params: {
           result: 'Task completed with all requirements met.'
@@ -509,7 +583,7 @@ Task completed with all requirements met.
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'attempt_completion',
         params: {
           result: '__PREVIOUS_RESPONSE__'
@@ -529,7 +603,7 @@ Task completed with all requirements met.
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'attempt_completion',
         params: {
           result: `\`\`\`json
@@ -552,7 +626,7 @@ This is my reasoning...
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: { query: 'authentication' }
       });
@@ -569,7 +643,7 @@ Let me analyze this.
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'extract',
         params: { targets: 'src/auth.js' }
       });
@@ -585,7 +659,7 @@ Let me analyze this.
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'query',
         params: { pattern: 'test' }
       });
@@ -599,7 +673,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: { query: 'function definition' }
       });
@@ -611,7 +685,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'extract',
         params: {
           targets: 'src/index.js:42'
@@ -625,7 +699,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'query',
         params: { pattern: 'class \\w+' }
       });
@@ -638,7 +712,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'listFiles',
         params: {
           path: 'src/',
@@ -657,7 +731,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: {
           query: 'authentication',
@@ -673,7 +747,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'extract',
         params: {
           targets: 'src/test.js:10'
@@ -689,7 +763,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'extract',
         params: {
           targets: 'src/app.js:1-100',
@@ -708,7 +782,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: {
           query: `function test() {
@@ -729,7 +803,7 @@ Let me analyze this.
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'bash',
         params: {
           command: 'git log --grep="#7054" --oneline',
@@ -751,7 +825,7 @@ The working directory should be the tyk project path.<bash>
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'bash',
         params: {
           command: 'git log --grep="#7054" --oneline',
@@ -768,7 +842,7 @@ The working directory should be the tyk project path.<bash>
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'bash',
         params: {
           command: 'git status'
@@ -784,7 +858,7 @@ The working directory should be the tyk project path.<bash>
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: { query: 'test query' }
       });
@@ -799,7 +873,7 @@ I should search for this...
 
       const result = parseXmlToolCallWithThinking(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'search',
         params: { query: 'authentication middleware' }
       });
@@ -812,7 +886,7 @@ I should search for this...
 
       const result = parseXmlToolCall(aiResponse);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'extract',
         params: {
           targets: 'src/auth.js:10-20',
@@ -837,7 +911,7 @@ I should search for this...
 
       const result = parseXmlToolCallWithThinking(aiResponse, validTools);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'edit',
         params: {
           file_path: 'src/main.js',
@@ -862,7 +936,7 @@ I should search for this...
 
       const result = parseXmlToolCall(aiResponse, validTools);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'edit',
         params: {
           file_path: 'config.json',
@@ -884,7 +958,7 @@ I should search for this...
 
       const result = parseXmlToolCall(aiResponse, validTools);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'create',
         params: {
           file_path: 'src/newFile.js',
@@ -907,7 +981,7 @@ This is a new project.</content>
 
       const result = parseXmlToolCall(aiResponse, validTools);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'create',
         params: {
           file_path: 'README.md',
@@ -928,7 +1002,7 @@ This is a new project.`,
 
       const result = parseXmlToolCall(aiResponse, validTools);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'edit',
         params: {
           file_path: 'test.js',
@@ -946,7 +1020,7 @@ This is a new project.`,
 
       const result = parseXmlToolCall(aiResponse, validTools);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'create',
         params: {
           file_path: 'new.txt',
@@ -969,7 +1043,7 @@ I need to rename this function to follow the naming convention.
 
       const result = parseXmlToolCallWithThinking(aiResponse, validTools);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         toolName: 'edit',
         params: {
           file_path: 'src/utils.js',

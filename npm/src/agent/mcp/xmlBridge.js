@@ -321,14 +321,17 @@ export function parseHybridXmlToolCall(xmlString, nativeTools = [], mcpBridge = 
   // This includes thinking tag removal and attempt_complete recovery logic
   const nativeResult = parseNativeXmlToolWithThinking(xmlString, nativeTools);
   if (nativeResult) {
-    return { ...nativeResult, type: 'native' };
+    const { thinkingContent, ...rest } = nativeResult;
+    return { ...rest, type: 'native', thinkingContent };
   }
 
   // Then try MCP tools if bridge is available
   if (mcpBridge) {
     const mcpResult = parseXmlMcpToolCall(xmlString, mcpBridge.getToolNames());
     if (mcpResult) {
-      return { ...mcpResult, type: 'mcp' };
+      // Extract thinking content for MCP tools as well
+      const { thinkingContent } = processXmlWithThinkingAndRecovery(xmlString, []);
+      return { ...mcpResult, type: 'mcp', thinkingContent };
     }
   }
 
@@ -344,18 +347,18 @@ export function parseHybridXmlToolCall(xmlString, nativeTools = [], mcpBridge = 
  */
 function parseNativeXmlToolWithThinking(xmlString, validTools) {
   // Use the shared processing logic
-  const { cleanedXmlString, recoveryResult } = processXmlWithThinkingAndRecovery(xmlString, validTools);
-  
-  // If recovery found an attempt_complete pattern, return it
+  const { cleanedXmlString, recoveryResult, thinkingContent } = processXmlWithThinkingAndRecovery(xmlString, validTools);
+
+  // If recovery found an attempt_complete pattern, return it with thinking content
   if (recoveryResult) {
-    return recoveryResult;
+    return { ...recoveryResult, thinkingContent };
   }
 
   // Use the original parseNativeXmlTool function to parse the cleaned XML string
   for (const toolName of validTools) {
     const result = parseNativeXmlTool(cleanedXmlString, toolName);
     if (result) {
-      return result;
+      return { ...result, thinkingContent };
     }
   }
 

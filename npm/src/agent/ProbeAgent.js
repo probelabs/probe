@@ -407,6 +407,209 @@ export class ProbeAgent {
   }
 
   /**
+   * Check if tracer is AppTracer (expects sessionId as first param) vs SimpleAppTracer
+   * @returns {boolean} - True if tracer is AppTracer style (requires sessionId)
+   * @private
+   */
+  _isAppTracerStyle() {
+    // AppTracer has recordThinkingContent(sessionId, iteration, content) signature
+    // SimpleAppTracer has recordThinkingContent(content, metadata) signature
+    // We detect by checking if there's a sessionSpans map (AppTracer-specific)
+    return this.tracer && typeof this.tracer.sessionSpans !== 'undefined';
+  }
+
+  /**
+   * Record an error classification event for telemetry
+   * Provides unified error recording across all error types
+   * @param {string} errorType - Error type (wrapped_tool, unrecognized_tool, no_tool_call, circuit_breaker)
+   * @param {string} message - Error message
+   * @param {Object} context - Additional context data
+   * @param {number} iteration - Current iteration number
+   * @private
+   */
+  _recordErrorTelemetry(errorType, message, context, iteration) {
+    if (!this.tracer) return;
+
+    if (this._isAppTracerStyle() && typeof this.tracer.recordErrorClassification === 'function') {
+      // AppTracer style: (sessionId, iteration, errorType, details)
+      this.tracer.recordErrorClassification(this.sessionId, iteration, errorType, {
+        message,
+        context
+      });
+    } else if (typeof this.tracer.recordErrorEvent === 'function') {
+      // SimpleAppTracer style: (errorType, details)
+      this.tracer.recordErrorEvent(errorType, {
+        message,
+        context: { ...context, iteration }
+      });
+    } else {
+      this.tracer.addEvent(`error.${errorType}`, {
+        'error.type': errorType,
+        'error.message': message,
+        'error.recoverable': errorType !== 'circuit_breaker',
+        'error.context': JSON.stringify(context).substring(0, 1000),
+        'iteration': iteration
+      });
+    }
+  }
+
+  /**
+   * Record AI thinking content for telemetry
+   * @param {string} thinkingContent - The thinking content
+   * @param {number} iteration - Current iteration number
+   * @private
+   */
+  _recordThinkingTelemetry(thinkingContent, iteration) {
+    if (!this.tracer || !thinkingContent) return;
+
+    if (this._isAppTracerStyle() && typeof this.tracer.recordThinkingContent === 'function') {
+      // AppTracer style: (sessionId, iteration, content)
+      this.tracer.recordThinkingContent(this.sessionId, iteration, thinkingContent);
+    } else if (typeof this.tracer.recordThinkingContent === 'function') {
+      // SimpleAppTracer style: (content, metadata)
+      this.tracer.recordThinkingContent(thinkingContent, { iteration });
+    } else {
+      this.tracer.addEvent('ai.thinking', {
+        'ai.thinking.content': thinkingContent.substring(0, 50000),
+        'ai.thinking.length': thinkingContent.length,
+        'iteration': iteration
+      });
+    }
+  }
+
+  /**
+   * Record AI tool decision for telemetry
+   * @param {string} toolName - The tool name
+   * @param {Object} params - Tool parameters
+   * @param {number} responseLength - Length of AI response
+   * @param {number} iteration - Current iteration number
+   * @private
+   */
+  _recordToolDecisionTelemetry(toolName, params, responseLength, iteration) {
+    if (!this.tracer) return;
+
+    if (this._isAppTracerStyle() && typeof this.tracer.recordAIToolDecision === 'function') {
+      // AppTracer style: (sessionId, iteration, toolName, params)
+      this.tracer.recordAIToolDecision(this.sessionId, iteration, toolName, params);
+    } else if (typeof this.tracer.recordToolDecision === 'function') {
+      // SimpleAppTracer style: (toolName, params, metadata)
+      this.tracer.recordToolDecision(toolName, params, {
+        iteration,
+        'ai.tool_decision.raw_response_length': responseLength
+      });
+    } else {
+      this.tracer.addEvent('ai.tool_decision', {
+        'ai.tool_decision.name': toolName,
+        'ai.tool_decision.params': JSON.stringify(params || {}).substring(0, 2000),
+        'ai.tool_decision.raw_response_length': responseLength,
+        'iteration': iteration
+      });
+    }
+  }
+
+  /**
+   * Record tool result for telemetry
+   * @param {string} toolName - The tool name
+   * @param {string|Object} result - Tool result
+   * @param {boolean} success - Whether tool succeeded
+   * @param {number} durationMs - Execution duration in milliseconds
+   * @param {number} iteration - Current iteration number
+   * @private
+   */
+  _recordToolResultTelemetry(toolName, result, success, durationMs, iteration) {
+    if (!this.tracer) return;
+
+    if (this._isAppTracerStyle() && typeof this.tracer.recordToolResult === 'function') {
+      // AppTracer style: (sessionId, iteration, toolName, result, success, durationMs)
+      this.tracer.recordToolResult(this.sessionId, iteration, toolName, result, success, durationMs);
+    } else if (typeof this.tracer.recordToolResult === 'function') {
+      // SimpleAppTracer style: (toolName, result, success, durationMs, metadata)
+      this.tracer.recordToolResult(toolName, result, success, durationMs, { iteration });
+    } else {
+      const resultStr = typeof result === 'string' ? result : JSON.stringify(result || '');
+      this.tracer.addEvent('tool.result', {
+        'tool.name': toolName,
+        'tool.result': resultStr.substring(0, 10000),
+        'tool.result.length': resultStr.length,
+        'tool.duration_ms': durationMs,
+        'tool.success': success,
+        'iteration': iteration
+      });
+    }
+  }
+
+  /**
+   * Record MCP tool lifecycle event for telemetry
+   * @param {string} phase - 'start' or 'end'
+   * @param {string} toolName - MCP tool name
+   * @param {Object} params - Tool parameters (for start) or null (for end)
+   * @param {number} iteration - Current iteration number
+   * @param {Object} [endData] - Additional data for end phase (result, success, durationMs, error)
+   * @private
+   */
+  _recordMcpToolTelemetry(phase, toolName, params, iteration, endData = null) {
+    if (!this.tracer) return;
+
+    if (phase === 'start') {
+      if (this._isAppTracerStyle() && typeof this.tracer.recordMcpToolStart === 'function') {
+        // AppTracer style: (sessionId, iteration, toolName, serverName, params)
+        this.tracer.recordMcpToolStart(this.sessionId, iteration, toolName, 'mcp', params);
+      } else if (typeof this.tracer.recordMcpToolStart === 'function') {
+        // SimpleAppTracer style: (toolName, serverName, params, metadata)
+        this.tracer.recordMcpToolStart(toolName, 'mcp', params, { iteration });
+      } else {
+        this.tracer.addEvent('mcp.tool.start', {
+          'mcp.tool.name': toolName,
+          'mcp.tool.server': 'mcp',
+          'mcp.tool.params': JSON.stringify(params || {}).substring(0, 2000),
+          'iteration': iteration
+        });
+      }
+    } else if (phase === 'end' && endData) {
+      const { result, success, durationMs, error } = endData;
+      if (this._isAppTracerStyle() && typeof this.tracer.recordMcpToolEnd === 'function') {
+        // AppTracer style: (sessionId, iteration, toolName, serverName, result, success, durationMs, error)
+        this.tracer.recordMcpToolEnd(this.sessionId, iteration, toolName, 'mcp', result, success, durationMs, error);
+      } else if (typeof this.tracer.recordMcpToolEnd === 'function') {
+        // SimpleAppTracer style: (toolName, serverName, result, success, durationMs, error, metadata)
+        this.tracer.recordMcpToolEnd(toolName, 'mcp', result, success, durationMs, error, { iteration });
+      } else {
+        const resultStr = typeof result === 'string' ? result : JSON.stringify(result || '');
+        this.tracer.addEvent('mcp.tool.end', {
+          'mcp.tool.name': toolName,
+          'mcp.tool.server': 'mcp',
+          'mcp.tool.result': resultStr.substring(0, 10000),
+          'mcp.tool.result.length': resultStr.length,
+          'mcp.tool.duration_ms': durationMs,
+          'mcp.tool.success': success,
+          'mcp.tool.error': error,
+          'iteration': iteration
+        });
+      }
+    }
+  }
+
+  /**
+   * Record iteration lifecycle event for telemetry
+   * @param {string} phase - 'end' (start is already handled elsewhere)
+   * @param {number} iteration - Current iteration number
+   * @param {Object} data - Additional iteration data
+   * @private
+   */
+  _recordIterationTelemetry(phase, iteration, data = {}) {
+    if (!this.tracer) return;
+
+    if (typeof this.tracer.recordIterationEvent === 'function') {
+      this.tracer.recordIterationEvent(phase, iteration, data);
+    } else {
+      this.tracer.addEvent(`iteration.${phase}`, {
+        'iteration': iteration,
+        ...data
+      });
+    }
+  }
+
+  /**
    * Initialize the agent asynchronously (must be called after constructor)
    * This method initializes MCP and merges MCP tools into the tool list, and loads history from storage
    */
@@ -2854,8 +3057,18 @@ Follow these instructions carefully:
         const parsedTool = (this.mcpBridge && !options._disableTools)
           ? parseHybridXmlToolCall(assistantResponseContent, nativeTools, this.mcpBridge)
           : parseXmlToolCallWithThinking(assistantResponseContent, validTools);
+
+        // Capture AI thinking content if present (for debugging and telemetry)
+        if (parsedTool?.thinkingContent) {
+          this._recordThinkingTelemetry(parsedTool.thinkingContent, currentIteration);
+        }
+
         if (parsedTool) {
           const { toolName, params } = parsedTool;
+
+          // Record AI tool decision for telemetry
+          this._recordToolDecisionTelemetry(toolName, params, assistantResponseContent.length, currentIteration);
+
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
 
           if (toolName === 'attempt_completion') {
@@ -2962,6 +3175,9 @@ Follow these instructions carefully:
 
             if (type === 'mcp' && this.mcpBridge && this.mcpBridge.isMcpTool(toolName)) {
               // Execute MCP tool
+              const mcpStartTime = Date.now();
+              this._recordMcpToolTelemetry('start', toolName, params, currentIteration);
+
               try {
                 // Log MCP tool execution in debug mode
                 if (this.debug) {
@@ -2999,6 +3215,15 @@ Follow these instructions carefully:
                   console.error(`[WARN] Tool output truncation failed: ${truncateError.message}`);
                 }
 
+                // Record MCP tool end event (success)
+                const mcpDurationMs = Date.now() - mcpStartTime;
+                this._recordMcpToolTelemetry('end', toolName, null, currentIteration, {
+                  result: toolResultContent,
+                  success: true,
+                  durationMs: mcpDurationMs,
+                  error: null
+                });
+
                 // Log MCP tool result in debug mode
                 if (this.debug) {
                   const preview = toolResultContent.length > 500 ? toolResultContent.substring(0, 500) + '...' : toolResultContent;
@@ -3011,6 +3236,15 @@ Follow these instructions carefully:
 
                 currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
               } catch (error) {
+                // Record MCP tool end event (failure)
+                const mcpDurationMs = Date.now() - mcpStartTime;
+                this._recordMcpToolTelemetry('end', toolName, null, currentIteration, {
+                  result: null,
+                  success: false,
+                  durationMs: mcpDurationMs,
+                  error: error.message
+                });
+
                 console.error(`Error executing MCP tool ${toolName}:`, error);
 
                 // Log MCP tool error in debug mode
@@ -3118,6 +3352,7 @@ Follow these instructions carefully:
                 };
 
                 let toolResult;
+                const toolStartTime = Date.now();
                 try {
                   if (this.tracer) {
                     toolResult = await this.tracer.withSpan('tool.call', executeToolCall, {
@@ -3128,7 +3363,11 @@ Follow these instructions carefully:
                   } else {
                     toolResult = await executeToolCall();
                   }
-                  
+
+                  // Record tool result in telemetry
+                  const toolDurationMs = Date.now() - toolStartTime;
+                  this._recordToolResultTelemetry(toolName, toolResult, true, toolDurationMs, currentIteration);
+
                   // Log tool result in debug mode
                   if (this.debug) {
                     const resultPreview = typeof toolResult === 'string'
@@ -3200,6 +3439,22 @@ Follow these instructions carefully:
                   role: 'user',
                   content: toolResultMessage
                 });
+
+                // Record conversation turns in telemetry
+                if (this.tracer) {
+                  if (typeof this.tracer.recordConversationTurn === 'function') {
+                    this.tracer.recordConversationTurn('assistant', assistantResponseContent, {
+                      iteration: currentIteration,
+                      has_tool_call: true,
+                      tool_name: toolName
+                    });
+                    this.tracer.recordConversationTurn('tool_result', toolResultContent, {
+                      iteration: currentIteration,
+                      tool_name: toolName,
+                      tool_success: true
+                    });
+                  }
+                }
 
                 // NOTE: Automatic image processing removed (GitHub issue #305)
                 // Images are now only loaded when the AI explicitly calls the readImage tool
@@ -3294,6 +3549,10 @@ Follow these instructions carefully:
             if (this.debug) {
               console.log(`[DEBUG] Detected wrapped tool '${wrappedToolName}' in assistant response - wrong XML format.`);
             }
+
+            // Record wrapped tool error in telemetry
+            this._recordErrorTelemetry('wrapped_tool', 'Tool call wrapped in markdown', { toolName: wrappedToolName }, currentIteration);
+
             const toolError = new ParameterError(
               `Tool '${wrappedToolName}' found but in WRONG FORMAT - do not wrap tools in other XML tags.`,
               {
@@ -3318,12 +3577,19 @@ Remove ALL wrapper tags and use <${wrappedToolName}> directly as the outermost t
             if (this.debug) {
               console.log(`[DEBUG] Detected unrecognized tool '${unrecognizedTool}' in assistant response.`);
             }
+
+            // Record unrecognized tool error in telemetry
+            this._recordErrorTelemetry('unrecognized_tool', `Unknown tool: ${unrecognizedTool}`, { toolName: unrecognizedTool, validTools }, currentIteration);
+
             const toolError = new ParameterError(`Tool '${unrecognizedTool}' is not available in this context.`, {
               suggestion: `Available tools: ${validTools.join(', ')}. Please use one of these tools instead.`
             });
             reminderContent = `<tool_result>\n${formatErrorForAI(toolError)}\n</tool_result>`;
           } else {
-            // No tool call detected at all - check if this is the last iteration
+            // No tool call detected at all - record in telemetry
+            this._recordErrorTelemetry('no_tool_call', 'AI response did not contain tool call', { responsePreview: assistantResponseContent.substring(0, 500) }, currentIteration);
+
+            // Check if this is the last iteration
             // On the last iteration, if the AI gave a substantive response without using
             // attempt_completion, accept it as the final answer rather than losing the content
             if (currentIteration >= maxIterations) {
@@ -3439,6 +3705,10 @@ Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant messa
               sameFormatErrorCount++;
               if (sameFormatErrorCount >= MAX_REPEATED_FORMAT_ERRORS) {
                 const errorDesc = isWrapped ? 'wrapped tool format' : unrecognizedTool;
+
+                // Record circuit breaker error in telemetry
+                this._recordErrorTelemetry('circuit_breaker', 'Format error limit exceeded', { formatErrorCount: sameFormatErrorCount, errorCategory }, currentIteration);
+
                 console.error(`[ERROR] Format error category '${errorCategory}' repeated ${sameFormatErrorCount} times. Breaking loop early to prevent infinite iteration.`);
                 finalResult = `Error: Unable to complete request. The AI model repeatedly used incorrect tool call format (${errorDesc}). Please try rephrasing your question or using a different model.`;
                 break;
@@ -3454,13 +3724,19 @@ Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant messa
           }
         }
 
+        // Record iteration end event
+        this._recordIterationTelemetry('end', currentIteration, {
+          'iteration.completed': completionAttempted,
+          'iteration.message_count': currentMessages.length
+        });
+
         // Keep message history manageable
         if (currentMessages.length > MAX_HISTORY_MESSAGES) {
           const messagesBefore = currentMessages.length;
           const systemMsg = currentMessages[0]; // Keep system message
           const recentMessages = currentMessages.slice(-MAX_HISTORY_MESSAGES + 1);
           currentMessages = [systemMsg, ...recentMessages];
-          
+
           if (this.debug) {
             console.log(`[DEBUG] Trimmed message history from ${messagesBefore} to ${currentMessages.length} messages`);
           }
