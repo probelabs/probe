@@ -15,7 +15,7 @@ import { PathError } from './error-types.js';
  * @param {string} inputPath - Path to resolve
  * @returns {string} Resolved real path or normalized path if resolution fails
  */
-function safeRealpath(inputPath) {
+export function safeRealpath(inputPath) {
 	try {
 		return realpathSync(inputPath);
 	} catch (error) {

@@ -7,7 +7,7 @@ import { tool } from 'ai';
 import { promises as fs } from 'fs';
 import { dirname, resolve, isAbsolute, sep } from 'path';
 import { existsSync } from 'fs';
-import { toRelativePath } from '../utils/path-validation.js';
+import { toRelativePath, safeRealpath } from '../utils/path-validation.js';
 
 /**
  * Validates that a path is within allowed directories
@@ -18,15 +18,18 @@ import { toRelativePath } from '../utils/path-validation.js';
 function isPathAllowed(filePath, allowedFolders) {
   if (!allowedFolders || allowedFolders.length === 0) {
     // If no restrictions, allow current directory and below
-    const resolvedPath = resolve(filePath);
-    const cwd = resolve(process.cwd());
+    // Use safeRealpath to resolve symlinks for security
+    const resolvedPath = safeRealpath(filePath);
+    const cwd = safeRealpath(process.cwd());
     // Ensure proper path separator to prevent path traversal
     return resolvedPath === cwd || resolvedPath.startsWith(cwd + sep);
   }
 
-  const resolvedPath = resolve(filePath);
+  // Use safeRealpath to resolve symlinks for security
+  // This prevents symlink bypass attacks (e.g., /tmp -> /private/tmp on macOS)
+  const resolvedPath = safeRealpath(filePath);
   return allowedFolders.some(folder => {
-    const allowedPath = resolve(folder);
+    const allowedPath = safeRealpath(folder);
     // Ensure proper path separator to prevent path traversal
     return resolvedPath === allowedPath || resolvedPath.startsWith(allowedPath + sep);
   });
