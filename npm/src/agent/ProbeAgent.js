@@ -71,7 +71,7 @@ import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
 import { handleContextLimitError } from './contextCompactor.js';
 import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
-import { getCommonPrefix, toRelativePath } from '../utils/path-validation.js';
+import { getCommonPrefix, toRelativePath, safeRealpath } from '../utils/path-validation.js';
 import { truncateIfNeeded, getMaxOutputTokens } from './outputTruncator.js';
 import { DelegationManager } from '../delegate.js';
 import {
@@ -271,7 +271,9 @@ export class ProbeAgent {
     }
 
     // Compute workspace root as common prefix of all allowed folders
-    // This provides a single "root" for relative path resolution
+    // This provides a single "root" for relative path resolution and default cwd
+    // IMPORTANT: workspaceRoot is NOT a security boundary - all security checks
+    // must be performed against this.allowedFolders, not workspaceRoot
     this.workspaceRoot = getCommonPrefix(this.allowedFolders);
 
     // Working directory for resolving relative paths
@@ -1418,7 +1420,8 @@ export class ProbeAgent {
       }
 
       // Security validation: check if path is within any allowed directory
-      // Use normalize() after resolve() to handle path traversal attempts (e.g., '/allowed/../etc/passwd')
+      // Use safeRealpath() to resolve symlinks and handle path traversal attempts (e.g., '/allowed/../etc/passwd')
+      // This prevents symlink bypass attacks (e.g., /tmp -> /private/tmp on macOS)
       const allowedDirs = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders : [process.cwd()];
 
       let absolutePath;
@@ -1426,20 +1429,20 @@ export class ProbeAgent {
 
       // If absolute path, check if it's within any allowed directory
       if (isAbsolute(imagePath)) {
-        // Normalize to resolve any '..' sequences
-        absolutePath = normalize(resolve(imagePath));
+        // Use safeRealpath to resolve symlinks for security
+        absolutePath = safeRealpath(resolve(imagePath));
         isPathAllowed = allowedDirs.some(dir => {
-          const normalizedDir = normalize(resolve(dir));
+          const resolvedDir = safeRealpath(dir);
           // Ensure the path is within the allowed directory (add separator to prevent prefix attacks)
-          return absolutePath === normalizedDir || absolutePath.startsWith(normalizedDir + sep);
+          return absolutePath === resolvedDir || absolutePath.startsWith(resolvedDir + sep);
         });
       } else {
         // For relative paths, try resolving against each allowed directory
         for (const dir of allowedDirs) {
-          const normalizedDir = normalize(resolve(dir));
-          const resolvedPath = normalize(resolve(dir, imagePath));
+          const resolvedDir = safeRealpath(dir);
+          const resolvedPath = safeRealpath(resolve(dir, imagePath));
           // Ensure the resolved path is within the allowed directory
-          if (resolvedPath === normalizedDir || resolvedPath.startsWith(normalizedDir + sep)) {
+          if (resolvedPath === resolvedDir || resolvedPath.startsWith(resolvedDir + sep)) {
             absolutePath = resolvedPath;
             isPathAllowed = true;
             break;
@@ -3070,18 +3073,19 @@ Follow these instructions carefully:
               // Execute native tool
               try {
                 // Add sessionId and workingDirectory to params for tool execution
-                // Validate and resolve workingDirectory
+                // Validate and resolve workingDirectory using safeRealpath for symlink security
                 // Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > process.cwd()
                 let resolvedWorkingDirectory = this.workspaceRoot || this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
                 if (params.workingDirectory) {
                   // Resolve relative paths against the current working directory context, not process.cwd()
-                  const requestedDir = isAbsolute(params.workingDirectory)
+                  // Use safeRealpath to resolve symlinks and prevent bypass attacks
+                  const requestedDir = safeRealpath(isAbsolute(params.workingDirectory)
                     ? resolve(params.workingDirectory)
-                    : resolve(resolvedWorkingDirectory, params.workingDirectory);
+                    : resolve(resolvedWorkingDirectory, params.workingDirectory));
                   // Check if the requested directory is within allowed folders
                   const isWithinAllowed = !this.allowedFolders || this.allowedFolders.length === 0 ||
                     this.allowedFolders.some(folder => {
-                      const resolvedFolder = resolve(folder);
+                      const resolvedFolder = safeRealpath(folder);
                       return requestedDir === resolvedFolder || requestedDir.startsWith(resolvedFolder + sep);
                     });
                   if (isWithinAllowed) {

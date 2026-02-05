@@ -118,14 +118,21 @@ export function normalizePath(inputPath, defaultPath = process.cwd()) {
  * Compute the common prefix (workspace root) from an array of folder paths.
  * This is useful for finding a single workspace root from multiple allowed folders.
  *
+ * IMPORTANT: This function returns a value for DISPLAY and CWD purposes only.
+ * It is NOT a security boundary. All security checks should be performed against
+ * the original allowedFolders array, not against workspaceRoot.
+ *
+ * When no common prefix exists (e.g., unrelated paths), returns the first folder.
+ * This is intentional - the caller should use allowedFolders for security validation.
+ *
  * Examples:
  * - ['/tmp/ws/tyk', '/tmp/ws/tyk-docs'] -> '/tmp/ws'
  * - ['/tmp/ws/tyk'] -> '/tmp/ws/tyk'
- * - ['/a/b', '/c/d'] -> '/a/b' (no common prefix, returns first folder)
+ * - ['/a/b', '/c/d'] -> '/a/b' (no common prefix, returns first folder for cwd)
  * - ['C:\\Users\\ws\\tyk', 'C:\\Users\\ws\\docs'] -> 'C:\\Users\\ws' (Windows)
  *
  * @param {string[]} folders - Array of absolute folder paths
- * @returns {string} Common prefix path (workspace root)
+ * @returns {string} Common prefix path (for display/cwd, NOT security boundary)
  */
 export function getCommonPrefix(folders) {
 	if (!folders || folders.length === 0) {

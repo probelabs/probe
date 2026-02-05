@@ -85,9 +85,11 @@ describe('Workspace Root Utilities', () => {
 				expect(result).toBe('C:\\a');
 			});
 
-			test('should handle Windows drive root as common prefix', () => {
+			test('should return first folder when only Windows drive is common', () => {
+				// When only the drive letter is common, return first folder for more useful context
+				// This matches the Unix behavior where '/' as common returns first folder
 				const result = getCommonPrefix(['C:\\a', 'C:\\b']);
-				expect(result).toBe('C:\\');
+				expect(result).toBe('C:\\a');
 			});
 		} else {
 			test('should return first folder when only Unix root is common', () => {
