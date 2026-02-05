@@ -385,6 +385,23 @@ export async function delegate({
 		throw new Error('Task parameter is required and must be a string');
 	}
 
+	// Support runtime timeout override via environment variables when timeout not explicitly passed
+	// This allows operators to configure delegation timeouts without code changes
+	// Priority: DELEGATION_TIMEOUT_MS (milliseconds) > DELEGATION_TIMEOUT_SECONDS > DELEGATION_TIMEOUT (seconds)
+	const hasExplicitTimeout = Object.prototype.hasOwnProperty.call(arguments?.[0] ?? {}, 'timeout');
+	if (!hasExplicitTimeout) {
+		const envTimeoutMs = parseInt(process.env.DELEGATION_TIMEOUT_MS || '', 10);
+		const envTimeoutSeconds = parseInt(
+			process.env.DELEGATION_TIMEOUT_SECONDS || process.env.DELEGATION_TIMEOUT || '',
+			10
+		);
+		if (!Number.isNaN(envTimeoutMs) && envTimeoutMs > 0) {
+			timeout = Math.max(1, Math.ceil(envTimeoutMs / 1000));
+		} else if (!Number.isNaN(envTimeoutSeconds) && envTimeoutSeconds > 0) {
+			timeout = Math.max(1, envTimeoutSeconds);
+		}
+	}
+
 	// Use provided manager or fall back to default singleton
 	const manager = delegationManager || defaultDelegationManager;
 
