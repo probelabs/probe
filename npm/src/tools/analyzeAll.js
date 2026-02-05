@@ -529,8 +529,8 @@ export async function analyzeAll(options) {
 	}
 
 	// Use workspaceRoot (computed common prefix) for consistent path handling
-	// Fallback chain: workspaceRoot > allowedFolders[0] > cwd > path
-	const effectiveWorkspaceRoot = workspaceRoot || allowedFolders?.[0] || cwd || path;
+	// Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > path
+	const effectiveWorkspaceRoot = workspaceRoot || cwd || allowedFolders?.[0] || path;
 
 	const delegateOptions = {
 		debug,

@@ -1676,7 +1676,8 @@ export class ProbeAgent {
       return this.architectureContext;
     }
 
-    const rootDirectory = this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd();
+    // Use workspaceRoot for consistent path handling
+    const rootDirectory = this.workspaceRoot || (this.allowedFolders.length > 0 ? this.allowedFolders[0] : process.cwd());
     const configuredName =
       typeof this.architectureFileName === 'string' ? this.architectureFileName.trim() : '';
     const hasConfiguredName = !!configuredName;
@@ -1834,6 +1835,10 @@ export class ProbeAgent {
   }
 
   _getSkillsRepoRoot() {
+    // Use workspaceRoot for consistent path handling
+    if (this.workspaceRoot) {
+      return resolve(this.workspaceRoot);
+    }
     if (this.allowedFolders && this.allowedFolders.length > 0) {
       return resolve(this.allowedFolders[0]);
     }
@@ -1914,7 +1919,7 @@ ${extractGuidance}
     // Add repository structure if available
     if (this.fileList) {
       systemPrompt += `\n\n# Repository Structure\n`;
-      systemPrompt += `You are working with a repository located at: ${this.allowedFolders[0]}\n\n`;
+      systemPrompt += `You are working with a repository located at: ${this.workspaceRoot}\n\n`;
       systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
       systemPrompt += '```\n' + this.fileList + '\n```\n';
     }
@@ -1976,7 +1981,7 @@ ${extractGuidance}
     // Add repository structure if available
     if (this.fileList) {
       systemPrompt += `\n\n# Repository Structure\n`;
-      systemPrompt += `You are working with a repository located at: ${this.allowedFolders[0]}\n\n`;
+      systemPrompt += `You are working with a repository located at: ${this.workspaceRoot}\n\n`;
       systemPrompt += `Here's an overview of the repository structure (showing up to 100 most relevant files):\n\n`;
       systemPrompt += '```\n' + this.fileList + '\n```\n';
     }
@@ -3066,8 +3071,8 @@ Follow these instructions carefully:
               try {
                 // Add sessionId and workingDirectory to params for tool execution
                 // Validate and resolve workingDirectory
-                // Priority: explicit cwd > first allowed folder > process.cwd()
-                let resolvedWorkingDirectory = this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
+                // Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > process.cwd()
+                let resolvedWorkingDirectory = this.workspaceRoot || this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
                 if (params.workingDirectory) {
                   // Resolve relative paths against the current working directory context, not process.cwd()
                   const requestedDir = isAbsolute(params.workingDirectory)
@@ -3647,7 +3652,7 @@ Convert your previous response content into actual JSON data that follows this s
               
               const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
                 debug: this.debug,
-                path: this.allowedFolders[0],
+                path: this.workspaceRoot || this.allowedFolders[0],
                 provider: this.clientApiProvider,
                 model: this.model,
                 tracer: this.tracer
@@ -3737,7 +3742,7 @@ Convert your previous response content into actual JSON data that follows this s
 
               const { JsonFixingAgent } = await import('./schemaUtils.js');
               const jsonFixer = new JsonFixingAgent({
-                path: this.allowedFolders[0],
+                path: this.workspaceRoot || this.allowedFolders[0],
                 provider: this.clientApiProvider,
                 model: this.model,
                 debug: this.debug,
@@ -3825,7 +3830,7 @@ Convert your previous response content into actual JSON data that follows this s
 
             const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
               debug: this.debug,
-              path: this.allowedFolders[0],
+              path: this.workspaceRoot || this.allowedFolders[0],
               provider: this.clientApiProvider,
               model: this.model,
               tracer: this.tracer
@@ -3981,7 +3986,7 @@ Convert your previous response content into actual JSON data that follows this s
           
           const finalMermaidValidation = await validateAndFixMermaidResponse(finalResult, {
             debug: this.debug,
-            path: this.allowedFolders[0],
+            path: this.workspaceRoot || this.allowedFolders[0],
             provider: this.clientApiProvider,
             model: this.model,
             tracer: this.tracer

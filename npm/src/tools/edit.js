@@ -41,11 +41,13 @@ function isPathAllowed(filePath, allowedFolders) {
  * @returns {Object} Parsed configuration
  */
 function parseFileToolOptions(options = {}) {
+  const allowedFolders = options.allowedFolders || [];
   return {
     debug: options.debug || false,
-    allowedFolders: options.allowedFolders || [],
+    allowedFolders,
     cwd: options.cwd,
-    workspaceRoot: options.workspaceRoot || options.cwd || process.cwd()
+    // Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > process.cwd()
+    workspaceRoot: options.workspaceRoot || options.cwd || (allowedFolders.length > 0 && allowedFolders[0]) || process.cwd()
   };
 }
 
