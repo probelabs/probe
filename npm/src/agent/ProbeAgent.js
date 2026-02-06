@@ -1204,43 +1204,56 @@ export class ProbeAgent {
           const abortSignal = controller.signal;
 
           // Create a text stream that extracts text from engine messages with timeout
+          // The generator clears the operation timeout when done to handle the case
+          // where the stream is returned immediately but consumed later
           async function* createTextStream() {
             let lastActivity = Date.now();
 
-            for await (const message of engineStream) {
-              // Check for abort signal
-              if (abortSignal.aborted) {
-                throw new Error('Operation aborted');
+            try {
+              for await (const message of engineStream) {
+                // Check for abort signal
+                if (abortSignal.aborted) {
+                  const abortError = new Error('Operation aborted');
+                  abortError.name = 'AbortError';
+                  throw abortError;
+                }
+
+                const now = Date.now();
+
+                // Check for activity timeout (no data received for too long)
+                if (now - lastActivity > activityTimeout) {
+                  throw new Error(`Engine stream timeout - no activity for ${activityTimeout}ms`);
+                }
+
+                // Check for overall request timeout
+                if (requestTimeout > 0 && now - startTime > requestTimeout) {
+                  throw new Error(`Engine stream timeout - request exceeded ${requestTimeout}ms`);
+                }
+
+                lastActivity = now;
+
+                if (message.type === 'text' && message.content) {
+                  yield message.content;
+                } else if (typeof message === 'string') {
+                  // If engine returns plain strings, pass them through
+                  yield message;
+                }
+                // Ignore other message types for the text stream
               }
-
-              const now = Date.now();
-
-              // Check for activity timeout (no data received for too long)
-              if (now - lastActivity > activityTimeout) {
-                throw new Error(`Engine stream timeout - no activity for ${activityTimeout}ms`);
+            } finally {
+              // Clear operation timeout when stream completes (success or error)
+              // This is done here because for engine paths, the stream is returned
+              // immediately but consumed later by the caller
+              if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
               }
-
-              // Check for overall request timeout
-              if (requestTimeout > 0 && now - startTime > requestTimeout) {
-                throw new Error(`Engine stream timeout - request exceeded ${requestTimeout}ms`);
-              }
-
-              lastActivity = now;
-
-              if (message.type === 'text' && message.content) {
-                yield message.content;
-              } else if (typeof message === 'string') {
-                // If engine returns plain strings, pass them through
-                yield message;
-              }
-              // Ignore other message types for the text stream
             }
           }
 
           // Wrap the engine result to match streamText interface
-          // Note: maxOperationTimeout cleanup is handled by the finally block.
-          // The createTextStream generator has its own activity/request timeouts
-          // that continue to protect against stalled streams during consumption.
+          // Note: maxOperationTimeout cleanup is handled by the generator's finally block
+          // since the stream is consumed after this function returns.
           return {
             textStream: createTextStream(),
             usage: Promise.resolve({}), // Engine should handle its own usage tracking
@@ -1294,43 +1307,56 @@ export class ProbeAgent {
           const abortSignal = controller.signal;
 
           // Create a text stream that extracts text from engine messages with timeout
+          // The generator clears the operation timeout when done to handle the case
+          // where the stream is returned immediately but consumed later
           async function* createTextStream() {
             let lastActivity = Date.now();
 
-            for await (const message of engineStream) {
-              // Check for abort signal
-              if (abortSignal.aborted) {
-                throw new Error('Operation aborted');
+            try {
+              for await (const message of engineStream) {
+                // Check for abort signal
+                if (abortSignal.aborted) {
+                  const abortError = new Error('Operation aborted');
+                  abortError.name = 'AbortError';
+                  throw abortError;
+                }
+
+                const now = Date.now();
+
+                // Check for activity timeout (no data received for too long)
+                if (now - lastActivity > activityTimeout) {
+                  throw new Error(`Engine stream timeout - no activity for ${activityTimeout}ms`);
+                }
+
+                // Check for overall request timeout
+                if (requestTimeout > 0 && now - startTime > requestTimeout) {
+                  throw new Error(`Engine stream timeout - request exceeded ${requestTimeout}ms`);
+                }
+
+                lastActivity = now;
+
+                if (message.type === 'text' && message.content) {
+                  yield message.content;
+                } else if (typeof message === 'string') {
+                  // If engine returns plain strings, pass them through
+                  yield message;
+                }
+                // Ignore other message types for the text stream
               }
-
-              const now = Date.now();
-
-              // Check for activity timeout (no data received for too long)
-              if (now - lastActivity > activityTimeout) {
-                throw new Error(`Engine stream timeout - no activity for ${activityTimeout}ms`);
+            } finally {
+              // Clear operation timeout when stream completes (success or error)
+              // This is done here because for engine paths, the stream is returned
+              // immediately but consumed later by the caller
+              if (timeoutId) {
+                clearTimeout(timeoutId);
+                timeoutId = null;
               }
-
-              // Check for overall request timeout
-              if (requestTimeout > 0 && now - startTime > requestTimeout) {
-                throw new Error(`Engine stream timeout - request exceeded ${requestTimeout}ms`);
-              }
-
-              lastActivity = now;
-
-              if (message.type === 'text' && message.content) {
-                yield message.content;
-              } else if (typeof message === 'string') {
-                // If engine returns plain strings, pass them through
-                yield message;
-              }
-              // Ignore other message types for the text stream
             }
           }
 
           // Wrap the engine result to match streamText interface
-          // Note: maxOperationTimeout cleanup is handled by the finally block.
-          // The createTextStream generator has its own activity/request timeouts
-          // that continue to protect against stalled streams during consumption.
+          // Note: maxOperationTimeout cleanup is handled by the generator's finally block
+          // since the stream is consumed after this function returns.
           return {
             textStream: createTextStream(),
             usage: Promise.resolve({}), // Engine should handle its own usage tracking
