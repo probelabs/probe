@@ -3,6 +3,26 @@ import { EventEmitter } from 'events';
 import type { RetryOptions } from './RetryManager';
 import type { FallbackOptions } from './FallbackManager';
 
+// ============================================================================
+// Timeout Configuration Constants
+// ============================================================================
+
+/**
+ * Default activity timeout for engine streams (3 minutes / 180000ms).
+ * This is the time allowed between stream chunks before considering the stream stalled.
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_DEFAULT: number;
+
+/**
+ * Minimum allowed activity timeout (5 seconds / 5000ms).
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_MIN: number;
+
+/**
+ * Maximum allowed activity timeout (10 minutes / 600000ms).
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_MAX: number;
+
 /**
  * Configuration options for creating a ProbeAgent instance
  */
@@ -80,6 +100,10 @@ export interface ProbeAgentOptions {
   completionPrompt?: string;
   /** Enable task management system for tracking multi-step progress */
   enableTasks?: boolean;
+  /** Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests. */
+  requestTimeout?: number;
+  /** Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback. */
+  maxOperationTimeout?: number;
 }
 
 /**

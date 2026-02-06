@@ -15,7 +15,7 @@ import { Session } from '../shared/Session.js';
  * Enhanced Claude Code Engine
  */
 export async function createEnhancedClaudeCLIEngine(options = {}) {
-  const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools } = options;
+  const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools, timeout = 120000 } = options;
 
   // Create or reuse session
   const session = new Session(
@@ -154,6 +154,37 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
         stdio: ['ignore', 'pipe', 'pipe']  // Ignore stdin since echo handles it
       });
 
+      // Subprocess timeout handling
+      let killed = false;
+      let timeoutHandle;
+      let sigkillHandle;
+
+      if (timeout > 0) {
+        timeoutHandle = setTimeout(() => {
+          if (!killed) {
+            killed = true;
+            processEnded = true;
+            proc.kill('SIGTERM');
+
+            if (debug) {
+              console.log(`[DEBUG] Process timed out after ${timeout}ms, sending SIGTERM`);
+            }
+
+            // Force kill after 5 seconds if still running
+            sigkillHandle = setTimeout(() => {
+              if (proc.exitCode === null) {
+                proc.kill('SIGKILL');
+                if (debug) {
+                  console.log('[DEBUG] Process did not exit, sending SIGKILL');
+                }
+              }
+            }, 5000);
+
+            emitter.emit('error', new Error(`Claude CLI process timed out after ${timeout}ms`));
+          }
+        }, timeout);
+      }
+
       // Handle stdout
       proc.stdout.on('data', (data) => {
         buffer += data.toString();
@@ -179,9 +210,23 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
 
       // Handle process end
       proc.on('close', (code) => {
+        // Clear the timeouts to prevent memory leaks
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        if (sigkillHandle) {
+          clearTimeout(sigkillHandle);
+        }
+
         processEnded = true;
         if (code !== 0 && debug) {
           console.log(`[DEBUG] Process exited with code ${code}`);
+        }
+
+        // If killed by timeout, the error was already emitted
+        if (killed) {
+          emitter.emit('end');
+          return;
         }
 
         // Process any remaining buffer
@@ -205,6 +250,14 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
       });
 
       proc.on('error', (error) => {
+        // Clear the timeouts to prevent memory leaks
+        if (timeoutHandle) {
+          clearTimeout(timeoutHandle);
+        }
+        if (sigkillHandle) {
+          clearTimeout(sigkillHandle);
+        }
+        processEnded = true;
         emitter.emit('error', error);
       });
 
@@ -259,8 +312,24 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
               content: `\n🔧 Using ${msg.name}: ${JSON.stringify(msg.input)}\n`
             };
 
-            // Execute tool
-            const result = await executeProbleTool(agent, msg.name, msg.input);
+            // Execute tool with timeout to prevent indefinite blocking
+            const toolTimeout = 30000; // 30 seconds
+            let toolTimeoutId;
+            const timeoutPromise = new Promise((_, reject) => {
+              toolTimeoutId = setTimeout(() => reject(new Error(`Tool ${msg.name} timed out after ${toolTimeout}ms`)), toolTimeout);
+            });
+            let result;
+            try {
+              result = await Promise.race([
+                executeProbleTool(agent, msg.name, msg.input),
+                timeoutPromise
+              ]);
+            } catch (error) {
+              result = `Tool error: ${error.message}`;
+            } finally {
+              // Always clear timeout to prevent memory leaks
+              clearTimeout(toolTimeoutId);
+            }
             yield { type: 'text', content: `${result}\n` };
           } else if (msg.type === 'toolBatch') {
             // Pass through the tool batch for ProbeAgent to emit
