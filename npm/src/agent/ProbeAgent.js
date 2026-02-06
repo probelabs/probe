@@ -189,6 +189,8 @@ export class ProbeAgent {
    * @param {number} [options.fallback.maxTotalAttempts=10] - Maximum total attempts across all providers
    * @param {string} [options.completionPrompt] - Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation)
    * @param {number} [options.maxOutputTokens] - Maximum tokens for tool output before truncation (default: 20000, can also be set via PROBE_MAX_OUTPUT_TOKENS env var)
+   * @param {number} [options.requestTimeout] - Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests.
+   * @param {number} [options.maxOperationTimeout] - Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback.
    */
   constructor(options = {}) {
     // Basic configuration
@@ -329,6 +331,23 @@ export class ProbeAgent {
     // Per-instance delegation manager for concurrent delegation limits
     // Each ProbeAgent instance has its own limits, not shared globally
     this.delegationManager = new DelegationManager();
+
+    // Request timeout configuration (default 2 minutes)
+    this.requestTimeout = options.requestTimeout ?? (
+      process.env.REQUEST_TIMEOUT ? parseInt(process.env.REQUEST_TIMEOUT, 10) : 120000
+    );
+    if (this.debug) {
+      console.log(`[DEBUG] Request timeout: ${this.requestTimeout}ms`);
+    }
+
+    // Maximum operation timeout for entire streamTextWithRetryAndFallback operation (default 5 minutes)
+    // This is the absolute maximum time including all retries and fallbacks
+    this.maxOperationTimeout = options.maxOperationTimeout ?? (
+      process.env.MAX_OPERATION_TIMEOUT ? parseInt(process.env.MAX_OPERATION_TIMEOUT, 10) : 300000
+    );
+    if (this.debug) {
+      console.log(`[DEBUG] Max operation timeout: ${this.maxOperationTimeout}ms`);
+    }
 
     // Retry configuration
     this.retryConfig = options.retry || {};
@@ -1111,6 +1130,23 @@ export class ProbeAgent {
    * @private
    */
   async streamTextWithRetryAndFallback(options) {
+    // Create AbortController for overall operation timeout
+    // This covers the ENTIRE operation including all retries and fallbacks
+    const controller = new AbortController();
+    let timeoutId = null;
+
+    // Set up overall operation timeout (default 5 minutes)
+    // This is set up ONCE at the start and covers all retries/fallbacks
+    if (this.maxOperationTimeout && this.maxOperationTimeout > 0) {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        if (this.debug) {
+          console.log(`[DEBUG] Operation timed out after ${this.maxOperationTimeout}ms (max operation timeout)`);
+        }
+      }, this.maxOperationTimeout);
+    }
+
+    try {
     // Check if we should use Claude Code engine
     if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
       try {
@@ -1137,9 +1173,30 @@ export class ProbeAgent {
           // Get the engine's query result (async generator)
           const engineStream = engine.query(prompt, engineOptions);
 
-          // Create a text stream that extracts text from engine messages
+          // Activity timeout for engine stream (default 60 seconds of no activity)
+          const activityTimeout = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10) || 60000;
+          const requestTimeout = this.requestTimeout;
+          const startTime = Date.now();
+
+          // Create a text stream that extracts text from engine messages with timeout
           async function* createTextStream() {
+            let lastActivity = Date.now();
+
             for await (const message of engineStream) {
+              const now = Date.now();
+
+              // Check for activity timeout (no data received for too long)
+              if (now - lastActivity > activityTimeout) {
+                throw new Error(`Engine stream timeout - no activity for ${activityTimeout}ms`);
+              }
+
+              // Check for overall request timeout
+              if (requestTimeout > 0 && now - startTime > requestTimeout) {
+                throw new Error(`Engine stream timeout - request exceeded ${requestTimeout}ms`);
+              }
+
+              lastActivity = now;
+
               if (message.type === 'text' && message.content) {
                 yield message.content;
               } else if (typeof message === 'string') {
@@ -1151,6 +1208,9 @@ export class ProbeAgent {
           }
 
           // Wrap the engine result to match streamText interface
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
           return {
             textStream: createTextStream(),
             usage: Promise.resolve({}), // Engine should handle its own usage tracking
@@ -1191,9 +1251,30 @@ export class ProbeAgent {
           // Get the engine's query result (async generator)
           const engineStream = engine.query(prompt, engineOptions);
 
-          // Create a text stream that extracts text from engine messages
+          // Activity timeout for engine stream (default 60 seconds of no activity)
+          const activityTimeout = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10) || 60000;
+          const requestTimeout = this.requestTimeout;
+          const startTime = Date.now();
+
+          // Create a text stream that extracts text from engine messages with timeout
           async function* createTextStream() {
+            let lastActivity = Date.now();
+
             for await (const message of engineStream) {
+              const now = Date.now();
+
+              // Check for activity timeout (no data received for too long)
+              if (now - lastActivity > activityTimeout) {
+                throw new Error(`Engine stream timeout - no activity for ${activityTimeout}ms`);
+              }
+
+              // Check for overall request timeout
+              if (requestTimeout > 0 && now - startTime > requestTimeout) {
+                throw new Error(`Engine stream timeout - request exceeded ${requestTimeout}ms`);
+              }
+
+              lastActivity = now;
+
               if (message.type === 'text' && message.content) {
                 yield message.content;
               } else if (typeof message === 'string') {
@@ -1205,6 +1286,9 @@ export class ProbeAgent {
           }
 
           // Wrap the engine result to match streamText interface
+          if (timeoutId) {
+            clearTimeout(timeoutId);
+          }
           return {
             textStream: createTextStream(),
             usage: Promise.resolve({}), // Engine should handle its own usage tracking
@@ -1234,10 +1318,11 @@ export class ProbeAgent {
     // If no fallback manager, just use retry with current provider
     if (!this.fallbackManager) {
       return await this.retryManager.executeWithRetry(
-        () => streamText(options),
+        () => streamText({ ...options, abortSignal: controller.signal }),
         {
           provider: this.apiType,
-          model: this.model
+          model: this.model,
+          signal: controller.signal
         }
       );
     }
@@ -1248,7 +1333,8 @@ export class ProbeAgent {
         // Create options with the fallback provider
         const fallbackOptions = {
           ...options,
-          model: provider(model)
+          model: provider(model),
+          abortSignal: controller.signal
         };
 
         // Create a retry manager for this specific provider
@@ -1266,11 +1352,18 @@ export class ProbeAgent {
           () => streamText(fallbackOptions),
           {
             provider: config.provider,
-            model: model
+            model: model,
+            signal: controller.signal
           }
         );
       }
     );
+    } finally {
+      // Clean up timeout
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+    }
   }
 
   /**

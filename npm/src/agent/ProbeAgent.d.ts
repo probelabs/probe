@@ -80,6 +80,10 @@ export interface ProbeAgentOptions {
   completionPrompt?: string;
   /** Enable task management system for tracking multi-step progress */
   enableTasks?: boolean;
+  /** Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests. */
+  requestTimeout?: number;
+  /** Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback. */
+  maxOperationTimeout?: number;
 }
 
 /**
