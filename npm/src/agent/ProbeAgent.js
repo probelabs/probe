@@ -1180,12 +1180,13 @@ export class ProbeAgent {
           const lastUserMessage = userMessages[userMessages.length - 1];
           const prompt = lastUserMessage ? lastUserMessage.content : '';
 
-          // Pass system message and other options
+          // Pass system message and other options including abort signal
           const engineOptions = {
             maxTokens: options.maxTokens,
             temperature: options.temperature,
             messages: options.messages,
-            systemPrompt: options.messages.find(m => m.role === 'system')?.content
+            systemPrompt: options.messages.find(m => m.role === 'system')?.content,
+            abortSignal: controller.signal
           };
 
           // Get the engine's query result (async generator)
@@ -1199,12 +1200,18 @@ export class ProbeAgent {
           })();
           const requestTimeout = this.requestTimeout;
           const startTime = Date.now();
+          const abortSignal = controller.signal;
 
           // Create a text stream that extracts text from engine messages with timeout
           async function* createTextStream() {
             let lastActivity = Date.now();
 
             for await (const message of engineStream) {
+              // Check for abort signal
+              if (abortSignal.aborted) {
+                throw new Error('Operation aborted');
+              }
+
               const now = Date.now();
 
               // Check for activity timeout (no data received for too long)
@@ -1262,12 +1269,13 @@ export class ProbeAgent {
           const lastUserMessage = userMessages[userMessages.length - 1];
           const prompt = lastUserMessage ? lastUserMessage.content : '';
 
-          // Pass system message and other options
+          // Pass system message and other options including abort signal
           const engineOptions = {
             maxTokens: options.maxTokens,
             temperature: options.temperature,
             messages: options.messages,
-            systemPrompt: options.messages.find(m => m.role === 'system')?.content
+            systemPrompt: options.messages.find(m => m.role === 'system')?.content,
+            abortSignal: controller.signal
           };
 
           // Get the engine's query result (async generator)
@@ -1281,12 +1289,18 @@ export class ProbeAgent {
           })();
           const requestTimeout = this.requestTimeout;
           const startTime = Date.now();
+          const abortSignal = controller.signal;
 
           // Create a text stream that extracts text from engine messages with timeout
           async function* createTextStream() {
             let lastActivity = Date.now();
 
             for await (const message of engineStream) {
+              // Check for abort signal
+              if (abortSignal.aborted) {
+                throw new Error('Operation aborted');
+              }
+
               const now = Date.now();
 
               // Check for activity timeout (no data received for too long)

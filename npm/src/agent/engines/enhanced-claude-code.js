@@ -324,10 +324,11 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
                 executeProbleTool(agent, msg.name, msg.input),
                 timeoutPromise
               ]);
-              clearTimeout(toolTimeoutId); // Clear timeout on success
             } catch (error) {
-              clearTimeout(toolTimeoutId); // Clear timeout on error too
               result = `Tool error: ${error.message}`;
+            } finally {
+              // Always clear timeout to prevent memory leaks
+              clearTimeout(toolTimeoutId);
             }
             yield { type: 'text', content: `${result}\n` };
           } else if (msg.type === 'toolBatch') {
