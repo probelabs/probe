@@ -333,18 +333,36 @@ export class ProbeAgent {
     this.delegationManager = new DelegationManager();
 
     // Request timeout configuration (default 2 minutes)
-    this.requestTimeout = options.requestTimeout ?? (
-      process.env.REQUEST_TIMEOUT ? parseInt(process.env.REQUEST_TIMEOUT, 10) : 120000
-    );
+    // Validates env var to prevent NaN or unreasonable values
+    this.requestTimeout = options.requestTimeout ?? (() => {
+      if (process.env.REQUEST_TIMEOUT) {
+        const parsed = parseInt(process.env.REQUEST_TIMEOUT, 10);
+        // Validate: must be positive number between 1s and 1 hour
+        if (isNaN(parsed) || parsed < 1000 || parsed > 3600000) {
+          return 120000; // Default 2 minutes
+        }
+        return parsed;
+      }
+      return 120000;
+    })();
     if (this.debug) {
       console.log(`[DEBUG] Request timeout: ${this.requestTimeout}ms`);
     }
 
     // Maximum operation timeout for entire streamTextWithRetryAndFallback operation (default 5 minutes)
     // This is the absolute maximum time including all retries and fallbacks
-    this.maxOperationTimeout = options.maxOperationTimeout ?? (
-      process.env.MAX_OPERATION_TIMEOUT ? parseInt(process.env.MAX_OPERATION_TIMEOUT, 10) : 300000
-    );
+    // Validates env var to prevent NaN or unreasonable values
+    this.maxOperationTimeout = options.maxOperationTimeout ?? (() => {
+      if (process.env.MAX_OPERATION_TIMEOUT) {
+        const parsed = parseInt(process.env.MAX_OPERATION_TIMEOUT, 10);
+        // Validate: must be positive number between 1s and 2 hours
+        if (isNaN(parsed) || parsed < 1000 || parsed > 7200000) {
+          return 300000; // Default 5 minutes
+        }
+        return parsed;
+      }
+      return 300000;
+    })();
     if (this.debug) {
       console.log(`[DEBUG] Max operation timeout: ${this.maxOperationTimeout}ms`);
     }
@@ -1174,7 +1192,11 @@ export class ProbeAgent {
           const engineStream = engine.query(prompt, engineOptions);
 
           // Activity timeout for engine stream (default 60 seconds of no activity)
-          const activityTimeout = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10) || 60000;
+          // Validates env var to prevent NaN or unreasonable values (5s to 5min range)
+          const activityTimeout = (() => {
+            const parsed = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10);
+            return isNaN(parsed) || parsed < 5000 || parsed > 300000 ? 60000 : parsed;
+          })();
           const requestTimeout = this.requestTimeout;
           const startTime = Date.now();
 
@@ -1208,9 +1230,9 @@ export class ProbeAgent {
           }
 
           // Wrap the engine result to match streamText interface
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-          }
+          // Note: maxOperationTimeout cleanup is handled by the finally block.
+          // The createTextStream generator has its own activity/request timeouts
+          // that continue to protect against stalled streams during consumption.
           return {
             textStream: createTextStream(),
             usage: Promise.resolve({}), // Engine should handle its own usage tracking
@@ -1252,7 +1274,11 @@ export class ProbeAgent {
           const engineStream = engine.query(prompt, engineOptions);
 
           // Activity timeout for engine stream (default 60 seconds of no activity)
-          const activityTimeout = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10) || 60000;
+          // Validates env var to prevent NaN or unreasonable values (5s to 5min range)
+          const activityTimeout = (() => {
+            const parsed = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10);
+            return isNaN(parsed) || parsed < 5000 || parsed > 300000 ? 60000 : parsed;
+          })();
           const requestTimeout = this.requestTimeout;
           const startTime = Date.now();
 
@@ -1286,9 +1312,9 @@ export class ProbeAgent {
           }
 
           // Wrap the engine result to match streamText interface
-          if (timeoutId) {
-            clearTimeout(timeoutId);
-          }
+          // Note: maxOperationTimeout cleanup is handled by the finally block.
+          // The createTextStream generator has its own activity/request timeouts
+          // that continue to protect against stalled streams during consumption.
           return {
             textStream: createTextStream(),
             usage: Promise.resolve({}), // Engine should handle its own usage tracking

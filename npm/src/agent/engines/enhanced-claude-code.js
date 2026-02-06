@@ -157,6 +157,7 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
       // Subprocess timeout handling
       let killed = false;
       let timeoutHandle;
+      let sigkillHandle;
 
       if (timeout > 0) {
         timeoutHandle = setTimeout(() => {
@@ -170,7 +171,7 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
             }
 
             // Force kill after 5 seconds if still running
-            setTimeout(() => {
+            sigkillHandle = setTimeout(() => {
               if (proc.exitCode === null) {
                 proc.kill('SIGKILL');
                 if (debug) {
@@ -209,9 +210,12 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
 
       // Handle process end
       proc.on('close', (code) => {
-        // Clear the timeout to prevent memory leaks
+        // Clear the timeouts to prevent memory leaks
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
+        }
+        if (sigkillHandle) {
+          clearTimeout(sigkillHandle);
         }
 
         processEnded = true;
@@ -246,9 +250,12 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
       });
 
       proc.on('error', (error) => {
-        // Clear the timeout to prevent memory leaks
+        // Clear the timeouts to prevent memory leaks
         if (timeoutHandle) {
           clearTimeout(timeoutHandle);
+        }
+        if (sigkillHandle) {
+          clearTimeout(sigkillHandle);
         }
         processEnded = true;
         emitter.emit('error', error);
@@ -307,16 +314,19 @@ export async function createEnhancedClaudeCLIEngine(options = {}) {
 
             // Execute tool with timeout to prevent indefinite blocking
             const toolTimeout = 30000; // 30 seconds
-            const timeoutPromise = new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`Tool ${msg.name} timed out after ${toolTimeout}ms`)), toolTimeout)
-            );
+            let toolTimeoutId;
+            const timeoutPromise = new Promise((_, reject) => {
+              toolTimeoutId = setTimeout(() => reject(new Error(`Tool ${msg.name} timed out after ${toolTimeout}ms`)), toolTimeout);
+            });
             let result;
             try {
               result = await Promise.race([
                 executeProbleTool(agent, msg.name, msg.input),
                 timeoutPromise
               ]);
+              clearTimeout(toolTimeoutId); // Clear timeout on success
             } catch (error) {
+              clearTimeout(toolTimeoutId); // Clear timeout on error too
               result = `Tool error: ${error.message}`;
             }
             yield { type: 'text', content: `${result}\n` };
