@@ -1192,11 +1192,12 @@ export class ProbeAgent {
           // Get the engine's query result (async generator)
           const engineStream = engine.query(prompt, engineOptions);
 
-          // Activity timeout for engine stream (default 60 seconds of no activity)
-          // Validates env var to prevent NaN or unreasonable values (5s to 5min range)
+          // Activity timeout for engine stream (default 180 seconds / 3 min of no activity)
+          // Conservative default to handle extended thinking models that may not stream during thinking
+          // Validates env var to prevent NaN or unreasonable values (5s to 10min range)
           const activityTimeout = (() => {
             const parsed = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10);
-            return isNaN(parsed) || parsed < 5000 || parsed > 300000 ? 60000 : parsed;
+            return isNaN(parsed) || parsed < 5000 || parsed > 600000 ? 180000 : parsed;
           })();
           const requestTimeout = this.requestTimeout;
           const startTime = Date.now();
@@ -1281,11 +1282,12 @@ export class ProbeAgent {
           // Get the engine's query result (async generator)
           const engineStream = engine.query(prompt, engineOptions);
 
-          // Activity timeout for engine stream (default 60 seconds of no activity)
-          // Validates env var to prevent NaN or unreasonable values (5s to 5min range)
+          // Activity timeout for engine stream (default 180 seconds / 3 min of no activity)
+          // Conservative default to handle extended thinking models that may not stream during thinking
+          // Validates env var to prevent NaN or unreasonable values (5s to 10min range)
           const activityTimeout = (() => {
             const parsed = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10);
-            return isNaN(parsed) || parsed < 5000 || parsed > 300000 ? 60000 : parsed;
+            return isNaN(parsed) || parsed < 5000 || parsed > 600000 ? 180000 : parsed;
           })();
           const requestTimeout = this.requestTimeout;
           const startTime = Date.now();
