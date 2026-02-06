@@ -3,6 +3,26 @@ import { EventEmitter } from 'events';
 import type { RetryOptions } from './RetryManager';
 import type { FallbackOptions } from './FallbackManager';
 
+// ============================================================================
+// Timeout Configuration Constants
+// ============================================================================
+
+/**
+ * Default activity timeout for engine streams (3 minutes / 180000ms).
+ * This is the time allowed between stream chunks before considering the stream stalled.
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_DEFAULT: number;
+
+/**
+ * Minimum allowed activity timeout (5 seconds / 5000ms).
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_MIN: number;
+
+/**
+ * Maximum allowed activity timeout (10 minutes / 600000ms).
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_MAX: number;
+
 /**
  * Configuration options for creating a ProbeAgent instance
  */

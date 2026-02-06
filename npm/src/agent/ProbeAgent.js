@@ -4,6 +4,29 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// ============================================================================
+// Timeout Configuration Constants
+// ============================================================================
+
+/**
+ * Default activity timeout for engine streams (3 minutes).
+ * This is the time allowed between stream chunks before considering the stream stalled.
+ * Conservative default to handle extended thinking models that may not stream during thinking.
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_DEFAULT = 180000;
+
+/**
+ * Minimum allowed activity timeout (5 seconds).
+ * Prevents unreasonably short timeouts that could cause premature failures.
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_MIN = 5000;
+
+/**
+ * Maximum allowed activity timeout (10 minutes).
+ * Prevents excessively long waits for stalled streams.
+ */
+export const ENGINE_ACTIVITY_TIMEOUT_MAX = 600000;
+
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -1151,12 +1174,12 @@ export class ProbeAgent {
    * @private
    */
   _createEngineTextStreamResult(engineStream, abortSignal, requestTimeout, timeoutState) {
-    // Activity timeout for engine stream (default 180 seconds / 3 min of no activity)
-    // Conservative default to handle extended thinking models that may not stream during thinking
-    // Validates env var to prevent NaN or unreasonable values (5s to 10min range)
+    // Activity timeout for engine stream - validates env var against defined bounds
     const activityTimeout = (() => {
       const parsed = parseInt(process.env.ENGINE_ACTIVITY_TIMEOUT, 10);
-      return isNaN(parsed) || parsed < 5000 || parsed > 600000 ? 180000 : parsed;
+      return isNaN(parsed) || parsed < ENGINE_ACTIVITY_TIMEOUT_MIN || parsed > ENGINE_ACTIVITY_TIMEOUT_MAX
+        ? ENGINE_ACTIVITY_TIMEOUT_DEFAULT
+        : parsed;
     })();
     const startTime = Date.now();
 
@@ -1219,104 +1242,51 @@ export class ProbeAgent {
   }
 
   /**
-   * Execute streamText with retry and fallback support
+   * Try to use an engine (claude-code or codex) for streaming
    * @param {Object} options - streamText options
-   * @returns {Promise<Object>} - streamText result
+   * @param {AbortController} controller - Abort controller for the operation
+   * @param {Object} timeoutState - Mutable timeout state for cleanup
+   * @returns {Promise<Object|null>} - Stream result or null if engine unavailable
    * @private
    */
-  async streamTextWithRetryAndFallback(options) {
-    // Create AbortController for overall operation timeout
-    // This covers the ENTIRE operation including all retries and fallbacks
-    const controller = new AbortController();
-    // Use an object to allow the helper method to clear the timeout
-    const timeoutState = { timeoutId: null };
-
-    // Set up overall operation timeout (default 5 minutes)
-    // This is set up ONCE at the start and covers all retries/fallbacks
-    if (this.maxOperationTimeout && this.maxOperationTimeout > 0) {
-      timeoutState.timeoutId = setTimeout(() => {
-        controller.abort();
-        if (this.debug) {
-          console.log(`[DEBUG] Operation timed out after ${this.maxOperationTimeout}ms (max operation timeout)`);
-        }
-      }, this.maxOperationTimeout);
+  async _tryEngineStreamPath(options, controller, timeoutState) {
+    const engine = await this.getEngine();
+    if (!engine || !engine.query) {
+      return null;
     }
 
-    try {
-    // Check if we should use Claude Code engine
-    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
-      try {
-        const engine = await this.getEngine();
-        if (engine && engine.query) {
-          // Convert Vercel AI SDK format to engine format
-          // Extract the ORIGINAL user message as the main prompt (skip any warning messages)
-          const userMessages = options.messages.filter(m =>
-            m.role === 'user' &&
-            !m.content.includes('WARNING: You have reached the maximum tool iterations limit')
-          );
-          const lastUserMessage = userMessages[userMessages.length - 1];
-          const prompt = lastUserMessage ? lastUserMessage.content : '';
+    // Extract the ORIGINAL user message as the main prompt (skip any warning messages)
+    const userMessages = options.messages.filter(m =>
+      m.role === 'user' &&
+      !m.content.includes('WARNING: You have reached the maximum tool iterations limit')
+    );
+    const lastUserMessage = userMessages[userMessages.length - 1];
+    const prompt = lastUserMessage ? lastUserMessage.content : '';
 
-          // Pass system message and other options including abort signal
-          const engineOptions = {
-            maxTokens: options.maxTokens,
-            temperature: options.temperature,
-            messages: options.messages,
-            systemPrompt: options.messages.find(m => m.role === 'system')?.content,
-            abortSignal: controller.signal
-          };
+    // Pass system message and other options including abort signal
+    const engineOptions = {
+      maxTokens: options.maxTokens,
+      temperature: options.temperature,
+      messages: options.messages,
+      systemPrompt: options.messages.find(m => m.role === 'system')?.content,
+      abortSignal: controller.signal
+    };
 
-          // Get the engine's query result and wrap with timeout handling
-          const engineStream = engine.query(prompt, engineOptions);
-          return this._createEngineTextStreamResult(
-            engineStream, controller.signal, this.requestTimeout, timeoutState
-          );
-        }
-      } catch (error) {
-        if (this.debug) {
-          console.log(`[DEBUG] Failed to use Claude Code engine, falling back to Vercel:`, error.message);
-        }
-        // Fall through to use Vercel engine as fallback
-      }
-    }
+    // Get the engine's query result and wrap with timeout handling
+    const engineStream = engine.query(prompt, engineOptions);
+    return this._createEngineTextStreamResult(
+      engineStream, controller.signal, this.requestTimeout, timeoutState
+    );
+  }
 
-    // Check if we should use Codex engine
-    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
-      try {
-        const engine = await this.getEngine();
-        if (engine && engine.query) {
-          // Convert Vercel AI SDK format to engine format
-          // Extract the ORIGINAL user message as the main prompt (skip any warning messages)
-          const userMessages = options.messages.filter(m =>
-            m.role === 'user' &&
-            !m.content.includes('WARNING: You have reached the maximum tool iterations limit')
-          );
-          const lastUserMessage = userMessages[userMessages.length - 1];
-          const prompt = lastUserMessage ? lastUserMessage.content : '';
-
-          // Pass system message and other options including abort signal
-          const engineOptions = {
-            maxTokens: options.maxTokens,
-            temperature: options.temperature,
-            messages: options.messages,
-            systemPrompt: options.messages.find(m => m.role === 'system')?.content,
-            abortSignal: controller.signal
-          };
-
-          // Get the engine's query result and wrap with timeout handling
-          const engineStream = engine.query(prompt, engineOptions);
-          return this._createEngineTextStreamResult(
-            engineStream, controller.signal, this.requestTimeout, timeoutState
-          );
-        }
-      } catch (error) {
-        if (this.debug) {
-          console.log(`[DEBUG] Failed to use Codex engine, falling back to Vercel:`, error.message);
-        }
-        // Fall through to use Vercel engine as fallback
-      }
-    }
-
+  /**
+   * Execute streamText with Vercel AI SDK using retry/fallback logic
+   * @param {Object} options - streamText options
+   * @param {AbortController} controller - Abort controller for the operation
+   * @returns {Promise<Object>} - Stream result
+   * @private
+   */
+  async _executeWithVercelProvider(options, controller) {
     // Initialize retry manager if not already created
     if (!this.retryManager) {
       this.retryManager = new RetryManager({
@@ -1344,14 +1314,12 @@ export class ProbeAgent {
     // Use fallback manager with retry for each provider
     return await this.fallbackManager.executeWithFallback(
       async (provider, model, config) => {
-        // Create options with the fallback provider
         const fallbackOptions = {
           ...options,
           model: provider(model),
           abortSignal: controller.signal
         };
 
-        // Create a retry manager for this specific provider
         const providerRetryManager = new RetryManager({
           maxRetries: config.maxRetries ?? this.retryConfig.maxRetries ?? 3,
           initialDelay: this.retryConfig.initialDelay ?? 1000,
@@ -1361,7 +1329,6 @@ export class ProbeAgent {
           debug: this.debug
         });
 
-        // Execute with retry for this provider
         return await providerRetryManager.executeWithRetry(
           () => streamText(fallbackOptions),
           {
@@ -1372,6 +1339,51 @@ export class ProbeAgent {
         );
       }
     );
+  }
+
+  /**
+   * Execute streamText with retry and fallback support
+   * @param {Object} options - streamText options
+   * @returns {Promise<Object>} - streamText result
+   * @private
+   */
+  async streamTextWithRetryAndFallback(options) {
+    // Create AbortController for overall operation timeout
+    const controller = new AbortController();
+    const timeoutState = { timeoutId: null };
+
+    // Set up overall operation timeout (default 5 minutes)
+    if (this.maxOperationTimeout && this.maxOperationTimeout > 0) {
+      timeoutState.timeoutId = setTimeout(() => {
+        controller.abort();
+        if (this.debug) {
+          console.log(`[DEBUG] Operation timed out after ${this.maxOperationTimeout}ms (max operation timeout)`);
+        }
+      }, this.maxOperationTimeout);
+    }
+
+    try {
+      // Try engine paths (claude-code or codex)
+      const useClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
+      const useCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
+
+      if (useClaudeCode || useCodex) {
+        try {
+          const result = await this._tryEngineStreamPath(options, controller, timeoutState);
+          if (result) {
+            return result;
+          }
+        } catch (error) {
+          if (this.debug) {
+            const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
+            console.log(`[DEBUG] Failed to use ${engineType} engine, falling back to Vercel:`, error.message);
+          }
+          // Fall through to Vercel provider
+        }
+      }
+
+      // Use Vercel AI SDK with retry/fallback
+      return await this._executeWithVercelProvider(options, controller);
     } finally {
       // Clean up timeout (for non-engine paths; engine paths clean up in the generator)
       if (timeoutState.timeoutId) {
