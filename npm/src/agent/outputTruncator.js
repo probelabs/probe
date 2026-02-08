@@ -5,6 +5,8 @@ import { randomUUID } from 'crypto';
 
 const DEFAULT_MAX_OUTPUT_TOKENS = 20000;
 const CHARS_PER_TOKEN = 4; // Conservative approximation
+const TAIL_TOKENS = 1000; // Number of tokens to show from the end of truncated output
+const MIN_LIMIT_FOR_TAIL = 2000; // Minimum token limit to use head+tail split
 
 /**
  * Validate and normalize a token limit value.
@@ -61,10 +63,6 @@ export async function truncateIfNeeded(content, tokenCounter, sessionId, maxToke
     return { truncated: false, content };
   }
 
-  // Truncate to approximately maxTokens worth of characters
-  const maxChars = limit * CHARS_PER_TOKEN;
-  const truncatedContent = content.substring(0, maxChars);
-
   // Try to write full output to temp file
   let tempFilePath = null;
   let fileError = null;
@@ -79,22 +77,37 @@ export async function truncateIfNeeded(content, tokenCounter, sessionId, maxToke
     tempFilePath = null;
   }
 
+  // Build truncated content with head + tail for better context
+  let truncatedBody;
+  const useTail = limit >= MIN_LIMIT_FOR_TAIL;
+
+  if (useTail) {
+    const headTokens = limit - TAIL_TOKENS;
+    const headChars = headTokens * CHARS_PER_TOKEN;
+    const tailChars = TAIL_TOKENS * CHARS_PER_TOKEN;
+    const headContent = content.substring(0, headChars);
+    const tailContent = content.substring(content.length - tailChars);
+    const omittedTokens = tokenCount - headTokens - TAIL_TOKENS;
+    truncatedBody = `${headContent}\n\n... ${omittedTokens} tokens omitted ...\n\n${tailContent}`;
+  } else {
+    const maxChars = limit * CHARS_PER_TOKEN;
+    truncatedBody = content.substring(0, maxChars);
+  }
+
   let message;
   if (tempFilePath) {
     message = `Output exceeded maximum size (${tokenCount} tokens, limit: ${limit}).
 Full output saved to: ${tempFilePath}
 
---- Truncated Output (first ${limit} tokens approx) ---
-${truncatedContent}
-...
+--- Truncated Output ---
+${truncatedBody}
 --- End of Truncated Output ---`;
   } else {
     message = `Output exceeded maximum size (${tokenCount} tokens, limit: ${limit}).
 Warning: Could not save full output to file (${fileError}).
 
---- Truncated Output (first ${limit} tokens approx) ---
-${truncatedContent}
-...
+--- Truncated Output ---
+${truncatedBody}
 --- End of Truncated Output ---`;
   }
 
