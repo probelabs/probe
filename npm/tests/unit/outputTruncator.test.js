@@ -104,9 +104,9 @@ describe('truncateIfNeeded', () => {
     expect(result.originalTokens).toBeUndefined();
   });
 
-  test('should truncate content and save to file when over limit', async () => {
+  test('should truncate content and save to file when over limit (small limit, head-only)', async () => {
     // Create content that's definitely over the limit (100 tokens = 400 chars with our mock)
-    // We'll use a limit of 10 tokens = 40 chars
+    // We'll use a limit of 10 tokens = 40 chars (below MIN_LIMIT_FOR_TAIL=2000, so head-only)
     const content = 'A'.repeat(200); // 50 tokens with our mock
     const maxTokens = 10; // Much smaller limit
 
@@ -125,9 +125,43 @@ describe('truncateIfNeeded', () => {
     expect(result.content).toContain('Full output saved to:');
     expect(result.content).toContain('--- Truncated Output');
 
+    // Small limit should NOT use head+tail (below MIN_LIMIT_FOR_TAIL)
+    expect(result.content).not.toContain('tokens omitted');
+
     // Verify the file was created with full content
     const fileContent = await readFile(result.tempFilePath, 'utf8');
     expect(fileContent).toBe(content);
+
+    // Cleanup
+    await rm(result.tempFilePath);
+  });
+
+  test('should use head+tail truncation when limit is large enough', async () => {
+    // Use a limit of 5000 tokens (above MIN_LIMIT_FOR_TAIL=2000)
+    // Create content of 10000 tokens = 40000 chars
+    const headChar = 'H';
+    const middleChar = 'M';
+    const tailChar = 'T';
+    // Head: first 16000 chars (4000 tokens), Middle: 20000 chars (5000 tokens), Tail: last 4000 chars (1000 tokens)
+    const content = headChar.repeat(16000) + middleChar.repeat(20000) + tailChar.repeat(4000);
+    // Total: 40000 chars = 10000 tokens
+    const maxTokens = 5000;
+
+    const result = await truncateIfNeeded(content, tokenCounter, sessionId, maxTokens);
+
+    expect(result.truncated).toBe(true);
+    expect(result.originalTokens).toBe(10000);
+
+    // Should contain the omitted tokens placeholder
+    // headTokens = 5000 - 1000 = 4000, tailTokens = 1000
+    // omitted = 10000 - 4000 - 1000 = 5000
+    expect(result.content).toContain('5000 tokens omitted');
+
+    // Head portion: 4000 tokens = 16000 chars from the start (all H's)
+    expect(result.content).toContain(headChar.repeat(16000));
+
+    // Tail portion: 1000 tokens = 4000 chars from the end (all T's)
+    expect(result.content).toContain(tailChar.repeat(4000));
 
     // Cleanup
     await rm(result.tempFilePath);
@@ -170,7 +204,8 @@ describe('truncateIfNeeded', () => {
     await rm(result.tempFilePath);
   });
 
-  test('should truncate content to approximately maxTokens characters', async () => {
+  test('should truncate content to approximately maxTokens characters (head-only for small limits)', async () => {
+    // Using limit of 50 which is below MIN_LIMIT_FOR_TAIL=2000, so head-only
     const content = 'A'.repeat(1000); // 250 tokens
     const maxTokens = 50; // Should result in ~200 chars (50 * 4)
 
@@ -179,8 +214,8 @@ describe('truncateIfNeeded', () => {
     expect(result.truncated).toBe(true);
 
     // The truncated content in the message should be approximately 200 chars
-    // Extract the truncated part from the message
-    const truncatedMatch = result.content.match(/--- Truncated Output.*---\n(A+)\n\.\.\./s);
+    // Extract the truncated part from the message (head-only, no tail)
+    const truncatedMatch = result.content.match(/--- Truncated Output ---\n(A+)\n--- End/s);
     expect(truncatedMatch).toBeTruthy();
     // The truncated content should be approximately maxTokens * 4 chars
     expect(truncatedMatch[1].length).toBe(200); // 50 tokens * 4 chars/token
