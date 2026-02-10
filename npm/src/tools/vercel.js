@@ -140,6 +140,7 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		`Options: exact=${exact ? 'true' : 'false'}, language=${language || 'auto'}, allow_tests=${allowTests ? 'true' : 'false'}.`,
 		'',
 		'Return ONLY valid JSON: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}',
+		'IMPORTANT: Use ABSOLUTE file paths in targets (e.g., "/full/path/to/file.ext#Symbol"). If you only have relative paths, make them relative to the search path above.',
 		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
 		'Deduplicate targets. Do NOT explain or answer - ONLY return the JSON targets.'
 	].join('\n');
@@ -267,11 +268,14 @@ export const searchTool = (options = {}) => {
 					return await runRawSearch();
 				}
 
-				const effectiveCwd = options.cwd || '.';
-				const resolvedTargets = targets.map(target => resolveTargetPath(target, effectiveCwd));
+				// Resolve relative paths against the actual search directory, not the general cwd.
+				// The delegate returns paths relative to where the search was performed (searchPaths[0]),
+				// which may differ from options.cwd when the user specifies a path parameter.
+				const resolutionBase = searchPaths[0] || options.cwd || '.';
+				const resolvedTargets = targets.map(target => resolveTargetPath(target, resolutionBase));
 				const extractOptions = {
 					files: resolvedTargets,
-					cwd: effectiveCwd,
+					cwd: resolutionBase,
 					allowTests: allow_tests ?? true
 				};
 
