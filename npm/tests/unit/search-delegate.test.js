@@ -47,8 +47,10 @@ describe('searchDelegate behavior', () => {
   });
 
   test('delegates search and extracts targets when searchDelegate=true', async () => {
+    // Delegate returns paths relative to the search directory (searchPaths[0]),
+    // not relative to cwd
     mockDelegate.mockResolvedValue(JSON.stringify({
-      targets: ['src/a.js#foo', 'src/b.js:10-12']
+      targets: ['a.js#foo', 'b.js:10-12']
     }));
     mockExtract.mockResolvedValue('EXTRACTED');
 
@@ -90,6 +92,7 @@ describe('searchDelegate behavior', () => {
     );
     const extractArgs = mockExtract.mock.calls[0][0];
     expect(extractArgs).toEqual(expect.objectContaining({ files: expect.any(Array) }));
+    // Paths should be resolved against the search path (/workspace/src), not cwd (/workspace)
     const normalizedFiles = extractArgs.files.map((file) =>
       file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
     );
@@ -98,6 +101,40 @@ describe('searchDelegate behavior', () => {
       '/workspace/src/b.js:10-12'
     ]));
     expect(mockSearch).not.toHaveBeenCalled();
+  });
+
+  test('resolves delegate paths against search path, not cwd, when they differ', async () => {
+    // Simulate the bug case: cwd differs from search path
+    // Delegate returns paths relative to the search directory
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      targets: ['dashboard/api.go#Handler', 'dashboard/model.go:10-20']
+    }));
+    mockExtract.mockResolvedValue('EXTRACTED');
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/tmp/workspace',
+      allowedFolders: ['/tmp/workspace']
+    });
+
+    const result = await tool.execute({
+      query: 'APIDefinition',
+      path: '/tmp/workspace/tyk-analytics'
+    });
+
+    expect(result).toBe('EXTRACTED');
+    const extractArgs = mockExtract.mock.calls[0][0];
+    const normalizedFiles = extractArgs.files.map((file) =>
+      file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
+    );
+    // Paths must resolve against the search path (/tmp/workspace/tyk-analytics),
+    // NOT against cwd (/tmp/workspace)
+    expect(normalizedFiles).toEqual(expect.arrayContaining([
+      '/tmp/workspace/tyk-analytics/dashboard/api.go#Handler',
+      '/tmp/workspace/tyk-analytics/dashboard/model.go:10-20'
+    ]));
+    // Extract cwd should also be the search path
+    expect(extractArgs.cwd).toBe('/tmp/workspace/tyk-analytics');
   });
 
   test('falls back to raw search when delegation fails', async () => {
