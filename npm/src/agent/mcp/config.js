@@ -15,7 +15,13 @@ const __dirname = dirname(__filename);
  * Timeout configuration constants
  */
 export const DEFAULT_TIMEOUT = 30000; // 30 seconds
-export const MAX_TIMEOUT = 600000; // 10 minutes max to prevent resource exhaustion
+export const MAX_TIMEOUT = (() => {
+  if (process.env.MCP_MAX_TIMEOUT) {
+    const parsed = parseInt(process.env.MCP_MAX_TIMEOUT, 10);
+    if (!isNaN(parsed) && parsed >= 30000 && parsed <= 7200000) return parsed;
+  }
+  return 1800000; // 30 minutes default - workflow tools (code checkouts, AI exploration) need time
+})();
 
 /**
  * Validate and normalize a timeout value
