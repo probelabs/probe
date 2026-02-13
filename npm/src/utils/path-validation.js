@@ -55,9 +55,9 @@ export function safeRealpath(inputPath) {
  * - Does NOT restrict access to specific directories (that's the responsibility
  *   of higher-level components like ProbeAgent with allowedFolders)
  *
- * @param {string} inputPath - The path to validate
+ * @param {string} inputPath - The path to validate (can be a file or directory; file paths are resolved to their parent directory)
  * @param {string} [defaultPath] - Default path to use if inputPath is not provided
- * @returns {Promise<string>} Normalized absolute path
+ * @returns {Promise<string>} Normalized absolute directory path. If inputPath is a file, returns its parent directory.
  * @throws {PathError} If the path is invalid or doesn't exist
  */
 export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
@@ -74,10 +74,16 @@ export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 		if (!stats.isDirectory()) {
 			// If the path is a file, resolve to its parent directory
 			// This handles cases where a file path is passed as cwd
-			const dirPath = path.dirname(normalizedPath);
-			const dirStats = await fs.stat(dirPath);
-			if (dirStats.isDirectory()) {
-				return dirPath;
+			// Use safeRealpath to resolve symlinks before extracting parent directory
+			const resolvedPath = safeRealpath(normalizedPath);
+			const dirPath = path.dirname(resolvedPath);
+			try {
+				const dirStats = await fs.stat(dirPath);
+				if (dirStats.isDirectory()) {
+					return safeRealpath(dirPath);
+				}
+			} catch (dirError) {
+				// Parent directory doesn't exist or isn't accessible - fall through to throw error for original path
 			}
 			throw new PathError(`Path is not a directory: ${normalizedPath}`, {
 				suggestion: 'The specified path is a file, not a directory. Please provide a directory path for searching.',

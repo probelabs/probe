@@ -245,7 +245,8 @@ index 123..456
 		test('validateCwdPath should resolve file path to parent directory', async () => {
 			const filePath = path.join(projectRoot, 'npm/package.json');
 			const result = await validateCwdPath(filePath);
-			expect(result).toBe(path.normalize(path.join(projectRoot, 'npm')));
+			// safeRealpath resolves symlinks, so compare against the real path
+			expect(result).toBe(fs.realpathSync(path.join(projectRoot, 'npm')));
 		});
 
 		test('normalizePath should normalize without requiring existence', () => {
