@@ -72,6 +72,13 @@ export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 	try {
 		const stats = await fs.stat(normalizedPath);
 		if (!stats.isDirectory()) {
+			// If the path is a file, resolve to its parent directory
+			// This handles cases where a file path is passed as cwd
+			const dirPath = path.dirname(normalizedPath);
+			const dirStats = await fs.stat(dirPath);
+			if (dirStats.isDirectory()) {
+				return dirPath;
+			}
 			throw new PathError(`Path is not a directory: ${normalizedPath}`, {
 				suggestion: 'The specified path is a file, not a directory. Please provide a directory path for searching.',
 				details: { path: normalizedPath, type: 'file' }
