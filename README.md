@@ -27,115 +27,82 @@ The result? **One Probe call captures what takes other tools 10+ agentic loops**
 
 ---
 
-## 30-Second Setup for Claude Code / Cursor / Windsurf
-
-Add Probe to your AI editor to instantly upgrade how it understands your code.
-
-**Claude Code** - Add to `~/.claude/claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "probe": {
-      "command": "npx",
-      "args": ["-y", "@probelabs/probe@latest", "mcp"]
-    }
-  }
-}
-```
-
-**Cursor** - Add to `.cursor/mcp.json` in your project:
-```json
-{
-  "mcpServers": {
-    "probe": {
-      "command": "npx",
-      "args": ["-y", "@probelabs/probe@latest", "mcp"]
-    }
-  }
-}
-```
-
-**Windsurf** - Add to `~/.codeium/windsurf/mcp_config.json`:
-```json
-{
-  "mcpServers": {
-    "probe": {
-      "command": "npx",
-      "args": ["-y", "@probelabs/probe@latest", "mcp"]
-    }
-  }
-}
-```
-
-Then ask your AI:
-> "Search the codebase for authentication implementations"
->
-> "Find all functions related to error handling in src/"
-
----
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [Features](#features)
-- [Usage Modes](#usage-modes)
-  - [MCP Server](#mcp-server-for-ai-editors)
-  - [CLI Agent](#cli-agent)
-  - [Interactive Chat](#interactive-chat)
-  - [Direct CLI](#direct-cli-commands)
-  - [Node.js SDK](#nodejs-sdk)
-- [Installation](#installation)
-- [Supported Languages](#supported-languages)
-- [Documentation](#documentation)
-
----
-
 ## Quick Start
 
-### Option 1: MCP Server (Recommended for AI Editors)
+### Option 1: Probe Agent via MCP (Recommended)
 
-No installation needed - just add the config above to your AI editor.
+Our built-in agent natively integrates with Claude Code, using its authentication—no extra API keys needed.
 
-### Option 2: CLI Agent
+Add to `~/.claude/claude_desktop_config.json`:
+```json
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@probelabs/probe@latest", "agent", "--mcp"]
+    }
+  }
+}
+```
+
+The Probe Agent is purpose-built to read and reason about code. It piggybacks on Claude Code's auth (or Codex auth), or you can provide your own `ANTHROPIC_API_KEY`.
+
+### Option 2: Raw Probe Tools via MCP
+
+If you prefer direct access to search/query/extract tools without the agent layer:
+
+```json
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@probelabs/probe@latest", "mcp"]
+    }
+  }
+}
+```
+
+### Option 3: Direct CLI (No MCP)
+
+Use Probe directly from your terminal—no AI editor required:
+
+```bash
+# Semantic search with Elasticsearch syntax
+npx -y @probelabs/probe search "authentication AND login" ./src
+
+# Extract code block at line 42
+npx -y @probelabs/probe extract src/main.rs:42
+
+# AST pattern matching
+npx -y @probelabs/probe query "fn $NAME($$$) -> Result<$RET>" --language rust
+```
+
+### Option 4: CLI Agent
 
 Ask questions about any codebase directly from your terminal:
 
 ```bash
-# One-shot question
+# One-shot question (uses your ANTHROPIC_API_KEY or OPENAI_API_KEY)
 npx -y @probelabs/probe@latest agent "How is authentication implemented?"
-
-# With specific path
-npx -y @probelabs/probe@latest agent "Find error handling patterns" --path ./src
 
 # With code editing capabilities
 npx -y @probelabs/probe@latest agent "Refactor the login function" --allow-edit
 ```
 
-### Option 3: Interactive Chat
+---
 
-```bash
-# Set your API key
-export ANTHROPIC_API_KEY=your_key  # or OPENAI_API_KEY
+## Table of Contents
 
-# Start interactive chat
-npx -y @probelabs/probe-chat ./your-project
-```
-
-### Option 4: Direct CLI Commands
-
-```bash
-# Install globally
-npm install -g @probelabs/probe
-
-# Semantic search with Elasticsearch syntax
-probe search "authentication AND login" ./src
-
-# Extract code block at line 42
-probe extract src/main.rs:42
-
-# AST pattern matching
-probe query "fn $NAME($$$) -> Result<$RET>" --language rust
-```
+- [Features](#features)
+- [Usage Modes](#usage-modes)
+  - [Probe Agent (MCP)](#probe-agent-mcp)
+  - [Raw MCP Tools](#raw-mcp-tools)
+  - [CLI Agent](#cli-agent)
+  - [Direct CLI](#direct-cli-commands)
+  - [Node.js SDK](#nodejs-sdk)
+- [Installation](#installation)
+- [Supported Languages](#supported-languages)
+- [Documentation](#documentation)
 
 ---
 
@@ -155,60 +122,26 @@ probe query "fn $NAME($$$) -> Result<$RET>" --language rust
 
 ## Usage Modes
 
-### MCP Server (for AI Editors)
+### Probe Agent (MCP)
 
-Run Probe as an MCP (Model Context Protocol) server to integrate with Claude Code, Cursor, Windsurf, and other AI editors.
-
-```bash
-npx -y @probelabs/probe@latest mcp
-```
-
-**Configuration options:**
+The recommended way to use Probe with AI editors. The Probe Agent is a specialized coding assistant that reasons about your code—not just pattern matches.
 
 ```json
 {
   "mcpServers": {
     "probe": {
       "command": "npx",
-      "args": ["-y", "@probelabs/probe@latest", "mcp", "--timeout", "60"]
+      "args": ["-y", "@probelabs/probe@latest", "agent", "--mcp"]
     }
   }
 }
 ```
 
-**Available tools when using MCP:**
-- `search` - Semantic code search with Elasticsearch-style queries
-- `query` - AST-based structural pattern matching
-- `extract` - Extract code blocks by line number or symbol name
-
----
-
-### CLI Agent
-
-A specialized agent designed to read and reason about code accurately—not just pattern match.
-
-```bash
-# Basic usage
-npx -y @probelabs/probe@latest agent "How does the ranking algorithm work?"
-
-# Specify search path
-npx -y @probelabs/probe@latest agent "Find API endpoints" --path ./src
-
-# Use specific AI provider
-npx -y @probelabs/probe@latest agent "Explain authentication" --provider anthropic
-
-# Enable code editing
-npx -y @probelabs/probe@latest agent "Add error handling to login()" --allow-edit
-
-# Use custom persona
-npx -y @probelabs/probe@latest agent "Review this code" --prompt code-review
-
-# Run as MCP server
-npx -y @probelabs/probe@latest agent --mcp
-
-# Run as ACP server (Agent Communication Protocol)
-npx -y @probelabs/probe@latest agent --acp
-```
+**Why use the agent?**
+- Purpose-built to understand and reason about code
+- Piggybacks on Claude Code / Codex authentication (or use your own API key)
+- Smarter multi-step reasoning for complex questions
+- Built-in code editing, task delegation, and more
 
 **Agent options:**
 
@@ -217,40 +150,53 @@ npx -y @probelabs/probe@latest agent --acp
 | `--path <dir>` | Search directory (default: current) |
 | `--provider <name>` | AI provider: `anthropic`, `openai`, `google` |
 | `--model <name>` | Override model name |
-| `--prompt <type>` | Persona: `code-explorer`, `engineer`, `code-review`, `support`, `architect` |
+| `--prompt <type>` | Persona: `code-explorer`, `engineer`, `code-review`, `architect` |
 | `--allow-edit` | Enable code modification |
 | `--enable-delegate` | Enable task delegation to subagents |
 | `--enable-bash` | Enable bash command execution |
-| `--allow-skills` | Enable skill discovery |
-| `--allow-tasks` | Enable task tracking |
 | `--max-iterations <n>` | Max tool iterations (default: 30) |
-| `--mcp` | Run as MCP server |
-| `--acp` | Run as ACP server |
 
 ---
 
-### Interactive Chat
+### Raw MCP Tools
 
-Full-featured chat interface with conversation history and streaming responses.
+Direct access to Probe's search, query, and extract tools—without the agent layer. Use this when you want your AI editor to call Probe tools directly.
 
-```bash
-# Quick start
-export ANTHROPIC_API_KEY=your_key
-npx -y @probelabs/probe-chat ./your-project
-
-# With web interface
-npx -y @probelabs/probe-chat --web ./your-project
-
-# With code editing
-npx -y @probelabs/probe-chat --allow-edit ./your-project
+```json
+{
+  "mcpServers": {
+    "probe": {
+      "command": "npx",
+      "args": ["-y", "@probelabs/probe@latest", "mcp"]
+    }
+  }
+}
 ```
 
-**Features:**
-- Multi-turn conversations with context
-- Token usage tracking
-- Code editing support (aider, claude-code backends)
-- Web interface option
-- Session persistence
+**Available tools:**
+- `search` - Semantic code search with Elasticsearch-style queries
+- `query` - AST-based structural pattern matching
+- `extract` - Extract code blocks by line number or symbol name
+
+---
+
+### CLI Agent
+
+Run the Probe Agent directly from your terminal:
+
+```bash
+# One-shot question
+npx -y @probelabs/probe@latest agent "How does the ranking algorithm work?"
+
+# Specify search path
+npx -y @probelabs/probe@latest agent "Find API endpoints" --path ./src
+
+# Enable code editing
+npx -y @probelabs/probe@latest agent "Add error handling to login()" --allow-edit
+
+# Use custom persona
+npx -y @probelabs/probe@latest agent "Review this code" --prompt code-review
+```
 
 ---
 
