@@ -4,13 +4,15 @@
 
 # Probe
 
-**The context engine your AI coding assistant is missing.**
+**We read code 10x more than we write it. Your AI should too.**
 
-Today's AI coding tools use a caveman approach to understanding your code: grep some files, read a few lines, hope for the best. It works on toy projects. It falls apart on real codebases.
+Today's AI coding tools use a caveman approach: grep some files, read random lines, hope for the best. It works on toy projects. It falls apart on real codebases.
 
-**Probe is different.** It treats your code as code—not text. It understands structure through AST parsing, finds what matters through semantic search, and delivers complete, meaningful context. No indexing required. No external APIs. Just instant, accurate results.
+**Probe is a context engine built for reading and reasoning.** It treats your code as code—not text. AST parsing understands structure. Semantic search finds what matters. You get complete, meaningful context in a single call.
 
-The result? **One Probe call captures what takes other tools 10+ agentic loops**—and delivers deeper, cleaner context with far less noise. Your AI finally gets what it needs to reason accurately.
+**The Probe Agent** is purpose-built for code understanding. It knows how to wield the Probe engine expertly—searching, extracting, and reasoning across your entire codebase. Perfect for spec-driven development, code reviews, onboarding, and any task where understanding comes before writing.
+
+**One Probe call captures what takes other tools 10+ agentic loops**—deeper, cleaner, and far less noise.
 
 ---
 
