@@ -113,7 +113,7 @@ AI agent orchestration platform for building intelligent coding assistants.
 | Document | Description |
 |----------|-------------|
 | [AI Code Editors](./use-cases/integrating-probe-into-ai-code-editors.md) | Cursor, Windsurf, Claude Code integration |
-| [GitHub Actions](./integrations/github-actions.md) | CI/CD integration for code analysis |
+| [GitHub Actions](./guides/github-actions.md) | CI/CD integration for code analysis |
 | [Web Interface Deployment](./use-cases/deploying-probe-web-interface.md) | Deploy Probe Chat for teams |
 
 ---
@@ -134,5 +134,4 @@ AI agent orchestration platform for building intelligent coding assistants.
 | Document | Description |
 |----------|-------------|
 | [Changelog](./changelog.md) | Version history and release notes |
-| [Blog](./blog/) | Technical articles and announcements |
 | [GitHub Releases](https://github.com/probelabs/probe/releases) | Download binaries and release assets |

@@ -122,7 +122,7 @@ This is a tip that provides helpful advice or best practices.
 We welcome contributions to the Probe documentation. If you find errors, omissions, or have suggestions for improvements, please consider contributing:
 
 1. Fork the [Probe repository](https://github.com/probelabs/probe) on GitHub
-2. Make your changes to the documentation files in the `site` directory
+2. Make your changes to the documentation files in the `docs` directory
 3. Submit a pull request with your changes
 
 For more information on contributing, see the [Contributing Guide](https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md).

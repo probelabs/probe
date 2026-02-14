@@ -1,6 +1,0 @@
-# IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
-[mcp_servers.code-search]
-command = "npx"
-args = ["-y", "@probelabs/probe", "mcp", "server"]
-# env = { "API_KEY" = "value" }
-
