@@ -27,6 +27,8 @@ import {
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,
+  googleSearchToolDefinition,
+  urlContextToolDefinition,
   parseXmlToolCall
 } from '../index.js';
 import { randomUUID } from 'crypto';
@@ -108,6 +110,8 @@ export {
   editToolDefinition,
   createToolDefinition,
   attemptCompletionToolDefinition,
+  googleSearchToolDefinition,
+  urlContextToolDefinition,
   parseXmlToolCall
 };
 

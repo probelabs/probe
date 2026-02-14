@@ -35,6 +35,8 @@ import {
 	analyzeAllToolDefinition,
 	attemptCompletionToolDefinition,
 	bashToolDefinition,
+	googleSearchToolDefinition,
+	urlContextToolDefinition,
 	parseXmlToolCall
 } from './tools/common.js';
 import {
@@ -114,6 +116,8 @@ export {
 	bashToolDefinition,
 	editToolDefinition,
 	createToolDefinition,
+	googleSearchToolDefinition,
+	urlContextToolDefinition,
 	// Export parser function
 	parseXmlToolCall,
 	// Export task management

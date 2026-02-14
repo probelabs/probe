@@ -386,6 +386,30 @@ User: Check system info
 </examples>
 `;
 
+export const googleSearchToolDefinition = `
+## gemini_google_search (Gemini Built-in)
+Description: Web search powered by Google. This is a built-in Gemini capability that automatically searches the web when the model needs current information. The model decides when to search and integrates results directly into its response with source citations.
+
+This tool is invoked automatically by the model — you do NOT need to use XML tool calls for it. Simply ask questions that require up-to-date or real-world information and the model will search the web as needed.
+
+Capabilities:
+- Real-time web search with grounded citations
+- Automatic query generation and result synthesis
+- Source attribution with URLs
+`;
+
+export const urlContextToolDefinition = `
+## gemini_url_context (Gemini Built-in)
+Description: URL content reader powered by Google. This is a built-in Gemini capability that automatically fetches and analyzes the content of URLs mentioned in the conversation. When you include URLs in your message, the model can read and understand their content.
+
+This tool is invoked automatically by the model — you do NOT need to use XML tool calls for it. Simply include URLs in your message and the model will fetch and analyze their content.
+
+Capabilities:
+- Fetch and read web page content from URLs in the prompt
+- Supports up to 20 URLs per request
+- Processes HTML content (does not execute JavaScript)
+`;
+
 export const searchDescription = 'Search code in the repository. Free-form questions are accepted, but Elasticsearch-style keyword queries work best. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
