@@ -1,6 +1,6 @@
 # DEPRECATED: This workflow has been disabled in favor of Cloudflare Pages deployment
 # The site is now deployed automatically via Cloudflare Pages integration
-# See site/wrangler.toml for the new deployment configuration
+# See docs/wrangler.toml for the new deployment configuration
 # 
 # .github/workflows/deploy.yml
 name: Build and Deploy VitePress Site (DISABLED)
@@ -37,10 +37,10 @@ jobs:
           # Temporarily disable cache to troubleshoot the issue
 
       - name: Install Dependencies
-        run: cd site && npm install # Use npm install instead of npm ci to ensure package-lock.json is generated
+        run: cd docs && npm install # Use npm install instead of npm ci to ensure package-lock.json is generated
 
       - name: Build VitePress Site
-        run: cd site && npm run docs:build # Build the VitePress site in the site directory
+        run: cd docs && npm run docs:build # Build the VitePress site in the docs directory
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
@@ -48,7 +48,7 @@ jobs:
       - name: Upload Artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./site/.vitepress/dist # Upload the VitePress build output as the artifact
+          path: ./docs/.vitepress/dist # Upload the VitePress build output as the artifact
 
       - name: Deploy to GitHub Pages
         id: deployment
