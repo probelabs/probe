@@ -47,7 +47,7 @@ Add to `~/.claude/claude_desktop_config.json`:
 }
 ```
 
-The Probe Agent is purpose-built to read and reason about code. It piggybacks on Claude Code's auth (or Codex auth), or you can provide your own `ANTHROPIC_API_KEY`.
+The Probe Agent is purpose-built to read and reason about code. It piggybacks on Claude Code's auth (or Codex auth), or works with any model via your own API key (e.g., `GOOGLE_API_KEY`).
 
 ### Option 2: Raw Probe Tools via MCP
 
@@ -84,7 +84,7 @@ npx -y @probelabs/probe query "fn $NAME($$$) -> Result<$RET>" --language rust
 Ask questions about any codebase directly from your terminal:
 
 ```bash
-# One-shot question (uses your ANTHROPIC_API_KEY or OPENAI_API_KEY)
+# One-shot question (works with any LLM provider)
 npx -y @probelabs/probe@latest agent "How is authentication implemented?"
 
 # With code editing capabilities
