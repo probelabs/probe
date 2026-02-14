@@ -3585,6 +3585,12 @@ Follow these instructions carefully:
 
                 let toolResultContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2);
 
+                // Convert absolute workspace paths to relative in tool results
+                if (this.workspaceRoot && toolResultContent) {
+                  const wsPrefix = this.workspaceRoot.endsWith(sep) ? this.workspaceRoot : this.workspaceRoot + sep;
+                  toolResultContent = toolResultContent.replaceAll(wsPrefix, '');
+                }
+
                 // Truncate if output exceeds token limit
                 try {
                   const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
