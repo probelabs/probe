@@ -3588,7 +3588,7 @@ Follow these instructions carefully:
                 // Convert absolute workspace paths to relative in tool results
                 if (this.workspaceRoot && toolResultContent) {
                   const wsPrefix = this.workspaceRoot.endsWith(sep) ? this.workspaceRoot : this.workspaceRoot + sep;
-                  toolResultContent = toolResultContent.replaceAll(wsPrefix, '');
+                  toolResultContent = toolResultContent.split(wsPrefix).join('');
                 }
 
                 // Truncate if output exceeds token limit

@@ -371,7 +371,7 @@ describe('Workspace Root Utilities', () => {
 		const applyConversion = (content, workspaceRoot) => {
 			if (!workspaceRoot || !content) return content;
 			const wsPrefix = workspaceRoot.endsWith(path.sep) ? workspaceRoot : workspaceRoot + path.sep;
-			return content.replaceAll(wsPrefix, '');
+			return content.split(wsPrefix).join('');
 		};
 
 		test('should convert "File:" header paths to relative', () => {
