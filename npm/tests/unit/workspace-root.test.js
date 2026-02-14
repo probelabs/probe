@@ -364,6 +364,110 @@ describe('Workspace Root Utilities', () => {
 		});
 	});
 
+	describe('Tool result path conversion', () => {
+		// Tests for the centralized absolute→relative path replacement in tool results
+		// (ProbeAgent.js replaces workspaceRoot + sep prefix in toolResultContent)
+
+		// Use '/' directly since test data uses Unix-style paths.
+		// ProbeAgent.js uses path.sep which is correct for the actual platform.
+		const applyConversion = (content, workspaceRoot) => {
+			if (!workspaceRoot || !content) return content;
+			const wsPrefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
+			return content.split(wsPrefix).join('');
+		};
+
+		test('should convert "File:" header paths to relative', () => {
+			const wsRoot = '/tmp/visor-workspaces/green-bee/';
+			const input = 'File: /tmp/visor-workspaces/green-bee/tyk-docs/api-management/api-versioning.mdx, Lines: 1-50';
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe('File: tyk-docs/api-management/api-versioning.mdx, Lines: 1-50');
+		});
+
+		test('should convert XML file paths to relative', () => {
+			const wsRoot = '/tmp/visor-workspaces/green-bee';
+			const input = '<file path="/tmp/visor-workspaces/green-bee/tyk-docs/file.mdx">';
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe('<file path="tyk-docs/file.mdx">');
+		});
+
+		test('should convert target paths with line numbers to relative', () => {
+			const wsRoot = '/tmp/visor-workspaces/green-bee';
+			const input = '/tmp/visor-workspaces/green-bee/tyk-docs/api-versioning.mdx:15';
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe('tyk-docs/api-versioning.mdx:15');
+		});
+
+		test('should convert multiple paths in one result', () => {
+			const wsRoot = '/tmp/ws';
+			const input = [
+				'File: /tmp/ws/src/main.rs, Lines: 1-20',
+				'File: /tmp/ws/src/lib.rs, Lines: 5-10',
+				'File: /tmp/ws/tests/test.rs'
+			].join('\n');
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe([
+				'File: src/main.rs, Lines: 1-20',
+				'File: src/lib.rs, Lines: 5-10',
+				'File: tests/test.rs'
+			].join('\n'));
+		});
+
+		test('should not modify paths outside workspace', () => {
+			const wsRoot = '/tmp/ws';
+			const input = 'File: /other/path/file.rs, Lines: 1-20';
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe('File: /other/path/file.rs, Lines: 1-20');
+		});
+
+		test('should not match partial workspace prefix', () => {
+			const wsRoot = '/tmp/ws';
+			const input = 'File: /tmp/workspace/file.rs';
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe('File: /tmp/workspace/file.rs');
+		});
+
+		test('should handle workspace root with trailing separator', () => {
+			const wsRoot = '/tmp/ws/';
+			const input = 'File: /tmp/ws/src/file.rs';
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe('File: src/file.rs');
+		});
+
+		test('should handle null/undefined content', () => {
+			expect(applyConversion(null, '/tmp/ws')).toBe(null);
+			expect(applyConversion(undefined, '/tmp/ws')).toBe(undefined);
+		});
+
+		test('should handle null/undefined workspace root', () => {
+			const input = 'File: /tmp/ws/src/file.rs';
+			expect(applyConversion(input, null)).toBe(input);
+			expect(applyConversion(input, undefined)).toBe(input);
+		});
+
+		test('should convert listFiles header path to relative', () => {
+			const wsRoot = '/tmp/ws';
+			const input = '/tmp/ws/src:\ndir     1.2K  components\nfile      42B  index.js';
+			const result = applyConversion(input, wsRoot);
+			expect(result).toBe('src:\ndir     1.2K  components\nfile      42B  index.js');
+		});
+
+		test('should handle JSON tool results with absolute paths', () => {
+			const wsRoot = '/tmp/ws';
+			const input = JSON.stringify({
+				targets: [
+					'/tmp/ws/tyk-docs/api-versioning.mdx:15',
+					'/tmp/ws/tyk-docs/auth.mdx:73'
+				]
+			}, null, 2);
+			const result = applyConversion(input, wsRoot);
+			const parsed = JSON.parse(result);
+			expect(parsed.targets).toEqual([
+				'tyk-docs/api-versioning.mdx:15',
+				'tyk-docs/auth.mdx:73'
+			]);
+		});
+	});
+
 	describe('Symlink Security', () => {
 		const testDir = path.join(os.tmpdir(), 'probe-symlink-test-' + Date.now());
 		const realDir = path.join(testDir, 'real');
