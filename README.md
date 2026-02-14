@@ -404,10 +404,28 @@ cargo install --path .
 
 ## Documentation
 
-- **[Full Documentation](https://probelabs.com/probe)** - Complete guides and reference
-- **[API Reference](https://probelabs.com/probe/probe-agent/sdk/api-reference)** - SDK documentation
-- **[MCP Protocol](https://probelabs.com/probe/probe-agent/protocols/mcp)** - MCP integration guide
-- **[CLI Reference](https://probelabs.com/probe/cli-mode)** - All CLI commands and options
+### Getting Started
+- [Quick Start](https://probelabs.com/probe/quick-start) - Get up and running in 5 minutes
+- [Installation](https://probelabs.com/probe/installation) - NPM, curl, Docker, and building from source
+- [Features Overview](https://probelabs.com/probe/features) - Core capabilities
+
+### Probe CLI
+- [Search Command](https://probelabs.com/probe/probe-cli/search) - Elasticsearch-style semantic search
+- [Extract Command](https://probelabs.com/probe/probe-cli/extract) - Extract code blocks with full AST context
+- [Query Command](https://probelabs.com/probe/probe-cli/query) - AST-based structural pattern matching
+- [CLI Reference](https://probelabs.com/probe/probe-cli/cli-reference) - Complete command-line reference
+
+### Probe Agent
+- [Agent Overview](https://probelabs.com/probe/probe-agent/overview) - What is Probe Agent and when to use it
+- [API Reference](https://probelabs.com/probe/probe-agent/sdk/api-reference) - ProbeAgent class documentation
+- [Node.js SDK](https://probelabs.com/probe/probe-agent/sdk/nodejs-sdk) - Full Node.js SDK reference
+- [MCP Integration](https://probelabs.com/probe/probe-agent/protocols/mcp-integration) - Editor integration guide
+
+### Guides & Reference
+- [Query Patterns](https://probelabs.com/probe/guides/query-patterns) - Effective search strategies
+- [Architecture](https://probelabs.com/probe/reference/architecture) - System design and internals
+- [Environment Variables](https://probelabs.com/probe/reference/environment-variables) - All configuration options
+- [FAQ](https://probelabs.com/probe/reference/faq) - Frequently asked questions
 
 ---
 
