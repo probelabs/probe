@@ -4,7 +4,7 @@
 
 # Probe
 
-**We read code 10x more than we write it. Your AI should too.**
+**We read code 10x more than we write it.** Probe is a code and markdown context engine, with a built-in agent, made to work on enterprise-scale codebases.
 
 Today's AI coding tools use a caveman approach: grep some files, read random lines, hope for the best. It works on toy projects. It falls apart on real codebases.
 
