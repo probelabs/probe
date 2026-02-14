@@ -58,6 +58,8 @@ import {
   implementToolDefinition,
   editToolDefinition,
   createToolDefinition,
+  googleSearchToolDefinition,
+  urlContextToolDefinition,
   attemptCompletionSchema,
   parseXmlToolCallWithThinking
 } from './tools.js';
@@ -403,6 +405,10 @@ export class ProbeAgent {
 
     // Initialize the AI model
     this.initializeModel();
+
+    // Gemini built-in tools (provider-defined, server-side)
+    // These are enabled automatically when the provider is Google
+    this._geminiToolsEnabled = this._initializeGeminiBuiltinTools();
 
     // Note: MCP initialization is now done in initialize() method
     // Constructor must remain synchronous for backward compatibility
@@ -1320,6 +1326,15 @@ export class ProbeAgent {
           abortSignal: controller.signal
         };
 
+        // Strip Gemini provider-defined tools when falling back to non-Google provider
+        // These tools have no execute function and would cause errors on other providers
+        if (config.provider !== 'google' && fallbackOptions.tools) {
+          delete fallbackOptions.tools;
+          if (this.debug) {
+            console.error(`[DEBUG] Stripped Gemini built-in tools for fallback to ${config.provider} provider`);
+          }
+        }
+
         const providerRetryManager = new RetryManager({
           maxRetries: config.maxRetries ?? this.retryConfig.maxRetries ?? 3,
           initialDelay: this.retryConfig.initialDelay ?? 1000,
@@ -1440,6 +1455,83 @@ export class ProbeAgent {
     if (this.debug) {
       console.log(`Using Google API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
     }
+  }
+
+  /**
+   * Initialize Gemini built-in tools (google_search, url_context).
+   * These are provider-defined tools that execute server-side on Google's infrastructure.
+   * They are only available when the provider is Google Gemini.
+   * @returns {{ googleSearch: boolean, urlContext: boolean }} Which tools were enabled
+   * @private
+   */
+  _initializeGeminiBuiltinTools() {
+    const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
+    const result = { googleSearch: false, urlContext: false };
+
+    if (this.apiType !== 'google') {
+      // Log info about unavailability for non-Google providers
+      if (isToolAllowed('google_search') || isToolAllowed('url_context')) {
+        if (this.debug) {
+          console.error(`[DEBUG] Gemini built-in tools (google_search, url_context) are not available: provider is '${this.apiType}', not 'google'. These tools require the Google Gemini provider.`);
+        }
+      }
+      return result;
+    }
+
+    // Check SDK support
+    if (!this.provider || !this.provider.tools) {
+      console.error('[ProbeAgent] Gemini built-in tools unavailable: @ai-sdk/google does not expose provider.tools. Upgrade to @ai-sdk/google v2.0.14+.');
+      return result;
+    }
+
+    if (isToolAllowed('google_search')) {
+      result.googleSearch = true;
+      if (this.debug) {
+        console.error('[DEBUG] Gemini built-in tool enabled: google_search');
+      }
+    }
+
+    if (isToolAllowed('url_context')) {
+      result.urlContext = true;
+      if (this.debug) {
+        console.error('[DEBUG] Gemini built-in tool enabled: url_context');
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Build Gemini provider-defined tools object for streamText().
+   * Returns undefined if no Gemini tools are enabled.
+   * @returns {Object|undefined}
+   * @private
+   */
+  _buildGeminiProviderTools() {
+    if (this.apiType !== 'google' || !this._geminiToolsEnabled) {
+      return undefined;
+    }
+
+    const { googleSearch, urlContext } = this._geminiToolsEnabled;
+    if (!googleSearch && !urlContext) {
+      return undefined;
+    }
+
+    if (!this.provider || !this.provider.tools) {
+      return undefined;
+    }
+
+    const tools = {};
+    const providerTools = this.provider.tools;
+
+    if (googleSearch && providerTools.googleSearch) {
+      tools.google_search = providerTools.googleSearch({});
+    }
+    if (urlContext && providerTools.urlContext) {
+      tools.url_context = providerTools.urlContext({});
+    }
+
+    return Object.keys(tools).length > 0 ? tools : undefined;
   }
 
   /**
@@ -2420,6 +2512,14 @@ ${extractGuidance}
       toolDefinitions += `${analyzeAllToolDefinition}\n`;
     }
 
+    // Gemini built-in tools (only when using Google provider)
+    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('google_search')) {
+      toolDefinitions += `${googleSearchToolDefinition}\n`;
+    }
+    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('url_context')) {
+      toolDefinitions += `${urlContextToolDefinition}\n`;
+    }
+
     // Build XML tool guidelines with dynamic examples based on allowed tools
     // Build examples only for allowed tools
     let toolExamples = '';
@@ -2496,6 +2596,12 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
     if (isToolAllowed('attempt_completion')) {
       availableToolsList += '- attempt_completion: Finalize the task and provide the result to the user.\n';
       availableToolsList += '- attempt_complete: Quick completion using previous response (shorthand).\n';
+    }
+    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('google_search')) {
+      availableToolsList += '- google_search: (auto) Web search via Google — invoked automatically by the model when it needs current information.\n';
+    }
+    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('url_context')) {
+      availableToolsList += '- url_context: (auto) URL content reader via Google — automatically fetches and reads URLs mentioned in the conversation.\n';
     }
 
     let xmlToolGuidelines = `
@@ -3049,12 +3155,21 @@ Follow these instructions carefully:
               // Prepare messages with potential image content
               const messagesForAI = this.prepareMessagesWithImages(currentMessages);
 
-              const result = await this.streamTextWithRetryAndFallback({
+              // Build streamText options, including Gemini provider-defined tools if applicable
+              const streamOptions = {
                 model: this.provider ? this.provider(this.model) : this.model,
                 messages: messagesForAI,
                 maxTokens: maxResponseTokens,
                 temperature: 0.3,
-              });
+              };
+
+              // Inject Gemini built-in tools (google_search, url_context) when using Google provider
+              const geminiProviderTools = this._buildGeminiProviderTools();
+              if (geminiProviderTools) {
+                streamOptions.tools = geminiProviderTools;
+              }
+
+              const result = await this.streamTextWithRetryAndFallback(streamOptions);
 
               // Get the promise reference BEFORE consuming stream (doesn't lock it)
               const usagePromise = result.usage;
