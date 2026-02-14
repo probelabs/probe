@@ -10,166 +10,153 @@ hero:
     alt: Probe Logo
   actions:
     - theme: brand
-      text: Get Started →
+      text: Get Started
       link: /quick-start
     - theme: alt
       text: GitHub Repo
       link: https://github.com/probelabs/probe
-    - theme: alt
-      text: Join Discord
-      link: https://discord.gg/t5QmP9EWSS
 ---
 
-<div class="quick-start-section">
-  <div class="container">
-    <div class="quick-start-grid">
-      <div class="quick-start-option">
-              <h3>Core Search</h3>
-              <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @probelabs/probe@latest "+stemming -lexer"</code></pre></div>
-              </div>
-              <p class="option-description">Fast semantic code search with elastic search syntax</p>
-            </div>
-            <div class="quick-start-option">
-              <h3>AI Chat</h3>
-              <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @probelabs/probe-chat@latest --web</code></pre></div>
-              </div>
-              <p class="option-description">Built-in AI agent. <small>OpenAI or Anthropic (API key required)</small></p>
-            </div>
-            <div class="quick-start-option">
-              <h3>MCP Server</h3>
-              <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>probe mcp</code></pre></div>
-              </div>
-              <p class="option-description">Model Context Protocol server for AI editors</p>
-            </div>
-            <div class="quick-start-option">
-              <h3>Probe Agent</h3>
-              <div class="pre-wrapper">
-                <div class="language-bash"><pre><code>npx -y @probelabs/probe@latest extract "main.rs:42" --prompt engineer</code></pre></div>
-              </div>
-              <p class="option-description">LLM-optimized code extraction with prompt templates</p>
-            </div>
-    </div>
-  </div>
-</div>
+# Probe Documentation
 
-<StarsBackground />
+Probe is a code and markdown context engine with a built-in AI agent, designed for enterprise-scale codebases. It combines ripgrep speed with tree-sitter AST parsing for semantic code search.
 
+---
 
-<div class="main-content">
-  <HomeFeatures />
+## Getting Started
 
-</div>
+| Document | Description |
+|----------|-------------|
+| [Quick Start](./quick-start.md) | Get up and running in 5 minutes |
+| [Installation](./installation.md) | NPM, curl, Docker, and building from source |
+| [Features Overview](./features.md) | Core capabilities and what makes Probe different |
 
-<style>
-.quick-start-section,
-.vision-section {
-  padding: 1rem 0;
-}
+---
 
-.quick-start-section {
-  text-align: center;
-  margin-top: -1rem;
-}
+## Probe CLI
 
-.quick-start-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
-  gap: 2rem;
-  max-width: 1200px;
-  margin: 0 auto;
-}
+The core semantic code search engine built in Rust.
 
-.quick-start-option {
-  text-align: center;
-}
+| Document | Description |
+|----------|-------------|
+| [Search Command](./probe-cli/search.md) | Elasticsearch-style semantic search |
+| [Extract Command](./probe-cli/extract.md) | Extract code blocks with full AST context |
+| [Query Command](./probe-cli/query.md) | AST-based structural pattern matching |
+| [CLI Reference](./probe-cli/cli-reference.md) | Complete command-line reference |
+| [Extraction Reference](./probe-cli/extraction-reference.md) | Advanced extraction techniques |
+| [Performance](./probe-cli/performance.md) | SIMD optimization and caching |
 
-.quick-start-option h3 {
-  margin-bottom: 0.5rem;
-  color: var(--vp-c-text-1);
-  margin-top: 0px;
-}
+---
 
-.pre-wrapper {
-  display: flex;
-  justify-content: center;
-  margin: 0.5rem auto;
-  width: auto;
-  overflow-x: auto;
-}
+## Probe Agent
 
-.pre-wrapper pre {
-  width: auto;
-  padding: 0.75rem 0.75rem;
-  border-radius: 6px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-  transition: box-shadow 0.2s ease;
-  display: inline-block;
-  overflow-x: auto;
-}
+AI agent SDK for building intelligent coding assistants.
 
-.pre-wrapper pre:hover {
-  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-}
+### Overview
 
-.option-description {
-  font-size: 0.9rem;
-  color: var(--vp-c-text-2);
-  margin-top: 0.5rem;
-}
+| Document | Description |
+|----------|-------------|
+| [Agent Overview](./probe-agent/overview.md) | What is Probe Agent and when to use it |
+| [AI Integration](./probe-agent/ai-integration.md) | Complete AI integration reference |
 
-.container {
-  margin: 0 auto;
-  padding: 0 0.5rem;
-  max-width: 1200px;
-}
+### SDK Reference
 
-.vision-section p {
-  font-size: 1rem;
-  line-height: 1.6;
-  margin: 0.75rem 0;
-  color: var(--vp-c-text-2);
-}
+| Document | Description |
+|----------|-------------|
+| [Getting Started](./probe-agent/sdk/getting-started.md) | Build your first AI agent |
+| [API Reference](./probe-agent/sdk/api-reference.md) | ProbeAgent class documentation |
+| [Node.js SDK](./probe-agent/sdk/nodejs-sdk.md) | Full Node.js SDK reference |
+| [Tools Reference](./probe-agent/sdk/tools-reference.md) | Search, query, extract, edit, bash tools |
+| [Engines & Providers](./probe-agent/sdk/engines.md) | Anthropic, OpenAI, Google, Bedrock |
+| [Storage Adapters](./probe-agent/sdk/storage-adapters.md) | Session persistence |
+| [Hooks System](./probe-agent/sdk/hooks.md) | Lifecycle and tool event hooks |
+| [Retry & Fallback](./probe-agent/sdk/retry-fallback.md) | Multi-provider resilience |
 
-.vision-section h2 {
-  margin-top: 1.5rem;
-}
+### Chat Interface
 
-h2 {
-  font-size: 1.5rem;
-  margin-bottom: 0.75rem;
-  color: var(--vp-c-text-1);
-}
+| Document | Description |
+|----------|-------------|
+| [CLI Usage](./probe-agent/chat/cli-usage.md) | Interactive terminal chat |
+| [Web Interface](./probe-agent/chat/web-interface.md) | Browser-based chat |
+| [Configuration](./probe-agent/chat/configuration.md) | API keys and settings |
 
-@media (max-width: 640px) {
-  .quick-start-grid {
-    grid-template-columns: 1fr;
-    gap: 1rem;
-  }
-  
-  .quick-start-option {
-    width: 100%;
-  }
-  
-  .container {
-    padding: 0 0.25rem;
-  }
-  
-  .pre-wrapper {
-    padding: 0;
-  }
-  
-  .pre-wrapper pre {
-    padding: 0.5rem 0.25rem;
-    font-size: 0.9rem;
-    width: 100%;
-  }
-  
-  .quick-start-section {
-    padding: 0.5rem 0;
-  }
-}
-</style>
+### Protocols
+
+| Document | Description |
+|----------|-------------|
+| [MCP Protocol](./probe-agent/protocols/mcp.md) | Model Context Protocol server |
+| [MCP Integration](./probe-agent/protocols/mcp-integration.md) | Editor integration guide |
+| [MCP Server](./probe-agent/protocols/mcp-server.md) | Server configuration |
+| [ACP Protocol](./probe-agent/protocols/acp.md) | Agent Communication Protocol |
+
+### Advanced Features
+
+| Document | Description |
+|----------|-------------|
+| [Delegation](./probe-agent/advanced/delegation.md) | Task delegation to subagents |
+| [Skills System](./probe-agent/advanced/skills.md) | Discoverable capabilities |
+| [Task Management](./probe-agent/advanced/tasks.md) | Multi-step operation tracking |
+| [Context Compaction](./probe-agent/advanced/context-compaction.md) | Token limit management |
+
+---
+
+## Guides
+
+| Document | Description |
+|----------|-------------|
+| [Query Patterns](./guides/query-patterns.md) | Effective search strategies |
+| [Agent Workflows](./guides/agent-workflows.md) | Common AI agent patterns |
+| [GitHub Actions](./guides/github-actions.md) | CI/CD integration |
+| [Security](./guides/security.md) | Sandboxing and permissions |
+| [Windows Guide](./guides/windows.md) | Windows-specific setup |
+
+---
+
+## Use Cases
+
+| Document | Description |
+|----------|-------------|
+| [AI Code Editors](./use-cases/ai-code-editors.md) | Cursor, Windsurf, Claude Code integration |
+| [CLI AI Workflows](./use-cases/cli-ai-workflows.md) | Terminal-based AI coding |
+| [Building AI Tools](./use-cases/building-ai-tools.md) | Create custom AI tools |
+| [Advanced CLI](./use-cases/advanced-cli.md) | Power user CLI patterns |
+| [Team Chat](./use-cases/team-chat.md) | Deploy for team collaboration |
+| [Web Interface Deployment](./use-cases/deploying-probe-web-interface.md) | Self-hosted web UI |
+
+---
+
+## Reference
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](./reference/architecture.md) | System design and internals |
+| [How It Works](./reference/how-it-works.md) | Technical deep-dive |
+| [Environment Variables](./reference/environment-variables.md) | All configuration options |
+| [Output Formats](./reference/output-formats.md) | JSON, XML, Markdown output |
+| [Language Support](./reference/language-support.md) | How Probe understands code |
+| [Supported Languages](./reference/supported-languages.md) | All supported languages |
+| [Adding Languages](./reference/adding-languages.md) | Contribute new language support |
+| [Glossary](./reference/glossary.md) | Terms and definitions |
+| [FAQ](./reference/faq.md) | Frequently asked questions |
+| [Limits](./reference/limits.md) | Token limits and constraints |
+| [Troubleshooting](./reference/troubleshooting.md) | Common issues and solutions |
+
+---
+
+## Contributing
+
+| Document | Description |
+|----------|-------------|
+| [Contributing Guide](https://github.com/probelabs/probe/blob/main/CONTRIBUTING.md) | How to contribute |
+| [Documentation Structure](./contributing/documentation-structure.md) | Docs organization |
+| [Documentation Maintenance](./contributing/documentation-maintenance.md) | Maintainer guide |
+| [Cross-References](./contributing/documentation-cross-references.md) | Link patterns |
+
+---
+
+## Release Information
+
+| Document | Description |
+|----------|-------------|
+| [Changelog](./changelog.md) | Version history and release notes |
+| [GitHub Releases](https://github.com/probelabs/probe/releases) | Download binaries |

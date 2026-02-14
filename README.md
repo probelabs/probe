@@ -405,9 +405,9 @@ cargo install --path .
 ## Documentation
 
 - **[Full Documentation](https://probelabs.com/probe)** - Complete guides and reference
-- **[API Reference](https://probelabs.com/probe/probe-agent/sdk/api-reference)** - SDK documentation
-- **[MCP Protocol](https://probelabs.com/probe/probe-agent/protocols/mcp)** - MCP integration guide
-- **[CLI Reference](https://probelabs.com/probe/cli-mode)** - All CLI commands and options
+- **[CLI Reference](https://probelabs.com/probe/probe-cli/cli-reference)** - All CLI commands and options
+- **[Agent SDK](https://probelabs.com/probe/probe-agent/sdk/api-reference)** - ProbeAgent API documentation
+- **[MCP Integration](https://probelabs.com/probe/probe-agent/protocols/mcp-integration)** - Editor integration guide
 
 ---
 
