@@ -368,9 +368,11 @@ describe('Workspace Root Utilities', () => {
 		// Tests for the centralized absolute→relative path replacement in tool results
 		// (ProbeAgent.js replaces workspaceRoot + sep prefix in toolResultContent)
 
+		// Use '/' directly since test data uses Unix-style paths.
+		// ProbeAgent.js uses path.sep which is correct for the actual platform.
 		const applyConversion = (content, workspaceRoot) => {
 			if (!workspaceRoot || !content) return content;
-			const wsPrefix = workspaceRoot.endsWith(path.sep) ? workspaceRoot : workspaceRoot + path.sep;
+			const wsPrefix = workspaceRoot.endsWith('/') ? workspaceRoot : workspaceRoot + '/';
 			return content.split(wsPrefix).join('');
 		};
 
