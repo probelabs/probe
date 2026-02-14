@@ -110,7 +110,7 @@ If you move a page to a new location, update all links to that page:
 
 ```bash
 # Find all links to a specific page
-grep -r "\[.*\](\/old-page-path)" site/
+grep -r "\[.*\](\/old-page-path)" docs/
 ```
 
 ### 2. Check for Broken Links

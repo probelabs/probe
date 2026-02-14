@@ -100,7 +100,7 @@ Add to supported languages description:
 
 ## Step 4: Documentation
 
-### File 11: `site/supported-languages.md`
+### File 11: `docs/supported-languages.md`
 Add table entry and language-specific features section.
 
 ## Testing

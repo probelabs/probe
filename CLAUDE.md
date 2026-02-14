@@ -120,7 +120,7 @@ make fix-all        # Runs format + lint fixes + tests
 2. Create module in `src/language/` implementing `Language` trait
 3. Add comprehensive tests including test detection
 4. Register in `src/language/factory.rs`
-5. Update docs in `site/supported-languages.md`
+5. Update docs in `docs/supported-languages.md`
 
 ## Common Commands
 
@@ -221,6 +221,6 @@ make install-hooks
 1. Search codebase first: `probe search "topic" ./src`
 2. Check existing tests for usage examples
 3. Review similar implementations
-4. Consult docs in `site/` directory
+4. Consult docs in `docs/` directory
 
 Remember: **Quality > Speed**. Write tests, handle errors properly, and maintain code standards.
