@@ -3,7 +3,7 @@ import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 describe('Gemini Built-in Tools', () => {
   describe('_initializeGeminiBuiltinTools', () => {
-    test('should enable google_search and url_context when provider is google', () => {
+    test('should enable gemini_google_search and gemini_url_context when provider is google', () => {
       const agent = new ProbeAgent({
         path: process.cwd(),
         provider: 'google',
@@ -38,7 +38,7 @@ describe('Gemini Built-in Tools', () => {
       const agent = new ProbeAgent({
         path: process.cwd(),
         provider: 'google',
-        allowedTools: ['search', 'google_search'],  // url_context not allowed
+        allowedTools: ['search', 'gemini_google_search'],  // gemini_url_context not allowed
       });
 
       if (agent.apiType === 'google') {
@@ -62,7 +62,7 @@ describe('Gemini Built-in Tools', () => {
       const agent = new ProbeAgent({
         path: process.cwd(),
         provider: 'google',
-        allowedTools: ['*', '!google_search'],
+        allowedTools: ['*', '!gemini_google_search'],
       });
 
       if (agent.apiType === 'google') {
@@ -101,6 +101,7 @@ describe('Gemini Built-in Tools', () => {
       if (agent.apiType === 'google' && agent.provider?.tools) {
         const tools = agent._buildGeminiProviderTools();
         expect(tools).toBeDefined();
+        // Keys in streamText tools use the SDK names (google_search, url_context)
         expect(tools.google_search).toBeDefined();
         expect(tools.url_context).toBeDefined();
       }
@@ -116,7 +117,7 @@ describe('Gemini Built-in Tools', () => {
 
       if (agent.apiType === 'google' && agent._geminiToolsEnabled.googleSearch) {
         const systemMessage = await agent.getSystemMessage();
-        expect(systemMessage).toContain('google_search');
+        expect(systemMessage).toContain('gemini_google_search');
         expect(systemMessage).toContain('Gemini Built-in');
         expect(systemMessage).toContain('Web search powered by Google');
       }
@@ -142,8 +143,8 @@ describe('Gemini Built-in Tools', () => {
 
       if (agent.apiType === 'google' && agent._geminiToolsEnabled.googleSearch) {
         const systemMessage = await agent.getSystemMessage();
-        expect(systemMessage).toContain('google_search: (auto)');
-        expect(systemMessage).toContain('url_context: (auto)');
+        expect(systemMessage).toContain('gemini_google_search: (auto)');
+        expect(systemMessage).toContain('gemini_url_context: (auto)');
       }
     });
   });

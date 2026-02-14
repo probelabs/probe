@@ -387,7 +387,7 @@ User: Check system info
 `;
 
 export const googleSearchToolDefinition = `
-## google_search (Gemini Built-in)
+## gemini_google_search (Gemini Built-in)
 Description: Web search powered by Google. This is a built-in Gemini capability that automatically searches the web when the model needs current information. The model decides when to search and integrates results directly into its response with source citations.
 
 This tool is invoked automatically by the model — you do NOT need to use XML tool calls for it. Simply ask questions that require up-to-date or real-world information and the model will search the web as needed.
@@ -399,7 +399,7 @@ Capabilities:
 `;
 
 export const urlContextToolDefinition = `
-## url_context (Gemini Built-in)
+## gemini_url_context (Gemini Built-in)
 Description: URL content reader powered by Google. This is a built-in Gemini capability that automatically fetches and analyzes the content of URLs mentioned in the conversation. When you include URLs in your message, the model can read and understand their content.
 
 This tool is invoked automatically by the model — you do NOT need to use XML tool calls for it. Simply include URLs in your message and the model will fetch and analyze their content.

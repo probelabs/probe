@@ -1458,7 +1458,7 @@ export class ProbeAgent {
   }
 
   /**
-   * Initialize Gemini built-in tools (google_search, url_context).
+   * Initialize Gemini built-in tools (gemini_google_search, gemini_url_context).
    * These are provider-defined tools that execute server-side on Google's infrastructure.
    * They are only available when the provider is Google Gemini.
    * @returns {{ googleSearch: boolean, urlContext: boolean }} Which tools were enabled
@@ -1470,9 +1470,9 @@ export class ProbeAgent {
 
     if (this.apiType !== 'google') {
       // Log info about unavailability for non-Google providers
-      if (isToolAllowed('google_search') || isToolAllowed('url_context')) {
+      if (isToolAllowed('gemini_google_search') || isToolAllowed('gemini_url_context')) {
         if (this.debug) {
-          console.error(`[DEBUG] Gemini built-in tools (google_search, url_context) are not available: provider is '${this.apiType}', not 'google'. These tools require the Google Gemini provider.`);
+          console.error(`[DEBUG] Gemini built-in tools (gemini_google_search, gemini_url_context) are not available: provider is '${this.apiType}', not 'google'. These tools require the Google Gemini provider.`);
         }
       }
       return result;
@@ -1484,17 +1484,17 @@ export class ProbeAgent {
       return result;
     }
 
-    if (isToolAllowed('google_search')) {
+    if (isToolAllowed('gemini_google_search')) {
       result.googleSearch = true;
       if (this.debug) {
-        console.error('[DEBUG] Gemini built-in tool enabled: google_search');
+        console.error('[DEBUG] Gemini built-in tool enabled: gemini_google_search');
       }
     }
 
-    if (isToolAllowed('url_context')) {
+    if (isToolAllowed('gemini_url_context')) {
       result.urlContext = true;
       if (this.debug) {
-        console.error('[DEBUG] Gemini built-in tool enabled: url_context');
+        console.error('[DEBUG] Gemini built-in tool enabled: gemini_url_context');
       }
     }
 
@@ -2513,10 +2513,10 @@ ${extractGuidance}
     }
 
     // Gemini built-in tools (only when using Google provider)
-    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('google_search')) {
+    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('gemini_google_search')) {
       toolDefinitions += `${googleSearchToolDefinition}\n`;
     }
-    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('url_context')) {
+    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('gemini_url_context')) {
       toolDefinitions += `${urlContextToolDefinition}\n`;
     }
 
@@ -2597,11 +2597,11 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
       availableToolsList += '- attempt_completion: Finalize the task and provide the result to the user.\n';
       availableToolsList += '- attempt_complete: Quick completion using previous response (shorthand).\n';
     }
-    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('google_search')) {
-      availableToolsList += '- google_search: (auto) Web search via Google — invoked automatically by the model when it needs current information.\n';
+    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('gemini_google_search')) {
+      availableToolsList += '- gemini_google_search: (auto) Web search via Google — invoked automatically by the model when it needs current information.\n';
     }
-    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('url_context')) {
-      availableToolsList += '- url_context: (auto) URL content reader via Google — automatically fetches and reads URLs mentioned in the conversation.\n';
+    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('gemini_url_context')) {
+      availableToolsList += '- gemini_url_context: (auto) URL content reader via Google — automatically fetches and reads URLs mentioned in the conversation.\n';
     }
 
     let xmlToolGuidelines = `
@@ -3163,7 +3163,7 @@ Follow these instructions carefully:
                 temperature: 0.3,
               };
 
-              // Inject Gemini built-in tools (google_search, url_context) when using Google provider
+              // Inject Gemini built-in tools (gemini_google_search, gemini_url_context) when using Google provider
               const geminiProviderTools = this._buildGeminiProviderTools();
               if (geminiProviderTools) {
                 streamOptions.tools = geminiProviderTools;
