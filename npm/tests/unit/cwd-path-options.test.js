@@ -242,11 +242,11 @@ index 123..456
 			).rejects.toThrow('Path does not exist');
 		});
 
-		test('validateCwdPath should throw for file path (not directory)', async () => {
+		test('validateCwdPath should resolve file path to parent directory', async () => {
 			const filePath = path.join(projectRoot, 'npm/package.json');
-			await expect(
-				validateCwdPath(filePath)
-			).rejects.toThrow('Path is not a directory');
+			const result = await validateCwdPath(filePath);
+			// safeRealpath resolves symlinks, so compare against the real path
+			expect(result).toBe(fs.realpathSync(path.join(projectRoot, 'npm')));
 		});
 
 		test('normalizePath should normalize without requiring existence', () => {
