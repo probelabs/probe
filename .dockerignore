@@ -14,7 +14,6 @@ Cargo.lock
 !LICENSE
 !ABOUT.MD
 docs/
-site/
 
 # IDE and editor files
 .vscode/
