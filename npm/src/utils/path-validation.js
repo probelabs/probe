@@ -83,7 +83,20 @@ export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 					return safeRealpath(dirPath);
 				}
 			} catch (dirError) {
-				// Parent directory doesn't exist or isn't accessible - fall through to throw error for original path
+				if (dirError.code === 'ENOENT') {
+					throw new PathError(`Parent directory does not exist for file: ${normalizedPath}`, {
+						suggestion: 'The specified path is a file whose parent directory does not exist.',
+						details: { path: normalizedPath, parentPath: dirPath, type: 'file' }
+					});
+				}
+				if (dirError.code === 'EACCES') {
+					throw new PathError(`Permission denied accessing parent directory: ${dirPath}`, {
+						recoverable: false,
+						suggestion: 'Permission denied accessing the parent directory of the specified file.',
+						details: { path: normalizedPath, parentPath: dirPath, type: 'file' }
+					});
+				}
+				throw dirError;
 			}
 			throw new PathError(`Path is not a directory: ${normalizedPath}`, {
 				suggestion: 'The specified path is a file, not a directory. Please provide a directory path for searching.',
