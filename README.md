@@ -4,13 +4,32 @@
 
 # Probe
 
-Probe is an **AI-friendly, fully local, semantic code search** tool designed to power the next generation of AI coding assistants. By combining the speed of [ripgrep](https://github.com/BurntSushi/ripgrep) with the code-aware parsing of [tree-sitter](https://tree-sitter.github.io/tree-sitter/), Probe delivers precise results with complete code blocks—perfect for large codebases and AI-driven development workflows.
+**The context engine your AI coding assistant is missing.**
+
+Today's AI coding tools use a caveman approach to understanding your code: grep some files, read a few lines, hope for the best. It works on toy projects. It falls apart on real codebases.
+
+**Probe is different.** It treats your code as code—not text. It understands structure through AST parsing, finds what matters through semantic search, and delivers complete, meaningful context. No indexing required. No external APIs. Just instant, accurate results.
+
+The result? Deeper understanding. Smarter answers. **10x more token-efficient** than brute-force file reading. And an agent that actually reasons about your code instead of guessing.
+
+---
+
+## Why Probe?
+
+| Traditional Approach | Probe |
+|---------------------|-------|
+| Grep + read random lines | Semantic search with Elasticsearch syntax |
+| Treats code as text | Understands code structure via tree-sitter AST |
+| Returns fragments | Returns complete functions, classes, structs |
+| Requires indexing | Zero setup, instant results |
+| Wastes tokens on noise | Precise, token-efficient context |
+| Struggles at scale | Built for million-line codebases |
 
 ---
 
 ## 30-Second Setup for Claude Code / Cursor / Windsurf
 
-Add Probe to your AI editor to instantly enable intelligent code search across large codebases.
+Add Probe to your AI editor to instantly upgrade how it understands your code.
 
 **Claude Code** - Add to `~/.claude/claude_desktop_config.json`:
 ```json
@@ -108,7 +127,7 @@ npx -y @probelabs/probe-chat ./your-project
 # Install globally
 npm install -g @probelabs/probe
 
-# Semantic search
+# Semantic search with Elasticsearch syntax
 probe search "authentication AND login" ./src
 
 # Extract code block at line 42
@@ -122,13 +141,15 @@ probe query "fn $NAME($$$) -> Result<$RET>" --language rust
 
 ## Features
 
-- **AI-Friendly**: Extracts **entire functions, classes, or structs** so AI models get full context
-- **Fully Local**: Keeps your code on your machine—no external APIs for search
-- **Blazing Fast**: Powered by ripgrep for instant scanning of massive codebases
-- **Code-Aware**: Tree-sitter parsing understands code structure accurately
-- **Smart Ranking**: BM25, TF-IDF, and hybrid ranking for relevant results
+- **Code-Aware**: Tree-sitter AST parsing understands your code's actual structure
+- **Semantic Search**: Elasticsearch-style queries (`AND`, `OR`, `NOT`, phrases, filters)
+- **Complete Context**: Returns entire functions, classes, or structs—not fragments
+- **Token-Efficient**: Get 10x more relevant context per token than file reading
+- **Zero Indexing**: Instant results on any codebase, no setup required
+- **Fully Local**: Your code never leaves your machine
+- **Blazing Fast**: Ripgrep-powered scanning handles million-line codebases
+- **Smart Ranking**: BM25, TF-IDF, and hybrid algorithms surface what matters
 - **Multi-Language**: Rust, Python, JavaScript, TypeScript, Go, C/C++, Java, and more
-- **Flexible**: MCP server, CLI agent, interactive chat, or direct SDK
 
 ---
 
@@ -164,7 +185,7 @@ npx -y @probelabs/probe@latest mcp
 
 ### CLI Agent
 
-The agent provides AI-powered code exploration directly from your terminal.
+A specialized agent designed to read and reason about code accurately—not just pattern match.
 
 ```bash
 # Basic usage
@@ -248,7 +269,7 @@ probe search <PATTERN> [PATH] [OPTIONS]
 # Basic search
 probe search "authentication" ./src
 
-# Boolean operators
+# Boolean operators (Elasticsearch syntax)
 probe search "error AND handling" ./
 probe search "login OR auth" ./src
 probe search "database NOT sqlite" ./
@@ -394,13 +415,13 @@ npm install -g @probelabs/probe
 ### curl (macOS/Linux)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/buger/probe/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/probelabs/probe/main/install.sh | bash
 ```
 
 ### PowerShell (Windows)
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/buger/probe/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/probelabs/probe/main/install.ps1 | iex
 ```
 
 ### From Source
@@ -435,10 +456,10 @@ cargo install --path .
 
 ## Documentation
 
-- **[Full Documentation](https://probelabs.com/docs)** - Complete guides and reference
-- **[API Reference](https://probelabs.com/probe-agent/sdk/api-reference)** - SDK documentation
-- **[MCP Protocol](https://probelabs.com/probe-agent/protocols/mcp)** - MCP integration guide
-- **[CLI Reference](https://probelabs.com/cli-mode)** - All CLI commands and options
+- **[Full Documentation](https://probelabs.com/probe)** - Complete guides and reference
+- **[API Reference](https://probelabs.com/probe/probe-agent/sdk/api-reference)** - SDK documentation
+- **[MCP Protocol](https://probelabs.com/probe/probe-agent/protocols/mcp)** - MCP integration guide
+- **[CLI Reference](https://probelabs.com/probe/cli-mode)** - All CLI commands and options
 
 ---
 
