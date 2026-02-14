@@ -26,8 +26,6 @@ docker pull probelabs/probe-chat:latest
 - Easy CI/CD integration
 - Isolated execution environment
 
-[→ Full Docker documentation](./integrations/docker.md)
-
 ### Using npm (Recommended for Node.js users)
 
 ```bash
