@@ -10,7 +10,7 @@ Today's AI coding tools use a caveman approach to understanding your code: grep 
 
 **Probe is different.** It treats your code as code—not text. It understands structure through AST parsing, finds what matters through semantic search, and delivers complete, meaningful context. No indexing required. No external APIs. Just instant, accurate results.
 
-The result? Deeper understanding. Smarter answers. **10x more token-efficient** than brute-force file reading. And an agent that actually reasons about your code instead of guessing.
+The result? **One Probe call captures what takes other tools 10+ agentic loops**—and delivers deeper, cleaner context with far less noise. Your AI finally gets what it needs to reason accurately.
 
 ---
 
@@ -22,7 +22,7 @@ The result? Deeper understanding. Smarter answers. **10x more token-efficient** 
 | Treats code as text | Understands code structure via tree-sitter AST |
 | Returns fragments | Returns complete functions, classes, structs |
 | Requires indexing | Zero setup, instant results |
-| Wastes tokens on noise | Precise, token-efficient context |
+| 10+ loops to gather context | One call, complete picture |
 | Struggles at scale | Built for million-line codebases |
 
 ---
@@ -144,7 +144,7 @@ probe query "fn $NAME($$$) -> Result<$RET>" --language rust
 - **Code-Aware**: Tree-sitter AST parsing understands your code's actual structure
 - **Semantic Search**: Elasticsearch-style queries (`AND`, `OR`, `NOT`, phrases, filters)
 - **Complete Context**: Returns entire functions, classes, or structs—not fragments
-- **Token-Efficient**: Get 10x more relevant context per token than file reading
+- **One Call, Full Context**: Captures what takes other tools 10+ loops to gather
 - **Zero Indexing**: Instant results on any codebase, no setup required
 - **Fully Local**: Your code never leaves your machine
 - **Blazing Fast**: Ripgrep-powered scanning handles million-line codebases
