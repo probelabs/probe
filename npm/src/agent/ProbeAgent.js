@@ -357,6 +357,10 @@ export class ProbeAgent {
     // Each ProbeAgent instance has its own limits, not shared globally
     this.delegationManager = new DelegationManager();
 
+    // Optional global concurrency limiter shared across all ProbeAgent instances.
+    // When set, every AI API call acquires a slot before calling the provider.
+    this.concurrencyLimiter = options.concurrencyLimiter || null;
+
     // Request timeout configuration (default 2 minutes)
     // Validates env var to prevent NaN or unreasonable values
     this.requestTimeout = options.requestTimeout ?? (() => {
@@ -824,6 +828,7 @@ export class ProbeAgent {
       provider: this.clientApiProvider,
       model: this.clientApiModel,
       delegationManager: this.delegationManager,  // Per-instance delegation limits
+      concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
       isToolAllowed
     };
 
@@ -1363,6 +1368,16 @@ export class ProbeAgent {
    * @private
    */
   async streamTextWithRetryAndFallback(options) {
+    // Acquire global concurrency slot if limiter is configured
+    const limiter = this.concurrencyLimiter;
+    if (limiter) {
+      await limiter.acquire(null);
+      if (this.debug) {
+        const stats = limiter.getStats();
+        console.log(`[DEBUG] Acquired global AI concurrency slot (${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize})`);
+      }
+    }
+
     // Create AbortController for overall operation timeout
     const controller = new AbortController();
     const timeoutState = { timeoutId: null };
@@ -1382,12 +1397,10 @@ export class ProbeAgent {
       const useClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
       const useCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
 
+      let result;
       if (useClaudeCode || useCodex) {
         try {
-          const result = await this._tryEngineStreamPath(options, controller, timeoutState);
-          if (result) {
-            return result;
-          }
+          result = await this._tryEngineStreamPath(options, controller, timeoutState);
         } catch (error) {
           if (this.debug) {
             const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
@@ -1397,8 +1410,43 @@ export class ProbeAgent {
         }
       }
 
-      // Use Vercel AI SDK with retry/fallback
-      return await this._executeWithVercelProvider(options, controller);
+      if (!result) {
+        // Use Vercel AI SDK with retry/fallback
+        result = await this._executeWithVercelProvider(options, controller);
+      }
+
+      // Wrap textStream so limiter slot is held until stream completes
+      if (limiter && result.textStream) {
+        const originalStream = result.textStream;
+        const debug = this.debug;
+        result.textStream = (async function* () {
+          try {
+            for await (const chunk of originalStream) {
+              yield chunk;
+            }
+          } finally {
+            limiter.release(null);
+            if (debug) {
+              const stats = limiter.getStats();
+              console.log(`[DEBUG] Released global AI concurrency slot (${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize})`);
+            }
+          }
+        })();
+      } else if (limiter) {
+        // No textStream (shouldn't happen, but release just in case)
+        limiter.release(null);
+      }
+
+      return result;
+    } catch (error) {
+      // Release on error if limiter was acquired
+      if (limiter) {
+        limiter.release(null);
+        if (this.debug) {
+          console.log(`[DEBUG] Released global AI concurrency slot on error`);
+        }
+      }
+      throw error;
     } finally {
       // Clean up timeout (for non-engine paths; engine paths clean up in the generator)
       if (timeoutState.timeoutId) {

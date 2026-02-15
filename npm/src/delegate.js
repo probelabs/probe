@@ -19,11 +19,14 @@ import { ProbeAgent } from './agent/ProbeAgent.js';
  * - For long-running processes, periodic cleanup of stale sessions may be needed
  */
 class DelegationManager {
-	constructor() {
-		this.maxConcurrent = parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
-		this.maxPerSession = parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
+	constructor(options = {}) {
+		this.maxConcurrent = options.maxConcurrent
+			?? parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
+		this.maxPerSession = options.maxPerSession
+			?? parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
 		// Default queue timeout: 60 seconds. Set DELEGATION_QUEUE_TIMEOUT=0 to disable.
-		this.defaultQueueTimeout = parseInt(process.env.DELEGATION_QUEUE_TIMEOUT || '60000', 10);
+		this.defaultQueueTimeout = options.queueTimeout
+			?? parseInt(process.env.DELEGATION_QUEUE_TIMEOUT || '60000', 10);
 
 		// Track delegations per session with timestamp for potential TTL cleanup
 		// Map<string, { count: number, lastUpdated: number }>
@@ -353,6 +356,7 @@ const DEFAULT_DELEGATE_TIMEOUT = parseInt(process.env.DELEGATE_TIMEOUT, 10) || 3
  * @param {boolean} [options.enableMcp=false] - Enable MCP tool integration (inherited from parent)
  * @param {Object} [options.mcpConfig] - MCP configuration object (inherited from parent)
  * @param {string} [options.mcpConfigPath] - Path to MCP configuration file (inherited from parent)
+ * @param {Object} [options.concurrencyLimiter=null] - Global AI concurrency limiter (DelegationManager instance)
  * @returns {Promise<string>} The response from the delegate agent
  */
 export async function delegate({
@@ -379,7 +383,8 @@ export async function delegate({
 	enableMcp = false,
 	mcpConfig = null,
 	mcpConfigPath = null,
-	delegationManager = null  // Optional per-instance manager, falls back to default singleton
+	delegationManager = null,  // Optional per-instance manager, falls back to default singleton
+	concurrencyLimiter = null  // Optional global AI concurrency limiter
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -464,7 +469,8 @@ export async function delegate({
 			enableTasks, // Inherit from parent (subagent gets isolated TaskManager)
 			enableMcp,   // Inherit from parent (subagent creates own MCPXmlBridge)
 			mcpConfig,   // Inherit from parent
-			mcpConfigPath // Inherit from parent
+			mcpConfigPath, // Inherit from parent
+			concurrencyLimiter // Inherit global AI concurrency limiter
 		});
 
 		if (debug) {
