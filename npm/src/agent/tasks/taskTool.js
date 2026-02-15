@@ -23,7 +23,8 @@ export const taskItemSchema = z.object({
  */
 export const taskSchema = z.object({
   action: z.enum(['create', 'update', 'complete', 'delete', 'list']),
-  tasks: z.array(z.union([z.string(), taskItemSchema])).optional(),
+  // Accept both array and JSON string (AI models sometimes serialize as string)
+  tasks: z.union([z.array(z.union([z.string(), taskItemSchema])), z.string()]).optional(),
   id: z.string().optional(),
   title: z.string().optional(),
   description: z.string().optional(),
@@ -141,6 +142,25 @@ SKIP TASKS for single-goal requests, even if they require multiple searches:
 
 **Key insight**: Multiple *internal steps* (search, read, analyze) are NOT the same as multiple *goals*.
 A single investigation with many steps is still ONE task, not many.
+
+## Task Granularity
+
+Tasks represent LOGICAL UNITS OF WORK, not individual files or steps:
+- "Fix 8 similar test files" → ONE task (same type of fix across files)
+- "Update API + tests + docs" → THREE tasks (different types of work)
+- "Implement feature in 5 files" → ONE task (single feature)
+
+**Rule of thumb**: If you're creating more than 3-4 tasks, you're probably too granular.
+
+**Anti-patterns to avoid**:
+- One task per file ❌
+- One task per function ❌
+- One task per repository (when same type of work) ❌
+
+**Good patterns**:
+- One task per distinct deliverable ✓
+- One task per phase (implement, test, document) ✓
+- One task per different type of work ✓
 
 MODIFY TASKS when (during execution):
 - You discover the problem is more complex than expected → Add new tasks
@@ -314,7 +334,17 @@ export function createTaskTool(options = {}) {
           return `Error: Invalid task parameters - ${validation.error.message}`;
         }
 
-        const { action, tasks, id, title, description, status, priority, dependencies, after } = validation.data;
+        const { action, tasks: rawTasks, id, title, description, status, priority, dependencies, after } = validation.data;
+
+        // Parse tasks if passed as JSON string (common AI model behavior)
+        let tasks = rawTasks;
+        if (typeof rawTasks === 'string') {
+          try {
+            tasks = JSON.parse(rawTasks);
+          } catch (e) {
+            return `Error: Invalid tasks JSON - ${e.message}`;
+          }
+        }
 
         switch (action) {
           case 'create': {

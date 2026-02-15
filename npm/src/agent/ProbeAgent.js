@@ -2496,10 +2496,9 @@ ${extractGuidance}
       toolDefinitions += `${taskToolDefinition}\n`;
     }
 
-    // Always include attempt_completion (unless explicitly disabled in raw AI mode)
-    if (isToolAllowed('attempt_completion')) {
-      toolDefinitions += `${attemptCompletionToolDefinition}\n`;
-    }
+    // Always include attempt_completion unconditionally - it's a completion signal, not a tool
+    // This ensures agents can always complete their work, regardless of tool restrictions
+    toolDefinitions += `${attemptCompletionToolDefinition}\n`;
 
     // Delegate tool (require both enableDelegate flag AND allowedTools permission)
     // Place after attempt_completion as it's an optional tool
@@ -3304,8 +3303,9 @@ Follow these instructions carefully:
           if (this.enableSkills && this.allowedTools.isEnabled('listSkills')) validTools.push('listSkills');
           if (this.enableSkills && this.allowedTools.isEnabled('useSkill')) validTools.push('useSkill');
           if (this.allowedTools.isEnabled('readImage')) validTools.push('readImage');
-          // Always allow attempt_completion - it's a completion signal, not a tool
+          // Always allow attempt_completion in validTools - it's a completion signal, not a tool
           // This ensures agents can complete even when disableTools: true is set (fixes #333)
+          // The tool DEFINITION may be hidden in raw AI mode, but we still need to recognize it
           validTools.push('attempt_completion');
 
           // Edit tools (require both allowEdit flag AND allowedTools permission)
