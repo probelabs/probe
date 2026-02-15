@@ -116,10 +116,20 @@ export function transformDSL(code, asyncFunctionNames) {
   });
 
   // Fourth pass: fix catch clause parameters (SandboxJS doesn't bind them)
-  // Transform: catch (e) { BODY } → catch (e) { var e = __getLastError(); BODY }
+  // Rename the catch parameter to avoid var conflicts on Node 20, then inject
+  // var with the original name. This ensures the original variable name works
+  // in the catch body on all Node.js versions.
+  // Transform: catch (e) { BODY } → catch (__catchParam) { var e = __getLastError(); BODY }
   walk.full(ast, (node) => {
     if (node.type === 'CatchClause' && node.param) {
       const paramName = node.param.name;
+      // Replace the catch parameter identifier with a dummy name
+      insertions.push({
+        offset: node.param.start,
+        deleteCount: node.param.end - node.param.start,
+        text: '__catchParam',
+      });
+      // Inject var declaration with the original name
       insertions.push({
         offset: node.body.start + 1,
         text: ` var ${paramName} = __getLastError();`,
@@ -147,10 +157,11 @@ export function transformDSL(code, asyncFunctionNames) {
   // Sort insertions by offset descending (apply from end to preserve offsets)
   insertions.sort((a, b) => b.offset - a.offset);
 
-  // Apply insertions to the source code
+  // Apply insertions/replacements to the source code
   let transformed = code;
   for (const ins of insertions) {
-    transformed = transformed.slice(0, ins.offset) + ins.text + transformed.slice(ins.offset);
+    const deleteCount = ins.deleteCount || 0;
+    transformed = transformed.slice(0, ins.offset) + ins.text + transformed.slice(ins.offset + deleteCount);
   }
 
   // Wrap in async IIFE with return so SandboxJS awaits the result

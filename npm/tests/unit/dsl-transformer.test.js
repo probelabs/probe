@@ -113,6 +113,7 @@ return null;
         }
       `;
       const result = transformDSL(code, ASYNC_FUNCS);
+      expect(result).toContain('catch (__catchParam)');
       expect(result).toContain('var e = __getLastError();');
     });
 
@@ -125,6 +126,7 @@ return null;
         }
       `;
       const result = transformDSL(code, ASYNC_FUNCS);
+      expect(result).toContain('catch (__catchParam)');
       expect(result).toContain('var err = __getLastError();');
     });
 
@@ -161,6 +163,8 @@ return null;
       const result = transformDSL(code, ASYNC_FUNCS);
       expect(result).toContain('var inner = __getLastError();');
       expect(result).toContain('var outer = __getLastError();');
+      // Both catch params should be renamed to __catchParam
+      expect(result.match(/__catchParam/g).length).toBe(2);
     });
   });
 

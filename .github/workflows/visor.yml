@@ -25,6 +25,7 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           installation-id: ${{ secrets.APP_INSTALLATION_ID }}
+          max-parallelism: '1'
           debug: 'true'
         env:
           # AI Provider API Keys (configure one of these in your repository secrets)
