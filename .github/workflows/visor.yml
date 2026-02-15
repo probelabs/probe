@@ -34,7 +34,7 @@ jobs:
           ANTHROPIC_API_URL: 'https://api.z.ai/api/anthropic/v1'
           # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Optional: Specify the AI model to use
-          MODEL_NAME: 'glm-4.6'
+          MODEL_NAME: 'glm-5'
 
       - name: Upload telemetry traces
         if: always()
