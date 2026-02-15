@@ -41,6 +41,8 @@ export interface ProbeAgentOptions {
   enableDelegate?: boolean;
   /** Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present) */
   architectureFileName?: string;
+  /** Enable the execute_plan DSL orchestration tool */
+  enableExecutePlan?: boolean;
   /** Enable bash tool for command execution */
   enableBash?: boolean;
   /** Bash tool configuration (allow/deny patterns) */

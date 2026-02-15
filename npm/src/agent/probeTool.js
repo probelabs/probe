@@ -211,6 +211,15 @@ export function createWrappedTools(baseTools) {
     );
   }
 
+  // Wrap execute_plan tool
+  if (baseTools.executePlanTool) {
+    wrappedTools.executePlanToolInstance = wrapToolWithEmitter(
+      baseTools.executePlanTool,
+      'execute_plan',
+      baseTools.executePlanTool.execute
+    );
+  }
+
   // Wrap bash tool
   if (baseTools.bashTool) {
     wrappedTools.bashToolInstance = wrapToolWithEmitter(

@@ -122,6 +122,55 @@ make fix-all        # Runs format + lint fixes + tests
 4. Register in `src/language/factory.rs`
 5. Update docs in `docs/supported-languages.md`
 
+### 6. Adding a New Agent Tool (NPM)
+
+When adding a new tool to the probe agent (like `search`, `execute_plan`, etc.), you must update **all** of the following files. Missing any will cause the tool to silently not work.
+
+**Schema & definition (`npm/src/tools/common.js`):**
+- Add Zod schema (e.g. `export const myToolSchema = z.object({...})`)
+- Add tool name to `DEFAULT_VALID_TOOLS` array
+- Add schema to `getValidParamsForTool()` switch map
+- Add XML tool definition string if using XML-based parsing
+
+**Implementation (`npm/src/tools/myTool.js`):**
+- Create tool file with `execute` function
+- Export the tool creator function and any definition generators
+
+**Vercel AI SDK wrapper (`npm/src/tools/vercel.js`) — if tool is a Vercel AI `tool()`:**
+- Add tool wrapper using the `tool()` helper from `ai` package
+
+**Tool index (`npm/src/tools/index.js`):**
+- Add exports for the tool creator, definition, and schema
+
+**SDK public API (`npm/src/index.js`):**
+- Import the tool creator, schema, and definition
+- Add all three to the `export {}` block
+
+**Agent tool creation (`npm/src/agent/tools.js`):**
+- Import the tool creator and schema from `../index.js`
+- Add tool instantiation in `createTools()` with `isToolAllowed()` check
+- Add schema and definition to re-exports
+
+**Agent tool wrapping (`npm/src/agent/probeTool.js`):**
+- Wrap the tool with `wrapToolWithEmitter()` for event emission
+
+**Agent registration (`npm/src/agent/ProbeAgent.js`) — 4 places:**
+1. **toolImplementations** (~line 840): Register wrapped tool instance
+2. **System prompt tool definitions** (~line 2420): Add tool definition to prompt
+3. **Available tools list** (~line 2500): Add one-line description
+4. **Valid tools list** (~line 3220): Add to `validTools` array
+
+**Tests:**
+- Unit tests in `npm/tests/unit/`
+- Verify with: `npm test --prefix npm -- --testPathPattern="myTool"`
+
+**Build & verify:**
+```bash
+npm run build --prefix npm          # Rebuild agent bundle
+npm test --prefix npm               # Run all tests
+node npm/bin/probe agent "test query" --path . --provider google  # End-to-end test
+```
+
 ## Common Commands
 
 ```bash

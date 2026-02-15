@@ -48,6 +48,7 @@ import {
   extractToolDefinition,
   delegateToolDefinition,
   analyzeAllToolDefinition,
+  getExecutePlanToolDefinition,
   bashToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
@@ -176,6 +177,7 @@ export class ProbeAgent {
    * @param {string} [options.promptType] - Predefined prompt type (code-explorer, code-searcher, architect, code-review, support)
    * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
    * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
+   * @param {boolean} [options.enableExecutePlan=false] - Enable the execute_plan DSL orchestration tool
    * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present)
    * @param {string} [options.path] - Search directory path
    * @param {string} [options.cwd] - Working directory for resolving relative paths (independent of allowedFolders)
@@ -225,6 +227,7 @@ export class ProbeAgent {
     this.promptType = options.promptType || 'code-explorer';
     this.allowEdit = !!options.allowEdit;
     this.enableDelegate = !!options.enableDelegate;
+    this.enableExecutePlan = !!options.enableExecutePlan;
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this.tracer = options.tracer || null;
@@ -809,6 +812,10 @@ export class ProbeAgent {
   initializeTools() {
     const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
 
+    // Output buffer for DSL output() function — shared mutable object,
+    // reset at the start of each answer() call
+    this._outputBuffer = { items: [] };
+
     const configOptions = {
       sessionId: this.sessionId,
       debug: this.debug,
@@ -820,6 +827,7 @@ export class ProbeAgent {
       searchDelegate: this.searchDelegate,
       allowEdit: this.allowEdit,
       enableDelegate: this.enableDelegate,
+      enableExecutePlan: this.enableExecutePlan,
       enableBash: this.enableBash,
       bashConfig: this.bashConfig,
       tracer: this.tracer,
@@ -828,6 +836,7 @@ export class ProbeAgent {
       provider: this.clientApiProvider,
       model: this.clientApiModel,
       delegationManager: this.delegationManager,  // Per-instance delegation limits
+      outputBuffer: this._outputBuffer,
       concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
       isToolAllowed
     };
@@ -853,7 +862,10 @@ export class ProbeAgent {
     if (this.enableDelegate && wrappedTools.delegateToolInstance && isToolAllowed('delegate')) {
       this.toolImplementations.delegate = wrappedTools.delegateToolInstance;
     }
-    if (wrappedTools.analyzeAllToolInstance && isToolAllowed('analyze_all')) {
+    if (this.enableExecutePlan && wrappedTools.executePlanToolInstance && isToolAllowed('execute_plan')) {
+      this.toolImplementations.execute_plan = wrappedTools.executePlanToolInstance;
+    } else if (wrappedTools.analyzeAllToolInstance && isToolAllowed('analyze_all')) {
+      // analyze_all is fallback when execute_plan is not enabled
       this.toolImplementations.analyze_all = wrappedTools.analyzeAllToolInstance;
     }
 
@@ -2554,8 +2566,18 @@ ${extractGuidance}
       toolDefinitions += `${delegateToolDefinition}\n`;
     }
 
-    // Analyze All tool for bulk data processing
-    if (isToolAllowed('analyze_all')) {
+    // Execute Plan tool for DSL-based orchestration (requires enableExecutePlan flag, supersedes analyze_all)
+    if (this.enableExecutePlan && isToolAllowed('execute_plan')) {
+      // Build available function list based on what tools are registered
+      const dslFunctions = ['LLM', 'map', 'chunk', 'batch', 'log', 'range', 'flatten', 'unique', 'groupBy', 'parseJSON', 'storeSet', 'storeGet', 'storeAppend', 'storeKeys', 'storeGetAll', 'output'];
+      if (isToolAllowed('search')) dslFunctions.unshift('search');
+      if (isToolAllowed('query')) dslFunctions.unshift('query');
+      if (isToolAllowed('extract')) dslFunctions.unshift('extract');
+      if (isToolAllowed('listFiles')) dslFunctions.push('listFiles');
+      if (this.enableBash && isToolAllowed('bash')) dslFunctions.push('bash');
+      toolDefinitions += `${getExecutePlanToolDefinition(dslFunctions)}\n`;
+    } else if (isToolAllowed('analyze_all')) {
+      // Fallback: only register analyze_all if execute_plan is not available
       toolDefinitions += `${analyzeAllToolDefinition}\n`;
     }
 
@@ -2631,7 +2653,9 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
     if (this.enableDelegate && isToolAllowed('delegate')) {
       availableToolsList += '- delegate: Delegate big distinct tasks to specialized probe subagents.\n';
     }
-    if (isToolAllowed('analyze_all')) {
+    if (this.enableExecutePlan && isToolAllowed('execute_plan')) {
+      availableToolsList += '- execute_plan: Execute a DSL program to orchestrate tool calls. ALWAYS use this for: questions containing "all"/"every"/"comprehensive"/"complete inventory", multi-topic analysis, open-ended discovery questions, or any task requiring full codebase coverage.\n';
+    } else if (isToolAllowed('analyze_all')) {
       availableToolsList += '- analyze_all: Process ALL data matching a query using map-reduce (for aggregate questions needing 100% coverage).\n';
     }
     if (this.enableBash && isToolAllowed('bash')) {
@@ -2860,6 +2884,11 @@ Follow these instructions carefully:
     try {
       // Track initial history length for storage
       const oldHistoryLength = this.history.length;
+
+      // Reset output buffer for this answer() call
+      if (this._outputBuffer) {
+        this._outputBuffer.items = [];
+      }
 
       // START CHECKPOINT: Initialize task management for this request
       if (this.enableTasks) {
@@ -3368,8 +3397,10 @@ Follow these instructions carefully:
           if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
             validTools.push('delegate');
           }
-          // Analyze All tool (for bulk data processing with map-reduce)
-          if (this.allowedTools.isEnabled('analyze_all')) {
+          // Execute Plan tool (requires enableExecutePlan flag, supersedes analyze_all)
+          if (this.enableExecutePlan && this.allowedTools.isEnabled('execute_plan')) {
+            validTools.push('execute_plan');
+          } else if (this.allowedTools.isEnabled('analyze_all')) {
             validTools.push('analyze_all');
           }
           // Task tool (require both enableTasks flag AND allowedTools permission)
@@ -4594,6 +4625,19 @@ Convert your previous response content into actual JSON data that follows this s
         }
       }
 
+      // Append DSL output buffer directly to response (bypasses LLM rewriting)
+      if (this._outputBuffer && this._outputBuffer.items.length > 0 && !options._schemaFormatted) {
+        const outputContent = this._outputBuffer.items.join('\n\n');
+        finalResult = (finalResult || '') + '\n\n' + outputContent;
+        if (options.onStream) {
+          options.onStream('\n\n' + outputContent);
+        }
+        if (this.debug) {
+          console.log(`[DEBUG] Appended ${this._outputBuffer.items.length} output buffer items (${outputContent.length} chars) to final result`);
+        }
+        this._outputBuffer.items = [];
+      }
+
       return finalResult;
 
     } catch (error) {
@@ -4756,6 +4800,7 @@ Convert your previous response content into actual JSON data that follows this s
       promptType: this.promptType,
       allowEdit: this.allowEdit,
       enableDelegate: this.enableDelegate,
+      enableExecutePlan: this.enableExecutePlan,
       architectureFileName: this.architectureFileName,
       // Pass allowedFolders which will recompute workspaceRoot correctly
       allowedFolders: [...this.allowedFolders],

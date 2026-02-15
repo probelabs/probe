@@ -54,6 +54,11 @@ export const analyzeAllSchema = z.object({
 	path: z.string().optional().default('.').describe('Directory path to search in')
 });
 
+export const executePlanSchema = z.object({
+	code: z.string().min(1).describe('JavaScript DSL code to execute. All function calls look synchronous — do NOT use async/await. Use map(items, fn) for batch operations. Use LLM(instruction, data) for AI processing.'),
+	description: z.string().optional().describe('Human-readable description of what this plan does, for logging.')
+});
+
 // Schema for the attempt_completion tool - flexible validation for direct XML response
 export const attemptCompletionSchema = {
 	// Custom validation that requires result parameter but allows direct XML response
@@ -425,6 +430,7 @@ export const DEFAULT_VALID_TOOLS = [
 	'extract',
 	'delegate',
 	'analyze_all',
+	'execute_plan',
 	'listSkills',
 	'useSkill',
 	'listFiles',
@@ -463,6 +469,7 @@ function getValidParamsForTool(toolName) {
 		extract: extractSchema,
 		delegate: delegateSchema,
 		analyze_all: analyzeAllSchema,
+		execute_plan: executePlanSchema,
 		listSkills: listSkillsSchema,
 		useSkill: useSkillSchema,
 		bash: bashSchema,

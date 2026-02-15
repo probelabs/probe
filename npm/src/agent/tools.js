@@ -5,6 +5,7 @@ import {
   extractTool,
   delegateTool,
   analyzeAllTool,
+  createExecutePlanTool,
   bashTool,
   editTool,
   createTool,
@@ -16,6 +17,7 @@ import {
   extractSchema,
   delegateSchema,
   analyzeAllSchema,
+  executePlanSchema,
   bashSchema,
   editSchema,
   createSchema,
@@ -24,6 +26,7 @@ import {
   extractToolDefinition,
   delegateToolDefinition,
   analyzeAllToolDefinition,
+  getExecutePlanToolDefinition,
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,
@@ -58,7 +61,10 @@ export function createTools(configOptions) {
   if (configOptions.enableDelegate && isToolAllowed('delegate')) {
     tools.delegateTool = delegateTool(configOptions);
   }
-  if (isToolAllowed('analyze_all')) {
+  if (configOptions.enableExecutePlan && isToolAllowed('execute_plan')) {
+    tools.executePlanTool = createExecutePlanTool(configOptions);
+  } else if (isToolAllowed('analyze_all')) {
+    // analyze_all is fallback when execute_plan is not enabled
     tools.analyzeAllTool = analyzeAllTool(configOptions);
   }
 
@@ -97,6 +103,7 @@ export {
   extractSchema,
   delegateSchema,
   analyzeAllSchema,
+  executePlanSchema,
   bashSchema,
   editSchema,
   createSchema,
@@ -106,6 +113,7 @@ export {
   extractToolDefinition,
   delegateToolDefinition,
   analyzeAllToolDefinition,
+  getExecutePlanToolDefinition,
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,
