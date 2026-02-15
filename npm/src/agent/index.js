@@ -142,6 +142,8 @@ function parseArgs() {
     skillDirs: null, // Comma-separated list of repo-relative skill directories
     // Task management
     enableTasks: false, // Enable task tracking for progress management
+    // Execute plan DSL tool
+    enableExecutePlan: false,
     // Bash tool configuration
     enableBash: false,
     bashAllow: null,
@@ -218,6 +220,8 @@ function parseArgs() {
       config.skillDirs = args[++i].split(',').map(dir => dir.trim()).filter(Boolean);
     } else if (arg === '--allow-tasks') {
       config.enableTasks = true;
+    } else if (arg === '--enable-execute-plan') {
+      config.enableExecutePlan = true;
     } else if (arg === '--enable-bash') {
       config.enableBash = true;
     } else if (arg === '--bash-allow' && i + 1 < args.length) {
@@ -294,6 +298,9 @@ Options:
   --trace-console                  Enable tracing to console output
   --no-mermaid-validation          Disable automatic mermaid diagram validation and fixing
   --help, -h                      Show this help message
+
+DSL Orchestration:
+  --enable-execute-plan            Enable execute_plan DSL tool for programmatic orchestration
 
 Bash Tool Options:
   --enable-bash                    Enable bash command execution for system exploration
@@ -843,6 +850,7 @@ async function main() {
       disableTools: config.disableTools,
       allowSkills: config.allowSkills,
       skillDirs: config.skillDirs,
+      enableExecutePlan: config.enableExecutePlan,
       enableBash: config.enableBash,
       bashConfig: bashConfig,
       enableTasks: config.enableTasks
