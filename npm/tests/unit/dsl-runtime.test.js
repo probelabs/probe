@@ -614,8 +614,8 @@ describe('DSL Runtime', () => {
     });
   });
 
-  describe('try/catch error handling', () => {
-    test('catch block can access error from tool call', async () => {
+  describe('error-safe tool returns', () => {
+    test('tool error returns ERROR: string instead of throwing', async () => {
       const errorRuntime = createDSLRuntime({
         toolImplementations: {
           search: {
@@ -626,31 +626,23 @@ describe('DSL Runtime', () => {
       });
 
       const result = await errorRuntime.execute(`
-        try {
-          const r = search("test");
-          return r;
-        } catch (e) {
-          return "caught: " + e.message;
-        }
+        const r = search("test");
+        return r;
       `);
       expect(result.status).toBe('success');
-      expect(result.result).toBe('caught: search failed');
+      expect(result.result).toBe('ERROR: search failed');
     });
 
-    test('catch block can access error from parseJSON', async () => {
+    test('parseJSON returns null on invalid input', async () => {
       const result = await runtime.execute(`
-        try {
-          const r = parseJSON("not valid json");
-          return r;
-        } catch (e) {
-          return "parse error caught";
-        }
+        const r = parseJSON("not valid json");
+        return r;
       `);
       expect(result.status).toBe('success');
-      expect(result.result).toBe('parse error caught');
+      expect(result.result).toBeNull();
     });
 
-    test('try/catch in loop - error resilience pattern', async () => {
+    test('error-resilient loop via string check', async () => {
       const errorRuntime = createDSLRuntime({
         toolImplementations: {
           extract: {
@@ -667,11 +659,11 @@ describe('DSL Runtime', () => {
         const files = ["good.js", "bad.js", "other.js"];
         const results = [];
         for (const f of files) {
-          try {
-            const content = extract(f);
+          const content = extract(f);
+          if (typeof content === "string" && content.indexOf("ERROR:") === 0) {
+            results.push("err: " + f);
+          } else {
             results.push("ok: " + f);
-          } catch (e) {
-            results.push("err: " + f + " - " + e.message);
           }
         }
         return results;
@@ -679,93 +671,41 @@ describe('DSL Runtime', () => {
       expect(result.status).toBe('success');
       expect(result.result).toEqual([
         'ok: good.js',
-        'err: bad.js - file not found',
+        'err: bad.js',
         'ok: other.js',
       ]);
     });
 
-    // NOTE: Nested try/catch with async errors is a known SandboxJS limitation.
-    // After an inner catch handles an async error, the outer catch doesn't work.
-    // This is a SandboxJS bug, not something our transformer can fix.
-    // Workaround: avoid nested try/catch in DSL code — use flat try/catch instead.
-    // NOTE: Nested try/catch with async errors is a known SandboxJS limitation.
-    // After an inner catch handles an async error, the outer catch may not work.
-    // Workaround: avoid nested try/catch — use flat try/catch with return instead.
-    test('try/catch with return in catch block', async () => {
+    test('LLM error returns ERROR: string', async () => {
       const errorRuntime = createDSLRuntime({
-        toolImplementations: {
-          search: {
-            execute: async () => { throw new Error('outer error'); },
-          },
-        },
-        llmCall: async () => { throw new Error('inner error'); },
+        toolImplementations: {},
+        llmCall: async () => { throw new Error('API rate limited'); },
       });
 
       const result = await errorRuntime.execute(`
-        try {
-          const r = LLM("test", "data");
-        } catch (inner) {
-          return "inner: " + inner.message;
-        }
+        const r = LLM("test", "data");
+        return r;
       `);
       expect(result.status).toBe('success');
-      expect(result.result).toBe('inner: inner error');
+      expect(result.result).toBe('ERROR: API rate limited');
     });
 
-    test('catch with String(e) coercion', async () => {
+    test('errors are logged', async () => {
       const errorRuntime = createDSLRuntime({
         toolImplementations: {
           search: {
-            execute: async () => { throw new Error('test error'); },
+            execute: async () => { throw new Error('timeout'); },
           },
         },
         llmCall: createMockLLM(),
       });
 
       const result = await errorRuntime.execute(`
-        try {
-          search("test");
-        } catch (e) {
-          return "caught: " + String(e);
-        }
+        search("test");
+        return "done";
       `);
       expect(result.status).toBe('success');
-      expect(result.result).toContain('test error');
-    });
-
-    test('catch without parameter still works', async () => {
-      const errorRuntime = createDSLRuntime({
-        toolImplementations: {
-          search: {
-            execute: async () => { throw new Error('fail'); },
-          },
-        },
-        llmCall: createMockLLM(),
-      });
-
-      const result = await errorRuntime.execute(`
-        var caught = false;
-        try {
-          search("test");
-        } catch {
-          caught = true;
-        }
-        return caught;
-      `);
-      expect(result.status).toBe('success');
-      // Note: SandboxJS catch without param works but var assignment is quirky
-    });
-
-    test('throw statement captures error in __lastError', async () => {
-      const result = await runtime.execute(`
-        try {
-          throw "custom error message";
-        } catch (e) {
-          return "caught: " + e;
-        }
-      `);
-      expect(result.status).toBe('success');
-      expect(result.result).toBe('caught: custom error message');
+      expect(result.logs.some(l => l.includes('[search]') && l.includes('ERROR: timeout'))).toBe(true);
     });
   });
 

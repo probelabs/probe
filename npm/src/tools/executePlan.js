@@ -498,7 +498,7 @@ return table;
 - Use \`LLM(instruction, data)\` for AI processing — returns a string.
 - Use \`log(message)\` for debugging — messages appear in the output.
 - Use \`parseJSON(text)\` instead of \`JSON.parse()\` when parsing LLM output — LLM responses often have markdown fences.
-- Use \`try/catch\` for error handling, \`while/break\` for loops and pagination. Do NOT nest try/catch blocks — use flat try/catch instead.
+- Tool functions never throw — on error they return an \`"ERROR: ..."\` string. Check with \`if (result.indexOf("ERROR:") === 0)\` to handle errors.
 - Always use explicit property assignment: \`{ key: value }\` not shorthand \`{ key }\`.
 - String concatenation with \`+\`, no template literals with backticks.
 - Use \`String(value)\` before calling \`.trim()\`, \`.split()\`, or \`.length\` on tool results.
@@ -711,10 +711,10 @@ const extracted = map(chunks, (c) => LLM(
   c
 ));
 for (const e of extracted) {
-  try {
-    const parsed = JSON.parse(String(e));
+  const parsed = parseJSON(String(e));
+  if (parsed) {
     for (const item of parsed) { storeAppend("endpoints", item); }
-  } catch (err) { log("Parse error, skipping chunk"); }
+  } else { log("Parse error, skipping chunk"); }
 }
 
 // Phase 2: Compute statistics with pure JS (no LLM needed)

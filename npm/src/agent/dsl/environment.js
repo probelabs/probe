@@ -43,26 +43,25 @@ export function getAsyncFunctionNames(mcpTools = {}) {
 }
 
 /**
- * Wrap a tool function with OTEL tracing and __lastError capture.
- * Creates a span for each call, recording params and result.
- * On error, sets errorHolder.value so catch blocks can access it
- * (SandboxJS doesn't bind catch clause parameters).
+ * Wrap a tool function with OTEL tracing and error-safe return.
+ * On error, returns "ERROR: <message>" instead of throwing — SandboxJS
+ * has unreliable try/catch for async errors, so tools never throw.
  *
  * @param {string} toolName - Name of the tool for the span
  * @param {Function} fn - The async tool function to wrap
  * @param {Object|null} tracer - SimpleAppTracer instance (or null)
- * @param {{ value: any }} errorHolder - Shared object for __lastError
+ * @param {Function} logFn - Function to write to execution logs
  * @returns {Function} Wrapped function
  */
-function traceToolCall(toolName, fn, tracer, errorHolder) {
+function traceToolCall(toolName, fn, tracer, logFn) {
   if (!tracer) {
-    // Still wrap to capture errors for __lastError
     return async (...args) => {
       try {
         return await fn(...args);
       } catch (e) {
-        errorHolder.value = e;
-        throw e;
+        const msg = 'ERROR: ' + (e.message || String(e));
+        logFn?.('[' + toolName + '] ' + msg);
+        return msg;
       }
     };
   }
@@ -94,7 +93,6 @@ function traceToolCall(toolName, fn, tracer, errorHolder) {
 
       return result;
     } catch (e) {
-      errorHolder.value = e;
       const elapsed = Date.now() - startTime;
       span?.setAttributes?.({
         'dsl.tool.duration_ms': elapsed,
@@ -112,7 +110,9 @@ function traceToolCall(toolName, fn, tracer, errorHolder) {
         { 'dsl.context': 'execute_plan' }
       );
 
-      throw e;
+      const msg = 'ERROR: ' + (e.message || String(e));
+      logFn?.('[' + toolName + '] ' + msg);
+      return msg;
     }
   };
 }
@@ -143,8 +143,8 @@ export function generateSandboxGlobals(options) {
 
   const globals = {};
 
-  // Shared error holder for __lastError (SandboxJS catch parameter workaround)
-  const errorHolder = { value: undefined };
+  // Log function — writes to the execution logs array (set by runtime before each execute())
+  const logFn = (msg) => { if (globals._logs) globals._logs.push(String(msg)); };
 
   // Bridge native tools
   for (const [name, schema] of Object.entries(NATIVE_TOOL_SCHEMAS)) {
@@ -171,7 +171,7 @@ export function generateSandboxGlobals(options) {
       return toolImplementations[name].execute(validated.data);
     };
 
-    globals[name] = traceToolCall(name, rawFn, tracer, errorHolder);
+    globals[name] = traceToolCall(name, rawFn, tracer, logFn);
   }
 
   // Bridge listFiles and searchFiles (no Zod schema, simpler interface)
@@ -179,13 +179,13 @@ export function generateSandboxGlobals(options) {
     const rawListFiles = async (pattern) => {
       return toolImplementations.listFiles.execute({ pattern });
     };
-    globals.listFiles = traceToolCall('listFiles', rawListFiles, tracer, errorHolder);
+    globals.listFiles = traceToolCall('listFiles', rawListFiles, tracer, logFn);
   }
   if (toolImplementations.searchFiles) {
     const rawSearchFiles = async (query) => {
       return toolImplementations.searchFiles.execute({ query });
     };
-    globals.searchFiles = traceToolCall('searchFiles', rawSearchFiles, tracer, errorHolder);
+    globals.searchFiles = traceToolCall('searchFiles', rawSearchFiles, tracer, logFn);
   }
 
   // Bridge MCP tools
@@ -194,7 +194,7 @@ export function generateSandboxGlobals(options) {
       const rawMcpFn = async (params = {}) => {
         return mcpBridge.callTool(name, params);
       };
-      globals[name] = traceToolCall(name, rawMcpFn, tracer, errorHolder);
+      globals[name] = traceToolCall(name, rawMcpFn, tracer, logFn);
     }
   }
 
@@ -203,7 +203,7 @@ export function generateSandboxGlobals(options) {
     const rawLLM = async (instruction, data, opts = {}) => {
       return llmCall(instruction, data, opts);
     };
-    globals.LLM = traceToolCall('LLM', rawLLM, tracer, errorHolder);
+    globals.LLM = traceToolCall('LLM', rawLLM, tracer, logFn);
   }
 
   // map() with concurrency control
@@ -229,7 +229,7 @@ export function generateSandboxGlobals(options) {
 
     return Promise.all(results);
   };
-  globals.map = traceToolCall('map', rawMap, tracer, errorHolder);
+  globals.map = traceToolCall('map', rawMap, tracer, logFn);
 
   // chunk() - split data into token-sized chunks
   globals.chunk = (data, tokens = 20000) => {
@@ -317,6 +317,7 @@ export function generateSandboxGlobals(options) {
   };
 
   // parseJSON — safely parse JSON from LLM responses that may be wrapped in markdown fences
+  // Returns null on parse failure instead of throwing (SandboxJS try/catch is unreliable)
   globals.parseJSON = (text) => {
     try {
       let s = String(text || '').trim();
@@ -334,8 +335,8 @@ export function generateSandboxGlobals(options) {
       }
       return JSON.parse(s);
     } catch (e) {
-      errorHolder.value = e;
-      throw e;
+      logFn('[parseJSON] ERROR: ' + e.message);
+      return null;
     }
   };
 
@@ -381,14 +382,6 @@ export function generateSandboxGlobals(options) {
       if (globals._logs) globals._logs.push('[output] ' + str.length + ' chars written to output buffer');
     };
   }
-
-  // __getLastError — SandboxJS doesn't bind catch clause parameters, so the
-  // transformer injects `var PARAM = __getLastError();` at the start of catch blocks.
-  // Using a function instead of a property because object spread in the sandbox
-  // constructor copies values, not getters.
-  globals.__getLastError = () => errorHolder.value;
-  // __setLastError — used by transformed throw statements: throw (__setLastError(expr), expr)
-  globals.__setLastError = (v) => { errorHolder.value = v; return v; };
 
   return globals;
 }

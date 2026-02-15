@@ -179,7 +179,7 @@ return report
 | `unique(array)` | Deduplicate array items | `array` |
 | `flatten(array)` | Flatten one level of nesting | `array` |
 | `range(start, end)` | Generate array of integers [start, end) | `array` |
-| `parseJSON(text)` | Parse JSON from LLM output (strips markdown fences automatically) | `any` |
+| `parseJSON(text)` | Parse JSON from LLM output (strips markdown fences). Returns `null` on parse failure. | `any\|null` |
 | `log(message)` | Log a message for debugging | `void` |
 
 ### Direct Output (sync)
@@ -402,7 +402,7 @@ LLM Script uses a safe subset of JavaScript. Keep these rules in mind:
 - Use `var` for variables (or `const`/`let`)
 - Use `for...of` loops for iteration
 - Use plain objects and arrays
-- Use `try/catch` for error handling
+- Check for errors with `if (result.indexOf("ERROR:") === 0)` — tool functions never throw, they return `"ERROR: ..."` strings
 - Use string concatenation with `+` (not template literals with `${}`)
 - Use `parseJSON()` instead of `JSON.parse()` when parsing LLM output (handles markdown fences)
 - Use `output()` for large structured data that should reach the user verbatim

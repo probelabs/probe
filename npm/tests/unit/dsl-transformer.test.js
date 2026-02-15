@@ -103,8 +103,8 @@ return null;
     });
   });
 
-  describe('catch parameter fix', () => {
-    test('injects __getLastError() call in catch body', () => {
+  describe('try/catch passthrough', () => {
+    test('preserves try/catch structure unchanged', () => {
       const code = `
         try {
           search("test");
@@ -113,58 +113,10 @@ return null;
         }
       `;
       const result = transformDSL(code, ASYNC_FUNCS);
-      expect(result).toContain('catch (__catchParam)');
-      expect(result).toContain('var e = __getLastError();');
-    });
-
-    test('handles different catch parameter names', () => {
-      const code = `
-        try {
-          search("test");
-        } catch (err) {
-          log(err);
-        }
-      `;
-      const result = transformDSL(code, ASYNC_FUNCS);
-      expect(result).toContain('catch (__catchParam)');
-      expect(result).toContain('var err = __getLastError();');
-    });
-
-    test('does not inject for catch without parameter', () => {
-      const code = `
-        try {
-          search("test");
-        } catch {
-          log("caught");
-        }
-      `;
-      const result = transformDSL(code, ASYNC_FUNCS);
+      // try/catch passes through — tools return error strings, no catch param rewriting needed
+      expect(result).toContain('catch (e)');
       expect(result).not.toContain('__getLastError');
-    });
-
-    test('transforms throw statement to capture via __setLastError', () => {
-      const code = `throw "custom error";`;
-      const result = transformDSL(code, ASYNC_FUNCS);
-      expect(result).toContain('throw __setLastError("custom error")');
-    });
-
-    test('handles nested try/catch', () => {
-      const code = `
-        try {
-          try {
-            search("test");
-          } catch (inner) {
-            log(inner);
-          }
-        } catch (outer) {
-          log(outer);
-        }
-      `;
-      const result = transformDSL(code, ASYNC_FUNCS);
-      expect(result).toContain('var inner = __getLastError();');
-      expect(result).toContain('var outer = __getLastError();');
-      // Both catch params should be renamed to __catchParam
-      expect(result.match(/__catchParam/g).length).toBe(2);
+      expect(result).not.toContain('__setLastError');
     });
   });
 
