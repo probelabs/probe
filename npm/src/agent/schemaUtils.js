@@ -772,6 +772,78 @@ export function isJsonSchemaDefinition(jsonString, options = {}) {
 }
 
 /**
+ * Check if schema is a simple text wrapper (e.g., {text: string} or {response: string})
+ * These schemas can be auto-wrapped without re-invoking the AI
+ * @param {string} schema - The schema string
+ * @returns {Object|null} - Object with field name if simple wrapper, null otherwise
+ */
+export function isSimpleTextWrapperSchema(schema) {
+  if (!schema || typeof schema !== 'string') {
+    return null;
+  }
+
+  const trimmed = schema.trim();
+
+  // Match patterns like: {text: string}, {"text": "string"}, {response: string}, etc.
+  // These are simple wrappers that just need a single text field
+  const simplePatterns = [
+    /^\{\s*["']?(\w+)["']?\s*:\s*["']?string["']?\s*\}$/i,
+    /^\{\s*["']?type["']?\s*:\s*["']?object["']?\s*,\s*["']?properties["']?\s*:\s*\{\s*["']?(\w+)["']?\s*:\s*\{\s*["']?type["']?\s*:\s*["']?string["']?\s*\}\s*\}\s*\}$/i
+  ];
+
+  for (const pattern of simplePatterns) {
+    const match = trimmed.match(pattern);
+    if (match) {
+      return { fieldName: match[1] };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Try to auto-wrap plain text for simple wrapper schemas
+ * Returns wrapped JSON if successful, null if not applicable
+ * @param {string} response - The response to wrap
+ * @param {string} schema - The schema string
+ * @param {Object} options - Options
+ * @param {boolean} [options.debug=false] - Enable debug logging
+ * @returns {string|null} - Wrapped JSON string or null
+ */
+export function tryAutoWrapForSimpleSchema(response, schema, options = {}) {
+  const { debug = false } = options;
+
+  const wrapperInfo = isSimpleTextWrapperSchema(schema);
+  if (!wrapperInfo) {
+    if (debug) {
+      console.log(`[DEBUG] Auto-wrap: Schema is not a simple text wrapper`);
+    }
+    return null;
+  }
+
+  // Check if response is already valid JSON
+  try {
+    JSON.parse(response);
+    // Already valid JSON, don't wrap
+    if (debug) {
+      console.log(`[DEBUG] Auto-wrap: Response is already valid JSON, skipping`);
+    }
+    return null;
+  } catch {
+    // Not valid JSON, proceed with wrapping
+  }
+
+  // Wrap the plain text in the schema structure
+  const wrapped = JSON.stringify({ [wrapperInfo.fieldName]: response });
+
+  if (debug) {
+    console.log(`[DEBUG] Auto-wrap: Wrapped plain text in {"${wrapperInfo.fieldName}": ...} (${response.length} chars)`);
+  }
+
+  return wrapped;
+}
+
+/**
  * Create a correction prompt for invalid JSON
  * @param {string} invalidResponse - The invalid JSON response
  * @param {string} schema - The original schema
@@ -817,9 +889,10 @@ export function createJsonCorrectionPrompt(invalidResponse, schema, errorOrValid
   const level = Math.min(retryCount, strengthLevels.length - 1);
   const currentLevel = strengthLevels[level];
 
+  // Include full response - truncating loses context the AI needs to fix the issue
   let prompt = `${currentLevel.prefix} Your previous response is not valid JSON and cannot be parsed. Here's what you returned:
 
-${invalidResponse.substring(0, 500)}${invalidResponse.length > 500 ? '...' : ''}
+${invalidResponse}
 
 Error: ${enhancedError}
 

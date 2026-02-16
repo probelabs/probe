@@ -16,7 +16,9 @@ import {
   validateMermaidDiagram,
   validateMermaidResponse,
   createMermaidCorrectionPrompt,
-  generateExampleFromSchema
+  generateExampleFromSchema,
+  isSimpleTextWrapperSchema,
+  tryAutoWrapForSimpleSchema
 } from '../../src/agent/schemaUtils.js';
 
 describe('Schema Utilities', () => {
@@ -1143,15 +1145,17 @@ describe('Schema Utilities', () => {
       expect(prompt).toContain('FINAL ATTEMPT - CRITICAL JSON ERROR:');
     });
 
-    test('should truncate long invalid responses', () => {
+    test('should include full response without truncation', () => {
+      // Full response is needed for AI to properly fix the issue
       const longResponse = 'Hello '.repeat(200) + '{"test": value}';
       const schema = '{"test": "string"}';
       const error = 'Unexpected token v';
-      
+
       const prompt = createJsonCorrectionPrompt(longResponse, schema, error, 0);
-      
-      expect(prompt).toContain('...');
-      expect(prompt.length).toBeLessThan(longResponse.length + 500);
+
+      // Should include the full response, not truncated
+      expect(prompt).toContain(longResponse);
+      expect(prompt).not.toContain('...');
     });
 
     test('should handle default retryCount parameter', () => {
@@ -1359,6 +1363,127 @@ describe('Schema Utilities', () => {
 
       // Verify it's valid JSON when stringified
       expect(() => JSON.parse(JSON.stringify(result))).not.toThrow();
+    });
+  });
+
+  describe('isSimpleTextWrapperSchema', () => {
+    test('should detect simple {text: string} schema', () => {
+      const result = isSimpleTextWrapperSchema('{text: string}');
+      expect(result).toEqual({ fieldName: 'text' });
+    });
+
+    test('should detect {response: string} schema', () => {
+      const result = isSimpleTextWrapperSchema('{response: string}');
+      expect(result).toEqual({ fieldName: 'response' });
+    });
+
+    test('should detect {"text": "string"} with quotes', () => {
+      const result = isSimpleTextWrapperSchema('{"text": "string"}');
+      expect(result).toEqual({ fieldName: 'text' });
+    });
+
+    test('should detect schema with whitespace', () => {
+      const result = isSimpleTextWrapperSchema('{ text : string }');
+      expect(result).toEqual({ fieldName: 'text' });
+    });
+
+    test('should return null for complex schemas', () => {
+      const complexSchema = '{"type": "object", "properties": {"text": {"type": "string"}, "count": {"type": "number"}}}';
+      expect(isSimpleTextWrapperSchema(complexSchema)).toBeNull();
+    });
+
+    test('should return null for multi-field schemas', () => {
+      const multiField = '{text: string, count: number}';
+      expect(isSimpleTextWrapperSchema(multiField)).toBeNull();
+    });
+
+    test('should return null for null/undefined', () => {
+      expect(isSimpleTextWrapperSchema(null)).toBeNull();
+      expect(isSimpleTextWrapperSchema(undefined)).toBeNull();
+    });
+
+    test('should return null for non-string input', () => {
+      expect(isSimpleTextWrapperSchema(123)).toBeNull();
+      expect(isSimpleTextWrapperSchema({})).toBeNull();
+    });
+
+    test('should handle single quotes', () => {
+      const result = isSimpleTextWrapperSchema("{'text': 'string'}");
+      expect(result).toEqual({ fieldName: 'text' });
+    });
+  });
+
+  describe('tryAutoWrapForSimpleSchema', () => {
+    test('should wrap plain text for {text: string} schema', () => {
+      const response = 'This is a plain text response about the code analysis.';
+      const schema = '{text: string}';
+
+      const result = tryAutoWrapForSimpleSchema(response, schema);
+
+      expect(result).toBe('{"text":"This is a plain text response about the code analysis."}');
+      expect(() => JSON.parse(result)).not.toThrow();
+    });
+
+    test('should wrap plain text for {response: string} schema', () => {
+      const response = 'Here is the analysis result.';
+      const schema = '{response: string}';
+
+      const result = tryAutoWrapForSimpleSchema(response, schema);
+
+      expect(result).toBe('{"response":"Here is the analysis result."}');
+    });
+
+    test('should return null if response is already valid JSON', () => {
+      const response = '{"text": "already valid"}';
+      const schema = '{text: string}';
+
+      const result = tryAutoWrapForSimpleSchema(response, schema);
+
+      expect(result).toBeNull();
+    });
+
+    test('should return null for complex schemas', () => {
+      const response = 'Plain text';
+      const schema = '{"text": "string", "count": "number"}';
+
+      const result = tryAutoWrapForSimpleSchema(response, schema);
+
+      expect(result).toBeNull();
+    });
+
+    test('should handle long responses without truncation', () => {
+      const longResponse = 'This is a very long response. '.repeat(100);
+      const schema = '{text: string}';
+
+      const result = tryAutoWrapForSimpleSchema(longResponse, schema);
+
+      expect(result).not.toBeNull();
+      const parsed = JSON.parse(result);
+      expect(parsed.text).toBe(longResponse);
+      expect(parsed.text.length).toBe(longResponse.length);
+    });
+
+    test('should handle responses with special characters', () => {
+      const response = 'Response with "quotes" and\nnewlines and \ttabs';
+      const schema = '{text: string}';
+
+      const result = tryAutoWrapForSimpleSchema(response, schema);
+
+      expect(result).not.toBeNull();
+      expect(() => JSON.parse(result)).not.toThrow();
+      const parsed = JSON.parse(result);
+      expect(parsed.text).toBe(response);
+    });
+
+    test('should handle responses with unicode', () => {
+      const response = 'Unicode: 你好 👋 émojis';
+      const schema = '{text: string}';
+
+      const result = tryAutoWrapForSimpleSchema(response, schema);
+
+      expect(result).not.toBeNull();
+      const parsed = JSON.parse(result);
+      expect(parsed.text).toBe(response);
     });
   });
 });

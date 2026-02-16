@@ -42,7 +42,7 @@ Manage tasks for tracking progress during code exploration and problem-solving. 
 
 Parameters:
 - action: (required) The action to perform: create, update, complete, delete, list
-- tasks: (optional) JSON array for batch operations - alternative to single-task params
+- tasks: (optional) Array of task objects for batch operations. Place raw JSON array directly between tags.
 - id: (optional) Task ID for single operations (e.g., "task-1")
 - title: (optional) Task title for create/update
 - description: (optional) Task description for create/update
@@ -50,6 +50,11 @@ Parameters:
 - priority: (optional) Task priority: low, medium, high, critical
 - dependencies: (optional) JSON array of task IDs that must be completed first
 - after: (optional) Task ID to insert the new task after (for ordering). By default, new tasks are appended to the end
+
+IMPORTANT - JSON Format:
+Place raw JSON arrays directly between tags without quotes or escaping:
+  CORRECT:   <tasks>[{"title": "Do X"}]</tasks>
+  INCORRECT: <tasks>"[{\"title\": \"Do X\"}]"</tasks>
 
 Usage Examples:
 

@@ -81,7 +81,8 @@ import {
   generateSchemaInstructions,
   isJsonSchemaDefinition,
   createSchemaDefinitionCorrectionPrompt,
-  validateAndFixMermaidResponse
+  validateAndFixMermaidResponse,
+  tryAutoWrapForSimpleSchema
 } from './schemaUtils.js';
 import { removeThinkingTags } from './xmlParsingUtils.js';
 import { predefinedPrompts } from './shared/prompts.js';
@@ -4501,6 +4502,19 @@ Convert your previous response content into actual JSON data that follows this s
               retryCount = 1; // Start at 1 since we already did one correction
             }
             
+            // Before entering correction loop, try auto-wrapping for simple schemas
+            // This avoids re-invoking AI for schemas like {text: string} where we can just wrap programmatically
+            if (!validation.isValid) {
+              const autoWrapped = tryAutoWrapForSimpleSchema(finalResult, options.schema, { debug: this.debug });
+              if (autoWrapped) {
+                if (this.debug) {
+                  console.log(`[DEBUG] JSON validation: Auto-wrapped plain text for simple schema`);
+                }
+                finalResult = autoWrapped;
+                validation = validateJsonResponse(finalResult, { debug: this.debug });
+              }
+            }
+
             while (!validation.isValid && retryCount < maxRetries) {
               if (this.debug) {
                 console.log(`[DEBUG] JSON validation: attempt_completion validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
