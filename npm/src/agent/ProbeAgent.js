@@ -3690,6 +3690,12 @@ Follow these instructions carefully:
                       model: this.model,                // Inherit model
                       searchDelegate: this.searchDelegate,
                       enableTasks: this.enableTasks,    // Inherit task management (subagent gets isolated TaskManager)
+                      enableMcp: !!this.mcpBridge,      // Inherit MCP enablement
+                      mcpConfig: this.mcpConfig,        // Inherit MCP configuration
+                      mcpConfigPath: this.mcpConfigPath, // Inherit MCP config path
+                      enableBash: this.enableBash,      // Inherit bash enablement
+                      bashConfig: this.bashConfig,      // Inherit bash configuration
+                      allowedTools: this.allowedTools.allowed || null,  // Inherit allowed tools whitelist
                       debug: this.debug,
                       tracer: this.tracer
                     };
