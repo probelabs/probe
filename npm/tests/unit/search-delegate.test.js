@@ -175,6 +175,40 @@ describe('searchDelegate behavior', () => {
     expect(mockSearch).toHaveBeenCalledTimes(1);
   });
 
+  test('strips workspace root prefix from extract output paths', async () => {
+    // Delegate returns absolute paths (which is common from the subagent)
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      targets: ['/tmp/workspace/tyk/apidef/migration.go#migrateGlobalRateLimit']
+    }));
+    // Extract output contains the absolute path in its text
+    mockExtract.mockResolvedValue(
+      '=== /tmp/workspace/tyk/apidef/migration.go ===\n' +
+      'func migrateGlobalRateLimit() {\n' +
+      '  // ...\n' +
+      '}\n'
+    );
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/tmp/workspace/tyk',
+      allowedFolders: ['/tmp/workspace/tyk']
+    });
+
+    const result = await tool.execute({
+      query: 'migrateGlobalRateLimit',
+      path: '/tmp/workspace/tyk'
+    });
+
+    // The workspace root prefix should be stripped from the output
+    expect(result).toBe(
+      '=== apidef/migration.go ===\n' +
+      'func migrateGlobalRateLimit() {\n' +
+      '  // ...\n' +
+      '}\n'
+    );
+    expect(result).not.toContain('/tmp/workspace/tyk/');
+  });
+
   test('uses raw search when searchDelegate=false', async () => {
     mockSearch.mockResolvedValue('RAW-SEARCH');
 
