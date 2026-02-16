@@ -175,28 +175,77 @@ export function createExecutePlanTool(options) {
   // Output buffer for direct-to-user content (bypasses LLM context window)
   const outputBuffer = options.outputBuffer || null;
 
-  if (options.toolImplementations) {
-    // Direct DSL options — used by tests and manual scripts
-    runtimeOptions = { ...options, tracer, sessionStore, outputBuffer };
-    llmCallFn = options.llmCall;
-  } else {
-    // Agent configOptions — build everything from the agent's config
-    llmCallFn = buildLLMCall(options);
-    runtimeOptions = {
-      toolImplementations: buildToolImplementations(options),
-      llmCall: llmCallFn,
-      mcpBridge: options.mcpBridge || null,
-      mcpTools: options.mcpTools || {},
-      mapConcurrency: options.mapConcurrency || 5,
-      timeoutMs: options.timeoutMs || 300000,
-      maxLoopIterations: options.maxLoopIterations || 5000,
-      tracer,
-      sessionStore,
-      outputBuffer,
-    };
+  // Lazy MCP getters — when using agent configOptions, MCP may be initialized after
+  // this tool is created. We use getters to resolve MCP state at execution time.
+  const getMcpBridge = options.getMcpBridge || (() => options.mcpBridge || null);
+  const getMcpTools = options.getMcpTools || (() => options.mcpTools || {});
+  const isMcpToolAllowed = options.isMcpToolAllowed || (() => true);
+
+  // Track which MCP bridge the current runtime was built with
+  let cachedMcpBridge = null;
+  let runtime = null;
+
+  /**
+   * Build or rebuild the DSL runtime.
+   * Called lazily on first execute() and when MCP bridge changes.
+   */
+  function buildRuntime() {
+    const currentMcpBridge = getMcpBridge();
+    const currentMcpTools = getMcpTools();
+
+    // Filter MCP tools through allowedTools
+    const filteredMcpTools = {};
+    for (const [name, tool] of Object.entries(currentMcpTools)) {
+      if (isMcpToolAllowed(name)) {
+        filteredMcpTools[name] = tool;
+      }
+    }
+
+    if (options.toolImplementations) {
+      // Direct DSL options — used by tests and manual scripts
+      runtimeOptions = {
+        ...options,
+        tracer,
+        sessionStore,
+        outputBuffer,
+        mcpBridge: currentMcpBridge,
+        mcpTools: filteredMcpTools,
+      };
+      llmCallFn = options.llmCall;
+    } else {
+      // Agent configOptions — build everything from the agent's config
+      llmCallFn = llmCallFn || buildLLMCall(options);
+      runtimeOptions = {
+        toolImplementations: buildToolImplementations(options),
+        llmCall: llmCallFn,
+        mcpBridge: currentMcpBridge,
+        mcpTools: filteredMcpTools,
+        mapConcurrency: options.mapConcurrency || 5,
+        timeoutMs: options.timeoutMs || 300000,
+        maxLoopIterations: options.maxLoopIterations || 5000,
+        tracer,
+        sessionStore,
+        outputBuffer,
+      };
+    }
+
+    cachedMcpBridge = currentMcpBridge;
+    runtime = createDSLRuntime(runtimeOptions);
+    return runtime;
   }
 
-  const runtime = createDSLRuntime(runtimeOptions);
+  /**
+   * Get or rebuild the runtime if MCP state has changed.
+   */
+  function getRuntime() {
+    const currentMcpBridge = getMcpBridge();
+    // Rebuild runtime if MCP bridge changed (null -> bridge, or different bridge)
+    if (!runtime || cachedMcpBridge !== currentMcpBridge) {
+      buildRuntime();
+    }
+    return runtime;
+  }
+
   const maxRetries = options.maxRetries ?? 2;
 
   return tool({
@@ -272,7 +321,7 @@ RULES REMINDER:
             }
           }
 
-          const result = await runtime.execute(currentCode, description);
+          const result = await getRuntime().execute(currentCode, description);
 
           if (result.status === 'success') {
             finalOutput = formatSuccess(result, description, attempt, outputBuffer);

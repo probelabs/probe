@@ -839,7 +839,12 @@ export class ProbeAgent {
       delegationManager: this.delegationManager,  // Per-instance delegation limits
       outputBuffer: this._outputBuffer,
       concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
-      isToolAllowed
+      isToolAllowed,
+      // Lazy MCP getters — MCP is initialized after tools are created, so we use
+      // getter functions that resolve at call-time to get the current MCP state
+      getMcpBridge: () => this.mcpBridge,
+      getMcpTools: () => this.mcpBridge?.mcpTools || {},
+      isMcpToolAllowed: (toolName) => this._isMcpToolAllowed(toolName),
     };
 
     // Create base tools
