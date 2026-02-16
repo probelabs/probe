@@ -3680,6 +3680,17 @@ Follow these instructions carefully:
                 const executeToolCall = async () => {
                   // For delegate tool, pass current iteration, max iterations, session ID, and config
                   if (toolName === 'delegate') {
+                    // Reconstruct allowedTools array preserving all modes (same logic as clone())
+                    let allowedToolsForDelegate = null;
+                    if (this.allowedTools.mode === 'whitelist') {
+                      allowedToolsForDelegate = [...this.allowedTools.allowed];
+                    } else if (this.allowedTools.mode === 'none') {
+                      allowedToolsForDelegate = [];
+                    } else if (this.allowedTools.mode === 'all' && this.allowedTools.exclusions?.length > 0) {
+                      allowedToolsForDelegate = ['*', ...this.allowedTools.exclusions.map(t => '!' + t)];
+                    }
+                    // If mode is 'all' with no exclusions, leave as null (default)
+
                     const enhancedParams = {
                       ...toolParams,
                       currentIteration,
@@ -3690,6 +3701,12 @@ Follow these instructions carefully:
                       model: this.model,                // Inherit model
                       searchDelegate: this.searchDelegate,
                       enableTasks: this.enableTasks,    // Inherit task management (subagent gets isolated TaskManager)
+                      enableMcp: !!this.mcpBridge,      // Inherit MCP enablement
+                      mcpConfig: this.mcpConfig,        // Inherit MCP configuration
+                      mcpConfigPath: this.mcpConfigPath, // Inherit MCP config path
+                      enableBash: this.enableBash,      // Inherit bash enablement
+                      bashConfig: this.bashConfig,      // Inherit bash configuration
+                      allowedTools: allowedToolsForDelegate,  // Inherit allowed tools from parent
                       debug: this.debug,
                       tracer: this.tracer
                     };
