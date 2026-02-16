@@ -283,7 +283,15 @@ export const searchTool = (options = {}) => {
 					extractOptions.format = 'xml';
 				}
 
-				return await extract(extractOptions);
+				const extractResult = await extract(extractOptions);
+
+				// Strip workspace root prefix from extract output so paths are relative
+				if (resolutionBase && typeof extractResult === 'string') {
+					const wsPrefix = resolutionBase.endsWith('/') ? resolutionBase : resolutionBase + '/';
+					return extractResult.split(wsPrefix).join('');
+				}
+
+				return extractResult;
 			} catch (error) {
 				console.error('Delegated search failed, falling back to raw search:', error);
 				try {
