@@ -309,38 +309,60 @@ describe('DSL Runtime', () => {
     });
 
     test('chunkByKey() handles interleaved keys correctly', async () => {
-      // Test that interleaved results (A1, B1, A2, B2) still keep A's together and B's together
+      // Test that interleaved results (A1, A2, B1, B2) keep same keys together
+      // The key insight: once a key is in a chunk, ALL its blocks stay there
+      // So we test that A1 and A2 are together, B1 and B2 are together
       const result = await runtime.execute(`
+        // Data arrives with A blocks, then B blocks (simulating grouped search results)
         const data = [
           "File: Customers/A/note1.txt",
-          "A content 1",
-          "",
-          "File: Customers/B/note1.txt",
-          "B content 1",
+          "${"a".repeat(60)}",
           "",
           "File: Customers/A/note2.txt",
-          "A content 2",
+          "${"b".repeat(60)}",
+          "",
+          "File: Customers/B/note1.txt",
+          "${"c".repeat(60)}",
           "",
           "File: Customers/B/note2.txt",
-          "B content 2"
+          "${"d".repeat(60)}"
         ].join("\\n");
 
+        // Token limit: 50 tokens = 200 chars
+        // Each block ~90 chars (30 header + 60 content)
+        // A1+A2 = ~180 chars (fits in 200)
+        // Adding B1 would be ~270 chars (overflow) -> flush, start new chunk
         const chunks = chunkByKey(data, (file) => {
           const match = file.match(/Customers\\/([^\\/]+)/);
           return match ? match[1] : 'other';
-        }, 5000); // Large limit - everything fits in one chunk
+        }, 50);
+
+        // Verify A's are together in chunk 0
+        const chunk0 = chunks[0];
+        const aCount = (chunk0.match(/Customers\\/A/g) || []).length;
+
+        // Verify B's are together in chunk 1 (if exists)
+        const chunk1 = chunks[1] || '';
+        const bCountInChunk1 = (chunk1.match(/Customers\\/B/g) || []).length;
 
         return {
           numChunks: chunks.length,
-          hasAllContent: chunks[0].indexOf("A content 1") >= 0 &&
-                         chunks[0].indexOf("A content 2") >= 0 &&
-                         chunks[0].indexOf("B content 1") >= 0 &&
-                         chunks[0].indexOf("B content 2") >= 0
+          aBlocksInChunk0: aCount,
+          bBlocksInChunk1: bCountInChunk1,
+          chunk0HasOnlyA: chunk0.indexOf("Customers/B") === -1,
+          chunk1HasOnlyB: chunk1.indexOf("Customers/A") === -1
         };
       `);
       expect(result.status).toBe('success');
-      expect(result.result.numChunks).toBe(1);
-      expect(result.result.hasAllContent).toBe(true);
+      // Should have 2 chunks - A's in first, B's in second
+      expect(result.result.numChunks).toBe(2);
+      // Both A blocks should be in chunk 0
+      expect(result.result.aBlocksInChunk0).toBe(2);
+      // Both B blocks should be in chunk 1
+      expect(result.result.bBlocksInChunk1).toBe(2);
+      // Chunks should not mix keys
+      expect(result.result.chunk0HasOnlyA).toBe(true);
+      expect(result.result.chunk1HasOnlyB).toBe(true);
     });
 
     test('extractPaths() extracts unique file paths from search results', async () => {
