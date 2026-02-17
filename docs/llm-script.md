@@ -160,14 +160,29 @@ return report
 
 | Function | Description | Returns |
 |----------|-------------|---------|
-| `LLM(instruction, data)` | Make a focused LLM call to process/classify/summarize data | `string` — AI response |
+| `LLM(instruction, data, options?)` | Make a focused LLM call to process/classify/summarize data. When `options.schema` is provided, automatically parses the JSON response. | `string` or `object` (if schema provided) |
 | `map(array, fn)` | Process items in parallel with concurrency control (default 3) | `array` — results |
+
+**LLM with Schema Example:**
+```javascript
+// Without schema - returns string, need manual parsing
+const raw = LLM("Extract customers as JSON", data)
+const customers = parseJSON(raw)
+
+// With schema - returns parsed object directly
+const customers = LLM("Extract customers", data, {
+  schema: '{"customers": [{"name": "string", "value": "number"}]}'
+})
+// customers.customers[0].name works directly!
+```
 
 ### Data Utilities (sync)
 
 | Function | Description | Returns |
 |----------|-------------|---------|
 | `chunk(data, tokens?)` | Split a large string into token-sized chunks (default 20,000 tokens) | `array` of strings |
+| `chunkByKey(data, keyFn, tokens?)` | Split data ensuring same-key items stay together. Keys extracted from `File:` headers. | `array` of strings |
+| `extractPaths(searchResults)` | Extract unique file paths from search results (parses `File:` headers) | `array` of strings |
 | `batch(array, size)` | Split array into sub-arrays of given size | `array` of arrays |
 | `groupBy(array, key)` | Group array items by a key or function | `object` |
 | `unique(array)` | Deduplicate array items | `array` |
@@ -175,6 +190,32 @@ return report
 | `range(start, end)` | Generate array of integers [start, end) | `array` |
 | `parseJSON(text)` | Parse JSON from LLM output (strips markdown fences). Returns `null` on parse failure. | `any\|null` |
 | `log(message)` | Log a message for debugging | `void` |
+
+**chunkByKey Example:**
+```javascript
+// Search returns snippets with "File: path/to/file" headers
+const results = search("customer feedback", { path: "./Customers" })
+
+// Group by customer - ensures all notes for same customer stay in same chunk
+const chunks = chunkByKey(results, file => {
+  const match = file.match(/Customers\/([^/]+)/)
+  return match ? match[1] : 'other'
+})
+
+// Each chunk contains ALL data for one or more customers (never split)
+```
+
+**extractPaths Example:**
+```javascript
+// Get full file content instead of snippets
+const results = search("authentication")
+const chunks = chunkByKey(results, keyFn)
+
+const fullContent = map(chunks, chunk => {
+  const paths = extractPaths(chunk)  // ['src/auth.js', 'src/login.js']
+  return extract(paths.join(' '))    // Get full file content
+})
+```
 
 ### Direct Output (sync)
 
@@ -347,7 +388,43 @@ const analysis = LLM(
 return analysis
 ```
 
-### Pattern 6: Direct Output for Large Data
+### Pattern 6: Boundary-Aware Customer Data Processing
+
+When processing data that's grouped by customer (or any key), use `chunkByKey()` to ensure a single customer's data is never split across chunks:
+
+```javascript
+// Search customer notes - results have "File: Customers/AcmeCorp/note1.txt" headers
+const results = search("product feedback feature request", { path: "./Customers" })
+
+// Group by customer - each chunk has complete data for its customers
+const chunks = chunkByKey(results, file => {
+  const match = file.match(/Customers\/([^/]+)/)
+  return match ? match[1] : 'unknown'
+})
+
+// Process each chunk - LLM sees complete customer context
+const insights = map(chunks, c => LLM(
+  "Extract customer insights. Return JSON with customer name, pain points, and feature requests.",
+  c,
+  { schema: '{"insights": [{"customer": "string", "pain_points": "string", "requests": "string"}]}' }
+))
+
+// Collect all insights
+var all = []
+for (const batch of insights) {
+  if (batch.insights) { for (const i of batch.insights) { all.push(i) } }
+}
+
+// Output as CSV
+output("customer,pain_points,requests\n")
+for (const i of all) {
+  output(i.customer + "," + i.pain_points + "," + i.requests + "\n")
+}
+
+return "Extracted " + all.length + " customer insights"
+```
+
+### Pattern 7: Direct Output for Large Data
 
 When your script produces large structured data (tables, JSON, CSV), use `output()` to deliver it directly to the user without the AI rewriting or summarizing it:
 
