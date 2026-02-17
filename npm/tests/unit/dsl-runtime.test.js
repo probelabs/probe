@@ -238,25 +238,7 @@ describe('DSL Runtime', () => {
     });
   });
 
-  describe('timeout and loop guards', () => {
-    test('times out long-running execution', async () => {
-      const slowRuntime = createDSLRuntime({
-        toolImplementations: createMockTools(),
-        llmCall: async (instruction, data) => {
-          await new Promise(r => setTimeout(r, 5000));
-          return 'done';
-        },
-        timeoutMs: 500,
-      });
-
-      const result = await slowRuntime.execute(`
-        const r = LLM("slow", "data");
-        return r;
-      `);
-      expect(result.status).toBe('error');
-      expect(result.error).toContain('timed out');
-    }, 10000);
-
+  describe('loop guards', () => {
     test('stops infinite while loops', async () => {
       const guardedRuntime = createDSLRuntime({
         toolImplementations: createMockTools(),

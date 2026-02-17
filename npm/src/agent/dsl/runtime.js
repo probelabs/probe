@@ -4,7 +4,7 @@
  * Orchestrates the full pipeline:
  * 1. Validate (AST whitelist)
  * 2. Transform (inject await, wrap in async IIFE)
- * 3. Execute in SandboxJS with tool globals + timeout
+ * 3. Execute in SandboxJS with tool globals
  *
  * Returns the result or a structured error.
  */
@@ -25,7 +25,6 @@ const Sandbox = SandboxModule.default || SandboxModule;
  * @param {Object} [options.mcpTools={}] - MCP tool metadata
  * @param {Function} options.llmCall - Function for LLM() calls: (instruction, data, options?) => Promise<any>
  * @param {number} [options.mapConcurrency=3] - Concurrency limit for map()
- * @param {number} [options.timeoutMs=120000] - Execution timeout in milliseconds (default 2 min)
  * @param {number} [options.maxLoopIterations=5000] - Max iterations for while/for loops
  * @param {Object} [options.tracer=null] - SimpleAppTracer instance for OTEL telemetry
  * @returns {Object} Runtime with execute() method
@@ -37,7 +36,6 @@ export function createDSLRuntime(options) {
     mcpTools = {},
     llmCall,
     mapConcurrency = 3,
-    timeoutMs = 120000,
     maxLoopIterations = 5000,
     tracer = null,
     sessionStore = {},
@@ -108,9 +106,8 @@ export function createDSLRuntime(options) {
       };
     }
 
-    // Step 3: Execute in SandboxJS with timeout
+    // Step 3: Execute in SandboxJS
     tracer?.addEvent?.('dsl.phase.execute_start', {
-      'dsl.timeout_ms': timeoutMs,
       'dsl.max_loop_iterations': maxLoopIterations,
     });
 
@@ -147,20 +144,10 @@ export function createDSLRuntime(options) {
       };
       process.on('unhandledRejection', rejectionHandler);
 
-      // Race execution against timeout
-      let timeoutHandle;
-      const executionPromise = exec().run();
-      const timeoutPromise = new Promise((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`Execution timed out after ${Math.round(timeoutMs / 1000)}s. Script took too long — reduce the amount of work (fewer items, smaller data) or increase timeout.`));
-        }, timeoutMs);
-      });
-
       let result;
       try {
-        result = await Promise.race([executionPromise, timeoutPromise]);
+        result = await exec().run();
       } finally {
-        clearTimeout(timeoutHandle);
         // Delay handler removal — SandboxJS can throw async errors after execution completes
         setTimeout(() => {
           process.removeListener('unhandledRejection', rejectionHandler);
