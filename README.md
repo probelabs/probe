@@ -376,7 +376,7 @@ return analysis;
 - **Concurrency control** - Parallel operations with configurable limits
 - **MCP tool integration** - Call any MCP tool from within scripts
 
-See the full [LLM Script Documentation](https://probelabs.com/probe/llm-script) for syntax and examples.
+See the full [LLM Script Documentation](./docs/llm-script.md) for syntax and examples.
 
 ---
 
@@ -432,31 +432,31 @@ cargo install --path .
 
 ## Documentation
 
-Full documentation is available at [probelabs.com/probe](https://probelabs.com/probe) and in the [`docs/`](./docs/) directory.
+Full documentation available at [probelabs.com/probe](https://probelabs.com/probe) or browse locally in [`docs/`](./docs/).
 
 ### Getting Started
-- [Quick Start](https://probelabs.com/probe/quick-start) - Get up and running in 5 minutes
-- [Installation](https://probelabs.com/probe/installation) - NPM, curl, Docker, and building from source
-- [Features Overview](https://probelabs.com/probe/features) - Core capabilities
+- [Quick Start](./docs/quick-start.md) - Get up and running in 5 minutes
+- [Installation](./docs/installation.md) - NPM, curl, Docker, and building from source
+- [Features Overview](./docs/features.md) - Core capabilities
 
 ### Probe CLI
-- [Search Command](https://probelabs.com/probe/probe-cli/search) - Elasticsearch-style semantic search
-- [Extract Command](https://probelabs.com/probe/probe-cli/extract) - Extract code blocks with full AST context
-- [Query Command](https://probelabs.com/probe/probe-cli/query) - AST-based structural pattern matching
-- [CLI Reference](https://probelabs.com/probe/probe-cli/cli-reference) - Complete command-line reference
+- [Search Command](./docs/probe-cli/search.md) - Elasticsearch-style semantic search
+- [Extract Command](./docs/probe-cli/extract.md) - Extract code blocks with full AST context
+- [Query Command](./docs/probe-cli/query.md) - AST-based structural pattern matching
+- [CLI Reference](./docs/probe-cli/cli-reference.md) - Complete command-line reference
 
 ### Probe Agent
-- [Agent Overview](https://probelabs.com/probe/probe-agent/overview) - What is Probe Agent and when to use it
-- [API Reference](https://probelabs.com/probe/probe-agent/sdk/api-reference) - ProbeAgent class documentation
-- [Node.js SDK](https://probelabs.com/probe/probe-agent/sdk/nodejs-sdk) - Full Node.js SDK reference
-- [MCP Integration](https://probelabs.com/probe/probe-agent/protocols/mcp-integration) - Editor integration guide
-- [LLM Script](https://probelabs.com/probe/llm-script) - Programmable orchestration DSL
+- [Agent Overview](./docs/probe-agent/overview.md) - What is Probe Agent and when to use it
+- [API Reference](./docs/probe-agent/sdk/api-reference.md) - ProbeAgent class documentation
+- [Node.js SDK](./docs/probe-agent/sdk/nodejs-sdk.md) - Full Node.js SDK reference
+- [MCP Integration](./docs/probe-agent/protocols/mcp-integration.md) - Editor integration guide
+- [LLM Script](./docs/llm-script.md) - Programmable orchestration DSL
 
 ### Guides & Reference
-- [Query Patterns](https://probelabs.com/probe/guides/query-patterns) - Effective search strategies
-- [Architecture](https://probelabs.com/probe/reference/architecture) - System design and internals
-- [Environment Variables](https://probelabs.com/probe/reference/environment-variables) - All configuration options
-- [FAQ](https://probelabs.com/probe/reference/faq) - Frequently asked questions
+- [Query Patterns](./docs/guides/query-patterns.md) - Effective search strategies
+- [Architecture](./docs/reference/architecture.md) - System design and internals
+- [Environment Variables](./docs/reference/environment-variables.md) - All configuration options
+- [FAQ](./docs/reference/faq.md) - Frequently asked questions
 
 ---
 
