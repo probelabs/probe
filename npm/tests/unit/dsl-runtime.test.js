@@ -343,6 +343,65 @@ describe('DSL Runtime', () => {
       expect(result.result.hasAllContent).toBe(true);
     });
 
+    test('extractPaths() extracts unique file paths from search results', async () => {
+      const result = await runtime.execute(`
+        const searchResults = [
+          "File: src/auth/login.js",
+          "function login() {}",
+          "",
+          "File: src/auth/logout.js",
+          "function logout() {}",
+          "",
+          "File: src/auth/login.js",
+          "another match in same file"
+        ].join("\\n");
+
+        return extractPaths(searchResults);
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result).toEqual(['src/auth/login.js', 'src/auth/logout.js']);
+    });
+
+    test('extractPaths() returns empty array when no File: headers', async () => {
+      const result = await runtime.execute(`
+        return extractPaths("just some text without file headers");
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result).toEqual([]);
+    });
+
+    test('extractPaths() works with chunkByKey for full content workflow', async () => {
+      const result = await runtime.execute(`
+        const searchResults = [
+          "File: Customers/Acme/note1.txt",
+          "${"x".repeat(50)}",
+          "",
+          "File: Customers/Acme/note2.txt",
+          "${"y".repeat(50)}",
+          "",
+          "File: Customers/Beta/note1.txt",
+          "${"z".repeat(50)}"
+        ].join("\\n");
+
+        // Group by customer with small token limit to force separate chunks
+        const chunks = chunkByKey(searchResults, file => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 50); // Small limit forces Acme and Beta into separate chunks
+
+        // Extract paths from first chunk (Acme)
+        const acmePaths = extractPaths(chunks[0]);
+
+        return {
+          numChunks: chunks.length,
+          acmePaths: acmePaths
+        };
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result.numChunks).toBe(2);
+      expect(result.result.acmePaths).toEqual(['Customers/Acme/note1.txt', 'Customers/Acme/note2.txt']);
+    });
+
     test('range() generates array', async () => {
       const result = await runtime.execute('return range(0, 5);');
       expect(result.status).toBe('success');

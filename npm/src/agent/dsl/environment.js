@@ -384,6 +384,15 @@ export function generateSandboxGlobals(options) {
     return chunks.length > 0 ? chunks : [''];
   };
 
+  // extractPaths() - extract unique file paths from search results
+  // Parses File: headers and returns deduplicated array of paths
+  globals.extractPaths = (searchResults) => {
+    const text = typeof searchResults === 'string' ? searchResults : JSON.stringify(searchResults);
+    const matches = text.match(/^File: ([^\n]+)/gm) || [];
+    const paths = matches.map(m => m.replace('File: ', '').trim());
+    return [...new Set(paths)];
+  };
+
   // Utility functions (pure, no async)
   globals.log = (message) => {
     // Collected by the runtime for the execution log
