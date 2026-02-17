@@ -118,6 +118,23 @@ function traceToolCall(toolName, fn, tracer, logFn) {
 }
 
 /**
+ * Try to parse a string as JSON if it looks like a JSON object or array.
+ * Checks if the first non-whitespace character is '{' or '[' before attempting parse.
+ * Returns the original string if it's not JSON.
+ *
+ * @param {string} text - The text to try parsing
+ * @returns {any} Parsed JSON value, or the original string
+ */
+function tryParseJSONValue(text) {
+  if (typeof text !== 'string') return text;
+  const firstChar = text.trimStart()[0];
+  if (firstChar === '{' || firstChar === '[') {
+    try { return JSON.parse(text); } catch (_) { /* not valid JSON */ }
+  }
+  return text;
+}
+
+/**
  * Generate sandbox globals that bridge DSL function calls to real tool implementations.
  *
  * @param {Object} options
@@ -195,7 +212,15 @@ export function generateSandboxGlobals(options) {
   if (mcpBridge) {
     for (const [name, tool] of Object.entries(mcpTools)) {
       const rawMcpFn = async (params = {}) => {
-        return tool.execute(params);
+        const result = await tool.execute(params);
+        // Extract text from MCP response envelope: { content: [{ type: 'text', text: '...' }] }
+        const text = result?.content?.[0]?.text;
+        if (text === undefined) {
+          // No envelope — if raw result is a JSON-like string, try parsing it
+          if (typeof result === 'string') return tryParseJSONValue(result);
+          return result;
+        }
+        return tryParseJSONValue(text);
       };
       globals[name] = traceToolCall(name, rawMcpFn, tracer, logFn);
     }

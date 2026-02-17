@@ -386,6 +386,219 @@ describe('MCP Integration with DSL Runtime', () => {
     });
   });
 
+  describe('MCP response envelope auto-parsing', () => {
+    // Real MCP callTool returns { content: [{ type: 'text', text: '...' }] }
+    // Tools must have .execute() method (Vercel tool format used since PR #420)
+    function createRealMcpBridge(toolFns = {}) {
+      const mcpTools = {};
+      for (const [name, fn] of Object.entries(toolFns)) {
+        mcpTools[name] = {
+          execute: async (params) => {
+            const data = await fn(params);
+            // Wrap in MCP protocol envelope like the real SDK does
+            return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+          },
+        };
+      }
+      return { mcpTools };
+    }
+
+    test('MCP JSON response is auto-parsed into object', async () => {
+      const mcpBridge = createRealMcpBridge({
+        zendesk_search_tickets: async (params) => {
+          return { tickets: [{ id: 1, subject: 'Test' }], count: 1 };
+        },
+      });
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const tickets = zendesk_search_tickets({query: "test"});
+        return tickets.tickets[0].subject;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('Test');
+    });
+
+    test('MCP array response is auto-parsed', async () => {
+      const mcpBridge = createRealMcpBridge({
+        get_comments: async () => [{ id: 1, body: 'hello' }, { id: 2, body: 'world' }],
+      });
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const comments = get_comments({});
+        let result = "";
+        for (const c of comments) { result = result + c.body + " "; }
+        return result;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toContain('hello');
+      expect(result.result).toContain('world');
+    });
+
+    test('MCP plain text response stays as string', async () => {
+      const mcpBridge = {
+        mcpTools: {
+          plain_tool: {
+            execute: async () => ({ content: [{ type: 'text', text: 'This is not JSON, just plain text.' }] }),
+          },
+        },
+      };
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const r = plain_tool({});
+        return r;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('This is not JSON, just plain text.');
+    });
+
+    test('MCP response without content envelope is returned as-is', async () => {
+      // Edge case: bridge returns raw object (like in tests/mocks)
+      const mcpBridge = createMockMcpBridge({
+        raw_tool: async () => ({ data: 'raw' }),
+      });
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const r = raw_tool({});
+        return r.data;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('raw');
+    });
+
+    test('raw string result that looks like JSON object is auto-parsed', async () => {
+      // Tool returns a raw JSON string (no MCP envelope)
+      const mcpBridge = {
+        mcpTools: {
+          string_json_tool: {
+            execute: async () => '{"status": "ok", "count": 42}',
+          },
+        },
+      };
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const r = string_json_tool({});
+        return r.count;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe(42);
+    });
+
+    test('raw string result that looks like JSON array is auto-parsed', async () => {
+      const mcpBridge = {
+        mcpTools: {
+          array_string_tool: {
+            execute: async () => '[1, 2, 3]',
+          },
+        },
+      };
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const r = array_string_tool({});
+        return r.length;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe(3);
+    });
+
+    test('raw string result that is not JSON stays as string', async () => {
+      const mcpBridge = {
+        mcpTools: {
+          plain_string_tool: {
+            execute: async () => 'Hello, this is plain text',
+          },
+        },
+      };
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const r = plain_string_tool({});
+        return r;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('Hello, this is plain text');
+    });
+
+    test('envelope text starting with { but invalid JSON stays as string', async () => {
+      const mcpBridge = {
+        mcpTools: {
+          bad_json_tool: {
+            execute: async () => ({ content: [{ type: 'text', text: '{not valid json at all' }] }),
+          },
+        },
+      };
+
+      const runtime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: createMockLLM(),
+        mcpBridge,
+        mcpTools: mcpBridge.mcpTools,
+      });
+
+      const result = await runtime.execute(`
+        const r = bad_json_tool({});
+        return r;
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('{not valid json at all');
+    });
+  });
+
   describe('Direct DSL options path', () => {
     test('direct options with mcpBridge work correctly', async () => {
       // When using direct toolImplementations (test mode), MCP should still work
