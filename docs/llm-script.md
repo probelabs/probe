@@ -27,26 +27,24 @@ LLM Script solves this by letting the AI write a **complete program** upfront th
 LLM Script programs look like simple JavaScript but run in a secure sandbox with special capabilities:
 
 ```javascript
-// Find all error handling patterns across the codebase
-const results = search("error handling try catch")
+// Find all API endpoints and count by HTTP method
+const results = search("API endpoint route handler")
 const chunks = chunk(results)
 
-var patterns = []
-for (const c of chunks) {
-  const found = LLM(
-    "Extract error handling patterns as JSON: [{type, file, description}]. ONLY JSON.",
-    c
-  )
-  try {
-    const parsed = JSON.parse(String(found))
-    for (const item of parsed) { patterns.push(item) }
-  } catch (e) { log("Parse error, skipping chunk") }
+const classified = map(chunks, c => LLM(
+  "Extract endpoints as JSON: [{method, path}]. ONLY JSON.", c
+))
+
+var endpoints = []
+for (const batch of classified) {
+  const parsed = parseJSON(batch)
+  if (parsed) { for (const ep of parsed) { endpoints.push(ep) } }
 }
 
-const byType = groupBy(patterns, "type")
-var table = "| Pattern | Count |\n|---------|-------|\n"
-for (const type of Object.keys(byType)) {
-  table = table + "| " + type + " | " + byType[type].length + " |\n"
+const byMethod = groupBy(endpoints, "method")
+var table = "| Method | Count |\n|--------|-------|\n"
+for (const method of Object.keys(byMethod)) {
+  table = table + "| " + method + " | " + byMethod[method].length + " |\n"
 }
 
 return table
@@ -97,10 +95,8 @@ const classified = map(chunks, (c) => LLM(
 
 var endpoints = []
 for (const batch of classified) {
-  try {
-    const parsed = JSON.parse(String(batch))
-    for (const ep of parsed) { endpoints.push(ep) }
-  } catch (e) { log("Parse error") }
+  const parsed = parseJSON(batch)
+  if (parsed) { for (const ep of parsed) { endpoints.push(ep) } }
 }
 
 // Pure JS statistics — no LLM needed
@@ -130,10 +126,8 @@ const items = map(chunks, (c) => LLM(
 
 var all = []
 for (const batch of items) {
-  try {
-    const parsed = JSON.parse(String(batch))
-    for (const item of parsed) { all.push(item) }
-  } catch (e) { log("Parse error") }
+  const parsed = parseJSON(batch)
+  if (parsed) { for (const item of parsed) { all.push(item) } }
 }
 
 const byPriority = groupBy(all, "priority")
@@ -243,10 +237,8 @@ const extracted = map(chunks, (c) => LLM(
   "Extract endpoints as JSON array: [{method, path, handler}]. ONLY JSON.", c
 ))
 for (const batch of extracted) {
-  try {
-    const parsed = JSON.parse(String(batch))
-    for (const item of parsed) { storeAppend("endpoints", item) }
-  } catch (e) { log("Parse error, skipping") }
+  const parsed = parseJSON(batch)
+  if (parsed) { for (const item of parsed) { storeAppend("endpoints", item) } }
 }
 
 // Phase 2: Pure JS statistics (no LLM needed!)
@@ -277,10 +269,8 @@ for (const b of batches) {
     return LLM("Find potential bugs. Return JSON: [{file, line, issue, severity}]. ONLY JSON.", code)
   })
   for (const r of results) {
-    try {
-      const parsed = JSON.parse(String(r))
-      for (const issue of parsed) { allIssues.push(issue) }
-    } catch (e) { log("Parse error") }
+    const parsed = parseJSON(r)
+    if (parsed) { for (const issue of parsed) { allIssues.push(issue) } }
   }
 }
 
@@ -371,12 +361,8 @@ const classified = map(chunks, (c) => LLM(
 
 var customers = []
 for (const batch of classified) {
-  try {
-    const parsed = parseJSON(String(batch))
-    if (Array.isArray(parsed)) {
-      for (const item of parsed) { customers.push(item) }
-    }
-  } catch (e) { log("Parse error, skipping") }
+  const parsed = parseJSON(batch)
+  if (parsed) { for (const item of parsed) { customers.push(item) } }
 }
 
 // Build a markdown table
@@ -431,6 +417,8 @@ LLM Script runs in a multi-layer security sandbox:
 5. **Self-Healing** — If a script fails, the error is sent to the LLM which generates a fixed version. Up to 2 retries are attempted before returning an error.
 
 ## Enabling LLM Script
+
+When enabled, Probe Agent gets access to the `execute_plan` tool. The AI generates LLM Script code and calls `execute_plan` to run it. The script has automatic access to all built-in tools (`search`, `query`, `extract`, `LLM`, etc.) plus any MCP tools you've connected.
 
 ### ProbeAgent SDK
 
@@ -506,7 +494,7 @@ You: "We need to upgrade the 'auth' library. Find every file that imports
 
 ## Related Resources
 
-- [AI Integration Overview](/ai-integration) — Overview of all Probe AI features
-- [Node.js SDK API Reference](/nodejs-sdk) — Programmatic access to Probe
-- [ProbeAgent SDK](/ai-integration#probeagent-sdk) — Building AI-powered code analysis apps
-- [AI Chat Mode](/ai-chat) — Interactive chat interface
+- [Agent Overview](./probe-agent/overview.md) — What is Probe Agent and when to use it
+- [Node.js SDK](./probe-agent/sdk/nodejs-sdk.md) — Programmatic access to Probe
+- [API Reference](./probe-agent/sdk/api-reference.md) — ProbeAgent class documentation
+- [Tools Reference](./probe-agent/sdk/tools-reference.md) — All available agent tools
