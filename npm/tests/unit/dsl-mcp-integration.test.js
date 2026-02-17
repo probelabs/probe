@@ -9,16 +9,25 @@
 import { createDSLRuntime } from '../../src/agent/dsl/runtime.js';
 import { createExecutePlanTool } from '../../src/tools/executePlan.js';
 
-// Mock MCP bridge that simulates callTool behavior
-function createMockMcpBridge(tools = {}) {
+// Mock MCP bridge that simulates MCPXmlBridge behavior
+// Real MCP tools have .execute() method (Vercel tool format)
+function createMockMcpBridge(toolFns = {}) {
+  // Wrap raw functions as tool objects with execute method
+  const mcpTools = {};
+  for (const [name, fn] of Object.entries(toolFns)) {
+    mcpTools[name] = {
+      execute: async (params) => fn(params),
+    };
+  }
   return {
+    // callTool is on MCPManager, not MCPXmlBridge, but we include it for compatibility
     callTool: async (name, params) => {
-      if (tools[name]) {
-        return tools[name](params);
+      if (mcpTools[name]) {
+        return mcpTools[name].execute(params);
       }
       throw new Error(`Unknown MCP tool: ${name}`);
     },
-    mcpTools: tools,
+    mcpTools,
   };
 }
 
