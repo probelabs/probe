@@ -80,6 +80,58 @@ describe('DSL Runtime', () => {
       expect(result.result).toContain('LLM processed: summarize');
     });
 
+    test('LLM with schema returns parsed JSON object', async () => {
+      const schemaRuntime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: async (instruction, data, options = {}) => {
+          // When schema is provided, simulate the structured JSON response
+          if (options.schema) {
+            return '{"customers": [{"name": "Acme Corp", "api_count": "10", "use_case": "Authentication"}]}';
+          }
+          return `LLM processed: ${instruction}`;
+        },
+      });
+
+      const result = await schemaRuntime.execute(`
+        const insights = LLM(
+          "Extract customer insights",
+          "Some data about customers",
+          { schema: '{"customers": [{"name": "string", "api_count": "string", "use_case": "string"}]}' }
+        );
+        return insights;
+      `);
+      expect(result.status).toBe('success');
+      // Should be a parsed object, not a string
+      expect(typeof result.result).toBe('object');
+      expect(result.result.customers).toBeDefined();
+      expect(result.result.customers[0].name).toBe('Acme Corp');
+    });
+
+    test('LLM with schema handles invalid JSON gracefully', async () => {
+      const schemaRuntime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: async (instruction, data, options = {}) => {
+          // Simulate a malformed response
+          if (options.schema) {
+            return 'Not valid JSON at all';
+          }
+          return `LLM processed: ${instruction}`;
+        },
+      });
+
+      const result = await schemaRuntime.execute(`
+        const insights = LLM(
+          "Extract insights",
+          "Some data",
+          { schema: '{"items": []}' }
+        );
+        return typeof insights;
+      `);
+      expect(result.status).toBe('success');
+      // Should fall back to string if JSON parsing fails
+      expect(result.result).toBe('string');
+    });
+
     test('chains tool calls', async () => {
       const result = await runtime.execute(`
         const searchResult = search("functions");
@@ -139,6 +191,237 @@ describe('DSL Runtime', () => {
       `);
       expect(result.status).toBe('success');
       expect(result.result).toBeGreaterThan(1);
+    });
+
+    test('chunkByKey() groups by key and streams efficiently', async () => {
+      // Create test data with File: headers
+      const result = await runtime.execute(`
+        const data = [
+          "File: Customers/Acme/note1.txt",
+          "Acme feedback 1",
+          "",
+          "File: Customers/Acme/note2.txt",
+          "Acme feedback 2",
+          "",
+          "File: Customers/Beta/note1.txt",
+          "Beta feedback 1",
+          "",
+          "File: Customers/Gamma/note1.txt",
+          "Gamma feedback 1"
+        ].join("\\n");
+
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 100); // Small token limit for testing
+
+        return {
+          numChunks: chunks.length,
+          chunk0HasAcme: chunks[0].indexOf("Acme") >= 0,
+          chunk0HasBothAcmeNotes: chunks[0].indexOf("note1.txt") >= 0 && chunks[0].indexOf("note2.txt") >= 0
+        };
+      `);
+      expect(result.status).toBe('success');
+      // Both Acme notes should be in the same chunk (same key never splits)
+      expect(result.result.chunk0HasAcme).toBe(true);
+      expect(result.result.chunk0HasBothAcmeNotes).toBe(true);
+    });
+
+    test('chunkByKey() keeps same-key blocks together even when exceeding token limit', async () => {
+      const result = await runtime.execute(`
+        // Create data where a single customer has blocks that together exceed the limit
+        const data = [
+          "File: Customers/BigCustomer/note1.txt",
+          "${"x".repeat(100)}",
+          "",
+          "File: Customers/BigCustomer/note2.txt",
+          "${"y".repeat(100)}",
+          "",
+          "File: Customers/BigCustomer/note3.txt",
+          "${"z".repeat(100)}"
+        ].join("\\n");
+
+        // Token limit that would be exceeded by all BigCustomer notes
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 25); // Very small limit - 100 chars
+
+        // All BigCustomer notes should still be in one chunk (never split same key)
+        return {
+          numChunks: chunks.length,
+          allInOneChunk: chunks[0].indexOf("note1.txt") >= 0 &&
+                          chunks[0].indexOf("note2.txt") >= 0 &&
+                          chunks[0].indexOf("note3.txt") >= 0
+        };
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result.numChunks).toBe(1);
+      expect(result.result.allInOneChunk).toBe(true);
+    });
+
+    test('chunkByKey() new key triggers flush when overflow', async () => {
+      const result = await runtime.execute(`
+        const data = [
+          "File: Customers/Alpha/note1.txt",
+          "${"a".repeat(50)}",
+          "",
+          "File: Customers/Alpha/note2.txt",
+          "${"b".repeat(50)}",
+          "",
+          "File: Customers/Beta/note1.txt",
+          "${"c".repeat(50)}"
+        ].join("\\n");
+
+        // Limit that fits Alpha but not Alpha + Beta
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 50); // 200 chars limit
+
+        return {
+          numChunks: chunks.length,
+          chunk0HasAlpha: chunks[0].indexOf("Alpha") >= 0,
+          chunk0HasBeta: chunks[0].indexOf("Beta") >= 0,
+          chunk1HasBeta: chunks.length > 1 && chunks[1].indexOf("Beta") >= 0
+        };
+      `);
+      expect(result.status).toBe('success');
+      // Alpha should be in first chunk, Beta should trigger new chunk
+      expect(result.result.numChunks).toBe(2);
+      expect(result.result.chunk0HasAlpha).toBe(true);
+      expect(result.result.chunk0HasBeta).toBe(false);
+      expect(result.result.chunk1HasBeta).toBe(true);
+    });
+
+    test('chunkByKey() falls back to chunk() when no File: headers found', async () => {
+      const result = await runtime.execute(`
+        const data = "This is plain text without any File: headers. ".repeat(100);
+        const chunks = chunkByKey(data, (file) => file, 50);
+        return {
+          numChunks: chunks.length,
+          isArray: Array.isArray(chunks)
+        };
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result.isArray).toBe(true);
+      expect(result.result.numChunks).toBeGreaterThan(0);
+    });
+
+    test('chunkByKey() handles interleaved keys correctly', async () => {
+      // Test that interleaved results (A1, A2, B1, B2) keep same keys together
+      // The key insight: once a key is in a chunk, ALL its blocks stay there
+      // So we test that A1 and A2 are together, B1 and B2 are together
+      const result = await runtime.execute(`
+        // Data arrives with A blocks, then B blocks (simulating grouped search results)
+        const data = [
+          "File: Customers/A/note1.txt",
+          "${"a".repeat(60)}",
+          "",
+          "File: Customers/A/note2.txt",
+          "${"b".repeat(60)}",
+          "",
+          "File: Customers/B/note1.txt",
+          "${"c".repeat(60)}",
+          "",
+          "File: Customers/B/note2.txt",
+          "${"d".repeat(60)}"
+        ].join("\\n");
+
+        // Token limit: 50 tokens = 200 chars
+        // Each block ~90 chars (30 header + 60 content)
+        // A1+A2 = ~180 chars (fits in 200)
+        // Adding B1 would be ~270 chars (overflow) -> flush, start new chunk
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 50);
+
+        // Verify A's are together in chunk 0
+        const chunk0 = chunks[0];
+        const aCount = (chunk0.match(/Customers\\/A/g) || []).length;
+
+        // Verify B's are together in chunk 1 (if exists)
+        const chunk1 = chunks[1] || '';
+        const bCountInChunk1 = (chunk1.match(/Customers\\/B/g) || []).length;
+
+        return {
+          numChunks: chunks.length,
+          aBlocksInChunk0: aCount,
+          bBlocksInChunk1: bCountInChunk1,
+          chunk0HasOnlyA: chunk0.indexOf("Customers/B") === -1,
+          chunk1HasOnlyB: chunk1.indexOf("Customers/A") === -1
+        };
+      `);
+      expect(result.status).toBe('success');
+      // Should have 2 chunks - A's in first, B's in second
+      expect(result.result.numChunks).toBe(2);
+      // Both A blocks should be in chunk 0
+      expect(result.result.aBlocksInChunk0).toBe(2);
+      // Both B blocks should be in chunk 1
+      expect(result.result.bBlocksInChunk1).toBe(2);
+      // Chunks should not mix keys
+      expect(result.result.chunk0HasOnlyA).toBe(true);
+      expect(result.result.chunk1HasOnlyB).toBe(true);
+    });
+
+    test('extractPaths() extracts unique file paths from search results', async () => {
+      const result = await runtime.execute(`
+        const searchResults = [
+          "File: src/auth/login.js",
+          "function login() {}",
+          "",
+          "File: src/auth/logout.js",
+          "function logout() {}",
+          "",
+          "File: src/auth/login.js",
+          "another match in same file"
+        ].join("\\n");
+
+        return extractPaths(searchResults);
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result).toEqual(['src/auth/login.js', 'src/auth/logout.js']);
+    });
+
+    test('extractPaths() returns empty array when no File: headers', async () => {
+      const result = await runtime.execute(`
+        return extractPaths("just some text without file headers");
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result).toEqual([]);
+    });
+
+    test('extractPaths() works with chunkByKey for full content workflow', async () => {
+      const result = await runtime.execute(`
+        const searchResults = [
+          "File: Customers/Acme/note1.txt",
+          "${"x".repeat(50)}",
+          "",
+          "File: Customers/Acme/note2.txt",
+          "${"y".repeat(50)}",
+          "",
+          "File: Customers/Beta/note1.txt",
+          "${"z".repeat(50)}"
+        ].join("\\n");
+
+        // Group by customer with small token limit to force separate chunks
+        const chunks = chunkByKey(searchResults, file => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 50); // Small limit forces Acme and Beta into separate chunks
+
+        // Extract paths from first chunk (Acme)
+        const acmePaths = extractPaths(chunks[0]);
+
+        return {
+          numChunks: chunks.length,
+          acmePaths: acmePaths
+        };
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result.numChunks).toBe(2);
+      expect(result.result.acmePaths).toEqual(['Customers/Acme/note1.txt', 'Customers/Acme/note2.txt']);
     });
 
     test('range() generates array', async () => {
@@ -858,5 +1141,139 @@ describe('DSL Runtime', () => {
       expect(outputLog).toBeDefined();
       expect(outputLog).toContain('chars written to output buffer');
     });
+  });
+});
+
+// Test extractRawOutputBlocks helper function
+import { extractRawOutputBlocks, RAW_OUTPUT_START, RAW_OUTPUT_END } from '../../src/tools/executePlan.js';
+
+describe('extractRawOutputBlocks', () => {
+  test('extracts single raw output block', () => {
+    const content = `Some result text\n\n${RAW_OUTPUT_START}\nCSV data here\nline2,data\n${RAW_OUTPUT_END}\n\n[The above raw output (20 chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+
+    const outputBuffer = { items: [] };
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content, outputBuffer);
+
+    expect(extractedBlocks).toHaveLength(1);
+    expect(extractedBlocks[0]).toBe('CSV data here\nline2,data');
+    expect(outputBuffer.items).toHaveLength(1);
+    expect(outputBuffer.items[0]).toBe('CSV data here\nline2,data');
+    expect(cleanedContent).not.toContain(RAW_OUTPUT_START);
+    expect(cleanedContent).not.toContain(RAW_OUTPUT_END);
+    expect(cleanedContent).not.toContain('Do NOT repeat');
+  });
+
+  test('extracts multiple raw output blocks', () => {
+    const content = `Result 1\n\n${RAW_OUTPUT_START}\nBlock 1\n${RAW_OUTPUT_END}\n\nSome text\n\n${RAW_OUTPUT_START}\nBlock 2\n${RAW_OUTPUT_END}`;
+
+    const outputBuffer = { items: [] };
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content, outputBuffer);
+
+    expect(extractedBlocks).toHaveLength(2);
+    expect(extractedBlocks[0]).toBe('Block 1');
+    expect(extractedBlocks[1]).toBe('Block 2');
+    expect(outputBuffer.items).toHaveLength(2);
+  });
+
+  test('returns original content when no blocks present', () => {
+    const content = 'Just regular content without any blocks';
+    const outputBuffer = { items: [] };
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content, outputBuffer);
+
+    expect(extractedBlocks).toHaveLength(0);
+    expect(cleanedContent).toBe(content);
+    expect(outputBuffer.items).toHaveLength(0);
+  });
+
+  test('works without outputBuffer parameter', () => {
+    const content = `Text\n\n${RAW_OUTPUT_START}\nData\n${RAW_OUTPUT_END}`;
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content);
+
+    expect(extractedBlocks).toHaveLength(1);
+    expect(extractedBlocks[0]).toBe('Data');
+    expect(cleanedContent).toBe('Text');
+  });
+
+  test('handles non-string content', () => {
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(null);
+    expect(cleanedContent).toBeNull();
+    expect(extractedBlocks).toHaveLength(0);
+
+    const { cleanedContent: c2, extractedBlocks: e2 } = extractRawOutputBlocks(123);
+    expect(c2).toBe(123);
+    expect(e2).toHaveLength(0);
+  });
+
+  test('preserves multiline content in blocks', () => {
+    const multilineData = 'customer,value,status\nAcme,100,active\nBeta,200,pending\nGamma,300,active';
+    const content = `Plan executed\n\n${RAW_OUTPUT_START}\n${multilineData}\n${RAW_OUTPUT_END}`;
+
+    const { extractedBlocks } = extractRawOutputBlocks(content);
+    expect(extractedBlocks[0]).toBe(multilineData);
+  });
+
+  test('simulates nested agent passthrough - child output cascades to parent', () => {
+    // Simulate child agent's execute_plan returning output with RAW_OUTPUT delimiters
+    const childToolResult = `Plan: Generate customer report
+
+Result: Report generated successfully
+
+${RAW_OUTPUT_START}
+customer,revenue,status
+Acme Corp,50000,active
+Beta Inc,30000,pending
+Gamma LLC,75000,active
+${RAW_OUTPUT_END}
+
+[The above raw output (89 chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+
+    // Parent agent has its own output buffer
+    const parentOutputBuffer = { items: [] };
+
+    // When parent processes the tool result, it extracts raw blocks
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(childToolResult, parentOutputBuffer);
+
+    // Raw content should be in parent's output buffer now
+    expect(parentOutputBuffer.items).toHaveLength(1);
+    expect(parentOutputBuffer.items[0]).toContain('customer,revenue,status');
+    expect(parentOutputBuffer.items[0]).toContain('Acme Corp,50000,active');
+
+    // Cleaned content should not have the raw block (LLM sees summary only)
+    expect(cleanedContent).toContain('Plan: Generate customer report');
+    expect(cleanedContent).toContain('Result: Report generated successfully');
+    expect(cleanedContent).not.toContain('Acme Corp,50000,active');
+    expect(cleanedContent).not.toContain(RAW_OUTPUT_START);
+  });
+
+  test('simulates multi-level nesting - grandchild to parent passthrough', () => {
+    // Level 1: Grandchild produces raw output
+    const grandchildOutput = { items: [] };
+    grandchildOutput.items.push('| Customer | Value |\n| Acme | 100 |');
+
+    // Level 2: Child wraps grandchild's output and produces its own tool result
+    // (simulating what formatSuccess does)
+    const childToolResult = `Plan: Aggregate data
+
+Result: Aggregated 1 customer
+
+${RAW_OUTPUT_START}
+| Customer | Value |
+| Acme | 100 |
+${RAW_OUTPUT_END}
+
+[The above raw output (32 chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+
+    // Level 3: Parent extracts and accumulates
+    const parentOutputBuffer = { items: ['Previous output from parent'] };
+    const { cleanedContent } = extractRawOutputBlocks(childToolResult, parentOutputBuffer);
+
+    // Parent should have both its own output AND child's raw output
+    expect(parentOutputBuffer.items).toHaveLength(2);
+    expect(parentOutputBuffer.items[0]).toBe('Previous output from parent');
+    expect(parentOutputBuffer.items[1]).toContain('| Acme | 100 |');
+
+    // LLM only sees the summary
+    expect(cleanedContent).toContain('Aggregated 1 customer');
+    expect(cleanedContent).not.toContain('| Acme | 100 |');
   });
 });
