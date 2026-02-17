@@ -17,7 +17,41 @@ import { glob } from 'glob';
 export { executePlanSchema };
 
 /**
+ * Decode common HTML entities that LLMs sometimes produce when generating code.
+ * This handles entities like &amp;&amp; → &&, &lt;= → <=, etc.
+ */
+function decodeHtmlEntities(str) {
+  const entities = {
+    '&amp;': '&',
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quot;': '"',
+    '&apos;': "'",
+    '&#39;': "'",
+    '&#x27;': "'",
+  };
+
+  // Replace named/common entities
+  let result = str.replace(/&(?:amp|lt|gt|quot|apos|#39|#x27);/gi, (match) => {
+    return entities[match.toLowerCase()] || match;
+  });
+
+  // Handle numeric entities (decimal): &#60; → <
+  result = result.replace(/&#(\d+);/g, (match, dec) => {
+    return String.fromCharCode(parseInt(dec, 10));
+  });
+
+  // Handle numeric entities (hex): &#x3C; → <
+  result = result.replace(/&#x([0-9a-f]+);/gi, (match, hex) => {
+    return String.fromCharCode(parseInt(hex, 16));
+  });
+
+  return result;
+}
+
+/**
  * Strip markdown fences and XML tags that LLMs sometimes wrap code in.
+ * Also decodes HTML entities that may appear in XML-extracted code.
  */
 function stripCodeWrapping(code) {
   let s = String(code || '');
@@ -25,6 +59,8 @@ function stripCodeWrapping(code) {
   s = s.replace(/^```(?:javascript|js)?\n?/gm, '').replace(/```$/gm, '');
   // Strip XML-style tags: <execute_plan>, </execute_plan>, <code>, </code>
   s = s.replace(/<\/?(?:execute_plan|code)>/g, '');
+  // Decode HTML entities (e.g., &amp;&amp; → &&, &lt;= → <=)
+  s = decodeHtmlEntities(s);
   return s.trim();
 }
 

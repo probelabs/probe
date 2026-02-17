@@ -9,6 +9,81 @@
 import * as acorn from 'acorn';
 import * as walk from 'acorn-walk';
 
+/**
+ * Convert a character offset to line and column numbers.
+ * @param {string} code - The source code
+ * @param {number} offset - Character offset
+ * @returns {{ line: number, column: number }}
+ */
+function offsetToLineColumn(code, offset) {
+  const lines = code.split('\n');
+  let pos = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const lineLength = lines[i].length + 1; // +1 for newline
+    if (pos + lineLength > offset) {
+      return { line: i + 1, column: offset - pos + 1 };
+    }
+    pos += lineLength;
+  }
+  return { line: lines.length, column: 1 };
+}
+
+/**
+ * Generate a code snippet with an arrow pointing to the error location.
+ * @param {string} code - The source code
+ * @param {number} line - Line number (1-based)
+ * @param {number} column - Column number (1-based)
+ * @param {number} contextLines - Number of lines to show before/after (default: 2)
+ * @returns {string}
+ */
+function generateErrorSnippet(code, line, column, contextLines = 2) {
+  const lines = code.split('\n');
+  const startLine = Math.max(0, line - 1 - contextLines);
+  const endLine = Math.min(lines.length, line + contextLines);
+
+  const snippetLines = [];
+  const lineNumWidth = String(endLine).length;
+
+  for (let i = startLine; i < endLine; i++) {
+    const lineNum = String(i + 1).padStart(lineNumWidth, ' ');
+    const marker = (i + 1 === line) ? '>' : ' ';
+    snippetLines.push(`${marker} ${lineNum} | ${lines[i]}`);
+
+    // Add arrow line for the error line
+    if (i + 1 === line) {
+      const padding = ' '.repeat(lineNumWidth + 4); // "  123 | " prefix
+      const arrow = ' '.repeat(Math.max(0, column - 1)) + '^';
+      snippetLines.push(`${padding}${arrow}`);
+    }
+  }
+
+  return snippetLines.join('\n');
+}
+
+/**
+ * Format an error message with code snippet.
+ * @param {string} message - The error message
+ * @param {string} code - The source code
+ * @param {number} offset - Character offset (optional, use -1 if line/column provided)
+ * @param {number} line - Line number (optional)
+ * @param {number} column - Column number (optional)
+ * @returns {string}
+ */
+function formatErrorWithSnippet(message, code, offset = -1, line = 0, column = 0) {
+  if (offset >= 0) {
+    const loc = offsetToLineColumn(code, offset);
+    line = loc.line;
+    column = loc.column;
+  }
+
+  if (line <= 0) {
+    return message;
+  }
+
+  const snippet = generateErrorSnippet(code, line, column);
+  return `${message}\n\n${snippet}`;
+}
+
 // Node types the LLM is allowed to generate
 const ALLOWED_NODE_TYPES = new Set([
   'Program',
@@ -102,16 +177,32 @@ export function validateDSL(code) {
       ecmaVersion: 2022,
       sourceType: 'script',
       allowReturnOutsideFunction: true,
+      locations: true, // Enable location tracking for better error messages
     });
   } catch (e) {
-    return { valid: false, errors: [`Syntax error: ${e.message}`] };
+    // Acorn errors have loc property with line/column
+    const line = e.loc?.line || 0;
+    const column = e.loc?.column ? e.loc.column + 1 : 0; // Acorn column is 0-based
+    const formattedError = formatErrorWithSnippet(
+      `Syntax error: ${e.message}`,
+      code,
+      -1,
+      line,
+      column
+    );
+    return { valid: false, errors: [formattedError] };
   }
+
+  // Helper to add error with code snippet
+  const addError = (message, position) => {
+    errors.push(formatErrorWithSnippet(message, code, position));
+  };
 
   // Step 2: Walk every node and validate
   walk.full(ast, (node) => {
     // Check node type against whitelist
     if (!ALLOWED_NODE_TYPES.has(node.type)) {
-      errors.push(`Blocked node type: ${node.type} at position ${node.start}`);
+      addError(`Blocked node type: ${node.type}`, node.start);
       return;
     }
 
@@ -121,7 +212,7 @@ export function validateDSL(code) {
         node.type === 'FunctionExpression') &&
       node.async
     ) {
-      errors.push(`Async functions are not allowed at position ${node.start}. Write synchronous code — the runtime handles async.`);
+      addError(`Async functions are not allowed. Write synchronous code — the runtime handles async.`, node.start);
     }
 
     // Block generator functions
@@ -129,19 +220,19 @@ export function validateDSL(code) {
       (node.type === 'FunctionExpression') &&
       node.generator
     ) {
-      errors.push(`Generator functions are not allowed at position ${node.start}`);
+      addError(`Generator functions are not allowed`, node.start);
     }
 
 
     // Check identifiers against blocklist
     if (node.type === 'Identifier' && BLOCKED_IDENTIFIERS.has(node.name)) {
-      errors.push(`Blocked identifier: '${node.name}' at position ${node.start}`);
+      addError(`Blocked identifier: '${node.name}'`, node.start);
     }
 
     // Check member expressions for blocked properties
     if (node.type === 'MemberExpression' && !node.computed) {
       if (node.property.type === 'Identifier' && BLOCKED_PROPERTIES.has(node.property.name)) {
-        errors.push(`Blocked property access: '.${node.property.name}' at position ${node.property.start}`);
+        addError(`Blocked property access: '.${node.property.name}'`, node.property.start);
       }
     }
 
@@ -149,7 +240,7 @@ export function validateDSL(code) {
     if (node.type === 'MemberExpression' && node.computed) {
       if (node.property.type === 'Literal' && typeof node.property.value === 'string') {
         if (BLOCKED_PROPERTIES.has(node.property.value) || BLOCKED_IDENTIFIERS.has(node.property.value)) {
-          errors.push(`Blocked computed property access: '["${node.property.value}"]' at position ${node.property.start}`);
+          addError(`Blocked computed property access: '["${node.property.value}"]'`, node.property.start);
         }
       }
     }
@@ -157,7 +248,7 @@ export function validateDSL(code) {
     // Block variable declarations named with blocked identifiers
     if (node.type === 'VariableDeclarator' && node.id.type === 'Identifier') {
       if (BLOCKED_IDENTIFIERS.has(node.id.name)) {
-        errors.push(`Cannot declare variable with blocked name: '${node.id.name}' at position ${node.id.start}`);
+        addError(`Cannot declare variable with blocked name: '${node.id.name}'`, node.id.start);
       }
     }
   });
