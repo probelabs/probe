@@ -189,10 +189,13 @@ export function generateSandboxGlobals(options) {
   }
 
   // Bridge MCP tools
+  // Note: mcpBridge is used as a gate (non-null check), but actual execution
+  // goes through tool.execute() since MCPXmlBridge stores tools in mcpTools
+  // and doesn't have a callTool() method (that's on MCPManager)
   if (mcpBridge) {
     for (const [name, tool] of Object.entries(mcpTools)) {
       const rawMcpFn = async (params = {}) => {
-        return mcpBridge.callTool(name, params);
+        return tool.execute(params);
       };
       globals[name] = traceToolCall(name, rawMcpFn, tracer, logFn);
     }

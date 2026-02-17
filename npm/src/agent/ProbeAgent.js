@@ -64,7 +64,7 @@ import {
   attemptCompletionSchema,
   parseXmlToolCallWithThinking
 } from './tools.js';
-import { createMessagePreview, detectUnrecognizedToolCall } from '../tools/common.js';
+import { createMessagePreview, detectUnrecognizedToolCall, detectStuckResponse, areBothStuckResponses } from '../tools/common.js';
 import {
   createWrappedTools,
   listFilesToolInstance,
@@ -3165,6 +3165,11 @@ Follow these instructions carefully:
       let sameResponseCount = 0;
       const MAX_REPEATED_IDENTICAL_RESPONSES = 3;
 
+      // Circuit breaker for consecutive no-tool responses (regardless of content)
+      // This catches cases where agent alternates between similar "stuck" messages
+      let consecutiveNoToolCount = 0;
+      const MAX_CONSECUTIVE_NO_TOOL = 5;
+
       // Tool iteration loop (only for non-CLI engines like Vercel/Anthropic/OpenAI)
       while (currentIteration < maxIterations && !completionAttempted) {
         currentIteration++;
@@ -3435,41 +3440,66 @@ Follow these instructions carefully:
 
           if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
 
+          // Reset consecutive no-tool counter since we got a valid tool call
+          consecutiveNoToolCount = 0;
+
           if (toolName === 'attempt_completion') {
             completionAttempted = true;
 
             // END CHECKPOINT: Block completion if there are incomplete tasks
+            // However, allow completion if the agent is stuck and genuinely cannot proceed
             if (this.enableTasks && this.taskManager && this.taskManager.hasIncompleteTasks()) {
-              const taskSummary = this.taskManager.getTaskSummary();
-              const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
-              const incompleteTasks = this.taskManager.getIncompleteTasks();
+              const completionResult = typeof params.result === 'string' ? params.result : '';
+              const isStuckCompletion = detectStuckResponse(completionResult);
+              const highIterationCount = currentIteration > maxIterations * 0.7; // >70% of max iterations
 
-              // Record telemetry for blocked completion
-              if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
-                this.tracer.recordTaskEvent('completion_blocked', {
-                  'task.incomplete_count': incompleteTasks.length,
-                  'task.incomplete_ids': incompleteTasks.map(t => t.id).join(', '),
-                  'task.iteration': currentIteration
+              // Allow stuck completions after many iterations to prevent infinite loops
+              if (isStuckCompletion && highIterationCount) {
+                if (this.debug) {
+                  console.log('[DEBUG] Task checkpoint: Allowing stuck completion (agent genuinely cannot proceed)');
+                  console.log('[DEBUG] Incomplete tasks will remain:', this.taskManager.getTaskSummary());
+                }
+                // Record telemetry for forced completion
+                if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
+                  this.tracer.recordTaskEvent('forced_stuck_completion', {
+                    'task.incomplete_count': this.taskManager.getIncompleteTasks().length,
+                    'task.iteration': currentIteration,
+                    'task.max_iterations': maxIterations
+                  });
+                }
+                // Continue to process the completion instead of blocking
+              } else {
+                const taskSummary = this.taskManager.getTaskSummary();
+                const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
+                const incompleteTasks = this.taskManager.getIncompleteTasks();
+
+                // Record telemetry for blocked completion
+                if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
+                  this.tracer.recordTaskEvent('completion_blocked', {
+                    'task.incomplete_count': incompleteTasks.length,
+                    'task.incomplete_ids': incompleteTasks.map(t => t.id).join(', '),
+                    'task.iteration': currentIteration
+                  });
+                }
+
+                if (this.debug) {
+                  console.log('[DEBUG] Task checkpoint: Blocking completion due to incomplete tasks');
+                  console.log('[DEBUG] Incomplete tasks:', taskSummary);
+                }
+
+                // Add reminder message and continue the loop
+                currentMessages.push({
+                  role: 'assistant',
+                  content: assistantResponseContent
                 });
+                currentMessages.push({
+                  role: 'user',
+                  content: blockedMessage
+                });
+
+                completionAttempted = false; // Reset to allow more iterations
+                continue; // Skip the break and continue the loop
               }
-
-              if (this.debug) {
-                console.log('[DEBUG] Task checkpoint: Blocking completion due to incomplete tasks');
-                console.log('[DEBUG] Incomplete tasks:', taskSummary);
-              }
-
-              // Add reminder message and continue the loop
-              currentMessages.push({
-                role: 'assistant',
-                content: assistantResponseContent
-              });
-              currentMessages.push({
-                role: 'user',
-                content: blockedMessage
-              });
-
-              completionAttempted = false; // Reset to allow more iterations
-              continue; // Skip the break and continue the loop
             }
 
             // Handle attempt_complete shorthand - use previous response
@@ -3898,10 +3928,19 @@ Follow these instructions carefully:
             break;
           }
 
-          // Check for repeated identical responses - if AI gives same response 3 times,
-          // accept it as the final answer instead of continuing the loop
-          if (lastNoToolResponse !== null && assistantResponseContent === lastNoToolResponse) {
+          // Increment consecutive no-tool counter (catches alternating stuck responses)
+          consecutiveNoToolCount++;
+
+          // Check for repeated identical responses OR semantically similar "stuck" responses
+          // This catches cases where AI alternates between slightly different "I cannot proceed" messages
+          const isIdentical = lastNoToolResponse !== null && assistantResponseContent === lastNoToolResponse;
+          const isSemanticallyStuck = lastNoToolResponse !== null && areBothStuckResponses(lastNoToolResponse, assistantResponseContent);
+
+          if (isIdentical || isSemanticallyStuck) {
             sameResponseCount++;
+            if (this.debug && isSemanticallyStuck && !isIdentical) {
+              console.log(`[DEBUG] Detected semantically similar stuck response (count: ${sameResponseCount})`);
+            }
             if (sameResponseCount >= MAX_REPEATED_IDENTICAL_RESPONSES) {
               // Clean up the response - remove thinking tags
               let cleanedResponse = assistantResponseContent;
@@ -3915,7 +3954,7 @@ Follow these instructions carefully:
 
               if (hasSubstantialContent) {
                 if (this.debug) {
-                  console.log(`[DEBUG] Same response repeated ${sameResponseCount} times - accepting as final answer (${cleanedResponse.length} chars)`);
+                  console.log(`[DEBUG] ${isIdentical ? 'Same' : 'Stuck'} response repeated ${sameResponseCount} times - accepting as final answer (${cleanedResponse.length} chars)`);
                 }
                 finalResult = cleanedResponse;
                 completionAttempted = true;
@@ -3923,9 +3962,28 @@ Follow these instructions carefully:
               }
             }
           } else {
-            // Different response, reset counter
+            // Different response (and not both stuck), reset counter
             lastNoToolResponse = assistantResponseContent;
             sameResponseCount = 1;
+          }
+
+          // Circuit breaker: If we've had MAX_CONSECUTIVE_NO_TOOL iterations without any tool call,
+          // force completion to avoid infinite loops (e.g., agent alternating between "can't proceed" variations)
+          if (consecutiveNoToolCount >= MAX_CONSECUTIVE_NO_TOOL) {
+            let cleanedResponse = assistantResponseContent;
+            cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+            cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*$/gi, '').trim();
+
+            if (cleanedResponse.length > 50) {
+              if (this.debug) {
+                console.log(`[DEBUG] Circuit breaker: ${consecutiveNoToolCount} consecutive no-tool responses - forcing completion`);
+              }
+              // Record this in telemetry
+              this._recordErrorTelemetry('consecutive_no_tool_circuit_breaker', `Forced completion after ${consecutiveNoToolCount} consecutive no-tool responses`, { responsePreview: cleanedResponse.substring(0, 500) }, currentIteration);
+              finalResult = cleanedResponse;
+              completionAttempted = true;
+              break;
+            }
           }
 
           // Add assistant response and ask for tool usage
