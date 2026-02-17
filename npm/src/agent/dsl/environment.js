@@ -227,9 +227,21 @@ export function generateSandboxGlobals(options) {
   }
 
   // LLM() built-in — delegate already has its own OTEL, but we add a DSL-level span
+  // When schema is provided, auto-parse the JSON result for easier downstream processing
   if (llmCall) {
     const rawLLM = async (instruction, data, opts = {}) => {
-      return llmCall(instruction, data, opts);
+      const result = await llmCall(instruction, data, opts);
+      // Auto-parse JSON when schema is provided and result is a string
+      if (opts.schema && typeof result === 'string') {
+        try {
+          return JSON.parse(result);
+        } catch (e) {
+          // If parsing fails, return the raw string (may have formatting issues)
+          logFn?.('[LLM] Warning: schema provided but result is not valid JSON');
+          return result;
+        }
+      }
+      return result;
     };
     globals.LLM = traceToolCall('LLM', rawLLM, tracer, logFn);
   }
@@ -304,6 +316,72 @@ export function generateSandboxGlobals(options) {
     }
 
     return chunks;
+  };
+
+  // chunkByKey() - chunk data ensuring same-key items stay together
+  // - Chunks CAN have multiple keys (customers)
+  // - But same key NEVER splits across chunks
+  globals.chunkByKey = (data, keyFn, maxTokens = 20000) => {
+    const CHARS_PER_TOKEN = 4;
+    const maxChars = maxTokens * CHARS_PER_TOKEN;
+    const text = typeof data === 'string' ? data : JSON.stringify(data);
+
+    // Find all File: markers
+    const blockRegex = /^File: ([^\n]+)/gm;
+    const markers = [];
+    let match;
+    while ((match = blockRegex.exec(text)) !== null) {
+      markers.push({ index: match.index, file: match[1].trim() });
+    }
+
+    // No File: headers - fallback to regular chunk
+    if (markers.length === 0) {
+      return globals.chunk(data, maxTokens);
+    }
+
+    const chunks = [];
+    let currentChunk = '';
+    let currentSize = 0;
+    let keysInChunk = new Set();  // Track which keys are in current chunk
+
+    // Process each block
+    for (let i = 0; i < markers.length; i++) {
+      const start = markers[i].index;
+      const end = i + 1 < markers.length ? markers[i + 1].index : text.length;
+      const block = text.slice(start, end).trim();
+      const file = markers[i].file;
+      const key = typeof keyFn === 'function' ? keyFn(file) : file;
+
+      const blockSize = block.length + 2; // +2 for \n\n separator
+      const wouldOverflow = currentSize + blockSize > maxChars;
+      const keyAlreadyInChunk = keysInChunk.has(key);
+
+      // Decision logic:
+      // - If key already in chunk: MUST add (never split a key)
+      // - If new key and would overflow: flush first, then add
+      // - If new key and fits: add to current chunk
+
+      if (!keyAlreadyInChunk && wouldOverflow && currentChunk) {
+        // New key would overflow - flush current chunk first
+        chunks.push(currentChunk.trim());
+        currentChunk = '';
+        currentSize = 0;
+        keysInChunk = new Set();
+      }
+
+      // Add block to current chunk
+      if (currentChunk) currentChunk += '\n\n';
+      currentChunk += block;
+      currentSize += blockSize;
+      keysInChunk.add(key);
+    }
+
+    // Flush final chunk
+    if (currentChunk.trim()) {
+      chunks.push(currentChunk.trim());
+    }
+
+    return chunks.length > 0 ? chunks : [''];
   };
 
   // Utility functions (pure, no async)

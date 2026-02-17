@@ -80,6 +80,58 @@ describe('DSL Runtime', () => {
       expect(result.result).toContain('LLM processed: summarize');
     });
 
+    test('LLM with schema returns parsed JSON object', async () => {
+      const schemaRuntime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: async (instruction, data, options = {}) => {
+          // When schema is provided, simulate the structured JSON response
+          if (options.schema) {
+            return '{"customers": [{"name": "Acme Corp", "api_count": "10", "use_case": "Authentication"}]}';
+          }
+          return `LLM processed: ${instruction}`;
+        },
+      });
+
+      const result = await schemaRuntime.execute(`
+        const insights = LLM(
+          "Extract customer insights",
+          "Some data about customers",
+          { schema: '{"customers": [{"name": "string", "api_count": "string", "use_case": "string"}]}' }
+        );
+        return insights;
+      `);
+      expect(result.status).toBe('success');
+      // Should be a parsed object, not a string
+      expect(typeof result.result).toBe('object');
+      expect(result.result.customers).toBeDefined();
+      expect(result.result.customers[0].name).toBe('Acme Corp');
+    });
+
+    test('LLM with schema handles invalid JSON gracefully', async () => {
+      const schemaRuntime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: async (instruction, data, options = {}) => {
+          // Simulate a malformed response
+          if (options.schema) {
+            return 'Not valid JSON at all';
+          }
+          return `LLM processed: ${instruction}`;
+        },
+      });
+
+      const result = await schemaRuntime.execute(`
+        const insights = LLM(
+          "Extract insights",
+          "Some data",
+          { schema: '{"items": []}' }
+        );
+        return typeof insights;
+      `);
+      expect(result.status).toBe('success');
+      // Should fall back to string if JSON parsing fails
+      expect(result.result).toBe('string');
+    });
+
     test('chains tool calls', async () => {
       const result = await runtime.execute(`
         const searchResult = search("functions");
@@ -139,6 +191,156 @@ describe('DSL Runtime', () => {
       `);
       expect(result.status).toBe('success');
       expect(result.result).toBeGreaterThan(1);
+    });
+
+    test('chunkByKey() groups by key and streams efficiently', async () => {
+      // Create test data with File: headers
+      const result = await runtime.execute(`
+        const data = [
+          "File: Customers/Acme/note1.txt",
+          "Acme feedback 1",
+          "",
+          "File: Customers/Acme/note2.txt",
+          "Acme feedback 2",
+          "",
+          "File: Customers/Beta/note1.txt",
+          "Beta feedback 1",
+          "",
+          "File: Customers/Gamma/note1.txt",
+          "Gamma feedback 1"
+        ].join("\\n");
+
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 100); // Small token limit for testing
+
+        return {
+          numChunks: chunks.length,
+          chunk0HasAcme: chunks[0].indexOf("Acme") >= 0,
+          chunk0HasBothAcmeNotes: chunks[0].indexOf("note1.txt") >= 0 && chunks[0].indexOf("note2.txt") >= 0
+        };
+      `);
+      expect(result.status).toBe('success');
+      // Both Acme notes should be in the same chunk (same key never splits)
+      expect(result.result.chunk0HasAcme).toBe(true);
+      expect(result.result.chunk0HasBothAcmeNotes).toBe(true);
+    });
+
+    test('chunkByKey() keeps same-key blocks together even when exceeding token limit', async () => {
+      const result = await runtime.execute(`
+        // Create data where a single customer has blocks that together exceed the limit
+        const data = [
+          "File: Customers/BigCustomer/note1.txt",
+          "${"x".repeat(100)}",
+          "",
+          "File: Customers/BigCustomer/note2.txt",
+          "${"y".repeat(100)}",
+          "",
+          "File: Customers/BigCustomer/note3.txt",
+          "${"z".repeat(100)}"
+        ].join("\\n");
+
+        // Token limit that would be exceeded by all BigCustomer notes
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 25); // Very small limit - 100 chars
+
+        // All BigCustomer notes should still be in one chunk (never split same key)
+        return {
+          numChunks: chunks.length,
+          allInOneChunk: chunks[0].indexOf("note1.txt") >= 0 &&
+                          chunks[0].indexOf("note2.txt") >= 0 &&
+                          chunks[0].indexOf("note3.txt") >= 0
+        };
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result.numChunks).toBe(1);
+      expect(result.result.allInOneChunk).toBe(true);
+    });
+
+    test('chunkByKey() new key triggers flush when overflow', async () => {
+      const result = await runtime.execute(`
+        const data = [
+          "File: Customers/Alpha/note1.txt",
+          "${"a".repeat(50)}",
+          "",
+          "File: Customers/Alpha/note2.txt",
+          "${"b".repeat(50)}",
+          "",
+          "File: Customers/Beta/note1.txt",
+          "${"c".repeat(50)}"
+        ].join("\\n");
+
+        // Limit that fits Alpha but not Alpha + Beta
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 50); // 200 chars limit
+
+        return {
+          numChunks: chunks.length,
+          chunk0HasAlpha: chunks[0].indexOf("Alpha") >= 0,
+          chunk0HasBeta: chunks[0].indexOf("Beta") >= 0,
+          chunk1HasBeta: chunks.length > 1 && chunks[1].indexOf("Beta") >= 0
+        };
+      `);
+      expect(result.status).toBe('success');
+      // Alpha should be in first chunk, Beta should trigger new chunk
+      expect(result.result.numChunks).toBe(2);
+      expect(result.result.chunk0HasAlpha).toBe(true);
+      expect(result.result.chunk0HasBeta).toBe(false);
+      expect(result.result.chunk1HasBeta).toBe(true);
+    });
+
+    test('chunkByKey() falls back to chunk() when no File: headers found', async () => {
+      const result = await runtime.execute(`
+        const data = "This is plain text without any File: headers. ".repeat(100);
+        const chunks = chunkByKey(data, (file) => file, 50);
+        return {
+          numChunks: chunks.length,
+          isArray: Array.isArray(chunks)
+        };
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result.isArray).toBe(true);
+      expect(result.result.numChunks).toBeGreaterThan(0);
+    });
+
+    test('chunkByKey() handles interleaved keys correctly', async () => {
+      // Test that interleaved results (A1, B1, A2, B2) still keep A's together and B's together
+      const result = await runtime.execute(`
+        const data = [
+          "File: Customers/A/note1.txt",
+          "A content 1",
+          "",
+          "File: Customers/B/note1.txt",
+          "B content 1",
+          "",
+          "File: Customers/A/note2.txt",
+          "A content 2",
+          "",
+          "File: Customers/B/note2.txt",
+          "B content 2"
+        ].join("\\n");
+
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/Customers\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 5000); // Large limit - everything fits in one chunk
+
+        return {
+          numChunks: chunks.length,
+          hasAllContent: chunks[0].indexOf("A content 1") >= 0 &&
+                         chunks[0].indexOf("A content 2") >= 0 &&
+                         chunks[0].indexOf("B content 1") >= 0 &&
+                         chunks[0].indexOf("B content 2") >= 0
+        };
+      `);
+      expect(result.status).toBe('success');
+      expect(result.result.numChunks).toBe(1);
+      expect(result.result.hasAllContent).toBe(true);
     });
 
     test('range() generates array', async () => {
