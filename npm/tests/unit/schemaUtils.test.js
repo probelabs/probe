@@ -1411,6 +1411,31 @@ describe('Schema Utilities', () => {
       const result = isSimpleTextWrapperSchema("{'text': 'string'}");
       expect(result).toEqual({ fieldName: 'text' });
     });
+
+    test('should detect full JSON Schema with required and description', () => {
+      // This is the schema format that was failing before the fix (issue #423)
+      const schema = '{"type":"object","properties":{"text":{"type":"string","description":"The response to the user"}},"required":["text"]}';
+      const result = isSimpleTextWrapperSchema(schema);
+      expect(result).toEqual({ fieldName: 'text' });
+    });
+
+    test('should detect full JSON Schema with additionalProperties', () => {
+      const schema = '{"type":"object","properties":{"response":{"type":"string"}},"additionalProperties":false}';
+      const result = isSimpleTextWrapperSchema(schema);
+      expect(result).toEqual({ fieldName: 'response' });
+    });
+
+    test('should return null for JSON Schema with multiple string properties', () => {
+      const schema = '{"type":"object","properties":{"text":{"type":"string"},"summary":{"type":"string"}}}';
+      const result = isSimpleTextWrapperSchema(schema);
+      expect(result).toBeNull();
+    });
+
+    test('should return null for JSON Schema with non-string property', () => {
+      const schema = '{"type":"object","properties":{"count":{"type":"number"}}}';
+      const result = isSimpleTextWrapperSchema(schema);
+      expect(result).toBeNull();
+    });
   });
 
   describe('tryAutoWrapForSimpleSchema', () => {

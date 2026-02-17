@@ -2891,8 +2891,10 @@ Follow these instructions carefully:
       // Track initial history length for storage
       const oldHistoryLength = this.history.length;
 
-      // Reset output buffer for this answer() call
-      if (this._outputBuffer) {
+      // Reset output buffer for this answer() call — but NOT during schema correction recursion
+      // When _schemaFormatted is true, this is a recursive call to fix JSON formatting,
+      // and we must preserve the output buffer so the parent call can append it
+      if (this._outputBuffer && !options?._schemaFormatted) {
         this._outputBuffer.items = [];
       }
 

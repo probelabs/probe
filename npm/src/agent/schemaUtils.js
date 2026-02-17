@@ -784,18 +784,42 @@ export function isSimpleTextWrapperSchema(schema) {
 
   const trimmed = schema.trim();
 
-  // Match patterns like: {text: string}, {"text": "string"}, {response: string}, etc.
-  // These are simple wrappers that just need a single text field
-  const simplePatterns = [
-    /^\{\s*["']?(\w+)["']?\s*:\s*["']?string["']?\s*\}$/i,
-    /^\{\s*["']?type["']?\s*:\s*["']?object["']?\s*,\s*["']?properties["']?\s*:\s*\{\s*["']?(\w+)["']?\s*:\s*\{\s*["']?type["']?\s*:\s*["']?string["']?\s*\}\s*\}\s*\}$/i
-  ];
+  // First, try parsing as JSON for full JSON Schema format
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed !== 'object' || parsed === null) {
+      // Fall through to regex matching
+    } else {
+      // Shorthand JSON format: {"text": "string"} or {"fieldName": "string"}
+      const keys = Object.keys(parsed);
+      if (keys.length === 1 && parsed[keys[0]] === 'string') {
+        return { fieldName: keys[0] };
+      }
 
-  for (const pattern of simplePatterns) {
-    const match = trimmed.match(pattern);
-    if (match) {
-      return { fieldName: match[1] };
+      // Full JSON Schema format: {"type":"object","properties":{"text":{"type":"string",...}}}
+      // Handles schemas with "required", "description", and other extra fields
+      if (parsed.type === 'object' && parsed.properties) {
+        const propKeys = Object.keys(parsed.properties);
+        if (propKeys.length === 1) {
+          const prop = parsed.properties[propKeys[0]];
+          if (prop && prop.type === 'string') {
+            return { fieldName: propKeys[0] };
+          }
+        }
+      }
+
+      // Valid JSON but not a simple wrapper
+      return null;
     }
+  } catch {
+    // Not valid JSON, fall through to regex matching
+  }
+
+  // Fallback: regex matching for shorthand formats like {text: string}, {'text': 'string'}
+  const simplePattern = /^\{\s*["']?(\w+)["']?\s*:\s*["']?string["']?\s*\}$/i;
+  const match = trimmed.match(simplePattern);
+  if (match) {
+    return { fieldName: match[1] };
   }
 
   return null;
