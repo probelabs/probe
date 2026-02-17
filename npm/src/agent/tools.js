@@ -6,6 +6,7 @@ import {
   delegateTool,
   analyzeAllTool,
   createExecutePlanTool,
+  createCleanupExecutePlanTool,
   bashTool,
   editTool,
   createTool,
@@ -18,6 +19,7 @@ import {
   delegateSchema,
   analyzeAllSchema,
   executePlanSchema,
+  cleanupExecutePlanSchema,
   bashSchema,
   editSchema,
   createSchema,
@@ -27,6 +29,7 @@ import {
   delegateToolDefinition,
   analyzeAllToolDefinition,
   getExecutePlanToolDefinition,
+  getCleanupExecutePlanToolDefinition,
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,
@@ -63,6 +66,10 @@ export function createTools(configOptions) {
   }
   if (configOptions.enableExecutePlan && isToolAllowed('execute_plan')) {
     tools.executePlanTool = createExecutePlanTool(configOptions);
+    // cleanup_execute_plan is enabled together with execute_plan
+    if (isToolAllowed('cleanup_execute_plan')) {
+      tools.cleanupExecutePlanTool = createCleanupExecutePlanTool(configOptions);
+    }
   } else if (isToolAllowed('analyze_all')) {
     // analyze_all is fallback when execute_plan is not enabled
     tools.analyzeAllTool = analyzeAllTool(configOptions);
@@ -104,6 +111,7 @@ export {
   delegateSchema,
   analyzeAllSchema,
   executePlanSchema,
+  cleanupExecutePlanSchema,
   bashSchema,
   editSchema,
   createSchema,
@@ -114,6 +122,7 @@ export {
   delegateToolDefinition,
   analyzeAllToolDefinition,
   getExecutePlanToolDefinition,
+  getCleanupExecutePlanToolDefinition,
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,

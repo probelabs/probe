@@ -220,6 +220,15 @@ export function createWrappedTools(baseTools) {
     );
   }
 
+  // Wrap cleanup_execute_plan tool
+  if (baseTools.cleanupExecutePlanTool) {
+    wrappedTools.cleanupExecutePlanToolInstance = wrapToolWithEmitter(
+      baseTools.cleanupExecutePlanTool,
+      'cleanup_execute_plan',
+      baseTools.cleanupExecutePlanTool.execute
+    );
+  }
+
   // Wrap bash tool
   if (baseTools.bashTool) {
     wrappedTools.bashToolInstance = wrapToolWithEmitter(

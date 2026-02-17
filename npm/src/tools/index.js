@@ -11,8 +11,8 @@ export { editTool, createTool } from './edit.js';
 // Export LangChain tools
 export { createSearchTool, createQueryTool, createExtractTool } from './langchain.js';
 
-// Export execute_plan tool
-export { createExecutePlanTool, getExecutePlanToolDefinition } from './executePlan.js';
+// Export execute_plan and cleanup_execute_plan tools
+export { createExecutePlanTool, getExecutePlanToolDefinition, createCleanupExecutePlanTool, getCleanupExecutePlanToolDefinition } from './executePlan.js';
 
 // Export common schemas and utilities
 export {
@@ -22,6 +22,7 @@ export {
 	delegateSchema,
 	bashSchema,
 	executePlanSchema,
+	cleanupExecutePlanSchema,
 	delegateDescription,
 	delegateToolDefinition,
 	bashDescription,

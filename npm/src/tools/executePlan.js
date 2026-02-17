@@ -6,7 +6,7 @@
  */
 
 import { tool } from 'ai';
-import { executePlanSchema, parseAndResolvePaths } from './common.js';
+import { executePlanSchema, cleanupExecutePlanSchema, parseAndResolvePaths } from './common.js';
 import { createDSLRuntime } from '../agent/dsl/runtime.js';
 import { search } from '../search.js';
 import { query } from '../query.js';
@@ -347,7 +347,16 @@ RULES REMINDER:
           });
         }
 
-        // All retries exhausted
+        // All retries exhausted — auto-cleanup output buffer to prevent stale data
+        if (outputBuffer && outputBuffer.items && outputBuffer.items.length > 0) {
+          const clearedChars = outputBuffer.items.reduce((sum, item) => sum + item.length, 0);
+          outputBuffer.items = [];
+          planSpan?.addEvent?.('dsl.auto_cleanup', {
+            'cleanup.chars_cleared': clearedChars,
+            'cleanup.reason': 'all_retries_exhausted',
+          });
+        }
+
         finalOutput = `Plan execution failed after ${maxRetries} retries.\n\nLast error: ${lastError}`;
         planSpan?.setAttributes?.({
           'dsl.result': 'all_retries_exhausted',
@@ -358,6 +367,11 @@ RULES REMINDER:
         planSpan?.end?.();
         return finalOutput;
       } catch (e) {
+        // Auto-cleanup output buffer on exception to prevent stale data
+        if (outputBuffer && outputBuffer.items && outputBuffer.items.length > 0) {
+          outputBuffer.items = [];
+        }
+
         planSpan?.setStatus?.('ERROR');
         planSpan?.addEvent?.('exception', {
           'exception.message': e.message,
@@ -807,4 +821,88 @@ for (const r of results) {
 output(table);
 return "Generated table with " + results.length + " items.";
 \`\`\``;
+}
+
+/**
+ * Create the cleanup_execute_plan tool for the Vercel AI SDK.
+ *
+ * Cleans up output buffer and optionally session store from previous
+ * failed or interrupted execute_plan calls.
+ *
+ * @param {Object} options
+ * @param {Object} [options.outputBuffer] - Output buffer to clear
+ * @param {Object} [options.sessionStore] - Session store to clear
+ * @param {Object} [options.tracer] - OTEL tracer for tracing
+ * @returns {Object} Vercel AI SDK tool
+ */
+export function createCleanupExecutePlanTool(options) {
+  const { outputBuffer, sessionStore, tracer } = options;
+
+  return tool({
+    description: 'Clean up output buffer and session store from previous execute_plan calls. ' +
+      'Use this when a previous execute_plan failed and left stale data, or before starting a fresh analysis.',
+    parameters: cleanupExecutePlanSchema,
+    execute: async ({ clearOutputBuffer = true, clearSessionStore = false }) => {
+      const span = tracer?.createToolSpan?.('cleanup_execute_plan', {
+        'cleanup.clear_output_buffer': clearOutputBuffer,
+        'cleanup.clear_session_store': clearSessionStore,
+      }) || null;
+
+      const results = [];
+
+      try {
+        if (clearOutputBuffer && outputBuffer) {
+          const itemCount = outputBuffer.items?.length || 0;
+          const charCount = outputBuffer.items?.reduce((sum, item) => sum + item.length, 0) || 0;
+          outputBuffer.items = [];
+          results.push(`Output buffer cleared (${itemCount} items, ${charCount} chars)`);
+        }
+
+        if (clearSessionStore && sessionStore) {
+          const keyCount = Object.keys(sessionStore).length;
+          for (const key of Object.keys(sessionStore)) {
+            delete sessionStore[key];
+          }
+          results.push(`Session store cleared (${keyCount} keys)`);
+        }
+
+        const output = results.length > 0
+          ? `Cleanup complete:\n- ${results.join('\n- ')}`
+          : 'Nothing to clean up';
+
+        span?.setAttributes?.({
+          'cleanup.result': output,
+          'cleanup.success': true,
+        });
+        span?.setStatus?.('OK');
+        span?.end?.();
+
+        return output;
+      } catch (e) {
+        span?.setStatus?.('ERROR');
+        span?.addEvent?.('exception', { 'exception.message': e.message });
+        span?.end?.();
+        return `Cleanup failed: ${e.message}`;
+      }
+    },
+  });
+}
+
+/**
+ * XML tool definition for cleanup_execute_plan.
+ *
+ * @returns {string} Tool definition text
+ */
+export function getCleanupExecutePlanToolDefinition() {
+  return `## cleanup_execute_plan
+Description: Clean up output buffer and session store from previous execute_plan calls. Use when a previous execute_plan failed and left stale data, or before starting a fresh analysis.
+
+Parameters:
+- clearOutputBuffer: (optional, default: true) Clear the output buffer from previous execute_plan calls
+- clearSessionStore: (optional, default: false) Clear the session store (persisted data across execute_plan calls)
+
+Example:
+<cleanup_execute_plan>
+<clearOutputBuffer>true</clearOutputBuffer>
+</cleanup_execute_plan>`;
 }

@@ -49,6 +49,7 @@ import {
   delegateToolDefinition,
   analyzeAllToolDefinition,
   getExecutePlanToolDefinition,
+  getCleanupExecutePlanToolDefinition,
   bashToolDefinition,
   listFilesToolDefinition,
   searchFilesToolDefinition,
@@ -870,6 +871,10 @@ export class ProbeAgent {
     }
     if (this.enableExecutePlan && wrappedTools.executePlanToolInstance && isToolAllowed('execute_plan')) {
       this.toolImplementations.execute_plan = wrappedTools.executePlanToolInstance;
+      // cleanup_execute_plan is enabled together with execute_plan
+      if (wrappedTools.cleanupExecutePlanToolInstance && isToolAllowed('cleanup_execute_plan')) {
+        this.toolImplementations.cleanup_execute_plan = wrappedTools.cleanupExecutePlanToolInstance;
+      }
     } else if (wrappedTools.analyzeAllToolInstance && isToolAllowed('analyze_all')) {
       // analyze_all is fallback when execute_plan is not enabled
       this.toolImplementations.analyze_all = wrappedTools.analyzeAllToolInstance;
@@ -2582,6 +2587,10 @@ ${extractGuidance}
       if (isToolAllowed('listFiles')) dslFunctions.push('listFiles');
       if (this.enableBash && isToolAllowed('bash')) dslFunctions.push('bash');
       toolDefinitions += `${getExecutePlanToolDefinition(dslFunctions)}\n`;
+      // cleanup_execute_plan is enabled together with execute_plan
+      if (isToolAllowed('cleanup_execute_plan')) {
+        toolDefinitions += `${getCleanupExecutePlanToolDefinition()}\n`;
+      }
     } else if (isToolAllowed('analyze_all')) {
       // Fallback: only register analyze_all if execute_plan is not available
       toolDefinitions += `${analyzeAllToolDefinition}\n`;
@@ -2661,6 +2670,9 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
     }
     if (this.enableExecutePlan && isToolAllowed('execute_plan')) {
       availableToolsList += '- execute_plan: Execute a DSL program to orchestrate tool calls. ALWAYS use this for: questions containing "all"/"every"/"comprehensive"/"complete inventory", multi-topic analysis, open-ended discovery questions, or any task requiring full codebase coverage.\n';
+      if (isToolAllowed('cleanup_execute_plan')) {
+        availableToolsList += '- cleanup_execute_plan: Clean up output buffer and session store from previous execute_plan calls.\n';
+      }
     } else if (isToolAllowed('analyze_all')) {
       availableToolsList += '- analyze_all: Process ALL data matching a query using map-reduce (for aggregate questions needing 100% coverage).\n';
     }
@@ -3413,6 +3425,10 @@ Follow these instructions carefully:
           // Execute Plan tool (requires enableExecutePlan flag, supersedes analyze_all)
           if (this.enableExecutePlan && this.allowedTools.isEnabled('execute_plan')) {
             validTools.push('execute_plan');
+            // cleanup_execute_plan is enabled together with execute_plan
+            if (this.allowedTools.isEnabled('cleanup_execute_plan')) {
+              validTools.push('cleanup_execute_plan');
+            }
           } else if (this.allowedTools.isEnabled('analyze_all')) {
             validTools.push('analyze_all');
           }

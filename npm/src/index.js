@@ -27,6 +27,7 @@ import {
 	delegateSchema,
 	analyzeAllSchema,
 	executePlanSchema,
+	cleanupExecutePlanSchema,
 	attemptCompletionSchema,
 	bashSchema,
 	searchToolDefinition,
@@ -47,7 +48,7 @@ import {
 	createToolDefinition
 } from './tools/edit.js';
 import { searchTool, queryTool, extractTool, delegateTool, analyzeAllTool } from './tools/vercel.js';
-import { createExecutePlanTool, getExecutePlanToolDefinition } from './tools/executePlan.js';
+import { createExecutePlanTool, getExecutePlanToolDefinition, createCleanupExecutePlanTool, getCleanupExecutePlanToolDefinition } from './tools/executePlan.js';
 import { bashTool } from './tools/bash.js';
 import { editTool, createTool } from './tools/edit.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
@@ -93,6 +94,7 @@ export {
 	delegateTool,
 	analyzeAllTool,
 	createExecutePlanTool,
+	createCleanupExecutePlanTool,
 	bashTool,
 	editTool,
 	createTool,
@@ -106,6 +108,7 @@ export {
 	delegateSchema,
 	analyzeAllSchema,
 	executePlanSchema,
+	cleanupExecutePlanSchema,
 	attemptCompletionSchema,
 	bashSchema,
 	editSchema,
@@ -117,6 +120,7 @@ export {
 	delegateToolDefinition,
 	analyzeAllToolDefinition,
 	getExecutePlanToolDefinition,
+	getCleanupExecutePlanToolDefinition,
 	attemptCompletionToolDefinition,
 	bashToolDefinition,
 	editToolDefinition,

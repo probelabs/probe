@@ -59,6 +59,11 @@ export const executePlanSchema = z.object({
 	description: z.string().optional().describe('Human-readable description of what this plan does, for logging.')
 });
 
+export const cleanupExecutePlanSchema = z.object({
+	clearOutputBuffer: z.boolean().optional().default(true).describe('Clear the output buffer from previous execute_plan calls'),
+	clearSessionStore: z.boolean().optional().default(false).describe('Clear the session store (persisted data across execute_plan calls)')
+});
+
 // Schema for the attempt_completion tool - flexible validation for direct XML response
 export const attemptCompletionSchema = {
 	// Custom validation that requires result parameter but allows direct XML response
@@ -431,6 +436,7 @@ export const DEFAULT_VALID_TOOLS = [
 	'delegate',
 	'analyze_all',
 	'execute_plan',
+	'cleanup_execute_plan',
 	'listSkills',
 	'useSkill',
 	'listFiles',
