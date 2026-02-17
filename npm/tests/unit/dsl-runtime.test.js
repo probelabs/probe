@@ -1189,4 +1189,69 @@ describe('extractRawOutputBlocks', () => {
     const { extractedBlocks } = extractRawOutputBlocks(content);
     expect(extractedBlocks[0]).toBe(multilineData);
   });
+
+  test('simulates nested agent passthrough - child output cascades to parent', () => {
+    // Simulate child agent's execute_plan returning output with RAW_OUTPUT delimiters
+    const childToolResult = `Plan: Generate customer report
+
+Result: Report generated successfully
+
+${RAW_OUTPUT_START}
+customer,revenue,status
+Acme Corp,50000,active
+Beta Inc,30000,pending
+Gamma LLC,75000,active
+${RAW_OUTPUT_END}
+
+[The above raw output (89 chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+
+    // Parent agent has its own output buffer
+    const parentOutputBuffer = { items: [] };
+
+    // When parent processes the tool result, it extracts raw blocks
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(childToolResult, parentOutputBuffer);
+
+    // Raw content should be in parent's output buffer now
+    expect(parentOutputBuffer.items).toHaveLength(1);
+    expect(parentOutputBuffer.items[0]).toContain('customer,revenue,status');
+    expect(parentOutputBuffer.items[0]).toContain('Acme Corp,50000,active');
+
+    // Cleaned content should not have the raw block (LLM sees summary only)
+    expect(cleanedContent).toContain('Plan: Generate customer report');
+    expect(cleanedContent).toContain('Result: Report generated successfully');
+    expect(cleanedContent).not.toContain('Acme Corp,50000,active');
+    expect(cleanedContent).not.toContain(RAW_OUTPUT_START);
+  });
+
+  test('simulates multi-level nesting - grandchild to parent passthrough', () => {
+    // Level 1: Grandchild produces raw output
+    const grandchildOutput = { items: [] };
+    grandchildOutput.items.push('| Customer | Value |\n| Acme | 100 |');
+
+    // Level 2: Child wraps grandchild's output and produces its own tool result
+    // (simulating what formatSuccess does)
+    const childToolResult = `Plan: Aggregate data
+
+Result: Aggregated 1 customer
+
+${RAW_OUTPUT_START}
+| Customer | Value |
+| Acme | 100 |
+${RAW_OUTPUT_END}
+
+[The above raw output (32 chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+
+    // Level 3: Parent extracts and accumulates
+    const parentOutputBuffer = { items: ['Previous output from parent'] };
+    const { cleanedContent } = extractRawOutputBlocks(childToolResult, parentOutputBuffer);
+
+    // Parent should have both its own output AND child's raw output
+    expect(parentOutputBuffer.items).toHaveLength(2);
+    expect(parentOutputBuffer.items[0]).toBe('Previous output from parent');
+    expect(parentOutputBuffer.items[1]).toContain('| Acme | 100 |');
+
+    // LLM only sees the summary
+    expect(cleanedContent).toContain('Aggregated 1 customer');
+    expect(cleanedContent).not.toContain('| Acme | 100 |');
+  });
 });
