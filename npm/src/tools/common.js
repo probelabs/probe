@@ -753,6 +753,67 @@ export function detectUnrecognizedToolCall(xmlString, validTools) {
 }
 
 /**
+ * Detect if a response indicates the agent is "stuck" and cannot proceed.
+ * This uses semantic pattern matching to catch variations of "I cannot proceed"
+ * that would bypass exact string matching.
+ *
+ * @param {string} response - The assistant response to check
+ * @returns {boolean} - True if the response indicates a stuck state
+ */
+export function detectStuckResponse(response) {
+	if (!response || typeof response !== 'string') {
+		return false;
+	}
+
+	const lowerResponse = response.toLowerCase();
+
+	// Patterns that indicate the agent is stuck
+	// Note: Use [''] to match both straight and curly apostrophes
+	const stuckPatterns = [
+		// Cannot proceed patterns
+		/\bi\s+cannot\s+proceed\b/i,
+		/\bi\s+can['']t\s+(?:proceed|continue|move\s+forward)\b/i,
+		/\bunable\s+to\s+(?:proceed|continue|complete)\b/i,
+		/\bblocked\b.*\b(?:proceed|continue)\b/i,
+		// Missing information patterns
+		/\bneed\s+(?:the|an?)\s+\w+(?:\s+\w+)?\s+to\s+(?:proceed|continue)\b/i,
+		/\brequire[sd]?\s+(?:the|an?)\s+\w+\b.*\bto\s+(?:proceed|continue)\b/i,
+		/\bmissing\s+(?:required|necessary|essential)\b/i,
+		// Deadlock/loop patterns
+		/\bdeadlock\b/i,
+		/\bwe\s+are\s+in\s+a\s+loop\b/i,
+		/\bstuck\s+in\s+a\s+loop\b/i,
+		/\bi\s+(?:have|['']ve)\s+(?:explained|stated|mentioned)\s+(?:this|the\s+situation|it)\s+(?:multiple|several)\s+times\b/i,
+		// Cannot find/get patterns
+		/\bi\s+(?:cannot|can['']t|could\s+not|couldn['']t)\s+(?:find|locate|get|retrieve|obtain)\s+(?:the|this|that|an?)\b/i,
+		/\bno\s+way\s+to\s+(?:find|get|obtain|retrieve)\b/i,
+		// Exhausted options patterns
+		/\bi\s+(?:have|['']ve)\s+exhausted\s+(?:all|my)\s+(?:available\s+)?(?:options|methods|approaches)\b/i,
+		/\bneither\s+of\s+these\s+methods\b/i,
+	];
+
+	for (const pattern of stuckPatterns) {
+		if (pattern.test(response)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Check if two responses are semantically similar (both indicate being stuck)
+ * This is a lightweight check that groups stuck responses together
+ *
+ * @param {string} response1 - First response
+ * @param {string} response2 - Second response
+ * @returns {boolean} - True if both responses indicate a stuck state
+ */
+export function areBothStuckResponses(response1, response2) {
+	return detectStuckResponse(response1) && detectStuckResponse(response2);
+}
+
+/**
  * Parse targets string into array of file specifications
  * Handles both space-separated and comma-separated targets for extract tool
  *
