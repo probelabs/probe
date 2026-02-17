@@ -360,21 +360,21 @@ const result = await generateText({
 
 ## LLM Script
 
-Probe includes a programmable orchestration engine for deterministic, multi-step code analysis tasks. LLM Script is a sandboxed JavaScript DSL that lets AI generate executable plans combining search, extraction, and LLM reasoning in a single pipeline.
+Probe Agent can use the `execute_plan` tool to run deterministic, multi-step code analysis tasks. LLM Script is a sandboxed JavaScript DSL where the AI generates executable plans combining search, extraction, and LLM reasoning in a single pipeline.
 
 ```javascript
-// AI-generated LLM Script example
-const files = await search({ query: "authentication", path: "./src" });
-const extracted = await map(files.slice(0, 5), f => extract({ files: [f.file] }));
-const analysis = await LLM("Summarize the authentication flow", extracted);
-return analysis;
+// AI-generated LLM Script example (await is auto-injected, don't write it)
+const files = search("authentication login")
+const chunks = chunk(files)
+const analysis = map(chunks, c => LLM("Summarize auth patterns", c))
+return analysis.join("\n")
 ```
 
 **Key features:**
-- **Sandboxed execution** - Safe, isolated JavaScript environment
-- **Built-in tools** - `search()`, `query()`, `extract()`, `LLM()`, `map()`, `chunk()`
-- **Concurrency control** - Parallel operations with configurable limits
-- **MCP tool integration** - Call any MCP tool from within scripts
+- **Agent integration** - Probe Agent calls `execute_plan` tool to run scripts
+- **Auto-await** - Async calls are automatically awaited (don't write `await`)
+- **All tools available** - `search()`, `query()`, `extract()`, `LLM()`, `map()`, `chunk()`, plus any MCP tools
+- **Sandboxed execution** - Safe, isolated JavaScript environment with timeout protection
 
 See the full [LLM Script Documentation](./docs/llm-script.md) for syntax and examples.
 
