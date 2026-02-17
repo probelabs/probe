@@ -166,14 +166,14 @@ return report
 **LLM with Schema Example:**
 ```javascript
 // Without schema - returns string, need manual parsing
-const raw = LLM("Extract customers as JSON", data)
-const customers = parseJSON(raw)
+const raw = LLM("Extract functions as JSON", data)
+const functions = parseJSON(raw)
 
 // With schema - returns parsed object directly
-const customers = LLM("Extract customers", data, {
-  schema: '{"customers": [{"name": "string", "value": "number"}]}'
+const result = LLM("Extract functions", data, {
+  schema: '{"functions": [{"name": "string", "file": "string", "lines": "number"}]}'
 })
-// customers.customers[0].name works directly!
+// result.functions[0].name works directly - no parseJSON needed!
 ```
 
 ### Data Utilities (sync)
@@ -194,15 +194,16 @@ const customers = LLM("Extract customers", data, {
 **chunkByKey Example:**
 ```javascript
 // Search returns snippets with "File: path/to/file" headers
-const results = search("customer feedback", { path: "./Customers" })
+const results = search("error handling", { path: "./src" })
 
-// Group by customer - ensures all notes for same customer stay in same chunk
+// Group by module - ensures all code from same module stays in same chunk
 const chunks = chunkByKey(results, file => {
-  const match = file.match(/Customers\/([^/]+)/)
+  const match = file.match(/src\/([^/]+)/)  // Extract first directory under src/
   return match ? match[1] : 'other'
 })
 
-// Each chunk contains ALL data for one or more customers (never split)
+// Each chunk contains ALL code for one or more modules (never split mid-module)
+// Useful when analyzing code that spans multiple files within a module
 ```
 
 **extractPaths Example:**
@@ -388,74 +389,81 @@ const analysis = LLM(
 return analysis
 ```
 
-### Pattern 6: Boundary-Aware Customer Data Processing
+### Pattern 6: Grouped Analysis with chunkByKey
 
-When processing data that's grouped by customer (or any key), use `chunkByKey()` to ensure a single customer's data is never split across chunks:
+When analyzing code organized by module, package, or namespace, use `chunkByKey()` to ensure all files from the same group stay together. This gives the LLM complete context for each logical unit:
 
 ```javascript
-// Search customer notes - results have "File: Customers/AcmeCorp/note1.txt" headers
-const results = search("product feedback feature request", { path: "./Customers" })
+// Search for error handling across the codebase
+const results = search("error handling try catch", { path: "./src" })
 
-// Group by customer - each chunk has complete data for its customers
+// Group by top-level module - each chunk has complete module context
 const chunks = chunkByKey(results, file => {
-  const match = file.match(/Customers\/([^/]+)/)
-  return match ? match[1] : 'unknown'
+  const match = file.match(/src\/([^/]+)/)
+  return match ? match[1] : 'other'
 })
 
-// Process each chunk - LLM sees complete customer context
-const insights = map(chunks, c => LLM(
-  "Extract customer insights. Return JSON with customer name, pain points, and feature requests.",
+// Analyze each module's error handling patterns
+const analyses = map(chunks, c => LLM(
+  "Analyze error handling patterns in this module. Identify: module name, patterns used, inconsistencies, and recommendations.",
   c,
-  { schema: '{"insights": [{"customer": "string", "pain_points": "string", "requests": "string"}]}' }
+  { schema: '{"modules": [{"name": "string", "patterns": "string", "issues": "string", "recommendation": "string"}]}' }
 ))
 
-// Collect all insights
+// Collect all module analyses
 var all = []
-for (const batch of insights) {
-  if (batch.insights) { for (const i of batch.insights) { all.push(i) } }
+for (const batch of analyses) {
+  if (batch.modules) { for (const m of batch.modules) { all.push(m) } }
 }
 
-// Output as CSV
-output("customer,pain_points,requests\n")
-for (const i of all) {
-  output(i.customer + "," + i.pain_points + "," + i.requests + "\n")
+// Output as markdown table
+output("| Module | Patterns | Issues | Recommendation |\n")
+output("|--------|----------|--------|----------------|\n")
+for (const m of all) {
+  output("| " + m.name + " | " + m.patterns + " | " + m.issues + " | " + m.recommendation + " |\n")
 }
 
-return "Extracted " + all.length + " customer insights"
+return "Analyzed error handling in " + all.length + " modules"
 ```
+
+**Other use cases for `chunkByKey()`:**
+- Group test files by the module they test
+- Analyze dependencies per package
+- Review code changes by author or PR
+- Process documentation by section
 
 ### Pattern 7: Direct Output for Large Data
 
 When your script produces large structured data (tables, JSON, CSV), use `output()` to deliver it directly to the user without the AI rewriting or summarizing it:
 
 ```javascript
-const results = search("customer onboarding")
+const results = search("function export public")
 const chunks = chunk(results)
 
 const classified = map(chunks, (c) => LLM(
-  "Extract customers as JSON: [{name, industry, status}]. ONLY JSON.", c
+  "Extract exported functions as JSON: [{name, file, description}]. ONLY JSON.", c
 ))
 
-var customers = []
+var functions = []
 for (const batch of classified) {
   const parsed = parseJSON(batch)
-  if (parsed) { for (const item of parsed) { customers.push(item) } }
+  if (parsed) { for (const item of parsed) { functions.push(item) } }
 }
 
 // Build a markdown table
-var table = "| Customer | Industry | Status |\n|----------|----------|--------|\n"
-for (const c of customers) {
-  table = table + "| " + (c.name || "Unknown") + " | " + (c.industry || "Unknown") + " | " + (c.status || "-") + " |\n"
+var table = "| Function | File | Description |\n|----------|------|-------------|\n"
+for (const f of functions) {
+  table = table + "| " + (f.name || "Unknown") + " | " + (f.file || "Unknown") + " | " + (f.description || "-") + " |\n"
 }
 
 // output() sends the full table directly to the user — no summarization
 output(table)
 
 // return value is what the AI sees — keep it short
-return "Generated table with " + customers.length + " customers"
+return "Generated table with " + functions.length + " exported functions"
 ```
 
-The AI will respond with something like "Here's the customer analysis..." and the full table will be appended verbatim below its response.
+The AI will respond with something like "Here's the API surface analysis..." and the full table will be appended verbatim below its response.
 
 ## Writing Rules
 
