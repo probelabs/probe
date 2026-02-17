@@ -365,6 +365,43 @@ describe('DSL Runtime', () => {
       expect(result.result.chunk1HasOnlyB).toBe(true);
     });
 
+    test('chunkByKey() works with complex regex patterns including non-capturing groups', async () => {
+      // This test verifies that complex regex patterns like (?:...) are not corrupted
+      // Bug report: /^(?:Customers|Prospects)\/([^/]+)/ was getting corrupted to /0/r]+)/
+      const result = await runtime.execute(`
+        const data = [
+          "File: Customers/Acme/note1.txt",
+          "Customer note",
+          "",
+          "File: Prospects/Beta/note1.txt",
+          "Prospect note",
+          "",
+          "File: Customers/Gamma/note1.txt",
+          "Another customer"
+        ].join("\\n");
+
+        // Use complex regex with non-capturing group and alternation
+        const chunks = chunkByKey(data, (file) => {
+          const match = file.match(/^(?:Customers|Prospects)\\/([^\\/]+)/);
+          return match ? match[1] : 'other';
+        }, 100);
+
+        // Verify regex worked correctly by checking extracted keys
+        return {
+          numChunks: chunks.length,
+          chunk0: chunks[0],
+          hasAcme: chunks[0].indexOf("Acme") >= 0,
+          hasBeta: chunks.some(c => c.indexOf("Beta") >= 0),
+          hasGamma: chunks.some(c => c.indexOf("Gamma") >= 0)
+        };
+      `);
+      expect(result.status).toBe('success');
+      // If regex was corrupted, the match would fail and all would go to 'other' key
+      expect(result.result.hasAcme).toBe(true);
+      expect(result.result.hasBeta).toBe(true);
+      expect(result.result.hasGamma).toBe(true);
+    });
+
     test('extractPaths() extracts unique file paths from search results', async () => {
       const result = await runtime.execute(`
         const searchResults = [
