@@ -420,6 +420,51 @@ RULES REMINDER:
   });
 }
 
+// Delimiters for raw output passthrough - prevents LLM from processing/hallucinating large structured output
+export const RAW_OUTPUT_START = '<<<RAW_OUTPUT>>>';
+export const RAW_OUTPUT_END = '<<<END_RAW_OUTPUT>>>';
+
+/**
+ * Extract raw output blocks from tool result content and pass them through to the output buffer.
+ * This prevents parent LLMs from processing/hallucinating large structured output.
+ *
+ * @param {string} content - The tool result content
+ * @param {Object} [outputBuffer] - The output buffer to append extracted content to
+ * @returns {{ cleanedContent: string, extractedBlocks: string[] }} - Content with blocks removed and extracted blocks
+ */
+export function extractRawOutputBlocks(content, outputBuffer = null) {
+  if (typeof content !== 'string') {
+    return { cleanedContent: content, extractedBlocks: [] };
+  }
+
+  const extractedBlocks = [];
+  const regex = new RegExp(`${RAW_OUTPUT_START}\\n([\\s\\S]*?)\\n${RAW_OUTPUT_END}`, 'g');
+
+  let cleanedContent = content;
+  let match;
+
+  // Extract all blocks
+  while ((match = regex.exec(content)) !== null) {
+    extractedBlocks.push(match[1]);
+  }
+
+  // Remove the blocks and any following instruction line from content
+  cleanedContent = content
+    .replace(new RegExp(`${RAW_OUTPUT_START}\\n[\\s\\S]*?\\n${RAW_OUTPUT_END}`, 'g'), '')
+    .replace(/\n\n\[The above raw output \(\d+ chars\) will be passed directly to the final response\. Do NOT repeat, summarize, or modify it\.\]/g, '')
+    .trim();
+
+  // If output buffer provided, append extracted content
+  if (outputBuffer && extractedBlocks.length > 0) {
+    for (const block of extractedBlocks) {
+      outputBuffer.items = outputBuffer.items || [];
+      outputBuffer.items.push(block);
+    }
+  }
+
+  return { cleanedContent, extractedBlocks };
+}
+
 function formatSuccess(result, description, attempt, outputBuffer) {
   let output = '';
 
@@ -452,10 +497,12 @@ function formatSuccess(result, description, attempt, outputBuffer) {
     }
   }
 
-  // If output buffer has content, tell the LLM the data was written to direct output
+  // If output buffer has content, wrap it in delimiters for passthrough
+  // This prevents parent LLMs from processing/hallucinating the raw data
   if (outputBuffer && outputBuffer.items && outputBuffer.items.length > 0) {
-    const totalChars = outputBuffer.items.reduce((sum, item) => sum + item.length, 0);
-    output += `\n\n[Output buffer: ${totalChars} chars written via output(). This content will be appended directly to your response. Do NOT repeat or summarize it.]`;
+    const rawContent = outputBuffer.items.join('\n');
+    output += `\n\n${RAW_OUTPUT_START}\n${rawContent}\n${RAW_OUTPUT_END}`;
+    output += `\n\n[The above raw output (${rawContent.length} chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
   }
 
   return output;

@@ -1062,3 +1062,72 @@ describe('DSL Runtime', () => {
     });
   });
 });
+
+// Test extractRawOutputBlocks helper function
+import { extractRawOutputBlocks, RAW_OUTPUT_START, RAW_OUTPUT_END } from '../../src/tools/executePlan.js';
+
+describe('extractRawOutputBlocks', () => {
+  test('extracts single raw output block', () => {
+    const content = `Some result text\n\n${RAW_OUTPUT_START}\nCSV data here\nline2,data\n${RAW_OUTPUT_END}\n\n[The above raw output (20 chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+
+    const outputBuffer = { items: [] };
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content, outputBuffer);
+
+    expect(extractedBlocks).toHaveLength(1);
+    expect(extractedBlocks[0]).toBe('CSV data here\nline2,data');
+    expect(outputBuffer.items).toHaveLength(1);
+    expect(outputBuffer.items[0]).toBe('CSV data here\nline2,data');
+    expect(cleanedContent).not.toContain(RAW_OUTPUT_START);
+    expect(cleanedContent).not.toContain(RAW_OUTPUT_END);
+    expect(cleanedContent).not.toContain('Do NOT repeat');
+  });
+
+  test('extracts multiple raw output blocks', () => {
+    const content = `Result 1\n\n${RAW_OUTPUT_START}\nBlock 1\n${RAW_OUTPUT_END}\n\nSome text\n\n${RAW_OUTPUT_START}\nBlock 2\n${RAW_OUTPUT_END}`;
+
+    const outputBuffer = { items: [] };
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content, outputBuffer);
+
+    expect(extractedBlocks).toHaveLength(2);
+    expect(extractedBlocks[0]).toBe('Block 1');
+    expect(extractedBlocks[1]).toBe('Block 2');
+    expect(outputBuffer.items).toHaveLength(2);
+  });
+
+  test('returns original content when no blocks present', () => {
+    const content = 'Just regular content without any blocks';
+    const outputBuffer = { items: [] };
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content, outputBuffer);
+
+    expect(extractedBlocks).toHaveLength(0);
+    expect(cleanedContent).toBe(content);
+    expect(outputBuffer.items).toHaveLength(0);
+  });
+
+  test('works without outputBuffer parameter', () => {
+    const content = `Text\n\n${RAW_OUTPUT_START}\nData\n${RAW_OUTPUT_END}`;
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(content);
+
+    expect(extractedBlocks).toHaveLength(1);
+    expect(extractedBlocks[0]).toBe('Data');
+    expect(cleanedContent).toBe('Text');
+  });
+
+  test('handles non-string content', () => {
+    const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(null);
+    expect(cleanedContent).toBeNull();
+    expect(extractedBlocks).toHaveLength(0);
+
+    const { cleanedContent: c2, extractedBlocks: e2 } = extractRawOutputBlocks(123);
+    expect(c2).toBe(123);
+    expect(e2).toHaveLength(0);
+  });
+
+  test('preserves multiline content in blocks', () => {
+    const multilineData = 'customer,value,status\nAcme,100,active\nBeta,200,pending\nGamma,300,active';
+    const content = `Plan executed\n\n${RAW_OUTPUT_START}\n${multilineData}\n${RAW_OUTPUT_END}`;
+
+    const { extractedBlocks } = extractRawOutputBlocks(content);
+    expect(extractedBlocks[0]).toBe(multilineData);
+  });
+});

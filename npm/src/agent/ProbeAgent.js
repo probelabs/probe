@@ -102,6 +102,7 @@ import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
 import { getCommonPrefix, toRelativePath, safeRealpath } from '../utils/path-validation.js';
 import { truncateIfNeeded, getMaxOutputTokens } from './outputTruncator.js';
 import { DelegationManager } from '../delegate.js';
+import { extractRawOutputBlocks } from '../tools/executePlan.js';
 import {
   TaskManager,
   createTaskTool,
@@ -3610,6 +3611,18 @@ Follow these instructions carefully:
 
                 let toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
 
+                // Extract raw output blocks and pass them through to output buffer (before truncation)
+                // This prevents LLM from processing/hallucinating large structured output from execute_plan
+                if (this._outputBuffer) {
+                  const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent, this._outputBuffer);
+                  if (extractedBlocks.length > 0) {
+                    toolResultContent = cleanedContent;
+                    if (this.debug) {
+                      console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) to output buffer`);
+                    }
+                  }
+                }
+
                 // Truncate if output exceeds token limit
                 try {
                   const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
@@ -3854,6 +3867,18 @@ Follow these instructions carefully:
                 if (this.workspaceRoot && toolResultContent) {
                   const wsPrefix = this.workspaceRoot.endsWith(sep) ? this.workspaceRoot : this.workspaceRoot + sep;
                   toolResultContent = toolResultContent.split(wsPrefix).join('');
+                }
+
+                // Extract raw output blocks and pass them through to output buffer (before truncation)
+                // This prevents LLM from processing/hallucinating large structured output from execute_plan
+                if (this._outputBuffer) {
+                  const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent, this._outputBuffer);
+                  if (extractedBlocks.length > 0) {
+                    toolResultContent = cleanedContent;
+                    if (this.debug) {
+                      console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) to output buffer`);
+                    }
+                  }
                 }
 
                 // Truncate if output exceeds token limit
