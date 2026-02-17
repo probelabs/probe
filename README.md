@@ -16,6 +16,27 @@ Today's AI coding tools use a caveman approach: grep some files, read random lin
 
 ---
 
+## Table of Contents
+
+- [Why Probe?](#why-probe)
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [Usage Modes](#usage-modes)
+  - [Probe Agent (MCP)](#probe-agent-mcp)
+  - [Raw MCP Tools](#raw-mcp-tools)
+  - [CLI Agent](#cli-agent)
+  - [Direct CLI Commands](#direct-cli-commands)
+  - [Node.js SDK](#nodejs-sdk)
+- [LLM Script](#llm-script)
+- [Installation](#installation)
+- [Supported Languages](#supported-languages)
+- [Documentation](#documentation)
+- [Environment Variables](#environment-variables)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
+
 ## Why Probe?
 
 | Traditional Approach | Probe |
@@ -90,21 +111,6 @@ npx -y @probelabs/probe@latest agent "How is authentication implemented?"
 # With code editing capabilities
 npx -y @probelabs/probe@latest agent "Refactor the login function" --allow-edit
 ```
-
----
-
-## Table of Contents
-
-- [Features](#features)
-- [Usage Modes](#usage-modes)
-  - [Probe Agent (MCP)](#probe-agent-mcp)
-  - [Raw MCP Tools](#raw-mcp-tools)
-  - [CLI Agent](#cli-agent)
-  - [Direct CLI](#direct-cli-commands)
-  - [Node.js SDK](#nodejs-sdk)
-- [Installation](#installation)
-- [Supported Languages](#supported-languages)
-- [Documentation](#documentation)
 
 ---
 
@@ -352,6 +358,28 @@ const result = await generateText({
 
 ---
 
+## LLM Script
+
+Probe includes a programmable orchestration engine for deterministic, multi-step code analysis tasks. LLM Script is a sandboxed JavaScript DSL that lets AI generate executable plans combining search, extraction, and LLM reasoning in a single pipeline.
+
+```javascript
+// AI-generated LLM Script example
+const files = await search({ query: "authentication", path: "./src" });
+const extracted = await map(files.slice(0, 5), f => extract({ files: [f.file] }));
+const analysis = await LLM("Summarize the authentication flow", extracted);
+return analysis;
+```
+
+**Key features:**
+- **Sandboxed execution** - Safe, isolated JavaScript environment
+- **Built-in tools** - `search()`, `query()`, `extract()`, `LLM()`, `map()`, `chunk()`
+- **Concurrency control** - Parallel operations with configurable limits
+- **MCP tool integration** - Call any MCP tool from within scripts
+
+See the full [LLM Script Documentation](https://probelabs.com/probe/llm-script) for syntax and examples.
+
+---
+
 ## Installation
 
 ### NPM (Recommended)
@@ -404,6 +432,8 @@ cargo install --path .
 
 ## Documentation
 
+Full documentation is available at [probelabs.com/probe](https://probelabs.com/probe) and in the [`docs/`](./docs/) directory.
+
 ### Getting Started
 - [Quick Start](https://probelabs.com/probe/quick-start) - Get up and running in 5 minutes
 - [Installation](https://probelabs.com/probe/installation) - NPM, curl, Docker, and building from source
@@ -420,6 +450,7 @@ cargo install --path .
 - [API Reference](https://probelabs.com/probe/probe-agent/sdk/api-reference) - ProbeAgent class documentation
 - [Node.js SDK](https://probelabs.com/probe/probe-agent/sdk/nodejs-sdk) - Full Node.js SDK reference
 - [MCP Integration](https://probelabs.com/probe/probe-agent/protocols/mcp-integration) - Editor integration guide
+- [LLM Script](https://probelabs.com/probe/llm-script) - Programmable orchestration DSL
 
 ### Guides & Reference
 - [Query Patterns](https://probelabs.com/probe/guides/query-patterns) - Effective search strategies

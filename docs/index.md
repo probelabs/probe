@@ -100,6 +100,16 @@ AI agent SDK for building intelligent coding assistants.
 
 ---
 
+## LLM Script
+
+Programmable orchestration engine for deterministic, multi-step code analysis.
+
+| Document | Description |
+|----------|-------------|
+| [LLM Script](./llm-script.md) | Sandboxed JavaScript DSL for AI-generated executable plans |
+
+---
+
 ## Guides
 
 | Document | Description |
