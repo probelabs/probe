@@ -431,6 +431,8 @@ return "Analyzed error handling in " + all.length + " modules"
 - Analyze dependencies per package
 - Review code changes by author or PR
 - Process documentation by section
+- Extract insights from markdown notes grouped by project or client
+- Analyze log files grouped by service or date
 
 ### Pattern 7: Direct Output for Large Data
 
