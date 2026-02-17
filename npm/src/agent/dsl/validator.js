@@ -16,18 +16,23 @@ const ALLOWED_NODE_TYPES = new Set([
   'BlockStatement',
   'VariableDeclaration',
   'VariableDeclarator',
+  'FunctionDeclaration',
   'ArrowFunctionExpression',
   'FunctionExpression',
   'CallExpression',
+  'NewExpression',
   'MemberExpression',
   'Identifier',
   'Literal',
   'TemplateLiteral',
   'TemplateElement',
+  'TaggedTemplateExpression',
   'ArrayExpression',
   'ObjectExpression',
   'SpreadElement',
   'IfStatement',
+  'SwitchStatement',
+  'SwitchCase',
   'ConditionalExpression',
   'ForOfStatement',
   'ForInStatement',
@@ -127,10 +132,6 @@ export function validateDSL(code) {
       errors.push(`Generator functions are not allowed at position ${node.start}`);
     }
 
-    // Block regex literals — SandboxJS doesn't support them
-    if (node.type === 'Literal' && node.regex) {
-      errors.push(`Regex literals are not supported at position ${node.start}. Use String methods like indexOf(), includes(), startsWith() instead.`);
-    }
 
     // Check identifiers against blocklist
     if (node.type === 'Identifier' && BLOCKED_IDENTIFIERS.has(node.name)) {

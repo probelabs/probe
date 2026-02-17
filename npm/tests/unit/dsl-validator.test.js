@@ -93,6 +93,51 @@ describe('DSL Validator', () => {
       expect(result.valid).toBe(true);
     });
 
+    test('switch statement', () => {
+      const result = validateDSL(`
+        const priority = "high";
+        let target;
+        switch (priority) {
+          case "high":
+            target = 60;
+            break;
+          case "low":
+            target = 240;
+            break;
+          default:
+            target = 120;
+        }
+        return target;
+      `);
+      expect(result.valid).toBe(true);
+    });
+
+    test('function declaration', () => {
+      const result = validateDSL(`
+        function double(x) { return x * 2; }
+        return double(21);
+      `);
+      expect(result.valid).toBe(true);
+    });
+
+    test('tagged template literal', () => {
+      const result = validateDSL(`
+        const result = tag\`hello \${"world"}\`;
+        return result;
+      `);
+      expect(result.valid).toBe(true);
+    });
+
+    test('new Date for date manipulation', () => {
+      const result = validateDSL(`
+        const d = new Date();
+        const start = new Date("2024-01-01");
+        const diff = d - start;
+        return diff;
+      `);
+      expect(result.valid).toBe(true);
+    });
+
     test('typical DSL program', () => {
       const result = validateDSL(`
         const results = search("API endpoints", "./src");
@@ -123,10 +168,15 @@ describe('DSL Validator', () => {
       expect(result.errors.some(e => e.includes('ClassDeclaration') || e.includes('ClassBody'))).toBe(true);
     });
 
-    test('rejects new expression', () => {
+    test('allows new expression for safe constructors', () => {
       const result = validateDSL('const d = new Date();');
+      expect(result.valid).toBe(true);
+    });
+
+    test('still rejects new Function (blocked identifier)', () => {
+      const result = validateDSL('const fn = new Function("return 1");');
       expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('Blocked node type: NewExpression');
+      expect(result.errors.some(e => e.includes("'Function'"))).toBe(true);
     });
 
     test('rejects this', () => {
@@ -208,16 +258,19 @@ describe('DSL Validator', () => {
       expect(result.valid).toBe(false);
     });
 
-    test('rejects regex literals', () => {
+    test('allows regex literals', () => {
       const result = validateDSL('const x = /pattern/.test("hello");');
-      expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('Regex literals are not supported');
+      expect(result.valid).toBe(true);
     });
 
-    test('rejects regex in replace', () => {
+    test('allows regex in replace', () => {
       const result = validateDSL('const s = "hello".replace(/h/, "H");');
-      expect(result.valid).toBe(false);
-      expect(result.errors[0]).toContain('Regex literals are not supported');
+      expect(result.valid).toBe(true);
+    });
+
+    test('allows regex with flags', () => {
+      const result = validateDSL('const s = "Hello".replace(/hello/gi, "world");');
+      expect(result.valid).toBe(true);
     });
   });
 
