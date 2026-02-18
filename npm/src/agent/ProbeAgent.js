@@ -4765,12 +4765,19 @@ Convert your previous response content into actual JSON data that follows this s
       // Append DSL output buffer directly to response (bypasses LLM rewriting)
       if (this._outputBuffer && this._outputBuffer.items.length > 0 && !options._schemaFormatted) {
         const outputContent = this._outputBuffer.items.join('\n\n');
-        finalResult = (finalResult || '') + '\n\n' + outputContent;
+        if (options.schema) {
+          // Schema response — the finalResult is JSON. Wrap output in RAW_OUTPUT
+          // delimiters so clients (visor, etc.) can extract and propagate the
+          // content separately from the JSON.
+          finalResult = (finalResult || '') + '\n<<<RAW_OUTPUT>>>\n' + outputContent + '\n<<<END_RAW_OUTPUT>>>';
+        } else {
+          finalResult = (finalResult || '') + '\n\n' + outputContent;
+        }
         if (options.onStream) {
           options.onStream('\n\n' + outputContent);
         }
         if (this.debug) {
-          console.log(`[DEBUG] Appended ${this._outputBuffer.items.length} output buffer items (${outputContent.length} chars) to final result`);
+          console.log(`[DEBUG] Appended ${this._outputBuffer.items.length} output buffer items (${outputContent.length} chars) to final result${options.schema ? ' (with RAW_OUTPUT delimiters)' : ''}`);
         }
         this._outputBuffer.items = [];
       }
