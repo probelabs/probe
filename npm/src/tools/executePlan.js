@@ -13,6 +13,7 @@ import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
 import { glob } from 'glob';
+import { bashTool } from './bash.js';
 
 export { executePlanSchema };
 
@@ -155,6 +156,27 @@ function buildToolImplementations(configOptions) {
       }
     },
   };
+
+  // Add bash tool if enabled
+  if (configOptions.enableBash) {
+    const bashToolInstance = bashTool({
+      bashConfig: configOptions.bashConfig || {},
+      debug: configOptions.debug || false,
+      cwd: cwd,
+      allowedFolders: configOptions.allowedFolders || [],
+      workspaceRoot: configOptions.workspaceRoot || cwd,
+      tracer: configOptions.tracer || null,
+    });
+    tools.bash = {
+      execute: async (params) => {
+        try {
+          return await bashToolInstance.execute(params);
+        } catch (e) {
+          return `Bash error: ${e.message}`;
+        }
+      },
+    };
+  }
 
   return tools;
 }

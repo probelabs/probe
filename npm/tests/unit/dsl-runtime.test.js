@@ -141,6 +141,29 @@ describe('DSL Runtime', () => {
       expect(result.status).toBe('success');
       expect(result.result).toContain('LLM processed: summarize');
     });
+
+    test('calls bash tool when available', async () => {
+      const bashRuntime = createDSLRuntime({
+        toolImplementations: {
+          ...createMockTools(),
+          bash: {
+            execute: async (params) => `command output: ${params.command}`,
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      const result = await bashRuntime.execute('const r = bash("ls -la"); return r;');
+      expect(result.status).toBe('success');
+      expect(result.result).toContain('command output: ls -la');
+    });
+
+    test('bash tool is not available when not provided', async () => {
+      // The default runtime doesn't include bash
+      const result = await runtime.execute('const r = bash("ls -la"); return r;');
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('bash is not defined');
+    });
   });
 
   describe('map() with concurrency', () => {
