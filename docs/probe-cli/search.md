@@ -247,6 +247,80 @@ probe search "config" ./ --ignore "vendor/*" --ignore "*.generated.ts"
 
 ---
 
+## Searching Dependencies
+
+Probe can search inside your project's dependencies (node_modules, Go modules, Rust crates). This is useful for understanding how libraries work or finding usage patterns.
+
+### Dependency Path Syntax
+
+Use language-specific prefixes to search within dependencies:
+
+| Prefix | Language | Example |
+|--------|----------|---------|
+| `go:` | Go | `go:github.com/gin-gonic/gin` |
+| `js:` | JavaScript/Node.js | `js:express` or `js:@ai-sdk/anthropic` |
+| `rust:` | Rust | `rust:serde` |
+
+### Examples
+
+```bash
+# Search in a Go dependency
+probe search "Context" go:github.com/gin-gonic/gin
+
+# Search in an npm package
+probe search "createClient" js:redis
+
+# Search in a scoped npm package
+probe search "createAnthropic" js:@ai-sdk/anthropic
+
+# Search in a Rust crate
+probe search "Serialize" rust:serde
+
+# Search in a subdirectory of a dependency
+probe search "Router" go:github.com/gin-gonic/gin/examples
+```
+
+### Alternative /dep/ Syntax
+
+You can also use the `/dep/` path prefix:
+
+```bash
+# Equivalent searches using /dep/ notation
+probe search "Context" /dep/go/github.com/gin-gonic/gin
+probe search "createClient" /dep/js/redis
+probe search "Serialize" /dep/rust/serde
+```
+
+### How It Works
+
+Probe resolves dependency paths to their actual filesystem locations:
+
+| Language | Resolution Path |
+|----------|-----------------|
+| Go | `$GOPATH/pkg/mod/` or Go module cache |
+| JavaScript | `node_modules/` in project or global |
+| Rust | `~/.cargo/registry/src/` |
+
+### Use Cases
+
+1. **Understanding library internals**: Search how a library implements a feature
+2. **Finding examples**: Search for usage patterns within library code
+3. **Debugging**: Locate where an error originates in a dependency
+4. **Learning**: Study well-written open source code
+
+```bash
+# How does gin handle middleware?
+probe search "middleware AND handler" go:github.com/gin-gonic/gin
+
+# How does express parse JSON?
+probe search "json AND parse" js:express
+
+# How does serde handle optional fields?
+probe search "Option AND deserialize" rust:serde
+```
+
+---
+
 ## Output Examples
 
 ### JSON Output

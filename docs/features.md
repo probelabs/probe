@@ -22,6 +22,7 @@ This means:
 - **Semantic Search**: Finds code by concept and meaning
 - **Language Awareness**: Recognizes language-specific patterns
 - **Symbol Extraction**: Extracts code by function/class name
+- **Dependency Search**: Search inside Go modules, npm packages, and Rust crates
 
 ### Performance
 
