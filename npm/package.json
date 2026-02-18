@@ -80,7 +80,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.1.46",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@nyariv/sandboxjs": "github:probelabs/SandboxJS",
-    "@probelabs/maid": "^0.0.24",
+    "@probelabs/maid": "^0.0.25",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
     "adm-zip": "^0.5.16",
