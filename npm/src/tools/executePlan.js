@@ -525,6 +525,9 @@ function formatSuccess(result, description, attempt, outputBuffer) {
     const rawContent = outputBuffer.items.join('\n');
     output += `\n\n${RAW_OUTPUT_START}\n${rawContent}\n${RAW_OUTPUT_END}`;
     output += `\n\n[The above raw output (${rawContent.length} chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+    // Clear the buffer after reading to prevent re-wrapping on subsequent execute_plan calls
+    // Without this, extractRawOutputBlocks pushes content back to buffer, causing exponential duplication
+    outputBuffer.items = [];
   }
 
   return output;
