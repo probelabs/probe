@@ -43,6 +43,37 @@ Semantic code search using Elasticsearch-style queries.
 </search>
 ```
 
+**Searching Dependencies:**
+
+The agent can search inside project dependencies using special path prefixes:
+
+| Prefix | Language | Example |
+|--------|----------|---------|
+| `go:` | Go modules | `go:github.com/gin-gonic/gin` |
+| `js:` | npm packages | `js:express` or `js:@ai-sdk/anthropic` |
+| `rust:` | Rust crates | `rust:serde` |
+
+```xml
+<!-- Search in an npm package -->
+<search>
+  <query>createAnthropic</query>
+  <path>js:@ai-sdk/anthropic</path>
+</search>
+
+<!-- Search in a Go module -->
+<search>
+  <query>Context AND middleware</query>
+  <path>go:github.com/gin-gonic/gin</path>
+</search>
+```
+
+**Prompting the Agent:**
+
+To ask the agent to search dependencies, use natural language like:
+- "Search for how createAnthropic works in the @ai-sdk/anthropic package"
+- "Look inside the gin library to see how middleware is implemented"
+- "Find the Serialize trait definition in the serde crate"
+
 **Configuration:**
 ```javascript
 const agent = new ProbeAgent({

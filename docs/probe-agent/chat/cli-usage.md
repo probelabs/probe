@@ -225,6 +225,30 @@ Assistant: [Uses extract tool]
 Here's the login function from src/auth/login.ts...
 ```
 
+### Searching Dependencies
+
+Probe can search inside your project's dependencies. Ask the agent to look inside npm packages, Go modules, or Rust crates:
+
+```
+You: How does createAnthropic work in the @ai-sdk/anthropic package?
+Assistant: I'll search inside the @ai-sdk/anthropic dependency...
+[Uses search with path: js:@ai-sdk/anthropic]
+The createAnthropic function initializes the Anthropic client...
+
+You: Look at how gin handles middleware
+Assistant: [Uses search with path: go:github.com/gin-gonic/gin]
+Here's how the gin library implements middleware...
+
+You: Find the Serialize trait in serde
+Assistant: [Uses search with path: rust:serde]
+The Serialize trait is defined in...
+```
+
+**Supported dependency prefixes:**
+- `js:package-name` - npm packages (e.g., `js:express`, `js:@ai-sdk/anthropic`)
+- `go:module/path` - Go modules (e.g., `go:github.com/gin-gonic/gin`)
+- `rust:crate-name` - Rust crates (e.g., `rust:serde`)
+
 ### Code Review
 
 ```bash
