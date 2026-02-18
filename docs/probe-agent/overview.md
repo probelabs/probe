@@ -115,6 +115,27 @@ Extract full function and class definitions with context:
 const response = await agent.answer("Extract the login function and explain how it works");
 ```
 
+### Dependency Search
+
+Search inside your project's dependencies - npm packages, Go modules, and Rust crates:
+
+```javascript
+// Ask the agent to search inside dependencies
+const response = await agent.answer(
+  "How does createAnthropic work in the @ai-sdk/anthropic package?"
+);
+
+// The agent uses special path prefixes:
+// - js:package-name (npm packages)
+// - go:module/path (Go modules)
+// - rust:crate-name (Rust crates)
+```
+
+**Example prompts:**
+- "Search for how express handles middleware"
+- "Look inside the gin library to see how routing works"
+- "Find the Serialize trait definition in serde"
+
 ### Code Editing (Optional)
 
 Enable code modifications with safeguards:
@@ -184,6 +205,7 @@ const agent = new ProbeAgent({
 | Feature | SDK | Chat CLI | Chat Web | MCP | ACP |
 |---------|-----|----------|----------|-----|-----|
 | Code Search | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Dependency Search | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Code Extraction | ✓ | ✓ | ✓ | ✓ | ✓ |
 | AST Queries | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Code Editing | ✓ | ✓ | ✓ | - | ✓ |
