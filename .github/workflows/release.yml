@@ -131,7 +131,7 @@ jobs:
           fi
           echo "CHECKSUM=${ARCHIVE_NAME}.${{ matrix.archive_ext }}.sha256" >> "$GITHUB_ENV"
 
-      # Upload artifact for npm packaging
+      # Upload artifact for npm packaging and release
       - name: Upload artifact for npm packaging
         uses: actions/upload-artifact@v4
         with:
@@ -139,16 +139,47 @@ jobs:
           path: ${{ env.ASSET }}
           retention-days: 1
 
-      # Upload the binary as a release asset
-      - name: Release
-        timeout-minutes: 15
+      # Upload checksum for release
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksum-${{ matrix.target }}
+          path: ${{ env.CHECKSUM }}
+          retention-days: 1
+
+  # Create GitHub release with all assets (runs once after all builds complete)
+  create-release:
+    name: Create GitHub Release
+    needs: build-and-release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: false
+
+      - name: Download all checksum artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: checksums
+          pattern: checksum-*
+          merge-multiple: false
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" \) -exec cp {} release-assets/ \;
+          find checksums -type f -name "*.sha256" -exec cp {} release-assets/ \;
+          echo "Release assets:"
+          ls -la release-assets/
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            ${{ env.ASSET }}
-            ${{ env.CHECKSUM }}
-          # Only generate release notes on the first matrix job to avoid duplicates
-          generate_release_notes: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+          files: release-assets/*
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -409,7 +440,7 @@ jobs:
 
   publish-docker-images:
     name: Publish Docker Images
-    needs: [build-and-release, publish-npm-package]
+    needs: [create-release, publish-npm-package]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
