@@ -33,6 +33,7 @@ Semantic code search using Elasticsearch-style queries.
 | `limit` | number | No | Maximum results (default: 20) |
 | `exact` | boolean | No | Exact match mode (default: false) |
 | `allowTests` | boolean | No | Include test files (default: false) |
+| `maxTokens` | number/null | No | Max tokens to return. Default 20000. Set to `null` for unlimited. |
 
 **Example AI Usage:**
 ```xml
@@ -42,6 +43,39 @@ Semantic code search using Elasticsearch-style queries.
   <limit>10</limit>
 </search>
 ```
+
+---
+
+### searchAll
+
+Exhaustive search that auto-paginates to retrieve ALL matching results. Use when you need complete coverage for bulk analysis.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Search query (supports AND, OR, NOT, wildcards) |
+| `path` | string | No | Directory to search (default: workspace root) |
+| `exact` | boolean | No | Exact match mode (default: false) |
+| `maxTokensPerPage` | number | No | Tokens per page (default: 20000) |
+| `maxPages` | number | No | Maximum pages to retrieve (default: 50, safety limit) |
+
+**Example DSL Usage:**
+```javascript
+// Get ALL matching results across the entire codebase
+const allResults = searchAll("authentication")
+
+// With options
+const results = searchAll({
+  query: "API endpoint",
+  path: "./src",
+  maxPages: 100
+})
+```
+
+**When to use:**
+- Use `search()` for targeted queries where first results are sufficient
+- Use `searchAll()` when you need complete coverage (e.g., "find ALL usages of X")
 
 **Searching Dependencies:**
 

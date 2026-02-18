@@ -150,11 +150,18 @@ return report
 
 | Function | Description | Returns |
 |----------|-------------|---------|
-| `search(query)` | Semantic code search with Elasticsearch-like syntax | `string` — code snippets with file paths |
+| `search(query)` | Semantic code search with Elasticsearch-like syntax. Returns up to 20K tokens by default. | `string` — code snippets with file paths |
+| `search(query, path, {maxTokens})` | Search with custom token limit. Use `{maxTokens: null}` for unlimited results. | `string` — code snippets |
+| `searchAll(query)` | **Exhaustive search** — auto-paginates to retrieve ALL matching results. Use for bulk analysis when you need complete coverage. | `string` — all matching code snippets |
 | `query(pattern)` | AST-based structural code search (tree-sitter) | `string` — matching code elements |
 | `extract(targets)` | Extract code by file path + line number | `string` — extracted code content |
 | `listFiles(pattern)` | List files matching a glob pattern | `array` — array of file path strings |
 | `bash(command)` | Execute a shell command | `string` — command output |
+
+**search vs searchAll:**
+- `search(query)` — Returns first 20K tokens. Fast, good for targeted queries.
+- `search(query, ".", {maxTokens: null})` — Returns all results in one call (may be large).
+- `searchAll(query)` — Auto-paginates, concatenating all pages. Best for comprehensive analysis.
 
 ### AI (async, auto-awaited)
 

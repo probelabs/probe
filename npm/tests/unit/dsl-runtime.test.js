@@ -164,6 +164,83 @@ describe('DSL Runtime', () => {
       expect(result.status).toBe('error');
       expect(result.error).toContain('bash is not defined');
     });
+
+    test('search with maxTokens parameter', async () => {
+      let capturedParams = null;
+      const searchRuntime = createDSLRuntime({
+        toolImplementations: {
+          ...createMockTools(),
+          search: {
+            execute: async (params) => {
+              capturedParams = params;
+              return `search results for: ${params.query}`;
+            },
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      // Test with explicit maxTokens using object syntax
+      const result = await searchRuntime.execute('const r = search({query: "test", path: ".", maxTokens: 50000}); return r;');
+      expect(result.status).toBe('success');
+      expect(capturedParams.maxTokens).toBe(50000);
+    });
+
+    test('search with maxTokens null (unlimited)', async () => {
+      let capturedParams = null;
+      const searchRuntime = createDSLRuntime({
+        toolImplementations: {
+          ...createMockTools(),
+          search: {
+            execute: async (params) => {
+              capturedParams = params;
+              return `search results for: ${params.query}`;
+            },
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      const result = await searchRuntime.execute('const r = search({query: "test", path: ".", maxTokens: null}); return r;');
+      expect(result.status).toBe('success');
+      expect(capturedParams.maxTokens).toBe(null);
+    });
+
+    test('searchAll is available in DSL', async () => {
+      const searchAllRuntime = createDSLRuntime({
+        toolImplementations: {
+          ...createMockTools(),
+          searchAll: {
+            execute: async (params) => `all results for: ${params.query}`,
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      const result = await searchAllRuntime.execute('const r = searchAll("bulk query"); return r;');
+      expect(result.status).toBe('success');
+      expect(result.result).toContain('all results for: bulk query');
+    });
+
+    test('searchAll accepts options', async () => {
+      let capturedParams = null;
+      const searchAllRuntime = createDSLRuntime({
+        toolImplementations: {
+          ...createMockTools(),
+          searchAll: {
+            execute: async (params) => {
+              capturedParams = params;
+              return `all results for: ${params.query}`;
+            },
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      const result = await searchAllRuntime.execute('const r = searchAll({query: "test", maxPages: 10}); return r;');
+      expect(result.status).toBe('success');
+      expect(capturedParams.maxPages).toBe(10);
+    });
   });
 
   describe('map() with concurrency', () => {

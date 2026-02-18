@@ -8,6 +8,7 @@
 
 import {
   searchSchema,
+  searchAllSchema,
   querySchema,
   extractSchema,
   bashSchema,
@@ -16,6 +17,7 @@ import {
 // Map of native tool names to their Zod schemas
 const NATIVE_TOOL_SCHEMAS = {
   search: searchSchema,
+  searchAll: searchAllSchema,
   query: querySchema,
   extract: extractSchema,
   bash: bashSchema,
@@ -23,7 +25,7 @@ const NATIVE_TOOL_SCHEMAS = {
 
 // Tools that are inherently async (make network/LLM calls)
 const ALWAYS_ASYNC = new Set([
-  'search', 'query', 'extract', 'listFiles', 'searchFiles', 'bash',
+  'search', 'searchAll', 'query', 'extract', 'listFiles', 'searchFiles', 'bash',
   'LLM', 'map',
 ]);
 

@@ -569,3 +569,108 @@ describe('createExecutePlanTool output() → RAW_OUTPUT', () => {
     expect(outputBuffer.items).toHaveLength(0);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// 5. search maxTokens and searchAll in DSL
+// ─────────────────────────────────────────────────────────────────────
+
+describe('search maxTokens and searchAll in DSL', () => {
+  test('search passes maxTokens parameter when provided via object syntax', async () => {
+    let capturedMaxTokens = undefined;
+    const outputBuffer = { items: [] };
+    const tool = createExecutePlanTool({
+      toolImplementations: {
+        search: {
+          execute: async (params) => {
+            capturedMaxTokens = params.maxTokens;
+            return 'search results';
+          },
+        },
+      },
+      llmCall: async () => 'ok',
+      outputBuffer,
+      maxRetries: 0,
+    });
+
+    await tool.execute({
+      code: 'const r = search({query: "test", path: ".", maxTokens: 50000}); return r;',
+      description: 'Test maxTokens',
+    });
+
+    expect(capturedMaxTokens).toBe(50000);
+  });
+
+  test('search passes maxTokens: null for unlimited via object syntax', async () => {
+    let capturedMaxTokens = 'not-set';
+    const outputBuffer = { items: [] };
+    const tool = createExecutePlanTool({
+      toolImplementations: {
+        search: {
+          execute: async (params) => {
+            capturedMaxTokens = params.maxTokens;
+            return 'search results';
+          },
+        },
+      },
+      llmCall: async () => 'ok',
+      outputBuffer,
+      maxRetries: 0,
+    });
+
+    await tool.execute({
+      code: 'const r = search({query: "test", maxTokens: null}); return r;',
+      description: 'Test unlimited maxTokens',
+    });
+
+    expect(capturedMaxTokens).toBe(null);
+  });
+
+  test('searchAll is callable from DSL', async () => {
+    const outputBuffer = { items: [] };
+    const tool = createExecutePlanTool({
+      toolImplementations: {
+        searchAll: {
+          execute: async (params) => {
+            return `all results for: ${params.query}`;
+          },
+        },
+      },
+      llmCall: async () => 'ok',
+      outputBuffer,
+      maxRetries: 0,
+    });
+
+    const result = await tool.execute({
+      code: 'const r = searchAll("bulk query"); return r;',
+      description: 'Test searchAll',
+    });
+
+    expect(result).toContain('Plan:');
+    expect(result).toContain('all results for: bulk query');
+  });
+
+  test('searchAll accepts maxPages option', async () => {
+    let capturedMaxPages = undefined;
+    const outputBuffer = { items: [] };
+    const tool = createExecutePlanTool({
+      toolImplementations: {
+        searchAll: {
+          execute: async (params) => {
+            capturedMaxPages = params.maxPages;
+            return `results for: ${params.query}`;
+          },
+        },
+      },
+      llmCall: async () => 'ok',
+      outputBuffer,
+      maxRetries: 0,
+    });
+
+    await tool.execute({
+      code: 'const r = searchAll({query: "test", maxPages: 10}); return r;',
+      description: 'Test searchAll with maxPages',
+    });
+
+    expect(capturedMaxPages).toBe(10);
+  });
+});
