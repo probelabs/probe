@@ -2904,10 +2904,11 @@ Follow these instructions carefully:
       // Track initial history length for storage
       const oldHistoryLength = this.history.length;
 
-      // Reset output buffer for this answer() call — but NOT during schema correction recursion
-      // When _schemaFormatted is true, this is a recursive call to fix JSON formatting,
-      // and we must preserve the output buffer so the parent call can append it
-      if (this._outputBuffer && !options?._schemaFormatted) {
+      // Reset output buffer for this answer() call — but NOT during recursive calls.
+      // _schemaFormatted: recursive call to fix JSON formatting
+      // _completionPromptProcessed: recursive call for completionPrompt follow-up
+      // Both must preserve the output buffer so the parent call can append it.
+      if (this._outputBuffer && !options?._schemaFormatted && !options?._completionPromptProcessed) {
         this._outputBuffer.items = [];
       }
 
@@ -4296,10 +4297,16 @@ After reviewing, provide your final answer using attempt_completion.`;
 
           // Make a follow-up call with the completion prompt
           // Pass _completionPromptProcessed to prevent infinite loops
+          // Save output buffer — the recursive answer() must not destroy DSL output() content
+          const savedOutputItems = this._outputBuffer ? [...this._outputBuffer.items] : [];
           const completionResult = await this.answer(completionPromptMessage, [], {
             ...options,
             _completionPromptProcessed: true
           });
+          // Restore output buffer so the parent call can append it to the final result
+          if (this._outputBuffer) {
+            this._outputBuffer.items = savedOutputItems;
+          }
 
           // Update finalResult with the result from the completion prompt
           finalResult = completionResult;
