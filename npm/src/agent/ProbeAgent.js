@@ -85,7 +85,7 @@ import {
   validateAndFixMermaidResponse,
   tryAutoWrapForSimpleSchema
 } from './schemaUtils.js';
-import { removeThinkingTags } from './xmlParsingUtils.js';
+import { removeThinkingTags, extractThinkingContent } from './xmlParsingUtils.js';
 import { predefinedPrompts } from './shared/prompts.js';
 import {
   MCPXmlBridge,
@@ -3554,8 +3554,25 @@ Follow these instructions carefully:
                   continue; // Don't use broken response, continue the loop
                 }
 
-                finalResult = prevContent;
-                if (this.debug) console.log(`[DEBUG] Using previous response as completion: ${finalResult.substring(0, 100)}...`);
+                // Pre-strip thinking tags to avoid losing content at final cleanup stage
+                const strippedContent = removeThinkingTags(prevContent);
+                if (strippedContent.length > 50) {
+                  // Enough content outside thinking tags — use stripped version directly
+                  finalResult = strippedContent;
+                  if (this.debug) console.log(`[DEBUG] Using previous response (thinking-stripped) as completion: ${finalResult.substring(0, 100)}...`);
+                } else {
+                  // Content was mostly/entirely inside thinking tags.
+                  // Extract thinking content and use it as the actual answer.
+                  const thinkingContent = extractThinkingContent(prevContent);
+                  if (thinkingContent && thinkingContent.length > 50) {
+                    finalResult = thinkingContent;
+                    if (this.debug) console.log(`[DEBUG] Previous response was mostly in thinking tags — using thinking content as completion: ${finalResult.substring(0, 100)}...`);
+                  } else {
+                    // Neither stripped nor thinking content is substantive — use raw as fallback
+                    finalResult = prevContent;
+                    if (this.debug) console.log(`[DEBUG] Using previous response as completion (raw): ${finalResult.substring(0, 100)}...`);
+                  }
+                }
               } else {
                 finalResult = 'Error: No previous response found to use as completion.';
                 if (this.debug) console.log(`[DEBUG] No suitable previous response found for attempt_complete shorthand`);

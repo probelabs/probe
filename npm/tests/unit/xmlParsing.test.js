@@ -1,5 +1,6 @@
 import { parseXmlToolCall, parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
 import { DEFAULT_VALID_TOOLS, buildToolTagPattern, detectUnrecognizedToolCall } from '../../src/tools/common.js';
+import { removeThinkingTags, extractThinkingContent } from '../../src/agent/xmlParsingUtils.js';
 
 describe('Shared Tool List', () => {
   test('DEFAULT_VALID_TOOLS should include bash', () => {
@@ -1182,6 +1183,67 @@ The user is asking to investigate the GraphQL layer in tyk-analytics.
 
         expect(result).toBe('wrapped_tool:attempt_completion');
       });
+    });
+  });
+});
+
+describe('removeThinkingTags and extractThinkingContent', () => {
+  test('removeThinkingTags strips closed thinking tags', () => {
+    const input = '<thinking>some reasoning</thinking>The actual answer here.';
+    expect(removeThinkingTags(input)).toBe('The actual answer here.');
+  });
+
+  test('removeThinkingTags strips unclosed thinking tags', () => {
+    const input = '<thinking>some reasoning that never closes';
+    expect(removeThinkingTags(input)).toBe('');
+  });
+
+  test('removeThinkingTags returns empty when content is entirely in thinking tags', () => {
+    const input = '<thinking>This is a long detailed analysis that the model put entirely in thinking tags. It contains all the useful content but will be stripped away.</thinking>';
+    expect(removeThinkingTags(input)).toBe('');
+  });
+
+  test('removeThinkingTags preserves content outside thinking tags', () => {
+    const input = '<thinking>reasoning</thinking>\n\nHere is the detailed answer with more than 50 characters of substantive content.';
+    const result = removeThinkingTags(input);
+    expect(result).toContain('Here is the detailed answer');
+    expect(result.length).toBeGreaterThan(50);
+  });
+
+  test('extractThinkingContent extracts content from thinking tags', () => {
+    const input = '<thinking>This is the actual analysis with useful content</thinking>';
+    expect(extractThinkingContent(input)).toBe('This is the actual analysis with useful content');
+  });
+
+  test('extractThinkingContent returns null when no thinking tags', () => {
+    expect(extractThinkingContent('No thinking tags here')).toBeNull();
+  });
+
+  describe('__PREVIOUS_RESPONSE__ thinking tag regression', () => {
+    test('should detect when previous response content is mostly inside thinking tags', () => {
+      // This simulates the bug: model puts answer in thinking tags,
+      // attempt_complete reuses it, then removeThinkingTags destroys the answer
+      const prevResponse = '<thinking>\nI have analyzed the two traces. The failures are caused by excessive data size from raw CI logs being fed into Gemini 2.5 Pro.\n\n1. Limit output size in execute_plan DSL\n2. Summarize before returning\n3. Warn/abort on large tool results\n</thinking>';
+
+      const stripped = removeThinkingTags(prevResponse);
+      const thinkingContent = extractThinkingContent(prevResponse);
+
+      // The stripped version would be nearly empty (the bug)
+      expect(stripped.length).toBeLessThan(50);
+
+      // But extractThinkingContent recovers the actual answer
+      expect(thinkingContent).toContain('excessive data size');
+      expect(thinkingContent.length).toBeGreaterThan(50);
+    });
+
+    test('should preserve content when it exists outside thinking tags', () => {
+      const prevResponse = '<thinking>Let me think about this</thinking>\n\nThe analysis shows that both failures are caused by excessive data size from raw CI logs. Here are the recommendations:\n1. Limit output size\n2. Summarize before returning';
+
+      const stripped = removeThinkingTags(prevResponse);
+
+      // Enough content outside thinking tags — no need for fallback
+      expect(stripped.length).toBeGreaterThan(50);
+      expect(stripped).toContain('excessive data size');
     });
   });
 });
