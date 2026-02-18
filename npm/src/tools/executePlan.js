@@ -85,6 +85,8 @@ function buildToolImplementations(configOptions) {
         if (!searchPaths || searchPaths.length === 0) {
           searchPaths = [cwd || '.'];
         }
+        // Allow maxTokens to be passed through (null = unlimited, undefined = default 20000)
+        const maxTokens = params.maxTokens !== undefined ? params.maxTokens : 20000;
         return await search({
           query: params.query,
           path: searchPaths.join(' '),
@@ -92,12 +94,76 @@ function buildToolImplementations(configOptions) {
           allowTests: true,
           exact: params.exact || false,
           json: false,
-          maxTokens: 20000,
+          maxTokens,
           session: sessionId,
           timeout: 60,
         });
       } catch (e) {
         return `Search error: ${e.message}`;
+      }
+    },
+  };
+
+  // searchAll: auto-paginating search that retrieves ALL results
+  // Calls search() repeatedly with same sessionId until no more results
+  tools.searchAll = {
+    execute: async (params) => {
+      try {
+        let searchPaths;
+        if (params.path) {
+          searchPaths = parseAndResolvePaths(params.path, cwd);
+        }
+        if (!searchPaths || searchPaths.length === 0) {
+          searchPaths = [cwd || '.'];
+        }
+        const pathStr = searchPaths.join(' ');
+        const maxTokensPerPage = params.maxTokensPerPage || 20000;
+        const maxPages = params.maxPages || 50; // Safety limit
+
+        let allResults = '';
+        let pageCount = 0;
+
+        while (pageCount < maxPages) {
+          const pageResult = await search({
+            query: params.query,
+            path: pathStr,
+            cwd,
+            allowTests: true,
+            exact: params.exact || false,
+            json: false,
+            maxTokens: maxTokensPerPage,
+            session: sessionId,
+            timeout: 60,
+          });
+
+          pageCount++;
+
+          // Check if we got results
+          if (!pageResult || pageResult.trim().length === 0) {
+            break;
+          }
+
+          // Check for "All results retrieved" or "No results found" signals
+          if (pageResult.includes('All results retrieved') ||
+              pageResult.includes('No results found') ||
+              pageResult.includes('No matching code blocks found')) {
+            // Include this final page if it has content beyond the message
+            if (pageResult.trim().length > 50) {
+              allResults += (allResults ? '\n\n' : '') + pageResult;
+            }
+            break;
+          }
+
+          allResults += (allResults ? '\n\n' : '') + pageResult;
+        }
+
+        if (pageCount >= maxPages) {
+          allResults += `\n\n[Warning: Reached maximum page limit (${maxPages}). Some results may be omitted.]`;
+        }
+
+        return allResults || 'No results found.';
+      } catch (e) {
+        return `SearchAll error: ${e.message}`;
       }
     },
   };
@@ -345,7 +411,8 @@ ${lastError}
 
 RULES REMINDER:
 - search(query) is KEYWORD SEARCH — pass a search query, NOT a filename. Use extract(filepath) to read file contents.
-- search(), query(), extract(), listFiles(), bash() all return STRINGS, not arrays.
+- search() returns up to 20K tokens by default. Use search(query, path, {maxTokens: null}) for unlimited, or searchAll(query) to auto-paginate ALL results.
+- search(), searchAll(), query(), extract(), listFiles(), bash() all return STRINGS, not arrays.
 - Use chunk(stringData) to split a string into an array of chunks.
 - Use map(array, fn) only with arrays. Do NOT pass strings to map().
 - Do NOT use .map(), .forEach(), .filter(), .join() — use for..of loops instead.
@@ -684,7 +751,8 @@ return table;
 ${funcList}
 
 **Return types — IMPORTANT:**
-- \`search(query)\` → **keyword search** — pass a search query (e.g. "error handling"), NOT a filename. Returns a **string** (matching code snippets). To process parts, use \`chunk()\` to split it.
+- \`search(query)\` → **keyword search** — pass a search query (e.g. "error handling"), NOT a filename. Returns a **string** (matching code snippets, up to 20K tokens by default). Use \`{maxTokens: null}\` for unlimited.
+- \`searchAll(query)\` → **exhaustive keyword search** — auto-paginates to retrieve ALL matching results. Returns a **string** (all matching code snippets concatenated). Use for bulk analysis.
 - \`query(pattern)\` → **AST search** — pass a tree-sitter pattern. Returns a **string** (matching code elements).
 - \`extract(targets)\` → **read file contents** — pass a file path like "src/main.js" or "src/main.js:42". Use this to read specific files found by listFiles(). Returns a **string**.
 - \`listFiles(pattern)\` → **list files** — pass a glob pattern like "**/*.md". Returns an **array** of file path strings. Use directly with \`for (const f of listFiles("**/*.md"))\`.

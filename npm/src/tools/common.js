@@ -13,8 +13,17 @@ export const searchSchema = z.object({
 	query: z.string().describe('Search query with Elasticsearch syntax. Use quotes for exact matches, AND/OR for boolean logic, - for negation.'),
 	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.'),
 	exact: z.boolean().optional().default(false).describe('Default (false) enables stemming and keyword splitting for exploratory search - "getUserData" matches "get", "user", "data", etc. Set true for precise symbol lookup where "getUserData" matches only "getUserData". Use true when you know the exact symbol name.'),
+	maxTokens: z.number().nullable().optional().describe('Maximum tokens to return. Default is 20000. Set to null for unlimited results.'),
 	session: z.string().optional().describe('Session ID for result caching and pagination. Pass the session ID from a previous search to get additional results (next page). Results already shown in a session are automatically excluded. Omit for a fresh search.'),
 	nextPage: z.boolean().optional().default(false).describe('Set to true when requesting the next page of results. Requires passing the same session ID from the previous search output.')
+});
+
+export const searchAllSchema = z.object({
+	query: z.string().describe('Search query with Elasticsearch syntax. Use quotes for exact matches, AND/OR for boolean logic, - for negation.'),
+	path: z.string().optional().default('.').describe('Path to search in.'),
+	exact: z.boolean().optional().default(false).describe('Use exact matching instead of stemming.'),
+	maxTokensPerPage: z.number().optional().default(20000).describe('Tokens per page when paginating. Default 20000.'),
+	maxPages: z.number().optional().default(50).describe('Maximum pages to retrieve. Default 50 (safety limit).')
 });
 
 export const querySchema = z.object({
