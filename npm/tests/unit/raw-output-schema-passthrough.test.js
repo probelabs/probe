@@ -571,7 +571,157 @@ describe('createExecutePlanTool output() → RAW_OUTPUT', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// 5. search maxTokens and searchAll in DSL
+// 5. completionPrompt does NOT leak _outputBuffer into finalResult
+// ─────────────────────────────────────────────────────────────────────
+
+describe('completionPrompt _outputBuffer isolation (issue #433)', () => {
+  let agent;
+  let mockCallCount;
+  let mockResponses;
+
+  beforeEach(() => {
+    mockCallCount = 0;
+    mockResponses = [];
+
+    agent = new ProbeAgent({
+      sessionId: 'test-completion-prompt-buffer',
+      path: process.cwd(),
+      debug: false,
+      enableExecutePlan: true,
+      completionPrompt: 'Please review and confirm your answer.',
+    });
+
+    agent.provider = (modelName) => `mock-${modelName}`;
+
+    agent.streamTextWithRetryAndFallback = jest.fn(async () => {
+      const response = mockResponses[mockCallCount] ||
+        { text: '<attempt_completion>\n<result>{"answer":"done"}</result>\n</attempt_completion>' };
+      mockCallCount++;
+
+      const textParts = [response.text];
+      let index = 0;
+      return {
+        textStream: {
+          [Symbol.asyncIterator]: () => ({
+            next: async () => {
+              if (index < textParts.length) {
+                return { value: textParts[index++], done: false };
+              }
+              return { value: undefined, done: true };
+            },
+          }),
+        },
+        text: Promise.resolve(response.text),
+        usage: Promise.resolve({ promptTokens: 100, completionTokens: 50 }),
+      };
+    });
+  });
+
+  afterEach(async () => {
+    agent = null;
+  });
+
+  test('inner completionPrompt answer() does NOT append _outputBuffer to its result', async () => {
+    const customerData = '--- report.md ---\n# Customers\n| Name | Auth |\n|---|---|\n| Acme | JWT |\n| Beta | HMAC |\n--- report.md ---';
+
+    agent.toolImplementations = {
+      execute_plan: {
+        execute: async () => {
+          return `Plan completed\n\n${RAW_OUTPUT_START}\n${customerData}\n${RAW_OUTPUT_END}\n\n[The above raw output (${customerData.length} chars) will be passed directly to the final response. Do NOT repeat, summarize, or modify it.]`;
+        },
+      },
+    };
+
+    // Iteration 1: LLM calls execute_plan
+    // Iteration 2: LLM returns attempt_completion (clean JSON, no customer data)
+    // Iteration 3: completionPrompt inner call — LLM reviews and returns confirmed JSON
+    mockResponses = [
+      { text: '<execute_plan>\n<code>output("' + customerData.replace(/\n/g, '\\n') + '"); return "done";</code>\n<description>Generate report</description>\n</execute_plan>' },
+      { text: '<attempt_completion>\n<result>{"answer":"Report generated","summary":"2 customers found"}</result>\n</attempt_completion>' },
+      { text: '<attempt_completion>\n<result>{"answer":"Report generated","summary":"2 customers found"}</result>\n</attempt_completion>' },
+    ];
+
+    agent.history = [{ role: 'system', content: 'You are a helpful assistant.' }];
+
+    const result = await agent.answer('Generate customer report', [], {
+      maxIterations: 10,
+      schema: '{"answer":"string","summary":"string"}',
+    });
+
+    // The final result should contain RAW_OUTPUT with customer data
+    // (appended ONLY by the parent answer() call, not by the inner completionPrompt call)
+    expect(result).toContain(RAW_OUTPUT_START);
+    expect(result).toContain(customerData);
+    expect(result).toContain(RAW_OUTPUT_END);
+
+    // The JSON part should be clean — no customer data leaked into it
+    const jsonPart = result.split(RAW_OUTPUT_START)[0].trim();
+    expect(jsonPart).not.toContain('Acme');
+    expect(jsonPart).not.toContain('Beta');
+    expect(jsonPart).not.toContain('--- report.md ---');
+
+    // Verify the JSON is valid
+    expect(() => JSON.parse(jsonPart)).not.toThrow();
+    const parsed = JSON.parse(jsonPart);
+    expect(parsed.answer).toBe('Report generated');
+
+    // RAW_OUTPUT should appear exactly once (only parent appends)
+    const rawStarts = result.split(RAW_OUTPUT_START).length - 1;
+    expect(rawStarts).toBe(1);
+  });
+
+  test('schema validation retry does NOT trigger cascading completionPrompt', async () => {
+    const customerData = 'Acme Corp,JWT,50\nBeta Inc,HMAC,12';
+
+    agent.toolImplementations = {
+      execute_plan: {
+        execute: async () => {
+          return `Done\n\n${RAW_OUTPUT_START}\n${customerData}\n${RAW_OUTPUT_END}`;
+        },
+      },
+    };
+
+    let completionPromptCallCount = 0;
+
+    // Track how many times the completionPrompt message appears
+    const origStream = agent.streamTextWithRetryAndFallback;
+    agent.streamTextWithRetryAndFallback = jest.fn(async (opts) => {
+      // Count completion prompt invocations by checking message content
+      if (opts && opts.messages) {
+        for (const msg of opts.messages) {
+          const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+          if (content.includes('Please review and confirm your answer.')) {
+            completionPromptCallCount++;
+          }
+        }
+      }
+      return origStream(opts);
+    });
+
+    // Iteration 1: call execute_plan
+    // Iteration 2: attempt_completion with valid JSON
+    // Iteration 3: completionPrompt review — returns valid JSON
+    mockResponses = [
+      { text: '<execute_plan>\n<code>output("data"); return "ok";</code>\n<description>Test</description>\n</execute_plan>' },
+      { text: '<attempt_completion>\n<result>{"answer":"done","summary":"ok"}</result>\n</attempt_completion>' },
+      { text: '<attempt_completion>\n<result>{"answer":"done","summary":"ok"}</result>\n</attempt_completion>' },
+    ];
+
+    agent.history = [{ role: 'system', content: 'You are a helpful assistant.' }];
+
+    await agent.answer('Test', [], {
+      maxIterations: 10,
+      schema: '{"answer":"string","summary":"string"}',
+    });
+
+    // completionPrompt should fire exactly once (for the initial attempt_completion),
+    // NOT again during any schema validation/correction retries
+    expect(completionPromptCallCount).toBeLessThanOrEqual(1);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────
+// 6. search maxTokens and searchAll in DSL
 // ─────────────────────────────────────────────────────────────────────
 
 describe('search maxTokens and searchAll in DSL', () => {
