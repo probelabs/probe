@@ -77,6 +77,38 @@ const results = searchAll({
 - Use `search()` for targeted queries where first results are sufficient
 - Use `searchAll()` when you need complete coverage (e.g., "find ALL usages of X")
 
+---
+
+### Session-Based Pagination (DSL)
+
+Within `execute_plan` DSL scripts, search uses session-based pagination:
+
+**How it works:**
+- Each `execute_plan` invocation gets a unique session ID
+- Multiple `search()` calls with the **same query** return successive pages
+- The session is isolated — different `execute_plan` calls don't interfere
+
+**Manual pagination example:**
+```javascript
+// In execute_plan DSL script
+let allResults = ""
+let page = search("authentication")
+
+while (page && !page.includes("All results retrieved")) {
+  allResults = allResults + "\n" + page
+  page = search("authentication")  // Same query = next page
+}
+
+return allResults
+```
+
+**Benefits of manual pagination:**
+- Process each page before fetching the next (memory efficient)
+- Stop early when you find what you need
+- Apply different logic per page (e.g., LLM classification)
+
+---
+
 **Searching Dependencies:**
 
 The agent can search inside project dependencies using special path prefixes:
