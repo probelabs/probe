@@ -4383,7 +4383,8 @@ Convert your previous response content into actual JSON data that follows this s
           // Call answer recursively with _schemaFormatted flag to prevent infinite loop
           finalResult = await this.answer(schemaPrompt, [], {
             ...options,
-            _schemaFormatted: true
+            _schemaFormatted: true,
+            _completionPromptProcessed: true  // Prevent cascading completion prompts in retry calls
           });
 
           // Step 2: Validate and fix Mermaid diagrams if present (BEFORE cleaning schema)
@@ -4642,7 +4643,8 @@ Convert your previous response content into actual JSON data that follows this s
               finalResult = await this.answer(schemaDefinitionPrompt, [], {
                 ...options,
                 _schemaFormatted: true,
-                _skipValidation: true  // Skip validation in recursive correction calls to prevent loops
+                _skipValidation: true,  // Skip validation in recursive correction calls to prevent loops
+                _completionPromptProcessed: true  // Prevent cascading completion prompts in retry calls
               });
               finalResult = cleanSchemaResponse(finalResult);
               validation = validateJsonResponse(finalResult);
@@ -4702,7 +4704,8 @@ Convert your previous response content into actual JSON data that follows this s
                 ...options,
                 _schemaFormatted: true,
                 _skipValidation: true,  // Skip validation in recursive correction calls to prevent loops
-                _disableTools: true     // Only allow attempt_completion - prevent AI from using search/query tools
+                _disableTools: true,    // Only allow attempt_completion - prevent AI from using search/query tools
+                _completionPromptProcessed: true  // Prevent cascading completion prompts in retry calls
               });
               finalResult = cleanSchemaResponse(finalResult);
               
@@ -4787,7 +4790,8 @@ Convert your previous response content into actual JSON data that follows this s
       }
 
       // Append DSL output buffer directly to response (bypasses LLM rewriting)
-      if (this._outputBuffer && this._outputBuffer.items.length > 0 && !options._schemaFormatted) {
+      // Skip during _completionPromptProcessed — only the parent answer() should append the buffer.
+      if (this._outputBuffer && this._outputBuffer.items.length > 0 && !options._schemaFormatted && !options._completionPromptProcessed) {
         const outputContent = this._outputBuffer.items.join('\n\n');
         if (options.schema) {
           // Schema response — the finalResult is JSON. Wrap output in RAW_OUTPUT
