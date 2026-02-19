@@ -66,13 +66,27 @@ function stripCodeWrapping(code) {
 }
 
 /**
+ * Generate a unique session ID for this execute_plan invocation.
+ * Uses crypto.randomUUID if available, falls back to timestamp + random.
+ */
+function generatePlanSessionId(baseSessionId) {
+  const uniquePart = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID().slice(0, 8)
+    : `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  return `${baseSessionId || 'plan'}-${uniquePart}`;
+}
+
+/**
  * Build DSL-compatible tool implementations from the agent's configOptions.
  *
  * @param {Object} configOptions - Agent config (sessionId, cwd, provider, model, etc.)
+ * @param {string} [planSessionId] - Unique session ID for this execute_plan invocation
  * @returns {Object} toolImplementations for createDSLRuntime
  */
-function buildToolImplementations(configOptions) {
-  const { sessionId, cwd } = configOptions;
+function buildToolImplementations(configOptions, planSessionId) {
+  const { cwd } = configOptions;
+  // Use planSessionId for isolated pagination per execute_plan, fall back to global sessionId
+  const sessionId = planSessionId || configOptions.sessionId;
   const tools = {};
 
   tools.search = {
@@ -311,9 +325,11 @@ export function createExecutePlanTool(options) {
 
   /**
    * Build or rebuild the DSL runtime.
-   * Called lazily on first execute() and when MCP bridge changes.
+   * Called for each execute() invocation with a unique planSessionId.
+   *
+   * @param {string} [planSessionId] - Unique session ID for this execute_plan invocation
    */
-  function buildRuntime() {
+  function buildRuntime(planSessionId) {
     const currentMcpBridge = getMcpBridge();
     const currentMcpTools = getMcpTools();
 
@@ -340,7 +356,7 @@ export function createExecutePlanTool(options) {
       // Agent configOptions — build everything from the agent's config
       llmCallFn = llmCallFn || buildLLMCall(options);
       runtimeOptions = {
-        toolImplementations: buildToolImplementations(options),
+        toolImplementations: buildToolImplementations(options, planSessionId),
         llmCall: llmCallFn,
         mcpBridge: currentMcpBridge,
         mcpTools: filteredMcpTools,
@@ -360,6 +376,7 @@ export function createExecutePlanTool(options) {
 
   /**
    * Get or rebuild the runtime if MCP state has changed.
+   * @deprecated Use buildRuntime(planSessionId) directly for unique sessions per execution
    */
   function getRuntime() {
     const currentMcpBridge = getMcpBridge();
@@ -378,13 +395,21 @@ export function createExecutePlanTool(options) {
       'Write simple synchronous-looking code — do NOT use async/await.',
     parameters: executePlanSchema,
     execute: async ({ code, description }) => {
+      // Generate a unique session ID for this execute_plan invocation
+      // This ensures search pagination is isolated per execute_plan call
+      const planSessionId = generatePlanSessionId(options.sessionId);
+
       // Create top-level OTEL span for the entire execute_plan invocation
       const planSpan = tracer?.createToolSpan?.('execute_plan', {
         'dsl.description': description || '',
         'dsl.code_length': code.length,
         'dsl.code': code,
         'dsl.max_retries': maxRetries,
+        'dsl.plan_session_id': planSessionId,
       }) || null;
+
+      // Build runtime with the unique planSessionId for isolated search pagination
+      const planRuntime = buildRuntime(planSessionId);
 
       // Strip XML tags and markdown fences LLMs sometimes wrap code in
       let currentCode = stripCodeWrapping(code);
@@ -446,7 +471,7 @@ RULES REMINDER:
             }
           }
 
-          const result = await getRuntime().execute(currentCode, description);
+          const result = await planRuntime.execute(currentCode, description);
 
           if (result.status === 'success') {
             finalOutput = formatSuccess(result, description, attempt, outputBuffer);
@@ -574,8 +599,15 @@ function formatSuccess(result, description, attempt, outputBuffer) {
 
   // Format the result value
   const resultValue = result.result;
+  const hasOutputBufferContent = outputBuffer && outputBuffer.items && outputBuffer.items.length > 0;
   if (resultValue === undefined || resultValue === null) {
-    output += 'Plan completed (no return value).';
+    if (hasOutputBufferContent) {
+      // output() was used but no return statement — tell LLM the script succeeded
+      const totalChars = outputBuffer.items.reduce((sum, item) => sum + item.length, 0);
+      output += `Plan completed successfully. Output captured (${totalChars} chars) via output() and will be included in the final response.`;
+    } else {
+      output += 'Plan completed (no return value).';
+    }
   } else if (typeof resultValue === 'string') {
     output += `Result:\n${resultValue}`;
   } else {

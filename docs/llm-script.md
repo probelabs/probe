@@ -163,6 +163,36 @@ return report
 - `search(query, ".", {maxTokens: null})` — Returns all results in one call (may be large).
 - `searchAll(query)` — Auto-paginates, concatenating all pages. Best for comprehensive analysis.
 
+**Session-Based Pagination:**
+
+Each `execute_plan` invocation gets its own isolated session ID. This means:
+- Multiple `search()` calls with the **same query** return successive pages (automatic pagination)
+- Different `execute_plan` calls don't interfere with each other's pagination state
+
+**Manual Pagination Loop:**
+```javascript
+// Each search() call with same query returns the next page
+let allResults = ""
+let page = search("authentication")
+
+while (page && !page.includes("All results retrieved")) {
+  allResults = allResults + "\n" + page
+  page = search("authentication")  // Same query = next page automatically
+}
+
+return allResults
+```
+
+**When to use manual loops vs searchAll():**
+
+| Use Case | Approach |
+|----------|----------|
+| Get everything, simple case | `searchAll(query)` |
+| Stop early when found | Manual loop with `break` |
+| Process each page with LLM | Manual loop with `LLM()` per page |
+| Different logic per page | Manual loop |
+| Memory-sensitive (large repos) | Manual loop, process & discard |
+
 ### AI (async, auto-awaited)
 
 | Function | Description | Returns |
@@ -473,6 +503,74 @@ return "Generated table with " + functions.length + " exported functions"
 ```
 
 The AI will respond with something like "Here's the API surface analysis..." and the full table will be appended verbatim below its response.
+
+### Pattern 8: Exhaustive Search with Pagination
+
+When you need ALL matching results from a large codebase, you have two options:
+
+**Option A: Use `searchAll()` for simple cases**
+```javascript
+// Automatically paginates and concatenates all results
+const allAuth = searchAll("authentication OR authorization")
+const chunks = chunk(allAuth)
+// Process all results...
+```
+
+**Option B: Manual pagination loop for custom logic**
+```javascript
+// Each execute_plan gets an isolated session, so pagination works correctly
+const query = "JWT OR OAuth OR HMAC OR authentication"
+var allResults = ""
+var pageNum = 0
+
+// Each search() call with the same query returns the next page
+var page = search(query)
+while (page && !page.includes("All results retrieved")) {
+  pageNum = pageNum + 1
+  log("Processing page " + pageNum)
+
+  // Process this page immediately (memory efficient)
+  const insights = LLM(
+    "Extract authentication patterns as JSON",
+    page,
+    { schema: '{"patterns": [{"type": "string", "file": "string"}]}' }
+  )
+
+  // Accumulate just the extracted data, not raw results
+  for (const p of insights.patterns || []) {
+    storeAppend("auth_patterns", p)
+  }
+
+  // Get next page (same query = automatic pagination)
+  page = search(query)
+}
+
+// Generate final report from accumulated data
+const patterns = storeGet("auth_patterns") || []
+const byType = groupBy(patterns, "type")
+
+output("# Authentication Patterns Found\n\n")
+for (const type of Object.keys(byType)) {
+  output("## " + type + " (" + byType[type].length + " occurrences)\n")
+  for (const p of byType[type]) {
+    output("- " + p.file + "\n")
+  }
+  output("\n")
+}
+
+return "Found " + patterns.length + " authentication patterns across " + pageNum + " pages"
+```
+
+**Why manual pagination?**
+- Process each page with LLM before fetching next (lower memory usage)
+- Stop early if you find what you need
+- Different processing logic per page
+- Track progress with `log()`
+
+**Session isolation guarantee:** Each `execute_plan` invocation gets a unique session ID, so:
+- Multiple scripts running in parallel don't interfere
+- Previous `execute_plan` calls don't affect pagination state
+- You always start from page 1 within each script
 
 ## Writing Rules
 

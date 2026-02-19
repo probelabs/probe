@@ -819,6 +819,11 @@ export class ProbeAgent {
     // reset at the start of each answer() call
     this._outputBuffer = { items: [] };
 
+    // Separate accumulator for extracted RAW_OUTPUT blocks from tool results.
+    // This is distinct from _outputBuffer to prevent the cycle where:
+    // formatSuccess wraps → extract re-adds → next execute_plan re-wraps (issue #438)
+    this._extractedRawBlocks = [];
+
     const configOptions = {
       sessionId: this.sessionId,
       debug: this.debug,
@@ -2910,6 +2915,8 @@ Follow these instructions carefully:
       // Both must preserve the output buffer so the parent call can append it.
       if (this._outputBuffer && !options?._schemaFormatted && !options?._completionPromptProcessed) {
         this._outputBuffer.items = [];
+        // Also reset the extracted blocks accumulator (issue #438)
+        this._extractedRawBlocks = [];
       }
 
       // START CHECKPOINT: Initialize task management for this request
@@ -3629,15 +3636,17 @@ Follow these instructions carefully:
 
                 let toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
 
-                // Extract raw output blocks and pass them through to output buffer (before truncation)
+                // Extract raw output blocks from tool result (before truncation)
                 // This prevents LLM from processing/hallucinating large structured output from execute_plan
-                if (this._outputBuffer) {
-                  const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent, this._outputBuffer);
-                  if (extractedBlocks.length > 0) {
-                    toolResultContent = cleanedContent;
-                    if (this.debug) {
-                      console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) to output buffer`);
-                    }
+                // Push to _extractedRawBlocks (NOT _outputBuffer) to prevent the cycle where:
+                // formatSuccess wraps → extract re-adds → next execute_plan re-wraps (issue #438)
+                const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent);
+                if (extractedBlocks.length > 0) {
+                  toolResultContent = cleanedContent;
+                  // Accumulate extracted blocks separately from DSL output() buffer
+                  this._extractedRawBlocks.push(...extractedBlocks);
+                  if (this.debug) {
+                    console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) from tool result`);
                   }
                 }
 
@@ -3887,15 +3896,17 @@ Follow these instructions carefully:
                   toolResultContent = toolResultContent.split(wsPrefix).join('');
                 }
 
-                // Extract raw output blocks and pass them through to output buffer (before truncation)
+                // Extract raw output blocks from tool result (before truncation)
                 // This prevents LLM from processing/hallucinating large structured output from execute_plan
-                if (this._outputBuffer) {
-                  const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent, this._outputBuffer);
-                  if (extractedBlocks.length > 0) {
-                    toolResultContent = cleanedContent;
-                    if (this.debug) {
-                      console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) to output buffer`);
-                    }
+                // Push to _extractedRawBlocks (NOT _outputBuffer) to prevent the cycle where:
+                // formatSuccess wraps → extract re-adds → next execute_plan re-wraps (issue #438)
+                const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent);
+                if (extractedBlocks.length > 0) {
+                  toolResultContent = cleanedContent;
+                  // Accumulate extracted blocks separately from DSL output() buffer
+                  this._extractedRawBlocks.push(...extractedBlocks);
+                  if (this.debug) {
+                    console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) from tool result`);
                   }
                 }
 
@@ -4314,16 +4325,18 @@ After reviewing, provide your final answer using attempt_completion.`;
 
           // Make a follow-up call with the completion prompt
           // Pass _completionPromptProcessed to prevent infinite loops
-          // Save output buffer — the recursive answer() must not destroy DSL output() content
+          // Save output buffers — the recursive answer() must not destroy DSL output() content
           const savedOutputItems = this._outputBuffer ? [...this._outputBuffer.items] : [];
+          const savedExtractedBlocks = this._extractedRawBlocks ? [...this._extractedRawBlocks] : [];
           const completionResult = await this.answer(completionPromptMessage, [], {
             ...options,
             _completionPromptProcessed: true
           });
-          // Restore output buffer so the parent call can append it to the final result
+          // Restore output buffers so the parent call can append them to the final result
           if (this._outputBuffer) {
             this._outputBuffer.items = savedOutputItems;
           }
+          this._extractedRawBlocks = savedExtractedBlocks;
 
           // Update finalResult with the result from the completion prompt
           finalResult = completionResult;
@@ -4791,8 +4804,14 @@ Convert your previous response content into actual JSON data that follows this s
 
       // Append DSL output buffer directly to response (bypasses LLM rewriting)
       // Skip during _completionPromptProcessed — only the parent answer() should append the buffer.
-      if (this._outputBuffer && this._outputBuffer.items.length > 0 && !options._schemaFormatted && !options._completionPromptProcessed) {
-        const outputContent = this._outputBuffer.items.join('\n\n');
+      // Combine _outputBuffer (from DSL output() calls) and _extractedRawBlocks (from tool results)
+      // Using separate accumulators prevents the cycle described in issue #438.
+      const allOutputItems = [
+        ...(this._outputBuffer?.items || []),
+        ...(this._extractedRawBlocks || [])
+      ];
+      if (allOutputItems.length > 0 && !options._schemaFormatted && !options._completionPromptProcessed) {
+        const outputContent = allOutputItems.join('\n\n');
         if (options.schema) {
           // Schema response — the finalResult is JSON. Wrap output in RAW_OUTPUT
           // delimiters so clients (visor, etc.) can extract and propagate the
@@ -4805,9 +4824,10 @@ Convert your previous response content into actual JSON data that follows this s
           options.onStream('\n\n' + outputContent);
         }
         if (this.debug) {
-          console.log(`[DEBUG] Appended ${this._outputBuffer.items.length} output buffer items (${outputContent.length} chars) to final result${options.schema ? ' (with RAW_OUTPUT delimiters)' : ''}`);
+          console.log(`[DEBUG] Appended ${allOutputItems.length} output items (${outputContent.length} chars) to final result${options.schema ? ' (with RAW_OUTPUT delimiters)' : ''}`);
         }
         this._outputBuffer.items = [];
+        this._extractedRawBlocks = [];
       }
 
       return finalResult;
