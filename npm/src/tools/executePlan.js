@@ -599,8 +599,15 @@ function formatSuccess(result, description, attempt, outputBuffer) {
 
   // Format the result value
   const resultValue = result.result;
+  const hasOutputBufferContent = outputBuffer && outputBuffer.items && outputBuffer.items.length > 0;
   if (resultValue === undefined || resultValue === null) {
-    output += 'Plan completed (no return value).';
+    if (hasOutputBufferContent) {
+      // output() was used but no return statement — tell LLM the script succeeded
+      const totalChars = outputBuffer.items.reduce((sum, item) => sum + item.length, 0);
+      output += `Plan completed successfully. Output captured (${totalChars} chars) via output() and will be included in the final response.`;
+    } else {
+      output += 'Plan completed (no return value).';
+    }
   } else if (typeof resultValue === 'string') {
     output += `Result:\n${resultValue}`;
   } else {
