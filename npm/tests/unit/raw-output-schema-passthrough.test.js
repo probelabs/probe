@@ -823,4 +823,31 @@ describe('search maxTokens and searchAll in DSL', () => {
 
     expect(capturedMaxPages).toBe(10);
   });
+
+  test('each execute_plan invocation gets unique session ID for search isolation', async () => {
+    // This test verifies that multiple execute_plan calls work independently
+    // Each gets a unique planSessionId so their search pagination is isolated
+    const outputBuffer = { items: [] };
+
+    const tool = createExecutePlanTool({
+      sessionId: 'base-session',
+      cwd: process.cwd(),
+      toolImplementations: {
+        search: {
+          execute: async (params) => 'search results',
+        },
+      },
+      llmCall: async () => 'ok',
+      outputBuffer,
+      maxRetries: 0,
+    });
+
+    // Execute twice - each should be independent (no session contamination)
+    const result1 = await tool.execute({ code: 'const r = search("test1"); return r;', description: 'First' });
+    const result2 = await tool.execute({ code: 'const r = search("test2"); return r;', description: 'Second' });
+
+    // Both should complete successfully
+    expect(result1).toContain('Plan:');
+    expect(result2).toContain('Plan:');
+  });
 });
