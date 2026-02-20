@@ -3571,7 +3571,12 @@ Follow these instructions carefully:
                 } else {
                   // Content was mostly/entirely inside thinking tags.
                   // Extract thinking content and use it as the actual answer.
-                  const thinkingContent = extractThinkingContent(prevContent);
+                  // extractThinkingContent now handles nested thinking tags (issue #439)
+                  let thinkingContent = extractThinkingContent(prevContent);
+                  // Also apply removeThinkingTags as extra safety to catch any edge cases
+                  if (thinkingContent) {
+                    thinkingContent = removeThinkingTags(thinkingContent) || thinkingContent.replace(/<\/?thinking>/g, '');
+                  }
                   if (thinkingContent && thinkingContent.length > 50) {
                     finalResult = thinkingContent;
                     if (this.debug) console.log(`[DEBUG] Previous response was mostly in thinking tags — using thinking content as completion: ${finalResult.substring(0, 100)}...`);
@@ -4795,10 +4800,25 @@ Convert your previous response content into actual JSON data that follows this s
       }
 
       // Remove thinking tags from final result before returning to user
+      // Skip for valid JSON to avoid destroying JSON structure when <thinking> appears
+      // inside string values (e.g., after tryAutoWrapForSimpleSchema embeds content with
+      // residual thinking tag fragments — issue #439)
       if (!options._schemaFormatted) {
-        finalResult = removeThinkingTags(finalResult);
-        if (this.debug) {
-          console.log(`[DEBUG] Removed thinking tags from final result`);
+        let isValidJson = false;
+        try {
+          JSON.parse(finalResult);
+          isValidJson = true;
+        } catch {
+          // Not valid JSON, proceed with thinking tag removal
+        }
+
+        if (!isValidJson) {
+          finalResult = removeThinkingTags(finalResult);
+          if (this.debug) {
+            console.log(`[DEBUG] Removed thinking tags from final result`);
+          }
+        } else if (this.debug) {
+          console.log(`[DEBUG] Skipped thinking tag removal for valid JSON result (issue #439)`);
         }
       }
 

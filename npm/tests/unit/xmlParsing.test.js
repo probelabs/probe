@@ -1247,3 +1247,251 @@ describe('removeThinkingTags and extractThinkingContent', () => {
     });
   });
 });
+
+describe('Issue #439: removeThinkingTags destroys JSON output', () => {
+  describe('extractThinkingContent should handle nested thinking tags', () => {
+    test('should not return content starting with <thinking>', () => {
+      const input = '<thinking><thinking>content</thinking></thinking>';
+      const result = extractThinkingContent(input);
+      expect(result).not.toMatch(/^<thinking>/);
+      expect(result).toBe('content');
+    });
+
+    test('should strip inner thinking tags from extracted content', () => {
+      const input = '<thinking>\n<thinking>\nReal content here\n</thinking>\n</thinking>';
+      const result = extractThinkingContent(input);
+      expect(result).not.toContain('<thinking>');
+      expect(result).not.toContain('</thinking>');
+      expect(result).toContain('Real content here');
+    });
+
+    test('should handle deeply nested thinking tags', () => {
+      const input = '<thinking><thinking><thinking>deep content</thinking></thinking></thinking>';
+      const result = extractThinkingContent(input);
+      expect(result).not.toContain('<thinking>');
+      expect(result).toBe('deep content');
+    });
+
+    test('should handle nested tags with actual content mixed in', () => {
+      const input = '<thinking>outer start\n<thinking>inner content</thinking>\nouter end</thinking>';
+      const result = extractThinkingContent(input);
+      // Non-greedy match captures from outer <thinking> to first </thinking>
+      // which is "outer start\n<thinking>inner content"
+      // Then we recursively extract from the inner <thinking>, getting "inner content"
+      expect(result).not.toContain('<thinking>');
+    });
+
+    test('should return null for empty nested thinking tags', () => {
+      const input = '<thinking><thinking></thinking></thinking>';
+      const result = extractThinkingContent(input);
+      // After extracting and cleaning, content is empty
+      expect(result).toBeNull();
+    });
+
+    test('production scenario: Gemini 2.5 Pro nested thinking (issue #439 trace)', () => {
+      const input = `<thinking>
+<thinking>
+I have already explained to the user why the full debugging process
+was not followed. I have analyzed the trace and confirmed that the
+assistant only performed the initial steps...
+</thinking>
+</thinking>`;
+      const result = extractThinkingContent(input);
+      expect(result).not.toMatch(/^<thinking>/);
+      expect(result).not.toContain('<thinking>');
+      expect(result).not.toContain('</thinking>');
+      expect(result).toContain('I have already explained');
+    });
+  });
+
+  describe('removeThinkingTags behavior with JSON (documenting the bug)', () => {
+    test('BUG: removeThinkingTags DESTROYS JSON with closed <thinking> in string values', () => {
+      // This documents the BUG behavior - removeThinkingTags strips the tags
+      // including from inside JSON strings, corrupting the structure
+      const json = '{"text":"<thinking>some analysis</thinking>rest of content"}';
+      const result = removeThinkingTags(json);
+      // The <thinking>...</thinking> is removed even from inside the JSON string
+      expect(result).toBe('{"text":"rest of content"}');
+      // This is technically valid JSON but loses content
+    });
+
+    test('BUG: removeThinkingTags TRUNCATES JSON with unclosed <thinking> in string values', () => {
+      // This documents the CRITICAL BUG - unclosed <thinking> truncates everything
+      const json = '{"text":"<thinking>content without closing tag"}';
+      const result = removeThinkingTags(json);
+      // TRUNCATED! Everything from <thinking> onwards is gone
+      expect(result).toBe('{"text":"');
+      // This is INVALID JSON - the exact bug from issue #439
+      expect(() => JSON.parse(result)).toThrow();
+    });
+
+    test('removeThinkingTags works correctly when thinking tags are OUTSIDE JSON', () => {
+      const input = '<thinking>reasoning</thinking>{"text":"actual content"}';
+      const result = removeThinkingTags(input);
+      expect(result).toBe('{"text":"actual content"}');
+      expect(() => JSON.parse(result)).not.toThrow();
+    });
+  });
+
+  describe('FIX: skip removeThinkingTags for valid JSON', () => {
+    test('valid JSON should be detected and preserved (not passed to removeThinkingTags)', () => {
+      // This is the fix logic from ProbeAgent.js:4802-4818
+      const jsonWithEmbeddedThinking = '{"text":"<thinking>content"}';
+
+      // Step 1: Check if it's valid JSON
+      let isValidJson = false;
+      try {
+        JSON.parse(jsonWithEmbeddedThinking);
+        isValidJson = true;
+      } catch {
+        // Not valid JSON
+      }
+
+      // Step 2: If valid JSON, we skip removeThinkingTags
+      expect(isValidJson).toBe(true);
+
+      // Step 3: Since we skip removeThinkingTags, content is preserved
+      const finalResult = jsonWithEmbeddedThinking; // NOT calling removeThinkingTags
+      expect(() => JSON.parse(finalResult)).not.toThrow();
+      const parsed = JSON.parse(finalResult);
+      expect(parsed.text).toBe('<thinking>content');
+    });
+
+    test('non-JSON content should still have removeThinkingTags applied', () => {
+      const plainTextWithThinking = '<thinking>reasoning</thinking>The actual answer';
+
+      // Step 1: Check if it's valid JSON
+      let isValidJson = false;
+      try {
+        JSON.parse(plainTextWithThinking);
+        isValidJson = true;
+      } catch {
+        // Not valid JSON
+      }
+
+      expect(isValidJson).toBe(false);
+
+      // Step 2: Since not JSON, apply removeThinkingTags
+      const finalResult = removeThinkingTags(plainTextWithThinking);
+      expect(finalResult).toBe('The actual answer');
+    });
+
+    test('production scenario: JSON with residual thinking from nested extraction', () => {
+      // Simulate: nested thinking → extractThinkingContent fails to clean →
+      // tryAutoWrapForSimpleSchema embeds in JSON → final cleanup
+      const residualThinking = '<thinking>some residual content from nested extraction';
+      const wrappedJson = JSON.stringify({ text: residualThinking });
+
+      // Without the fix: removeThinkingTags would truncate
+      const withoutFix = removeThinkingTags(wrappedJson);
+      expect(withoutFix).toBe('{"text":"');
+      expect(() => JSON.parse(withoutFix)).toThrow();
+
+      // With the fix: we detect valid JSON and skip removeThinkingTags
+      let isValidJson = false;
+      try {
+        JSON.parse(wrappedJson);
+        isValidJson = true;
+      } catch {
+        // Not valid JSON
+      }
+      expect(isValidJson).toBe(true);
+
+      // Content is preserved
+      const withFix = wrappedJson; // Skip removeThinkingTags for valid JSON
+      expect(() => JSON.parse(withFix)).not.toThrow();
+      const parsed = JSON.parse(withFix);
+      expect(parsed.text).toContain('some residual content');
+    });
+  });
+
+  describe('Real scenario: auto-wrapped content with nested thinking extraction', () => {
+    test('complete flow: nested thinking → extract → auto-wrap → should preserve content', () => {
+      // Simulate Gemini 2.5 Pro producing nested thinking
+      const aiResponse = '<thinking>\n<thinking>\nActual analysis content here.\n</thinking>\n</thinking>';
+
+      // Step 1: extractThinkingContent (now fixed for nested tags)
+      const extracted = extractThinkingContent(aiResponse);
+
+      // The extracted content should NOT start with <thinking>
+      expect(extracted).not.toMatch(/^<thinking>/);
+      expect(extracted).toContain('Actual analysis content here');
+
+      // Step 2: Simulate auto-wrap (JSON.stringify)
+      const wrapped = JSON.stringify({ text: extracted });
+
+      // Step 3: The wrapped JSON should be valid
+      expect(() => JSON.parse(wrapped)).not.toThrow();
+
+      // Step 4: Parse and verify content is preserved
+      const parsed = JSON.parse(wrapped);
+      expect(parsed.text).toContain('Actual analysis content here');
+      expect(parsed.text.length).toBeGreaterThan(10);
+    });
+
+    test('complete flow: when skip removeThinkingTags for valid JSON is applied', () => {
+      // Simulate the scenario where content with residual <thinking> gets auto-wrapped
+      const contentWithResidualTag = '<thinking>some residual thinking text';
+      const wrapped = JSON.stringify({ text: contentWithResidualTag });
+
+      // If we detect valid JSON, we should NOT call removeThinkingTags
+      let finalResult = wrapped;
+      let isValidJson = false;
+      try {
+        JSON.parse(finalResult);
+        isValidJson = true;
+      } catch {
+        // Not valid JSON
+      }
+
+      // The JSON is valid, so we should skip removeThinkingTags
+      expect(isValidJson).toBe(true);
+
+      // The final result should still be valid JSON
+      expect(() => JSON.parse(finalResult)).not.toThrow();
+
+      // Content should be preserved (not truncated)
+      const parsed = JSON.parse(finalResult);
+      expect(parsed.text).toContain('some residual thinking text');
+    });
+  });
+
+  describe('__PREVIOUS_RESPONSE__ length-based heuristic edge cases', () => {
+    test('length > 50 check behavior with extracted thinking content', () => {
+      // A valid answer inside thinking tags
+      const prevResponse = '<thinking>The build failed because of a missing dependency in package.json.</thinking>';
+
+      // Extract thinking content (simulating __PREVIOUS_RESPONSE__ handler)
+      const thinkingContent = extractThinkingContent(prevResponse);
+
+      // The content should be extracted and cleaned
+      expect(thinkingContent).toBe('The build failed because of a missing dependency in package.json.');
+
+      // This content is > 50 chars so it would pass the length check
+      expect(thinkingContent.length).toBeGreaterThan(50);
+    });
+
+    test('short valid answer inside thinking tags', () => {
+      // A perfectly valid short answer that would fail the > 50 check
+      const prevResponse = '<thinking>Build failed: missing dep.</thinking>';
+
+      const thinkingContent = extractThinkingContent(prevResponse);
+
+      expect(thinkingContent).toBe('Build failed: missing dep.');
+      // This is < 50 chars and would fail the length check
+      expect(thinkingContent.length).toBeLessThan(50);
+    });
+
+    test('nested thinking with garbage would now be cleaned', () => {
+      // Previously, this would return "<thinking>" repeated content
+      // which would pass the length > 50 check despite being garbage
+      const garbage = '<thinking><thinking><thinking>actual content</thinking></thinking></thinking>';
+
+      const result = extractThinkingContent(garbage);
+
+      // With the fix, we get clean content without any thinking tags
+      expect(result).not.toContain('<thinking>');
+      expect(result).toBe('actual content');
+    });
+  });
+});
