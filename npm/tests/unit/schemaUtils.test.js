@@ -18,7 +18,8 @@ import {
   createMermaidCorrectionPrompt,
   generateExampleFromSchema,
   isSimpleTextWrapperSchema,
-  tryAutoWrapForSimpleSchema
+  tryAutoWrapForSimpleSchema,
+  sanitizeMarkdownEscapesInJson
 } from '../../src/agent/schemaUtils.js';
 
 describe('Schema Utilities', () => {
@@ -1509,6 +1510,338 @@ describe('Schema Utilities', () => {
       expect(result).not.toBeNull();
       const parsed = JSON.parse(result);
       expect(parsed.text).toBe(response);
+    });
+  });
+
+  // Issue #441: Markdown escapes in JSON cause double-wrapping
+  describe('Issue #441: Markdown escape sequences in JSON', () => {
+    describe('sanitizeMarkdownEscapesInJson', () => {
+      test('should return input unchanged for null/undefined/non-string', () => {
+        expect(sanitizeMarkdownEscapesInJson(null)).toBeNull();
+        expect(sanitizeMarkdownEscapesInJson(undefined)).toBeUndefined();
+        expect(sanitizeMarkdownEscapesInJson(123)).toBe(123);
+      });
+
+      test('should remove backslash from \\* (Markdown bold/italic)', () => {
+        const input = '{"text": "The formula is N \\* (1 + M) queries."}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "The formula is N * (1 + M) queries."}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should remove backslash from \\_ (Markdown underscore)', () => {
+        const input = '{"text": "Use snake\\_case naming."}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Use snake_case naming."}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should remove backslash from \\# (Markdown heading)', () => {
+        const input = '{"text": "Issue \\#123 was fixed."}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Issue #123 was fixed."}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should remove backslash from \\~ (Markdown strikethrough)', () => {
+        const input = '{"text": "Use \\~deprecated\\~ method."}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Use ~deprecated~ method."}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should handle multiple Markdown escapes in one string', () => {
+        const input = '{"text": "Formula: N \\* M \\+ P \\- Q"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Formula: N * M + P - Q"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should preserve valid JSON escape: \\\\ (backslash)', () => {
+        const input = '{"path": "C:\\\\Users\\\\name"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        // \\\\ should stay as \\\\
+        expect(result).toBe('{"path": "C:\\\\Users\\\\name"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+        expect(JSON.parse(result).path).toBe('C:\\Users\\name');
+      });
+
+      test('should preserve valid JSON escape: \\" (quote)', () => {
+        const input = '{"text": "She said \\"hello\\""}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "She said \\"hello\\""}');
+        expect(() => JSON.parse(result)).not.toThrow();
+        expect(JSON.parse(result).text).toBe('She said "hello"');
+      });
+
+      test('should preserve valid JSON escape: \\n (newline)', () => {
+        const input = '{"text": "Line 1\\nLine 2"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Line 1\\nLine 2"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+        expect(JSON.parse(result).text).toBe('Line 1\nLine 2');
+      });
+
+      test('should preserve valid JSON escape: \\t (tab)', () => {
+        const input = '{"text": "Col1\\tCol2"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Col1\\tCol2"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should preserve valid JSON escape: \\r (carriage return)', () => {
+        const input = '{"text": "Line\\r\\n"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Line\\r\\n"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should preserve valid JSON escape: \\b (backspace)', () => {
+        const input = '{"text": "Back\\bspace"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Back\\bspace"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should preserve valid JSON escape: \\f (form feed)', () => {
+        const input = '{"text": "Form\\ffeed"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Form\\ffeed"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should preserve valid JSON escape: \\/ (forward slash)', () => {
+        const input = '{"url": "https:\\/\\/example.com"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"url": "https:\\/\\/example.com"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should preserve valid JSON escape: \\uXXXX (unicode)', () => {
+        const input = '{"text": "Euro: \\u20AC"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe('{"text": "Euro: \\u20AC"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+        expect(JSON.parse(result).text).toBe('Euro: €');
+      });
+
+      test('should handle mixed valid and invalid escapes', () => {
+        const input = '{"text": "Formula: N \\* M\\nNew line\\twith tab and \\#hashtag"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        // \* and \# should be sanitized, \n and \t should be preserved
+        expect(result).toBe('{"text": "Formula: N * M\\nNew line\\twith tab and #hashtag"}');
+        expect(() => JSON.parse(result)).not.toThrow();
+
+        const parsed = JSON.parse(result);
+        expect(parsed.text).toContain('N * M');
+        expect(parsed.text).toContain('\n');
+        expect(parsed.text).toContain('\t');
+        expect(parsed.text).toContain('#hashtag');
+      });
+
+      test('production scenario: formula with \\* from Gemini 2.5 Pro', () => {
+        // This is the exact case from issue #441
+        const input = '{"text": "The time complexity is O(N \\* log(N)) for sorting."}';
+
+        // Before fix: JSON.parse fails with "Invalid escape character in string"
+        expect(() => JSON.parse(input)).toThrow();
+
+        // After fix: sanitizeMarkdownEscapesInJson removes the invalid escape
+        const sanitized = sanitizeMarkdownEscapesInJson(input);
+        expect(() => JSON.parse(sanitized)).not.toThrow();
+
+        const parsed = JSON.parse(sanitized);
+        expect(parsed.text).toBe('The time complexity is O(N * log(N)) for sorting.');
+      });
+    });
+
+    describe('tryAutoWrapForSimpleSchema with Markdown escapes', () => {
+      test('should return sanitized JSON instead of wrapping when Markdown escapes are present', () => {
+        const response = '{"text": "Formula: N \\* (1 + M)"}';
+        const schema = '{text: string}';
+
+        const result = tryAutoWrapForSimpleSchema(response, schema);
+
+        // Should return sanitized JSON, NOT wrap it again
+        expect(result).not.toBeNull();
+        expect(() => JSON.parse(result)).not.toThrow();
+
+        const parsed = JSON.parse(result);
+        // Should NOT be double-wrapped like {"text": "{\"text\": ...}"}
+        expect(typeof parsed.text).toBe('string');
+        expect(parsed.text).not.toContain('{');
+        expect(parsed.text).toBe('Formula: N * (1 + M)');
+      });
+
+      test('should still wrap plain text that is not JSON', () => {
+        const response = 'This is just plain text with an asterisk *';
+        const schema = '{text: string}';
+
+        const result = tryAutoWrapForSimpleSchema(response, schema);
+
+        expect(result).not.toBeNull();
+        const parsed = JSON.parse(result);
+        expect(parsed.text).toBe(response);
+      });
+
+      test('should return null for already valid JSON without Markdown escapes', () => {
+        const response = '{"text": "Normal text without escapes"}';
+        const schema = '{text: string}';
+
+        const result = tryAutoWrapForSimpleSchema(response, schema);
+
+        expect(result).toBeNull();
+      });
+
+      test('production scenario: Gemini 2.5 Pro formula response', () => {
+        // Exact scenario from issue #441
+        const response = '{"text": "The formula is **N \\* (1 + M)** queries."}';
+        const schema = '{"type":"object","properties":{"text":{"type":"string"}}}';
+
+        const result = tryAutoWrapForSimpleSchema(response, schema);
+
+        // Should return sanitized JSON
+        expect(result).not.toBeNull();
+        expect(() => JSON.parse(result)).not.toThrow();
+
+        const parsed = JSON.parse(result);
+        expect(parsed.text).toBe('The formula is **N * (1 + M)** queries.');
+
+        // Should NOT be double-wrapped
+        expect(parsed.text).not.toContain('{');
+        expect(parsed.text).not.toContain('\\');
+      });
+    });
+
+    describe('validateJsonResponse with Markdown escapes', () => {
+      test('should validate JSON with Markdown escapes after sanitization', () => {
+        const response = '{"text": "Formula: N \\* M"}';
+
+        const result = validateJsonResponse(response);
+
+        expect(result.isValid).toBe(true);
+        expect(result.parsed.text).toBe('Formula: N * M');
+      });
+
+      test('should validate JSON with schema after sanitization', () => {
+        const response = '{"text": "Use \\#hashtag"}';
+        const schema = {
+          type: 'object',
+          properties: {
+            text: { type: 'string' }
+          },
+          required: ['text']
+        };
+
+        const result = validateJsonResponse(response, { schema });
+
+        expect(result.isValid).toBe(true);
+        expect(result.parsed.text).toBe('Use #hashtag');
+      });
+
+      test('should still reject truly invalid JSON', () => {
+        const response = '{"text": missing quotes}';
+
+        const result = validateJsonResponse(response);
+
+        expect(result.isValid).toBe(false);
+        expect(result.error).toBeDefined();
+      });
+
+      test('should reject JSON with schema violations even after sanitization', () => {
+        const response = '{"text": 123}';  // text should be string, not number
+        const schema = {
+          type: 'object',
+          properties: {
+            text: { type: 'string' }
+          }
+        };
+
+        const result = validateJsonResponse(response, { schema });
+
+        expect(result.isValid).toBe(false);
+        expect(result.error).toBe('Schema validation failed');
+      });
+    });
+
+    describe('Edge cases', () => {
+      test('should handle Windows paths correctly', () => {
+        // Windows paths should use \\, which is valid JSON
+        const input = '{"path": "C:\\\\Users\\\\Documents\\\\file.txt"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe(input);
+        expect(() => JSON.parse(result)).not.toThrow();
+        expect(JSON.parse(result).path).toBe('C:\\Users\\Documents\\file.txt');
+      });
+
+      test('should handle regex patterns in strings', () => {
+        // Regex with \\d, \\s, \\w - these become d, s, w but that's OK for display
+        // The point is the JSON can be parsed
+        const input = '{"regex": "\\\\d+\\\\.\\\\d+"}';  // Properly escaped for JSON
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe(input);
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should handle empty strings', () => {
+        const input = '';
+        const result = sanitizeMarkdownEscapesInJson(input);
+        expect(result).toBe('');
+      });
+
+      test('should handle strings without any escapes', () => {
+        const input = '{"text": "No escapes here"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe(input);
+        expect(() => JSON.parse(result)).not.toThrow();
+      });
+
+      test('should handle multiple fields with Markdown escapes', () => {
+        const input = '{"title": "Issue \\#123", "body": "Fix: N \\* M", "tags": ["\\*important\\*"]}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(() => JSON.parse(result)).not.toThrow();
+        const parsed = JSON.parse(result);
+        expect(parsed.title).toBe('Issue #123');
+        expect(parsed.body).toBe('Fix: N * M');
+        expect(parsed.tags[0]).toBe('*important*');
+      });
+
+      test('should handle nested objects with Markdown escapes', () => {
+        const input = '{"outer": {"inner": {"text": "N \\* M"}}}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(() => JSON.parse(result)).not.toThrow();
+        const parsed = JSON.parse(result);
+        expect(parsed.outer.inner.text).toBe('N * M');
+      });
+
+      test('should not break valid JSON that happens to contain asterisks', () => {
+        const input = '{"text": "5 * 3 = 15"}';
+        const result = sanitizeMarkdownEscapesInJson(input);
+
+        expect(result).toBe(input);
+        expect(() => JSON.parse(result)).not.toThrow();
+        expect(JSON.parse(result).text).toBe('5 * 3 = 15');
+      });
     });
   });
 });
