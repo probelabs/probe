@@ -166,6 +166,39 @@ export function decodeHtmlEntities(text) {
 }
 
 /**
+ * Sanitize Markdown escape sequences in JSON strings
+ *
+ * Markdown uses backslash escapes like \*, \_, \#, \~ etc. which are NOT valid
+ * JSON escape sequences. When AI models produce JSON with Markdown content,
+ * these escapes cause JSON.parse() to fail with "Invalid \escape" errors.
+ *
+ * This function removes the backslash from invalid escape sequences while
+ * preserving valid JSON escapes: \\, \", \/, \b, \f, \n, \r, \t, \uXXXX
+ *
+ * @param {string} jsonString - JSON string that may contain Markdown escapes
+ * @returns {string} - JSON string with invalid escapes sanitized
+ */
+export function sanitizeMarkdownEscapesInJson(jsonString) {
+  if (!jsonString || typeof jsonString !== 'string') {
+    return jsonString;
+  }
+
+  // Strategy: Match either:
+  // 1. \\\\ (escaped backslash) - preserve as-is
+  // 2. \\X where X is NOT a valid JSON escape char - remove the backslash
+  //
+  // Valid JSON escape chars: " \ / b f n r t u
+  // This converts: \* → *, \_ → _, \# → #, \~ → ~, etc.
+  // But preserves: \\, \", \n, \t, \r, \b, \f, \/, \uXXXX
+  return jsonString.replace(/\\\\|\\([^"\\\/bfnrtu])/g, (match, captured) => {
+    if (match === '\\\\') {
+      return '\\\\'; // Preserve escaped backslash
+    }
+    return captured; // Remove backslash from invalid escape
+  });
+}
+
+/**
  * Normalize JavaScript syntax to valid JSON syntax
  * Converts single quotes to double quotes for strings in JSON-like structures
  *
@@ -370,9 +403,30 @@ export function validateJsonResponse(response, options = {}) {
     }
   }
 
+  // Try to parse the response, with fallback to sanitizing Markdown escapes (issue #441)
+  let responseToValidate = response;
+  try {
+    JSON.parse(response);
+  } catch (initialError) {
+    // Check if the error is due to invalid escape sequences (Markdown escapes like \*, \_)
+    if (initialError.message && initialError.message.includes('escape')) {
+      const sanitized = sanitizeMarkdownEscapesInJson(response);
+      try {
+        JSON.parse(sanitized);
+        // Sanitized version parses - use it instead
+        responseToValidate = sanitized;
+        if (debug) {
+          console.log(`[DEBUG] JSON validation: Fixed Markdown escapes in JSON (issue #441)`);
+        }
+      } catch {
+        // Sanitization didn't help, continue with original (will fail below with proper error)
+      }
+    }
+  }
+
   try {
     const parseStart = Date.now();
-    const parsed = JSON.parse(response);
+    const parsed = JSON.parse(responseToValidate);
     const parseTime = Date.now() - parseStart;
 
     if (debug) {
@@ -853,7 +907,26 @@ export function tryAutoWrapForSimpleSchema(response, schema, options = {}) {
       console.log(`[DEBUG] Auto-wrap: Response is already valid JSON, skipping`);
     }
     return null;
-  } catch {
+  } catch (initialError) {
+    // Not valid JSON - check if it's due to Markdown escapes (issue #441)
+    // AI models sometimes produce JSON with Markdown escapes like \* or \_
+    // which are valid Markdown but NOT valid JSON escape sequences
+    if (initialError.message && initialError.message.includes('escape')) {
+      try {
+        const sanitized = sanitizeMarkdownEscapesInJson(response);
+        JSON.parse(sanitized);
+        // Sanitized JSON is valid! Return it instead of wrapping
+        if (debug) {
+          console.log(`[DEBUG] Auto-wrap: Fixed Markdown escapes in JSON (issue #441), returning sanitized JSON`);
+        }
+        return sanitized;
+      } catch {
+        // Sanitization didn't help, proceed with wrapping
+        if (debug) {
+          console.log(`[DEBUG] Auto-wrap: Markdown escape sanitization didn't fix JSON, proceeding with wrapping`);
+        }
+      }
+    }
     // Not valid JSON, proceed with wrapping
   }
 
