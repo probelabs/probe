@@ -294,6 +294,22 @@ export function cleanSchemaResponse(response) {
     return cleanSchemaResponse(resultWrapperMatch[1]);
   }
 
+  // Strip <tool_code>...</tool_code> wrapper (Gemini-style code execution format)
+  // Issue #443: Gemini sometimes wraps responses in <plan> + <tool_code> tags
+  // e.g., <tool_code>print(attempt_completion({"projects": ["repo1"]}))</tool_code>
+  const toolCodeMatch = trimmed.match(/<tool_code>\s*([\s\S]*?)\s*<\/tool_code>/);
+  if (toolCodeMatch) {
+    let innerContent = toolCodeMatch[1].trim();
+    // Extract JSON from print() or attempt_completion() wrappers
+    // e.g., print({"key": "value"}) or attempt_completion({"key": "value"})
+    const funcCallMatch = innerContent.match(/(?:print|attempt_completion)\s*\(\s*([{\[][\s\S]*[}\]])\s*\)/);
+    if (funcCallMatch) {
+      return cleanSchemaResponse(funcCallMatch[1]);
+    }
+    // Try cleaning the inner content directly
+    return cleanSchemaResponse(innerContent);
+  }
+
   // First, look for JSON after code block markers - similar to mermaid extraction
   // Try with json language specifier
   const jsonBlockMatch = trimmed.match(/```json\s*\n([\s\S]*?)\n```/);

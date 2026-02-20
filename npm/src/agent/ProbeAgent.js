@@ -4005,6 +4005,33 @@ Follow these instructions carefully:
             break;
           }
 
+          // Issue #443: Check if response contains valid schema-matching JSON
+          // Before triggering error.no_tool_call, strip markdown fences and validate
+          // This handles cases where AI returns valid JSON without using attempt_completion
+          if (options.schema) {
+            // Remove thinking tags first
+            let contentToCheck = assistantResponseContent;
+            contentToCheck = contentToCheck.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
+            contentToCheck = contentToCheck.replace(/<thinking>[\s\S]*$/gi, '').trim();
+
+            // Try to extract and validate JSON
+            const cleanedJson = cleanSchemaResponse(contentToCheck);
+            try {
+              JSON.parse(cleanedJson);
+              const validation = validateJsonResponse(cleanedJson, { debug: this.debug, schema: options.schema });
+              if (validation.isValid) {
+                if (this.debug) {
+                  console.log(`[DEBUG] Issue #443: Accepting valid JSON response without attempt_completion (${cleanedJson.length} chars)`);
+                }
+                finalResult = cleanedJson;
+                completionAttempted = true;
+                break;
+              }
+            } catch {
+              // Not valid JSON - continue to standard no_tool_call handling
+            }
+          }
+
           // Increment consecutive no-tool counter (catches alternating stuck responses)
           consecutiveNoToolCount++;
 
