@@ -229,6 +229,50 @@ The user is asking about dashboard features. I should select tyk-analytics and p
       expect(validation.isValid).toBe(true);
       expect(validation.parsed.projects).toEqual(['tyk-analytics', 'portal']);
     });
+
+    test('should accept Gemini-style <tool_code> wrapped response', () => {
+      // From trace f46b5cc - Gemini wraps response in <plan> + <tool_code> tags
+      const aiResponse = `<plan>
+1. The user is asking to scan the "Portal API" codebase.
+2. The relevant repository is TykTechnologies/portal.
+3. The only project needed is portal.
+</plan>
+<tool_code>
+print(attempt_completion({"projects": ["portal"]}))
+</tool_code>`;
+
+      // Remove <plan> tags first (they're not part of the JSON extraction)
+      const withoutPlan = aiResponse
+        .replace(/<plan>[\s\S]*?<\/plan>/gi, '')
+        .trim();
+
+      const cleaned = cleanSchemaResponse(withoutPlan);
+
+      const validation = validateJsonResponse(cleaned);
+      expect(validation.isValid).toBe(true);
+      expect(validation.parsed.projects).toEqual(['portal']);
+    });
+
+    test('should extract JSON from <tool_code> with attempt_completion wrapper', () => {
+      const aiResponse = `<tool_code>attempt_completion({"status": "done", "result": 42})</tool_code>`;
+
+      const cleaned = cleanSchemaResponse(aiResponse);
+
+      const validation = validateJsonResponse(cleaned);
+      expect(validation.isValid).toBe(true);
+      expect(validation.parsed.status).toBe('done');
+      expect(validation.parsed.result).toBe(42);
+    });
+
+    test('should extract JSON from <tool_code> with print wrapper', () => {
+      const aiResponse = `<tool_code>print({"message": "hello world"})</tool_code>`;
+
+      const cleaned = cleanSchemaResponse(aiResponse);
+
+      const validation = validateJsonResponse(cleaned);
+      expect(validation.isValid).toBe(true);
+      expect(validation.parsed.message).toBe('hello world');
+    });
   });
 
   describe('Edge cases', () => {
