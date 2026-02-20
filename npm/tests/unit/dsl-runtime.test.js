@@ -1281,6 +1281,162 @@ describe('DSL Runtime', () => {
   });
 });
 
+// Issue #444: Test fixes for search() path coercion and LLM() error guard
+describe('Issue #444 fixes', () => {
+  describe('search() path object coercion', () => {
+    test('should coerce object with file_path to string', async () => {
+      const coercionRuntime = createDSLRuntime({
+        toolImplementations: {
+          search: {
+            execute: async (params) => `searched in: ${params.path || 'default'}`,
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      // Simulate AI passing an object with file_path instead of string
+      const result = await coercionRuntime.execute(`
+        const field = { file_path: "/src/test.js", name: "testField" };
+        return search("query", field);
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('searched in: /src/test.js');
+      // Should have logged a warning about coercion
+      expect(result.logs.some(l => l.includes('Coerced object path') && l.includes('issue #444'))).toBe(true);
+    });
+
+    test('should coerce object with path property to string', async () => {
+      const coercionRuntime = createDSLRuntime({
+        toolImplementations: {
+          search: {
+            execute: async (params) => `searched in: ${params.path || 'default'}`,
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      const result = await coercionRuntime.execute(`
+        const item = { path: "/src/module", type: "directory" };
+        return search("function", item);
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('searched in: /src/module');
+    });
+
+    test('should coerce object with directory property to string', async () => {
+      const coercionRuntime = createDSLRuntime({
+        toolImplementations: {
+          search: {
+            execute: async (params) => `searched in: ${params.path || 'default'}`,
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      const result = await coercionRuntime.execute(`
+        const folder = { directory: "./tests", name: "testFolder" };
+        return search("test", folder);
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('searched in: ./tests');
+    });
+
+    test('should still fail if object has no coercible property', async () => {
+      const coercionRuntime = createDSLRuntime({
+        toolImplementations: {
+          search: {
+            execute: async (params) => `searched in: ${params.path}`,
+          },
+        },
+        llmCall: createMockLLM(),
+      });
+
+      const result = await coercionRuntime.execute(`
+        const badObj = { name: "test", value: 123 };
+        return search("query", badObj);
+      `);
+
+      // Should return error string since the object couldn't be coerced
+      expect(result.status).toBe('success'); // DSL catches errors as strings
+      expect(result.result).toContain('ERROR:');
+    });
+  });
+
+  describe('LLM() error string guard', () => {
+    test('should block error strings from being passed to LLM()', async () => {
+      const guardRuntime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: async (instruction, data) => {
+          // This should NOT be called when data is an error string
+          return `LLM processed: ${data}`;
+        },
+      });
+
+      const result = await guardRuntime.execute(`
+        const errorData = "ERROR: Invalid parameters for search: Expected string, received object";
+        return LLM("Analyze this", errorData);
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toContain('ERROR: Previous tool call failed');
+      expect(result.logs.some(l => l.includes('[LLM] Blocked'))).toBe(true);
+    });
+
+    test('should allow normal strings to pass to LLM()', async () => {
+      const guardRuntime = createDSLRuntime({
+        toolImplementations: createMockTools(),
+        llmCall: async (instruction, data) => {
+          return `Processed: ${data}`;
+        },
+      });
+
+      const result = await guardRuntime.execute(`
+        const normalData = "This is valid search results";
+        return LLM("Analyze this", normalData);
+      `);
+
+      expect(result.status).toBe('success');
+      expect(result.result).toBe('Processed: This is valid search results');
+    });
+
+    test('should prevent cascading failures from broken search calls', async () => {
+      let llmCallCount = 0;
+      const cascadeRuntime = createDSLRuntime({
+        toolImplementations: {
+          search: {
+            execute: async (params) => {
+              // Simulate search failing due to bad params
+              if (typeof params.path === 'object') {
+                throw new Error('Invalid parameters: Expected string, received object');
+              }
+              return 'search results';
+            },
+          },
+        },
+        llmCall: async (instruction, data) => {
+          llmCallCount++;
+          return `LLM result ${llmCallCount}`;
+        },
+      });
+
+      // Even though the code passes error string to LLM, the guard should block it
+      const result = await cascadeRuntime.execute(`
+        const field = { file_path: "/src/test.js" };
+        const searchResult = search("query", field);
+        return LLM("Process", searchResult);
+      `);
+
+      expect(result.status).toBe('success');
+      // search() should succeed due to coercion (Fix 1)
+      // LLM should be called normally
+      expect(llmCallCount).toBe(1);
+    });
+  });
+});
+
 // Test extractRawOutputBlocks helper function
 import { extractRawOutputBlocks, RAW_OUTPUT_START, RAW_OUTPUT_END } from '../../src/tools/executePlan.js';
 

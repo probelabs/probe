@@ -183,6 +183,16 @@ export function generateSandboxGlobals(options) {
         });
       }
 
+      // Issue #444: Auto-coerce object paths to strings for search()
+      // AI-generated DSL sometimes passes field objects instead of field.file_path strings
+      if (params.path && typeof params.path === 'object') {
+        const coercedPath = params.path.file_path || params.path.path || params.path.directory || params.path.filename;
+        if (coercedPath && typeof coercedPath === 'string') {
+          logFn?.(`[${name}] Warning: Coerced object path to string "${coercedPath}" (issue #444)`);
+          params.path = coercedPath;
+        }
+      }
+
       const validated = schema.safeParse(params);
       if (!validated.success) {
         throw new Error(`Invalid parameters for ${name}: ${validated.error.message}`);
@@ -232,6 +242,15 @@ export function generateSandboxGlobals(options) {
   // When schema is provided, auto-parse the JSON result for easier downstream processing
   if (llmCall) {
     const rawLLM = async (instruction, data, opts = {}) => {
+      // Issue #444: Guard against error strings being passed as data
+      // When previous tool calls fail, they return "ERROR: ..." strings
+      // Passing these to LLM() spawns useless delegates that can't help
+      const dataStr = typeof data === 'string' ? data : JSON.stringify(data);
+      if (dataStr && dataStr.startsWith('ERROR:')) {
+        logFn?.('[LLM] Blocked: data contains error from previous tool call');
+        return 'ERROR: Previous tool call failed - ' + dataStr.substring(0, 200);
+      }
+
       const result = await llmCall(instruction, data, opts);
       // Auto-parse JSON when schema is provided and result is a string
       if (opts.schema && typeof result === 'string') {

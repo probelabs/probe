@@ -436,6 +436,7 @@ ${lastError}
 
 RULES REMINDER:
 - search(query) is KEYWORD SEARCH — pass a search query, NOT a filename. Use extract(filepath) to read file contents.
+- search(query, path) — the path argument must be a STRING, not an object. Use field.file_path, not field.
 - search() returns up to 20K tokens by default. Use search(query, path, {maxTokens: null}) for unlimited, or searchAll(query) to auto-paginate ALL results.
 - search(), searchAll(), query(), extract(), listFiles(), bash() all return STRINGS, not arrays.
 - Use chunk(stringData) to split a string into an array of chunks.
@@ -444,7 +445,8 @@ RULES REMINDER:
 - Do NOT define helper functions that call tools — write logic inline.
 - Do NOT use async/await, template literals, or shorthand properties.
 - Do NOT use regex literals (/pattern/) — use String methods like indexOf, includes, startsWith instead.
-- String concatenation with +, not template literals.`;
+- String concatenation with +, not template literals.
+- IMPORTANT: If a tool returns "ERROR: ...", do NOT pass that error string to LLM() — handle or skip it.`;
 
               const fixedCode = await llmCallFn(fixPrompt, '', { maxTokens: 4000, temperature: 0.2 });
               // Strip markdown fences and XML tags the LLM might add
