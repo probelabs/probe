@@ -45,12 +45,38 @@ export function removeThinkingTags(xmlString) {
 
 /**
  * Extract thinking content for potential logging
+ * Handles nested thinking tags by recursively stripping inner tags.
  * @param {string} xmlString - The XML string to extract from
- * @returns {string|null} - Thinking content or null if not found
+ * @returns {string|null} - Thinking content (cleaned of nested tags) or null if not found
  */
 export function extractThinkingContent(xmlString) {
   const thinkingMatch = xmlString.match(/<thinking>([\s\S]*?)<\/thinking>/);
-  return thinkingMatch ? thinkingMatch[1].trim() : null;
+  if (!thinkingMatch) {
+    return null;
+  }
+
+  let content = thinkingMatch[1].trim();
+
+  // Handle nested thinking tags: if the extracted content itself starts with <thinking>,
+  // recursively extract from it until we get clean content.
+  // This handles: <thinking><thinking>content</thinking></thinking>
+  // where non-greedy match captures "<thinking>content" (issue #439)
+  while (content.startsWith('<thinking>')) {
+    const innerMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/);
+    if (innerMatch) {
+      content = innerMatch[1].trim();
+    } else {
+      // Unclosed inner <thinking> tag - strip the opening tag and use remaining content
+      // e.g., "<thinking>content" becomes "content"
+      content = content.substring('<thinking>'.length).trim();
+      break;
+    }
+  }
+
+  // Also strip any remaining thinking tags that might be embedded in the content
+  content = content.replace(/<\/?thinking>/g, '').trim();
+
+  return content || null;
 }
 
 /**
