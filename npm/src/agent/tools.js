@@ -87,7 +87,6 @@ export function createTools(configOptions) {
   if (configOptions.allowEdit && isToolAllowed('create')) {
     tools.createTool = createTool(configOptions);
   }
-
   return tools;
 }
 
@@ -131,33 +130,6 @@ export {
   urlContextToolDefinition,
   parseXmlToolCall
 };
-
-// Define the implement tool XML definition
-export const implementToolDefinition = `
-## implement
-Description: Implement a given task. Can modify files. Can be used ONLY if task explicitly stated that something requires modification or implementation.
-
-Parameters:
-- task: (required) The task description. Should be as detailed as possible, ideally pointing to exact files which needs be modified or created.
-- autoCommits: (optional) Whether to enable auto-commits in aider. Default is false.
-
-Usage Example:
-
-<examples>
-
-User: Can you implement a function to calculate Fibonacci numbers in main.js?
-<implement>
-<task>Implement a recursive function to calculate the nth Fibonacci number in main.js</task>
-</implement>
-
-User: Can you implement a function to calculate Fibonacci numbers in main.js with auto-commits?
-<implement>
-<task>Implement a recursive function to calculate the nth Fibonacci number in main.js</task>
-<autoCommits>true</autoCommits>
-</implement>
-
-</examples>
-`;
 
 // Define the listFiles tool XML definition
 export const listFilesToolDefinition = `

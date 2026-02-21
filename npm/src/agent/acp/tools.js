@@ -162,7 +162,8 @@ export class ACPToolManager {
         return ToolCallKind.extract;
       case 'delegate':
         return ToolCallKind.execute;
-      case 'implement':
+      case 'edit':
+      case 'create':
         return ToolCallKind.edit;
       default:
         return ToolCallKind.execute;

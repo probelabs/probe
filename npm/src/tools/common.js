@@ -450,7 +450,6 @@ export const DEFAULT_VALID_TOOLS = [
 	'useSkill',
 	'listFiles',
 	'searchFiles',
-	'implement',
 	'bash',
 	'task',
 	'attempt_completion'
@@ -496,7 +495,7 @@ function getValidParamsForTool(toolName) {
 
 	const schema = schemaMap[toolName];
 	if (!schema) {
-		// For tools without schema (listFiles, searchFiles, implement), return common params
+		// For tools without schema (listFiles, searchFiles), return common params
 		// These are the shared params that appear across multiple tools
 		return ['path', 'directory', 'pattern', 'recursive', 'includeHidden', 'task', 'files', 'autoCommits', 'result'];
 	}
@@ -688,7 +687,7 @@ export function detectUnrecognizedToolCall(xmlString, validTools) {
 	// Common tool names that AI might try to use (these should appear as top-level tags)
 	const knownToolNames = [
 		'search', 'query', 'extract', 'listFiles', 'searchFiles',
-		'listSkills', 'useSkill', 'readImage', 'implement', 'edit',
+		'listSkills', 'useSkill', 'readImage', 'edit',
 		'create', 'delegate', 'bash', 'task', 'attempt_completion',
 		'attempt_complete', 'read_file', 'write_file', 'run_command',
 		'grep', 'find', 'cat', 'list_directory'

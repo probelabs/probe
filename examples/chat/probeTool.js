@@ -11,9 +11,6 @@ import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 
-// Import the new pluggable implementation tool
-import { createImplementTool } from './implement/core/ImplementTool.js';
-
 // Create an event emitter for tool calls
 export const toolCallEmitter = new EventEmitter();
 
@@ -257,73 +254,6 @@ const wrapToolWithEmitter = (tool, toolName, baseExecute) => {
 	};
 };
 
-// Create the implement tool using the new pluggable system
-const implementToolConfig = {
-	enabled: process.env.ALLOW_EDIT === '1' || process.argv.includes('--allow-edit'),
-	backendConfig: {
-		// Configuration can be extended here
-	}
-};
-
-const pluggableImplementTool = createImplementTool(implementToolConfig);
-
-// Create a compatibility wrapper for the old interface
-const baseImplementTool = {
-	name: "implement",
-	description: pluggableImplementTool.description,
-	inputSchema: pluggableImplementTool.inputSchema,
-	execute: async ({ task, autoCommits = false, prompt, sessionId }) => {
-		const debug = process.env.DEBUG_CHAT === '1';
-		
-		if (debug) {
-			console.log(`[DEBUG] Executing implementation with task: ${task}`);
-			console.log(`[DEBUG] Auto-commits: ${autoCommits}`);
-			console.log(`[DEBUG] Session ID: ${sessionId}`);
-			if (prompt) console.log(`[DEBUG] Custom prompt: ${prompt}`);
-		}
-
-		// Check if the tool is enabled
-		if (!implementToolConfig.enabled) {
-			return {
-				success: false,
-				output: null,
-				error: 'Implementation tool is not enabled. Use --allow-edit flag to enable.',
-				command: null,
-				timestamp: new Date().toISOString(),
-				prompt: prompt || task
-			};
-		}
-
-		try {
-			// Use the new pluggable implementation tool
-			const result = await pluggableImplementTool.execute({
-				task: prompt || task, // Use prompt if provided, otherwise use task
-				autoCommit: autoCommits,
-				sessionId: sessionId,
-				// Pass through any additional options that might be useful
-				context: {
-					workingDirectory: process.cwd()
-				}
-			});
-
-			// The result is already in the expected format
-			return result;
-
-		} catch (error) {
-			// Handle any unexpected errors
-			console.error(`Error in implement tool:`, error);
-			return {
-				success: false,
-				output: null,
-				error: error.message || 'Unknown error in implementation tool',
-				command: null,
-				timestamp: new Date().toISOString(),
-				prompt: prompt || task
-			};
-		}
-	}
-};
-
 // Wrapper for listFiles tool with ALLOWED_FOLDERS security
 const baseListFilesTool = {
 	...packageListFilesToolInstance,
@@ -472,7 +402,6 @@ const baseSearchFilesTool = {
 export const searchToolInstance = wrapToolWithEmitter(baseSearchTool, 'search', baseSearchTool.execute);
 export const queryToolInstance = wrapToolWithEmitter(baseQueryTool, 'query', baseQueryTool.execute);
 export const extractToolInstance = wrapToolWithEmitter(baseExtractTool, 'extract', baseExtractTool.execute);
-export const implementToolInstance = wrapToolWithEmitter(baseImplementTool, 'implement', baseImplementTool.execute);
 export const listFilesToolInstance = wrapToolWithEmitter(baseListFilesTool, 'listFiles', baseListFilesTool.execute);
 export const searchFilesToolInstance = wrapToolWithEmitter(baseSearchFilesTool, 'searchFiles', baseSearchFilesTool.execute);
 
@@ -483,7 +412,6 @@ if (process.env.DEBUG_CHAT === '1') {
 	console.log('[DEBUG]   - search: Search for code patterns');
 	console.log('[DEBUG]   - query: Semantic code search');
 	console.log('[DEBUG]   - extract: Extract code snippets');
-	console.log('[DEBUG]   - implement: Generate code implementations');
 	console.log('[DEBUG]   - listFiles: List directory contents');
 	console.log('[DEBUG]   - searchFiles: Search files by pattern');
 	console.log('[DEBUG] ========================================\n');

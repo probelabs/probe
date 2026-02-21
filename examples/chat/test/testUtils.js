@@ -3,7 +3,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { ProbeChat } from '../probeChat.js';
 import { MockLLMProvider, createMockStreamText } from './mocks/mockLLMProvider.js';
-import MockBackend from '../implement/backends/MockBackend.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -120,20 +119,6 @@ export async function createTestProbeChat(options = {}) {
                 };
             }
         },
-        implement: {
-            execute: async (args, options) => {
-                console.log('Mock implement called with:', args);
-                return {
-                    sessionId: 'mock-session',
-                    status: 'success',
-                    filesModified: ['mock.js'],
-                    summary: 'Mock implementation complete'
-                };
-            },
-            handleError: (error) => {
-                console.error('Mock implement error:', error);
-            }
-        }
     };
     
     // Make tools accessible for test overrides
@@ -234,36 +219,6 @@ export async function createTestProbeChat(options = {}) {
     probeChat.processImageUrl = async function(url) {
         return 'mock-base64-image-data';
     };
-    
-    // Register mock backend if implement tool is being tested
-    if (options.useMockBackend) {
-        const mockBackend = new MockBackend();
-        
-        if (options.mockBackendResponses) {
-            mockBackend.setResponses(options.mockBackendResponses);
-        }
-        
-        // Override the implement tool's execute method to use our mock backend
-        const originalImplementExecute = probeChat.tools.implement.execute;
-        probeChat.tools.implement.execute = async function(args, options) {
-            // Force the mock backend
-            args.backend = 'mock';
-            
-            // If we need to register the backend, do it here
-            if (this.backendManager) {
-                await this.backendManager.registerBackend(mockBackend);
-            } else {
-                // Direct execution with mock backend
-                return await mockBackend.implement(args, options);
-            }
-            
-            return originalImplementExecute ? originalImplementExecute.call(this, args, options) : 
-                   await mockBackend.implement(args, options);
-        };
-        
-        // Return both for test access
-        return { probeChat, mockProvider, mockBackend };
-    }
     
     return { probeChat, mockProvider };
 }

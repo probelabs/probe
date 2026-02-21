@@ -13,7 +13,6 @@ import {
 	searchToolInstance, // Keep direct instances for API endpoints
 	queryToolInstance,
 	extractToolInstance,
-	implementToolInstance,
 	toolCallEmitter,
 	cancelToolExecutions,
 	clearToolExecutionData,
@@ -99,13 +98,13 @@ function getOrCreateChat(sessionId, apiCredentials = null) {
  * Start the web server
  * @param {string} version - The version of the application
  * @param {Object} options - Additional options
- * @param {boolean} options.allowEdit - Whether to allow editing files via the implement tool
+ * @param {boolean} options.allowEdit - Whether to allow editing files
  */
 export async function startWebServer(version, options = {}) {
 	const allowEdit = options?.allowEdit || false;
 
 	if (allowEdit) {
-		console.log('Edit mode enabled: implement tool is available');
+		console.log('Edit mode enabled');
 	}
 	// Authentication configuration
 	const AUTH_ENABLED = process.env.AUTH_ENABLED === '1';
@@ -156,10 +155,6 @@ export async function startWebServer(version, options = {}) {
 		extract: extractToolInstance
 	};
 	
-	// Add implement tool if edit mode is enabled
-	if (allowEdit) {
-		directApiTools.implement = implementToolInstance;
-	}
 
 
 	// Helper function to send SSE data
@@ -214,7 +209,6 @@ export async function startWebServer(version, options = {}) {
 			'OPTIONS /api/search': (req, res) => handleOptions(res),
 			'OPTIONS /api/query': (req, res) => handleOptions(res),
 			'OPTIONS /api/extract': (req, res) => handleOptions(res),
-			'OPTIONS /api/implement': (req, res) => handleOptions(res),
 			'OPTIONS /cancel-request': (req, res) => handleOptions(res),
 			'OPTIONS /folders': (req, res) => handleOptions(res), // Added for /folders
 
@@ -641,24 +635,6 @@ export async function startWebServer(version, options = {}) {
 				});
 			},
 			
-			// Implement tool endpoint (only available if allowEdit is true)
-			'POST /api/implement': async (req, res) => {
-				// Check if edit mode is enabled
-				if (!directApiTools.implement) {
-					return sendError(res, 403, 'Implement tool is not enabled. Start server with --allow-edit to enable.');
-				}
-				
-				handlePostRequest(req, res, async (body) => {
-					const { task, sessionId: reqSessionId } = body;
-					if (!task) return sendError(res, 400, 'Missing required parameter: task');
-
-					const sessionId = reqSessionId || randomUUID();
-					const toolParams = { task, sessionId };
-
-					await executeDirectTool(res, directApiTools.implement, 'implement', toolParams, sessionId);
-				});
-			},
-
 			// --- Main Chat Endpoint (Handles the Loop) ---
 			'POST /chat': (req, res) => { // This is the route used by the frontend UI
 				handlePostRequest(req, res, async (requestData) => {

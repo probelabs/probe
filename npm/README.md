@@ -23,6 +23,7 @@ During installation, the package will automatically download the appropriate pro
 - **Search Code**: Search for patterns in your codebase using Elasticsearch-like query syntax
 - **Query Code**: Find specific code structures using tree-sitter patterns
 - **Extract Code**: Extract code blocks from files based on file paths and line numbers
+- **Edit Code**: AI-powered code editing with text replacement (fuzzy matching), AST-aware symbol replace/insert across 16 languages
 - **AI Tools Integration**: Ready-to-use tools for Vercel AI SDK, LangChain, and other AI frameworks
 - **System Message**: Default system message for AI assistants with instructions on using probe tools
 - **Cross-Platform**: Works on Windows, macOS, and Linux
@@ -91,7 +92,7 @@ const agent = new ProbeAgent({
   path: '/path/to/your/project',
   provider: 'anthropic',   // or 'openai', 'google'
   model: 'claude-3-5-sonnet-20241022',  // Optional: override model
-  allowEdit: false,        // Optional: enable code modification
+  allowEdit: true,         // Optional: enable edit + create tools for code modification
   debug: true,            // Optional: enable debug logging
   allowedTools: ['*'],    // Optional: filter available tools (see Tool Filtering below)
   enableMcp: true,        // Optional: enable MCP tool integration
@@ -292,8 +293,7 @@ const agent5 = new ProbeAgent({
 - `listFiles` - List files and directories
 - `searchFiles` - Find files by glob pattern
 - `bash` - Execute bash commands (requires `enableBash: true`)
-- `implement` - Implement features with aider (requires `allowEdit: true`)
-- `edit` - Edit files with exact string replacement (requires `allowEdit: true`)
+- `edit` - Edit files with text replacement or AST-aware symbol editing (requires `allowEdit: true`)
 - `create` - Create new files (requires `allowEdit: true`)
 - `delegate` - Delegate tasks to subagents (requires `enableDelegate: true`)
 - `attempt_completion` - Signal task completion
@@ -326,6 +326,137 @@ probe agent "Analyze the architecture" --allowed-tools all
 - Both the feature flag AND `allowedTools` must permit a tool for it to be available
 - Blocked tools will not appear in the system message and cannot be executed
 - Use `allowedTools: []` for pure conversational AI without code analysis tools
+
+### Code Editing (Edit & Create Tools)
+
+Probe provides built-in code modification tools that work across all interfaces. The `edit` tool supports three modes: text-based find/replace with fuzzy matching, AST-aware symbol replacement, and symbol insertion.
+
+#### Enabling Edit Tools
+
+**CLI Agent:**
+```bash
+# Enable with --allow-edit flag
+probe agent "Fix the bug in auth.js" --allow-edit --path ./my-project
+
+# Enable with environment variable
+ALLOW_EDIT=1 probe agent "Refactor the login flow" --path ./my-project
+```
+
+**SDK (ProbeAgent):**
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+const agent = new ProbeAgent({
+  path: '/path/to/project',
+  allowEdit: true,       // enables edit + create tools
+  provider: 'anthropic'
+});
+
+// The agent can now modify files when answering questions
+const answer = await agent.answer("Fix the off-by-one error in calculateTotal");
+```
+
+**SDK (Standalone Tools):**
+```javascript
+import { editTool, createTool } from '@probelabs/probe';
+
+const edit = editTool({
+  allowedFolders: ['/path/to/project'],
+  cwd: '/path/to/project'
+});
+
+const create = createTool({
+  allowedFolders: ['/path/to/project'],
+  cwd: '/path/to/project'
+});
+```
+
+#### Edit Tool Modes
+
+| Mode | Parameters | Use Case |
+|------|-----------|----------|
+| **Text edit** | `old_string` + `new_string` | Small, precise changes: fix a condition, rename a variable, update a value |
+| **Symbol replace** | `symbol` + `new_string` | Replace an entire function/class/method by name (AST-aware, 16 languages) |
+| **Symbol insert** | `symbol` + `new_string` + `position` | Insert new code before or after an existing symbol |
+
+#### Edit Tool Parameters
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `file_path` | Yes | Path to the file to edit (absolute or relative to cwd) |
+| `new_string` | Yes | Replacement text or new code content |
+| `old_string` | No | Text to find and replace. Copy verbatim from the file. |
+| `replace_all` | No | Replace all occurrences (default: `false`, text mode only) |
+| `symbol` | No | Code symbol name for AST-aware editing (e.g. `"myFunction"`, `"MyClass.myMethod"`) |
+| `position` | No | `"before"` or `"after"` — insert near the symbol instead of replacing it |
+
+#### Examples
+
+**Text edit — find and replace:**
+```javascript
+await edit.execute({
+  file_path: 'src/main.js',
+  old_string: 'return false;',
+  new_string: 'return true;'
+});
+// => "Successfully edited src/main.js (1 replacement)"
+```
+
+**Text edit — fuzzy matching handles whitespace differences:**
+```javascript
+// File has: "  const x = 1;"  (2-space indent)
+// Your search string omits the indent — fuzzy matching finds it anyway
+await edit.execute({
+  file_path: 'src/main.js',
+  old_string: 'const x = 1;',
+  new_string: '  const x = 2;'
+});
+// => "Successfully edited src/main.js (1 replacement, matched via line-trimmed)"
+```
+
+**Symbol replace — rewrite a function by name:**
+```javascript
+await edit.execute({
+  file_path: 'src/utils.js',
+  symbol: 'calculateTotal',
+  new_string: `function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}`
+});
+// => "Successfully replaced symbol "calculateTotal" in src/utils.js (was lines 10-15, now 3 lines)"
+```
+
+**Symbol insert — add a new function after an existing one:**
+```javascript
+await edit.execute({
+  file_path: 'src/utils.js',
+  symbol: 'calculateTotal',
+  position: 'after',
+  new_string: `function calculateTax(total, rate) {
+  return total * rate;
+}`
+});
+// => "Successfully inserted 3 lines after symbol "calculateTotal" in src/utils.js (at line 16)"
+```
+
+**Create a new file:**
+```javascript
+await create.execute({
+  file_path: 'src/newModule.js',
+  content: `export function greet(name) {
+  return \`Hello, \${name}!\`;
+}`
+});
+// => "Successfully created src/newModule.js (52 bytes)"
+```
+
+#### Key Features
+
+- **Fuzzy matching**: Text mode automatically handles minor whitespace and indentation differences between your search string and the actual file content. Four strategies are tried in order: exact match, line-trimmed, whitespace-normalized, indent-flexible.
+- **AST-aware symbol editing**: Symbol mode uses tree-sitter to locate functions, classes, and methods by name across 16 languages (JavaScript, TypeScript, Python, Rust, Go, Java, C, C++, Ruby, PHP, Swift, Kotlin, Scala, C#, Lua, Zig).
+- **Auto-indentation**: Symbol mode automatically adjusts the indentation of `new_string` to match the original symbol's indentation level.
+- **Self-healing errors**: All error messages include specific recovery instructions telling you (or the LLM) exactly how to fix the call and retry.
+- **Security**: Path traversal attacks are blocked — all file operations are restricted to `allowedFolders`.
 
 ### Using as an MCP Server
 
@@ -844,6 +975,7 @@ probe mcp --timeout 60
 
 ## Additional Documentation
 
+- [Edit & Create Tools](./docs/EDIT_CREATE_TOOLS.md) - Code editing with fuzzy matching, AST-aware symbol editing, and file creation
 - [Context Window Compaction](./CONTEXT_COMPACTION.md) - Automatic conversation history compression
 - [MCP Integration](./MCP_INTEGRATION_SUMMARY.md) - Model Context Protocol support details
 - [Delegate Tool](./DELEGATE_TOOL_README.md) - Task distribution to subagents

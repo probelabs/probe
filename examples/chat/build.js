@@ -79,8 +79,7 @@ async function buildApp() {
     // Copy directories that might be needed at runtime
     const staticDirs = [
       'bin',
-      'storage', 
-      'implement'
+      'storage'
     ];
 
     for (const dir of staticDirs) {

@@ -13,7 +13,7 @@ export interface ProbeAgentOptions {
   systemPrompt?: string;
   /** Predefined prompt type (persona) */
   promptType?: 'code-explorer' | 'engineer' | 'code-review' | 'support' | 'architect';
-  /** Allow the use of the 'implement' tool for code editing */
+  /** Allow the use of the 'edit' and 'create' tools for code editing */
   allowEdit?: boolean;
   /** Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present) */
   architectureFileName?: string;
@@ -563,11 +563,93 @@ export declare function listFilesByLevel(
 export declare const DEFAULT_SYSTEM_MESSAGE: string;
 
 /**
+ * Edit tool configuration options
+ */
+export interface EditToolOptions {
+  /** Debug mode */
+  debug?: boolean;
+  /** Allowed directories for file operations */
+  allowedFolders?: string[];
+  /** Working directory for resolving relative paths */
+  cwd?: string;
+  /** Workspace root for relative path display */
+  workspaceRoot?: string;
+}
+
+/**
+ * Edit tool parameters (text mode)
+ */
+export interface EditTextParams {
+  /** Path to the file to edit */
+  file_path: string;
+  /** Text to find in the file (copy verbatim) */
+  old_string: string;
+  /** Replacement text */
+  new_string: string;
+  /** Replace all occurrences (default: false) */
+  replace_all?: boolean;
+}
+
+/**
+ * Edit tool parameters (symbol replace mode)
+ */
+export interface EditSymbolReplaceParams {
+  /** Path to the file to edit */
+  file_path: string;
+  /** Symbol name to replace (e.g. "myFunction", "MyClass.myMethod") */
+  symbol: string;
+  /** New code to replace the symbol with */
+  new_string: string;
+}
+
+/**
+ * Edit tool parameters (symbol insert mode)
+ */
+export interface EditSymbolInsertParams {
+  /** Path to the file to edit */
+  file_path: string;
+  /** Symbol name to insert near */
+  symbol: string;
+  /** New code to insert */
+  new_string: string;
+  /** Insert before or after the symbol */
+  position: 'before' | 'after';
+}
+
+/**
+ * Create tool parameters
+ */
+export interface CreateParams {
+  /** Path where the file should be created */
+  file_path: string;
+  /** Content to write to the file */
+  content: string;
+  /** Overwrite if file exists (default: false) */
+  overwrite?: boolean;
+}
+
+/**
+ * Create edit tool instance
+ */
+export declare function editTool(options?: EditToolOptions): {
+  execute(params: EditTextParams | EditSymbolReplaceParams | EditSymbolInsertParams): Promise<string>;
+};
+
+/**
+ * Create create tool instance
+ */
+export declare function createTool(options?: EditToolOptions): {
+  execute(params: CreateParams): Promise<string>;
+};
+
+/**
  * Schema definitions
  */
 export declare const searchSchema: any;
 export declare const querySchema: any;
 export declare const extractSchema: any;
+export declare const editSchema: any;
+export declare const createSchema: any;
 export declare const attemptCompletionSchema: any;
 
 /**
@@ -576,6 +658,8 @@ export declare const attemptCompletionSchema: any;
 export declare const searchToolDefinition: any;
 export declare const queryToolDefinition: any;
 export declare const extractToolDefinition: any;
+export declare const editToolDefinition: string;
+export declare const createToolDefinition: string;
 export declare const attemptCompletionToolDefinition: any;
 
 /**

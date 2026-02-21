@@ -35,7 +35,7 @@ export interface ProbeAgentOptions {
   systemPrompt?: string;
   /** Predefined prompt type (persona) */
   promptType?: 'code-explorer' | 'code-searcher' | 'engineer' | 'code-review' | 'support' | 'architect';
-  /** Allow the use of the 'implement' tool for code editing */
+  /** Allow the use of the 'edit' and 'create' tools for code editing */
   allowEdit?: boolean;
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;

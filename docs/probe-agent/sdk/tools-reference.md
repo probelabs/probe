@@ -10,7 +10,7 @@ ProbeAgent provides a comprehensive set of tools that the AI can use to interact
 |----------|-------|-------------|
 | **Search & Query** | search, query, extract | Find and retrieve code |
 | **File Operations** | edit, create, listFiles, searchFiles | Modify and explore files |
-| **Execution** | bash, implement | Run commands and implement features |
+| **Execution** | bash | Run shell commands |
 | **Analysis** | analyze_all, readImage | Comprehensive analysis |
 | **Agent Control** | delegate, attempt_completion | Orchestration and completion |
 | **Skills** | listSkills, useSkill | Dynamic capabilities |
@@ -206,47 +206,147 @@ Extract code blocks from files by location or symbol.
 
 ### edit
 
-Edit existing files with precise replacements.
+Edit files using text replacement or AST-aware symbol operations. Supports three modes: text-based find/replace with fuzzy matching, AST-aware symbol replacement, and symbol insertion.
 
 **Enabled By:** `allowEdit: true`
+
+**Three Editing Modes:**
+
+| Mode | Parameters | When to Use |
+|------|-----------|-------------|
+| **Text edit** | `old_string` + `new_string` | Small, precise changes: fix a condition, rename a variable, update a value |
+| **Symbol replace** | `symbol` + `new_string` | Replace an entire function, class, or method by name (no exact text matching needed) |
+| **Symbol insert** | `symbol` + `new_string` + `position` | Insert new code before or after an existing symbol |
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file` | string | Yes | File path to edit |
-| `edits` | array | Yes | Array of edit operations |
+| `file_path` | string | Yes | Path to the file to edit (absolute or relative to cwd) |
+| `new_string` | string | Yes | Replacement text or new code content |
+| `old_string` | string | No | Text to find and replace. Copy verbatim from the file. |
+| `replace_all` | boolean | No | Replace all occurrences (default: false, text mode only) |
+| `symbol` | string | No | Code symbol name for AST-aware editing (e.g. `"myFunction"`, `"MyClass.myMethod"`) |
+| `position` | string | No | `"before"` or `"after"` — insert near the symbol instead of replacing it |
 
-**Edit Object:**
+**Mode Selection Rules:**
+- If `symbol` is provided → AST-aware mode (symbol replace or symbol insert depending on `position`)
+- If `old_string` is provided (without `symbol`) → text-based mode
+- If both `symbol` and `old_string` are provided → `symbol` takes priority
+- If neither is provided → error with guidance
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `start` | number | Start line (1-indexed) |
-| `end` | number | End line (1-indexed) |
-| `content` | string | Replacement content |
+#### Text Mode — Find and Replace
 
-**Example AI Usage:**
+Provide `old_string` with text copied verbatim from the file and `new_string` with the replacement.
+
 ```xml
 <edit>
-  <file>src/utils.ts</file>
-  <edits>
-    <edit>
-      <start>10</start>
-      <end>15</end>
-      <content>// New implementation
-function processData(data: Data): Result {
-  return transform(data);
-}</content>
-    </edit>
-  </edits>
+<file_path>src/main.js</file_path>
+<old_string>return false;</old_string>
+<new_string>return true;</new_string>
 </edit>
 ```
+
+**Fuzzy Matching:** If exact matching fails, the tool automatically tries progressively relaxed matching:
+1. **Exact match** — verbatim string comparison
+2. **Line-trimmed** — strips leading/trailing whitespace from each line
+3. **Whitespace-normalized** — collapses all runs of whitespace to single spaces
+4. **Indent-flexible** — matches code structure regardless of base indentation level
+
+Replace all occurrences:
+```xml
+<edit>
+<file_path>config.json</file_path>
+<old_string>"debug": false</old_string>
+<new_string>"debug": true</new_string>
+<replace_all>true</replace_all>
+</edit>
+```
+
+#### Symbol Replace Mode — Rewrite by Name
+
+Provide `symbol` with the name of a function, class, or method and `new_string` with the complete new implementation. No need to quote the old code.
+
+```xml
+<edit>
+<file_path>src/utils.js</file_path>
+<symbol>calculateTotal</symbol>
+<new_string>function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}</new_string>
+</edit>
+```
+
+The tool uses tree-sitter AST parsing to find the symbol by name, then replaces the entire definition with your `new_string`. Supported across 16 languages: JavaScript, TypeScript, Python, Rust, Go, Java, C, C++, Ruby, PHP, Swift, Kotlin, Scala, C#, Lua, Zig.
+
+**Auto-indentation:** The tool detects the original symbol's indentation level and reindents your `new_string` to match.
+
+**Symbol naming:** Use the name as it appears in source — functions: `"calculateTotal"`, classes: `"UserService"`, methods: `"MyClass.myMethod"` (dot notation).
+
+#### Symbol Insert Mode — Add Code Near a Symbol
+
+Provide `symbol`, `new_string`, and `position` (`"before"` or `"after"`) to insert code near an existing symbol.
+
+```xml
+<edit>
+<file_path>src/utils.js</file_path>
+<symbol>calculateTotal</symbol>
+<position>after</position>
+<new_string>function calculateTax(total, rate) {
+  return total * rate;
+}</new_string>
+</edit>
+```
+
+**Error Handling — Self-Healing Messages:**
+
+All error messages include specific recovery instructions. When an edit fails, the error tells the AI exactly how to fix the call and retry. For example:
+- **String not found:** Suggests reading current file content, trying symbol mode, verifying path
+- **Symbol not found:** Suggests using `search`/`extract` to find the correct name, offers text mode fallback
+- **Multiple occurrences:** Suggests `replace_all=true` or adding more context
 
 **Configuration:**
 ```javascript
 const agent = new ProbeAgent({
   path: './src',
-  allowEdit: true
+  allowEdit: true,
+  allowedFolders: ['./src', './tests']  // restrict to specific directories
+});
+```
+
+**Standalone SDK Usage:**
+```javascript
+import { editTool } from '@probelabs/probe';
+
+const edit = editTool({
+  allowedFolders: ['/path/to/project'],
+  cwd: '/path/to/project'
+});
+
+// Text edit
+await edit.execute({
+  file_path: 'src/main.js',
+  old_string: 'return false;',
+  new_string: 'return true;'
+});
+
+// Symbol replace
+await edit.execute({
+  file_path: 'src/utils.js',
+  symbol: 'calculateTotal',
+  new_string: `function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}`
+});
+
+// Symbol insert
+await edit.execute({
+  file_path: 'src/utils.js',
+  symbol: 'calculateTotal',
+  position: 'after',
+  new_string: `function calculateTax(total, rate) {
+  return total * rate;
+}`
 });
 ```
 
@@ -254,7 +354,7 @@ const agent = new ProbeAgent({
 
 ### create
 
-Create new files.
+Create new files with specified content. Parent directories are created automatically.
 
 **Enabled By:** `allowEdit: true`
 
@@ -262,17 +362,26 @@ Create new files.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file` | string | Yes | Path for new file |
-| `content` | string | Yes | File content |
-| `overwrite` | boolean | No | Allow overwriting (default: false) |
+| `file_path` | string | Yes | Path where the file should be created |
+| `content` | string | Yes | Content to write to the file |
+| `overwrite` | boolean | No | Whether to overwrite if file exists (default: false) |
 
 **Example AI Usage:**
 ```xml
 <create>
-  <file>src/utils/helpers.ts</file>
-  <content>export function formatDate(date: Date): string {
+<file_path>src/utils/helpers.ts</file_path>
+<content>export function formatDate(date: Date): string {
   return date.toISOString();
 }</content>
+</create>
+```
+
+Overwrite an existing file:
+```xml
+<create>
+<file_path>src/config.json</file_path>
+<content>{"debug": true, "verbose": false}</content>
+<overwrite>true</overwrite>
 </create>
 ```
 
@@ -322,7 +431,7 @@ Search for files by name pattern.
 
 ---
 
-## Execution Tools
+## Execution Tool
 
 ### bash
 
@@ -372,34 +481,6 @@ const agent = new ProbeAgent({
 - `rm -rf /`, `rm -rf ~` (destructive)
 - `sudo` (privilege escalation)
 - `chmod 777` (dangerous permissions)
-
----
-
-### implement
-
-Implement features using pluggable backends.
-
-**Enabled By:** `allowEdit: true`
-
-**Parameters:**
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `task` | string | Yes | Task description |
-| `autoCommits` | boolean | No | Enable auto-commits |
-
-**Example AI Usage:**
-```xml
-<implement>
-  <task>Add input validation to the login form</task>
-  <autoCommits>false</autoCommits>
-</implement>
-```
-
-**Backends:**
-- Claude Code (default)
-- Aider
-- Custom backends
 
 ---
 

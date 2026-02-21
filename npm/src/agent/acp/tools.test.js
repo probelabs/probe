@@ -117,7 +117,8 @@ describe('ACPToolManager', () => {
       expect(toolManager.getToolKind('query')).toBe(ToolCallKind.query);
       expect(toolManager.getToolKind('extract')).toBe(ToolCallKind.extract);
       expect(toolManager.getToolKind('delegate')).toBe(ToolCallKind.execute);
-      expect(toolManager.getToolKind('implement')).toBe(ToolCallKind.edit);
+      expect(toolManager.getToolKind('edit')).toBe(ToolCallKind.edit);
+      expect(toolManager.getToolKind('create')).toBe(ToolCallKind.edit);
       expect(toolManager.getToolKind('unknown')).toBe(ToolCallKind.execute);
     });
   });
