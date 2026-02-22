@@ -23,7 +23,7 @@ During installation, the package will automatically download the appropriate pro
 - **Search Code**: Search for patterns in your codebase using Elasticsearch-like query syntax
 - **Query Code**: Find specific code structures using tree-sitter patterns
 - **Extract Code**: Extract code blocks from files based on file paths and line numbers
-- **Edit Code**: AI-powered code editing with text replacement (fuzzy matching), AST-aware symbol replace/insert across 16 languages
+- **Edit Code**: AI-powered code editing with text replacement (fuzzy matching), AST-aware symbol replace/insert across 16 languages, and line-targeted editing with optional hash-based integrity verification
 - **AI Tools Integration**: Ready-to-use tools for Vercel AI SDK, LangChain, and other AI frameworks
 - **System Message**: Default system message for AI assistants with instructions on using probe tools
 - **Cross-Platform**: Works on Windows, macOS, and Linux
@@ -293,7 +293,7 @@ const agent5 = new ProbeAgent({
 - `listFiles` - List files and directories
 - `searchFiles` - Find files by glob pattern
 - `bash` - Execute bash commands (requires `enableBash: true`)
-- `edit` - Edit files with text replacement or AST-aware symbol editing (requires `allowEdit: true`)
+- `edit` - Edit files with text replacement, AST-aware symbol editing, or line-targeted editing (requires `allowEdit: true`)
 - `create` - Create new files (requires `allowEdit: true`)
 - `delegate` - Delegate tasks to subagents (requires `enableDelegate: true`)
 - `attempt_completion` - Signal task completion
@@ -329,7 +329,7 @@ probe agent "Analyze the architecture" --allowed-tools all
 
 ### Code Editing (Edit & Create Tools)
 
-Probe provides built-in code modification tools that work across all interfaces. The `edit` tool supports three modes: text-based find/replace with fuzzy matching, AST-aware symbol replacement, and symbol insertion.
+Probe provides built-in code modification tools that work across all interfaces. The `edit` tool supports four modes: text-based find/replace with fuzzy matching, AST-aware symbol replacement, symbol insertion, and line-targeted editing with optional hash-based integrity verification.
 
 #### Enabling Edit Tools
 
@@ -349,6 +349,7 @@ import { ProbeAgent } from '@probelabs/probe';
 const agent = new ProbeAgent({
   path: '/path/to/project',
   allowEdit: true,       // enables edit + create tools
+  // hashLines defaults to true when allowEdit is true (line integrity verification)
   provider: 'anthropic'
 });
 
@@ -378,6 +379,7 @@ const create = createTool({
 | **Text edit** | `old_string` + `new_string` | Small, precise changes: fix a condition, rename a variable, update a value |
 | **Symbol replace** | `symbol` + `new_string` | Replace an entire function/class/method by name (AST-aware, 16 languages) |
 | **Symbol insert** | `symbol` + `new_string` + `position` | Insert new code before or after an existing symbol |
+| **Line-targeted edit** | `start_line` + `new_string` | Edit specific lines from extract/search output; ideal for changes inside large functions |
 
 #### Edit Tool Parameters
 
@@ -388,7 +390,9 @@ const create = createTool({
 | `old_string` | No | Text to find and replace. Copy verbatim from the file. |
 | `replace_all` | No | Replace all occurrences (default: `false`, text mode only) |
 | `symbol` | No | Code symbol name for AST-aware editing (e.g. `"myFunction"`, `"MyClass.myMethod"`) |
-| `position` | No | `"before"` or `"after"` — insert near the symbol instead of replacing it |
+| `position` | No | `"before"` or `"after"` — insert near the symbol or line instead of replacing it |
+| `start_line` | No | Line reference for line-targeted editing (e.g. `"42"` or `"42:ab"` with hash) |
+| `end_line` | No | End of line range, inclusive (e.g. `"55"` or `"55:cd"`). Defaults to `start_line`. |
 
 #### Examples
 
@@ -439,6 +443,30 @@ await edit.execute({
 // => "Successfully inserted 3 lines after symbol "calculateTotal" in src/utils.js (at line 16)"
 ```
 
+**Line-targeted edit — edit specific lines from extract output:**
+```javascript
+// After extracting "src/order.js#processOrder" and seeing lines 143-145
+await edit.execute({
+  file_path: 'src/order.js',
+  start_line: '143',
+  end_line: '145',
+  new_string: '  const items = order.items.filter(i => i.active);'
+});
+// => "Successfully edited src/order.js (lines 143-145 replaced with 1 line)"
+```
+
+**Line-targeted edit — with hash integrity verification:**
+```javascript
+// Use the hash from extract output (e.g. "143:cd") for verification
+await edit.execute({
+  file_path: 'src/order.js',
+  start_line: '143:cd',
+  new_string: '  const items = order.items.filter(i => i.active);'
+});
+// If hash matches: edit succeeds
+// If hash doesn't match: error with updated reference for retry
+```
+
 **Create a new file:**
 ```javascript
 await create.execute({
@@ -455,6 +483,9 @@ await create.execute({
 - **Fuzzy matching**: Text mode automatically handles minor whitespace and indentation differences between your search string and the actual file content. Four strategies are tried in order: exact match, line-trimmed, whitespace-normalized, indent-flexible.
 - **AST-aware symbol editing**: Symbol mode uses tree-sitter to locate functions, classes, and methods by name across 16 languages (JavaScript, TypeScript, Python, Rust, Go, Java, C, C++, Ruby, PHP, Swift, Kotlin, Scala, C#, Lua, Zig).
 - **Auto-indentation**: Symbol mode automatically adjusts the indentation of `new_string` to match the original symbol's indentation level.
+- **Line-targeted editing**: Use line numbers from `extract`/`search` output to make precise edits inside large functions. Optional hash-based integrity verification detects stale references.
+- **Extract→Edit workflow**: Extract a function by symbol name (e.g. `"file.js#myFunction"`), then use the line numbers from the output to surgically edit specific lines with `start_line`/`end_line`.
+- **File state tracking**: Automatic per-session tracking ensures edits are never based on stale content. Files read via `search`/`extract` are tracked; edits to unread or modified files are blocked with recovery instructions.
 - **Self-healing errors**: All error messages include specific recovery instructions telling you (or the LLM) exactly how to fix the call and retry.
 - **Security**: Path traversal attacks are blocked — all file operations are restricted to `allowedFolders`.
 

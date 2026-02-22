@@ -35,6 +35,9 @@ export async function findSymbol(filePath, symbolName, cwd) {
       file: match.file
     };
   } catch (error) {
+    if (process.env.DEBUG === '1') {
+      console.error(`[SymbolEdit] findSymbol error for "${symbolName}" in ${filePath}: ${error.message}`);
+    }
     return null;
   }
 }

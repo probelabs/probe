@@ -4,6 +4,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { editTool, createTool } from '../../src/tools/edit.js';
+import { FileTracker } from '../../src/tools/fileTracker.js';
 import { promises as fs } from 'fs';
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
@@ -849,6 +850,198 @@ if (!user.email) {
       const content = await fs.readFile(testFile, 'utf-8');
       expect(content).toContain('x.enabled');
       expect(content).toContain('x.label');
+    });
+  });
+
+  // ─── FileTracker Integration ───
+
+  describe('fileTracker integration', () => {
+    test('edit succeeds when file was seen', async () => {
+      const originalContent = 'Hello, world!\nThis is a test.';
+      await fs.writeFile(testFile, originalContent);
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(testFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'This is a test.',
+        new_string: 'This was edited.'
+      });
+
+      expect(result).toContain('Successfully edited');
+    });
+
+    test('edit fails with untracked message when file not seen', async () => {
+      const originalContent = 'Hello, world!';
+      await fs.writeFile(testFile, originalContent);
+
+      const tracker = new FileTracker();
+      // Do NOT mark file as seen
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'Hello',
+        new_string: 'Goodbye'
+      });
+
+      expect(result).toContain('not been read yet');
+      expect(result).toContain('extract');
+
+      // File should be unchanged
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe(originalContent);
+    });
+
+    test('edit succeeds even when file modified externally (seen-check only)', async () => {
+      // Key behavioral change: file-level mtime no longer blocks edits
+      await fs.writeFile(testFile, 'original content here');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(testFile);
+
+      // Modify the file externally
+      await fs.writeFile(testFile, 'modified content here that is now different length');
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'modified',
+        new_string: 'changed'
+      });
+
+      // Should succeed — file was seen, content matching handles the rest
+      expect(result).toContain('Successfully edited');
+    });
+
+    test('chained edits succeed with text mode', async () => {
+      await fs.writeFile(testFile, 'line 1\nline 2\nline 3');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(testFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      // First edit
+      const result1 = await edit.execute({
+        file_path: testFile,
+        old_string: 'line 2',
+        new_string: 'line TWO'
+      });
+      expect(result1).toContain('Successfully edited');
+
+      // Second edit — file was modified by first edit but seen-check passes
+      const result2 = await edit.execute({
+        file_path: testFile,
+        old_string: 'line 3',
+        new_string: 'line THREE'
+      });
+      expect(result2).toContain('Successfully edited');
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe('line 1\nline TWO\nline THREE');
+    });
+
+    test('standalone editTool without fileTracker works unchanged', async () => {
+      await fs.writeFile(testFile, 'standalone test');
+
+      // No fileTracker in options
+      const edit = editTool({
+        allowedFolders: [testDir]
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'standalone test',
+        new_string: 'still works'
+      });
+
+      expect(result).toContain('Successfully edited');
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe('still works');
+    });
+
+    test('createTool updates tracker after write', async () => {
+      const newFile = join(testDir, 'created.js');
+      const tracker = new FileTracker();
+
+      const create = createTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await create.execute({
+        file_path: newFile,
+        content: 'new file content'
+      });
+
+      expect(result).toContain('Successfully');
+      expect(tracker.isTracked(newFile)).toBe(true);
+    });
+
+    test('symbol edit updates tracker after write', async () => {
+      const jsFile = join(testDir, 'sym.js');
+      await fs.writeFile(jsFile, 'function hello() {\n  return "hi";\n}\n');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(jsFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: jsFile,
+        symbol: 'hello',
+        new_string: 'function hello() {\n  return "world";\n}'
+      });
+
+      expect(result).toContain('Successfully replaced symbol');
+      // Tracker should be updated — second edit should work
+      const check = tracker.checkBeforeEdit(jsFile);
+      expect(check.ok).toBe(true);
+    });
+
+    test('line-targeted edit updates tracker after write', async () => {
+      const lineFile = join(testDir, 'lines.js');
+      await fs.writeFile(lineFile, 'line one\nline two\nline three\n');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(lineFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: lineFile,
+        start_line: '2',
+        new_string: 'line TWO'
+      });
+
+      expect(result).toContain('Successfully edited');
+      // Tracker should be updated
+      const check = tracker.checkBeforeEdit(lineFile);
+      expect(check.ok).toBe(true);
     });
   });
 });

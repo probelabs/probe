@@ -1131,6 +1131,93 @@ I need to rename this function to follow the naming convention.
     });
   });
 
+  describe('Edit tool line-targeted mode parsing', () => {
+    test('should parse edit tool with start_line (line replace mode)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<new_string>return processItems(order.items);</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: 42,  // XML parser coerces to number
+          new_string: 'return processItems(order.items);'
+        }
+      });
+    });
+
+    test('should parse edit tool with start_line and end_line (range replace)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<end_line>55</end_line>
+<new_string>// simplified
+return processItems(order.items);</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: 42,
+          end_line: 55,
+          new_string: '// simplified\nreturn processItems(order.items);'
+        }
+      });
+    });
+
+    test('should parse edit tool with start_line hash (preserves as string)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42:ab</start_line>
+<new_string>return true;</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: '42:ab',  // Contains non-numeric chars, stays string
+          new_string: 'return true;'
+        }
+      });
+    });
+
+    test('should parse edit tool with start_line and position (insert mode)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<position>after</position>
+<new_string>const validated = validate(input);</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: 42,
+          position: 'after',
+          new_string: 'const validated = validate(input);'
+        }
+      });
+    });
+  });
+
   describe('Wrapped tool call detection (Issue: api_call infinite loop)', () => {
     describe('detectUnrecognizedToolCall with wrapped tools', () => {
       test('should detect tool name wrapped in <api_call><tool_name> tags', () => {

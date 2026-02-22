@@ -2,11 +2,11 @@
 
 ## Overview
 
-The Probe Agent provides file editing and creation capabilities through two tools: `edit` and `create`. The `edit` tool supports three modes — text-based find/replace with fuzzy matching, AST-aware symbol replacement, and symbol insertion. These tools are disabled by default and must be explicitly enabled.
+The Probe Agent provides file editing and creation capabilities through two tools: `edit` and `create`. The `edit` tool supports four modes — text-based find/replace with fuzzy matching, AST-aware symbol replacement, symbol insertion, and line-targeted editing with optional hash-based integrity verification. These tools are disabled by default and must be explicitly enabled.
 
 ## Edit Tool
 
-### Three Editing Modes
+### Four Editing Modes
 
 Choose the mode based on the scope of your change:
 
@@ -15,6 +15,7 @@ Choose the mode based on the scope of your change:
 | **Text edit** | `old_string` + `new_string` | Small, precise changes: fix a condition, rename a variable, update a value |
 | **Symbol replace** | `symbol` + `new_string` | Replace an entire function, class, or method by name (no exact text matching needed) |
 | **Symbol insert** | `symbol` + `new_string` + `position` | Insert new code before or after an existing symbol |
+| **Line-targeted edit** | `start_line` + `new_string` | Edit specific lines from extract/search output; ideal for changes inside large functions |
 
 ### Parameters
 
@@ -25,14 +26,16 @@ Choose the mode based on the scope of your change:
 | `old_string` | No | Text to find and replace. Copy verbatim from the file. |
 | `replace_all` | No | Replace all occurrences (default: `false`, text mode only) |
 | `symbol` | No | Code symbol name for AST-aware editing (e.g. `"myFunction"`, `"MyClass.myMethod"`) |
-| `position` | No | `"before"` or `"after"` — insert near the symbol instead of replacing it |
+| `position` | No | `"before"` or `"after"` — insert near the symbol or line instead of replacing it |
+| `start_line` | No | Line reference for line-targeted editing (e.g. `"42"` or `"42:ab"` with hash) |
+| `end_line` | No | End of line range, inclusive (e.g. `"55"` or `"55:cd"`). Defaults to `start_line`. |
 
-### Mode Selection Rules
+### Mode Selection Rules (Priority Order)
 
 - If `symbol` is provided, the tool uses AST-aware mode (symbol replace or symbol insert depending on `position`)
-- If `old_string` is provided (without `symbol`), the tool uses text-based mode
-- If both `symbol` and `old_string` are provided, `symbol` takes priority
-- If neither is provided, the tool returns an error with guidance
+- If `start_line` is provided (without `symbol`), the tool uses line-targeted mode
+- If `old_string` is provided (without `symbol` or `start_line`), the tool uses text-based mode
+- If none are provided, the tool returns an error with guidance
 
 ### Text Mode — Find and Replace
 
@@ -128,6 +131,79 @@ Provide `symbol`, `new_string`, and `position` (`"before"` or `"after"`) to inse
 
 Indentation is automatically adjusted to match the reference symbol.
 
+### Line-Targeted Mode — Edit by Line Number
+
+Use line numbers from `extract` or `search` output to make precise edits. Ideal for editing inside large functions without rewriting the entire symbol.
+
+#### Replace a Line
+
+```xml
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<new_string>  return processItems(order.items);</new_string>
+</edit>
+```
+
+#### Replace a Range of Lines
+
+```xml
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<end_line>55</end_line>
+<new_string>  // simplified implementation
+  return processItems(order.items);</new_string>
+</edit>
+```
+
+#### Insert After a Line
+
+```xml
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<position>after</position>
+<new_string>  const validated = validate(input);</new_string>
+</edit>
+```
+
+#### Delete Lines
+
+```xml
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<end_line>45</end_line>
+<new_string></new_string>
+</edit>
+```
+
+#### Hash-Based Integrity Verification
+
+When `allowEdit` is enabled, `hashLines` is on by default — search/extract output includes content hashes (e.g. `42:ab | function foo() {}`). Use these in your edit references for integrity verification:
+
+```xml
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42:ab</start_line>
+<end_line>55:cd</end_line>
+<new_string>  return processItems(order.items);</new_string>
+</edit>
+```
+
+If the hash doesn't match (file changed since last read), the error includes the updated reference so you can retry.
+
+#### Heuristic Auto-Corrections
+
+Line-targeted edits automatically correct common LLM mistakes:
+
+1. **Prefix stripping**: If `new_string` contains `42:ab | code`, the line-number prefixes are stripped
+2. **Echo stripping**: If `new_string` echoes boundary lines (the line before/after the edit range), they are removed
+3. **Indent restoration**: If `new_string` has different base indentation than the original lines, it's reindented to match
+
+The success message notes any auto-corrections applied, e.g.: `[auto-corrected: stripped line-number prefixes, stripped echoed line before range]`
+
 ## Create Tool
 
 Creates new files with specified content. Parent directories are created automatically.
@@ -174,6 +250,9 @@ ALLOW_EDIT=1 probe agent "Refactor the login flow" --path ./my-project
 
 # Combine with other options
 probe agent --allow-edit --enable-bash --path ./src "Set up a new React component with tests"
+
+# hashLines is on by default with --allow-edit; disable with --no-hash-lines
+probe agent --allow-edit --no-hash-lines --path ./src "Fix the bug"
 ```
 
 ### SDK — ProbeAgent
@@ -184,6 +263,7 @@ import { ProbeAgent } from '@probelabs/probe';
 const agent = new ProbeAgent({
   path: '/path/to/project',
   allowEdit: true,       // enables edit + create tools
+  // hashLines defaults to true when allowEdit is true (disable with hashLines: false)
   provider: 'anthropic',
   allowedFolders: ['./src', './tests']  // restrict to specific directories
 });
@@ -345,16 +425,23 @@ All error messages include specific recovery instructions. When an edit fails, t
    - Adding a new function next to a related one
    - Adding imports or comments near specific code
 
+4. **Editing inside large functions** → Extract symbol + line-targeted edit
+   - First: `extract` with a symbol target (e.g. `"src/main.js#processOrder"`) to see the function with line numbers
+   - Then: `edit` with `start_line`/`end_line` to surgically modify specific lines within it
+   - With `allowEdit`, `hashLines` is on by default — extract output includes content hashes (e.g. `42:ab |`) for integrity verification in the edit call
+
 ### Workflow
 
 ```
 1. Use 'search' to find relevant files and code
-2. Use 'extract' to see the full context (exact content)
+2. Use 'extract' to see the full context (exact content with line numbers)
 3. Choose the appropriate edit mode:
    - Copy exact text for old_string (text mode)
    - Use the symbol name directly (symbol mode)
-4. If edit fails, read the error message and follow its instructions
-5. Use 'extract' again to verify the change
+   - Use line numbers from extract/search output (line-targeted mode)
+4. For large functions: extract the symbol first, then use line-targeted edits
+5. If edit fails, read the error message and follow its instructions
+6. Use 'extract' again to verify the change
 ```
 
 ### Common Patterns
@@ -394,6 +481,61 @@ All error messages include specific recovery instructions. When an edit fails, t
 </edit>
 ```
 
+## File State Tracking (Multi-Edit Safety)
+
+When using ProbeAgent with `allowEdit: true`, the system automatically tracks which files and symbols the LLM has seen via `search` or `extract`. This uses two-tier content-aware tracking to prevent edits based on stale content while allowing edits to proceed when only unrelated parts of a file changed.
+
+### How It Works
+
+1. **File-level "seen" tracking**: Every `extract` and `search` call marks files as "seen". Before any `edit`, the tracker checks if the file was previously read. If not, the edit is blocked with a message guiding the LLM to use `extract` first
+2. **Symbol-level content hashing**: When extracting a symbol (e.g., `file.js#myFunction`), the system computes a SHA-256 content hash of the symbol's code. Before a symbol edit, it re-reads the symbol via tree-sitter AST and compares the hash. If the symbol changed, the edit is blocked
+3. **Smart staleness**: Edits proceed when the target symbol hasn't changed, even if other parts of the file were modified. This is more granular than file-level mtime tracking
+4. **Chained edit support**: After every successful symbol write, the tracker re-reads the symbol to capture its new content hash and position, enabling subsequent edits to the same symbol
+
+### Error Messages
+
+| Scenario | Error Message |
+|----------|--------------|
+| **File never read** | `This file has not been read yet in this session. Use 'extract' to read the file first...` |
+| **Symbol changed** | `Symbol "foo" has changed since you last read it. Use extract to re-read...` |
+
+Both error messages include an `<extract>` example for the LLM to recover automatically.
+
+### Standalone Usage
+
+When using `editTool()` directly (without ProbeAgent), file tracking is not enabled — all edits proceed without staleness checks, preserving backward compatibility.
+
+To enable tracking for standalone tools, pass a `FileTracker` instance via options:
+
+```javascript
+import { editTool } from '@probelabs/probe';
+import { FileTracker } from '@probelabs/probe';
+
+const tracker = new FileTracker();
+const edit = editTool({
+  allowedFolders: ['/path/to/project'],
+  fileTracker: tracker
+});
+
+// Mark a file as seen before editing
+tracker.markFileSeen('/path/to/project/src/main.js');
+
+// Edit succeeds — file was seen
+await edit.execute({
+  file_path: 'src/main.js',
+  old_string: 'return false;',
+  new_string: 'return true;'
+});
+// Tracker is automatically updated after write, so chained edits work
+```
+
+### Design Decisions
+
+- **Content hash, not mtime**: SHA-256 of normalized content detects actual changes, not filesystem metadata. Enables "symbol unchanged = edit allowed" even when other parts of the file changed.
+- **Two-tier tracking**: File-level "seen" flag (from search) guards against blind edits. Symbol-level content hashes (from extract) verify staleness at the right granularity.
+- **Per-session isolation**: Each ProbeAgent instance gets its own FileTracker. Subagents get their own tracker too (natural isolation via fresh ProbeAgent instances).
+- **Graceful degradation**: When `fileTracker` is `undefined` (standalone tools, read-only sessions), all checks are no-ops.
+
 ## Limitations
 
 - **Single file per call**: Each tool call operates on one file
@@ -413,6 +555,18 @@ cd npm && NODE_OPTIONS=--experimental-vm-modules npx jest tests/unit/symbol-edit
 
 # Run fuzzy matching tests
 cd npm && NODE_OPTIONS=--experimental-vm-modules npx jest tests/unit/fuzzy-match.test.js
+
+# Run line-targeted mode tests
+cd npm && NODE_OPTIONS=--experimental-vm-modules npx jest tests/unit/line-edit-mode.test.js
+
+# Run hashline utility tests
+cd npm && NODE_OPTIONS=--experimental-vm-modules npx jest tests/unit/hashline.test.js
+
+# Run file tracker tests
+cd npm && NODE_OPTIONS=--experimental-vm-modules npx jest tests/unit/fileTracker.test.js
+
+# Run line-edit heuristics tests
+cd npm && NODE_OPTIONS=--experimental-vm-modules npx jest tests/unit/line-edit-heuristics.test.js
 
 # Run XML parsing tests (includes edit tool XML parsing)
 cd npm && NODE_OPTIONS=--experimental-vm-modules npx jest tests/unit/xmlParsing.test.js

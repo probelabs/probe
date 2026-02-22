@@ -65,6 +65,7 @@ import {
   parseXmlToolCallWithThinking
 } from './tools.js';
 import { createMessagePreview, detectUnrecognizedToolCall, detectStuckResponse, areBothStuckResponses } from '../tools/common.js';
+import { FileTracker } from '../tools/fileTracker.js';
 import {
   createWrappedTools,
   listFilesToolInstance,
@@ -228,6 +229,7 @@ export class ProbeAgent {
     this.customPrompt = options.systemPrompt || options.customPrompt || null;
     this.promptType = options.promptType || 'code-explorer';
     this.allowEdit = !!options.allowEdit;
+    this.hashLines = options.hashLines !== undefined ? !!options.hashLines : this.allowEdit;
     this.enableDelegate = !!options.enableDelegate;
     this.enableExecutePlan = !!options.enableExecutePlan;
     this.debug = options.debug || process.env.DEBUG === '1';
@@ -328,6 +330,7 @@ export class ProbeAgent {
       console.log(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
       console.log(`[DEBUG] Allow Edit: ${this.allowEdit}`);
+      console.log(`[DEBUG] Hash Lines: ${this.hashLines}`);
       console.log(`[DEBUG] Search delegation enabled: ${this.searchDelegate}`);
       console.log(`[DEBUG] Workspace root: ${this.workspaceRoot}`);
       console.log(`[DEBUG] Working directory (cwd): ${this.cwd}`);
@@ -830,9 +833,12 @@ export class ProbeAgent {
       cwd: this.cwd,
       workspaceRoot: this.workspaceRoot,
       allowedFolders: this.allowedFolders,
+      // File state tracking for safe multi-edit workflows (only when editing is enabled)
+      fileTracker: this.allowEdit ? new FileTracker({ debug: this.debug }) : null,
       outline: this.outline,
       searchDelegate: this.searchDelegate,
       allowEdit: this.allowEdit,
+      hashLines: this.hashLines,
       enableDelegate: this.enableDelegate,
       enableExecutePlan: this.enableExecutePlan,
       enableBash: this.enableBash,
@@ -2640,7 +2646,7 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
       availableToolsList += '- query: Search code using structural AST patterns.\n';
     }
     if (isToolAllowed('extract')) {
-      availableToolsList += '- extract: Extract specific code blocks or lines from files.\n';
+      availableToolsList += '- extract: Extract specific code blocks or lines from files. Use with symbol targets (e.g. "file.js#funcName") to get line numbers for line-targeted editing.\n';
     }
     if (isToolAllowed('listFiles')) {
       availableToolsList += '- listFiles: List files and directories in a specified location.\n';
@@ -2658,7 +2664,7 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
       availableToolsList += '- readImage: Read and load an image file for AI analysis.\n';
     }
     if (this.allowEdit && isToolAllowed('edit')) {
-      availableToolsList += '- edit: Edit files using text replacement or AST-aware symbol operations.\n';
+      availableToolsList += '- edit: Edit files using text replacement, AST-aware symbol operations, or line-targeted editing.\n';
     }
     if (this.allowEdit && isToolAllowed('create')) {
       availableToolsList += '- create: Create new files with specified content.\n';
@@ -2749,9 +2755,14 @@ Follow these instructions carefully:
 8. Once the task is fully completed, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
 9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
 10. When modifying files, choose the appropriate tool:
-    - Use 'edit' for all code modifications. For small changes (a line or a few lines), use old_string + new_string — copy old_string verbatim from the file. For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
+    - Use 'edit' for all code modifications:
+      * For small changes (a line or a few lines), use old_string + new_string — copy old_string verbatim from the file.
+      * For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
+      * For editing specific lines from search/extract output, use start_line (and optionally end_line) with the line numbers shown in the output.${this.hashLines ? ' Line references include content hashes (e.g. "42:ab") for integrity verification.' : ''}
+      * For editing inside large functions: first use extract with the symbol target (e.g. "file.js#myFunction") to see the function with line numbers${this.hashLines ? ' and hashes' : ''}, then use start_line/end_line to surgically edit specific lines within it.
     - Use 'create' for new files or complete file rewrites.
-    - If an edit fails, read the error message — it tells you exactly how to fix the call and retry.` : ''}
+    - If an edit fails, read the error message — it tells you exactly how to fix the call and retry.
+    - The system tracks which files you've seen via search/extract. If you try to edit a file you haven't read, or one that changed since you last read it, the edit will fail with instructions to re-read first. Always use extract before editing to ensure you have current file content.` : ''}
 </instructions>
 `;
 

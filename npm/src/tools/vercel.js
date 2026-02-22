@@ -11,6 +11,7 @@ import { delegate } from '../delegate.js';
 import { analyzeAll } from './analyzeAll.js';
 import { searchSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 import { formatErrorForAI } from '../utils/error-types.js';
+import { annotateOutputWithHashes } from './hashline.js';
 
 const CODE_SEARCH_SCHEMA = {
 	type: 'object',
@@ -161,8 +162,16 @@ export const searchTool = (options = {}) => {
 		maxTokens = 20000,
 		debug = false,
 		outline = false,
-		searchDelegate = false
+		searchDelegate = false,
+		hashLines = false
 	} = options;
+
+	const maybeAnnotate = (result) => {
+		if (hashLines && typeof result === 'string') {
+			return annotateOutputWithHashes(result);
+		}
+		return result;
+	};
 
 	return tool({
 		name: 'search',
@@ -215,7 +224,12 @@ export const searchTool = (options = {}) => {
 
 			if (!searchDelegate) {
 				try {
-					return await runRawSearch();
+					const result = maybeAnnotate(await runRawSearch());
+					// Track files found in search results for staleness detection
+					if (options.fileTracker && typeof result === 'string') {
+						options.fileTracker.trackFilesFromOutput(result, options.cwd || '.').catch(() => {});
+					}
+					return result;
 				} catch (error) {
 					console.error('Error executing search command:', error);
 					return formatErrorForAI(error);
@@ -265,7 +279,11 @@ export const searchTool = (options = {}) => {
 					if (debug) {
 						console.error('Delegated search returned no targets; falling back to raw search');
 					}
-					return await runRawSearch();
+					const fallbackResult = maybeAnnotate(await runRawSearch());
+					if (options.fileTracker && typeof fallbackResult === 'string') {
+						options.fileTracker.trackFilesFromOutput(fallbackResult, options.cwd || '.').catch(() => {});
+					}
+					return fallbackResult;
 				}
 
 				// Resolve relative paths against the actual search directory, not the general cwd.
@@ -288,14 +306,18 @@ export const searchTool = (options = {}) => {
 				// Strip workspace root prefix from extract output so paths are relative
 				if (resolutionBase && typeof extractResult === 'string') {
 					const wsPrefix = resolutionBase.endsWith('/') ? resolutionBase : resolutionBase + '/';
-					return extractResult.split(wsPrefix).join('');
+					return maybeAnnotate(extractResult.split(wsPrefix).join(''));
 				}
 
-				return extractResult;
+				return maybeAnnotate(extractResult);
 			} catch (error) {
 				console.error('Delegated search failed, falling back to raw search:', error);
 				try {
-					return await runRawSearch();
+					const fallbackResult2 = maybeAnnotate(await runRawSearch());
+					if (options.fileTracker && typeof fallbackResult2 === 'string') {
+						options.fileTracker.trackFilesFromOutput(fallbackResult2, options.cwd || '.').catch(() => {});
+					}
+					return fallbackResult2;
 				} catch (fallbackError) {
 					console.error('Error executing search command:', fallbackError);
 					// Both delegation and fallback failed - provide detailed error
@@ -366,7 +388,7 @@ export const queryTool = (options = {}) => {
  * @returns {Object} Configured extract tool
  */
 export const extractTool = (options = {}) => {
-	const { debug = false, outline = false } = options;
+	const { debug = false, outline = false, hashLines = false } = options;
 
 	return tool({
 		name: 'extract',
@@ -388,6 +410,7 @@ export const extractTool = (options = {}) => {
 				// Create a temporary file for input content if provided
 				let tempFilePath = null;
 				let extractOptions = { cwd: effectiveCwd };
+				let extractFiles = null; // Track resolved file targets for content hashing
 
 				if (input_content) {
 					// Import required modules
@@ -424,7 +447,7 @@ export const extractTool = (options = {}) => {
 					const parsedTargets = parseTargets(targets);
 
 					// Resolve relative paths in targets against cwd
-					const files = parsedTargets.map(target => resolveTargetPath(target, effectiveCwd));
+					extractFiles = parsedTargets.map(target => resolveTargetPath(target, effectiveCwd));
 
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;
@@ -434,7 +457,7 @@ export const extractTool = (options = {}) => {
 
 					// Set up extract options with files
 					extractOptions = {
-						files,
+						files: extractFiles,
 						cwd: effectiveCwd,
 						allowTests: allow_tests ?? true,
 						contextLines: context_lines,
@@ -446,6 +469,11 @@ export const extractTool = (options = {}) => {
 
 				// Execute the extract command
 				const results = await extract(extractOptions);
+
+				// Track files and symbol content for staleness detection (post-extract)
+				if (options.fileTracker && extractFiles && extractFiles.length > 0) {
+					options.fileTracker.trackFilesFromExtract(extractFiles, effectiveCwd).catch(() => {});
+				}
 
 				// Clean up temporary file if created
 				if (tempFilePath) {
@@ -460,6 +488,9 @@ export const extractTool = (options = {}) => {
 					}
 				}
 
+				if (hashLines && typeof results === 'string') {
+					return annotateOutputWithHashes(results);
+				}
 				return results;
 			} catch (error) {
 				console.error('Error executing extract command:', error);

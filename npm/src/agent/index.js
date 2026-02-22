@@ -125,6 +125,7 @@ function parseArgs() {
     provider: null,
     model: null,
     allowEdit: process.env.ALLOW_EDIT === '1' || false,
+    hashLines: process.env.HASH_LINES !== undefined ? process.env.HASH_LINES === '1' : undefined,
     enableDelegate: false,
     verbose: false,
     help: false,
@@ -167,6 +168,10 @@ function parseArgs() {
       config.verbose = true;
     } else if (arg === '--allow-edit') {
       config.allowEdit = true;
+    } else if (arg === '--hash-lines') {
+      config.hashLines = true;
+    } else if (arg === '--no-hash-lines') {
+      config.hashLines = false;
     } else if (arg === '--enable-delegate') {
       config.enableDelegate = true;
     } else if (arg === '--no-delegate') {
@@ -276,6 +281,8 @@ Options:
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
   --allow-edit                     Enable code modification capabilities (edit + create tools)
+  --hash-lines                     Annotate search/extract output with line hashes (default: on when --allow-edit)
+  --no-hash-lines                  Disable line hash annotations even with --allow-edit
   --enable-delegate                Enable delegate tool for task distribution to subagents
   --allowed-tools <tools>          Filter available tools (comma-separated list)
                                    Use '*' or 'all' for all tools (default)
@@ -319,6 +326,7 @@ Environment Variables:
   MODEL_NAME                      Override model name
   MAX_RESPONSE_TOKENS             Maximum tokens for AI response
   ALLOW_EDIT                      Enable code modification (set to '1')
+  HASH_LINES                      Annotate output with line hashes (set to '1'; default: on with ALLOW_EDIT)
   DEBUG                           Enable verbose mode (set to '1')
 
 Examples:

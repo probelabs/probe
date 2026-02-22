@@ -45,6 +45,16 @@ describe('Unified Edit Tool - Symbol Mode', () => {
       expect(editSchema.properties.old_string.type).toBe('string');
     });
 
+    test('should include start_line property for line-targeted mode', () => {
+      expect(editSchema.properties.start_line).toBeDefined();
+      expect(editSchema.properties.start_line.type).toBe('string');
+    });
+
+    test('should include end_line property for line-targeted mode', () => {
+      expect(editSchema.properties.end_line).toBeDefined();
+      expect(editSchema.properties.end_line.type).toBe('string');
+    });
+
     test('should have type object', () => {
       expect(editSchema.type).toBe('object');
     });
@@ -164,12 +174,26 @@ describe('Unified Edit Tool - Symbol Mode', () => {
       expect(result).toContain('Permission denied');
     });
 
-    test('should return error when neither old_string nor symbol is provided', async () => {
+    test('should return error when neither old_string, symbol, nor start_line is provided', async () => {
       const testFile = join(tempDir, 'test.js');
       await fs.writeFile(testFile, 'function foo() { return 1; }');
       const result = await tool.execute({ file_path: testFile, new_string: 'bar' });
       expect(result).toContain('Error editing file');
       expect(result).toContain('Must provide either old_string');
+      expect(result).toContain('start_line');
+    });
+
+    test('symbol mode should take priority over start_line', async () => {
+      const testFile = join(tempDir, 'test.js');
+      await fs.writeFile(testFile, 'function foo() { return 1; }');
+      const result = await tool.execute({
+        file_path: testFile,
+        symbol: 'nonexistent',
+        start_line: '1',
+        new_string: 'bar'
+      });
+      // Should try symbol mode (and fail at findSymbol), NOT line mode
+      expect(result).toContain('Symbol');
     });
 
     test('should accept empty string as valid new_string in symbol mode', async () => {

@@ -154,8 +154,6 @@ export async function startWebServer(version, options = {}) {
 		query: queryToolInstance,
 		extract: extractToolInstance
 	};
-	
-
 
 	// Helper function to send SSE data
 	function sendSSEData(res, data, eventType = 'message') {

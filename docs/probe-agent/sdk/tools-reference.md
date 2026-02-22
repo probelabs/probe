@@ -206,17 +206,18 @@ Extract code blocks from files by location or symbol.
 
 ### edit
 
-Edit files using text replacement or AST-aware symbol operations. Supports three modes: text-based find/replace with fuzzy matching, AST-aware symbol replacement, and symbol insertion.
+Edit files using text replacement, AST-aware symbol operations, or line-targeted editing. Supports four modes: text-based find/replace with fuzzy matching, AST-aware symbol replacement, symbol insertion, and line-targeted editing with optional hash-based integrity verification.
 
 **Enabled By:** `allowEdit: true`
 
-**Three Editing Modes:**
+**Four Editing Modes:**
 
 | Mode | Parameters | When to Use |
 |------|-----------|-------------|
 | **Text edit** | `old_string` + `new_string` | Small, precise changes: fix a condition, rename a variable, update a value |
 | **Symbol replace** | `symbol` + `new_string` | Replace an entire function, class, or method by name (no exact text matching needed) |
 | **Symbol insert** | `symbol` + `new_string` + `position` | Insert new code before or after an existing symbol |
+| **Line-targeted edit** | `start_line` + `new_string` | Edit specific lines from extract/search output; ideal for changes inside large functions |
 
 **Parameters:**
 
@@ -227,13 +228,15 @@ Edit files using text replacement or AST-aware symbol operations. Supports three
 | `old_string` | string | No | Text to find and replace. Copy verbatim from the file. |
 | `replace_all` | boolean | No | Replace all occurrences (default: false, text mode only) |
 | `symbol` | string | No | Code symbol name for AST-aware editing (e.g. `"myFunction"`, `"MyClass.myMethod"`) |
-| `position` | string | No | `"before"` or `"after"` — insert near the symbol instead of replacing it |
+| `position` | string | No | `"before"` or `"after"` — insert near the symbol or line instead of replacing it |
+| `start_line` | string | No | Line reference for line-targeted editing (e.g. `"42"` or `"42:ab"` with hash) |
+| `end_line` | string | No | End of line range, inclusive (e.g. `"55"` or `"55:cd"`). Defaults to `start_line`. |
 
-**Mode Selection Rules:**
+**Mode Selection Rules (Priority Order):**
 - If `symbol` is provided → AST-aware mode (symbol replace or symbol insert depending on `position`)
-- If `old_string` is provided (without `symbol`) → text-based mode
-- If both `symbol` and `old_string` are provided → `symbol` takes priority
-- If neither is provided → error with guidance
+- If `start_line` is provided (without `symbol`) → line-targeted mode
+- If `old_string` is provided (without `symbol` or `start_line`) → text-based mode
+- If none are provided → error with guidance
 
 #### Text Mode — Find and Replace
 
@@ -298,12 +301,31 @@ Provide `symbol`, `new_string`, and `position` (`"before"` or `"after"`) to inse
 </edit>
 ```
 
+#### Line-Targeted Mode — Edit by Line Number
+
+Use line numbers from `extract` or `search` output to make precise edits. Ideal for editing inside large functions without rewriting the entire symbol.
+
+```xml
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<end_line>55</end_line>
+<new_string>  // simplified implementation
+  return processItems(order.items);</new_string>
+</edit>
+```
+
+When `allowEdit` is enabled, `hashLines` is on by default — line references include content hashes for integrity verification (e.g. `"42:ab"`). If the hash doesn't match, the error provides updated references. Disable with `hashLines: false` or `--no-hash-lines`.
+
+**Heuristic auto-corrections** handle common LLM mistakes: stripping accidental line-number prefixes, removing echoed boundary lines, and restoring indentation.
+
 **Error Handling — Self-Healing Messages:**
 
 All error messages include specific recovery instructions. When an edit fails, the error tells the AI exactly how to fix the call and retry. For example:
 - **String not found:** Suggests reading current file content, trying symbol mode, verifying path
 - **Symbol not found:** Suggests using `search`/`extract` to find the correct name, offers text mode fallback
 - **Multiple occurrences:** Suggests `replace_all=true` or adding more context
+- **Hash mismatch:** Provides the updated line:hash reference for retrying
 
 **Configuration:**
 ```javascript
@@ -313,6 +335,44 @@ const agent = new ProbeAgent({
   allowedFolders: ['./src', './tests']  // restrict to specific directories
 });
 ```
+
+**Extract→Edit Workflow (Large Functions):**
+
+For editing inside large functions, combine `extract` (to get line numbers) with `edit` (to make precise changes):
+
+```xml
+<!-- Step 1: Extract the function to see its line numbers -->
+<extract>
+<targets>src/order.js#processOrder</targets>
+</extract>
+
+<!-- Output shows:
+  142:ab | function processOrder(order) {
+  143:cd |   const items = order.items;
+  ...
+  189:ef |   return total;
+  190:12 | }
+-->
+
+<!-- Step 2: Edit specific lines within the function -->
+<edit>
+<file_path>src/order.js</file_path>
+<start_line>143:cd</start_line>
+<end_line>145</end_line>
+<new_string>  const items = order.items.filter(i => i.active);
+  const validated = validateItems(items);</new_string>
+</edit>
+```
+
+With `allowEdit`, `hashLines` is on by default — the extract output includes content hashes (e.g. `143:cd`) for integrity verification in the edit call. If the file changed since extraction, the error provides updated references.
+
+**File State Tracking (Multi-Edit Safety):**
+
+When `allowEdit: true`, the agent automatically tracks which files have been read via `search`/`extract`. Before any edit, the tracker verifies that:
+1. The file was previously read (blocks blind edits)
+2. The file hasn't been modified since it was last read (detects stale content)
+
+After each successful write, the tracker is updated so chained edits to the same file work correctly. If a check fails, the error message guides the LLM to re-read the file with `extract` before retrying.
 
 **Standalone SDK Usage:**
 ```javascript
@@ -347,6 +407,29 @@ await edit.execute({
   new_string: `function calculateTax(total, rate) {
   return total * rate;
 }`
+});
+
+// Line-targeted edit (replace a range)
+await edit.execute({
+  file_path: 'src/order.js',
+  start_line: '143',
+  end_line: '145',
+  new_string: '  const items = order.items.filter(i => i.active);'
+});
+
+// Line-targeted edit with hash verification
+await edit.execute({
+  file_path: 'src/order.js',
+  start_line: '143:cd',
+  new_string: '  const items = order.items.filter(i => i.active);'
+});
+
+// Insert after a line
+await edit.execute({
+  file_path: 'src/order.js',
+  start_line: '142',
+  position: 'after',
+  new_string: '  console.log("Processing order:", order.id);'
 });
 ```
 
