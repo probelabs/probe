@@ -9,7 +9,7 @@ import { dirname, resolve, isAbsolute, sep } from 'path';
 import { existsSync } from 'fs';
 import { toRelativePath, safeRealpath } from '../utils/path-validation.js';
 import { findFuzzyMatch } from './fuzzyMatch.js';
-import { findSymbol, detectBaseIndent, reindent } from './symbolEdit.js';
+import { findSymbol, findAllSymbols, detectBaseIndent, reindent } from './symbolEdit.js';
 import { parseLineRef, validateLineHash, computeLineHash } from './hashline.js';
 import { cleanNewString } from './lineEditHeuristics.js';
 
@@ -72,10 +72,17 @@ async function handleSymbolEdit({ resolvedPath, file_path, symbol, new_string, p
   }
 
   // Find the symbol using AST (always re-reads the file — cheap, ~100ms)
-  const symbolInfo = await findSymbol(resolvedPath, symbol, cwd || process.cwd());
-  if (!symbolInfo) {
+  const allMatches = await findAllSymbols(resolvedPath, symbol, cwd || process.cwd());
+  if (allMatches.length === 0) {
     return `Error editing file: Symbol "${symbol}" not found in ${file_path}. Verify the symbol name matches a top-level function, class, method, or other named definition exactly as declared in the source. Use 'search' or 'extract' to inspect the file and find the correct symbol name. Alternatively, use old_string + new_string for text-based editing instead.`;
   }
+  if (allMatches.length > 1) {
+    const suggestions = allMatches.map(m =>
+      `  - ${m.qualifiedName} (${m.nodeType}, line ${m.startLine})`
+    ).join('\n');
+    return `Error editing ${file_path}: Found ${allMatches.length} symbols named "${symbol}". Use a qualified name to specify which one:\n${suggestions}\n\nExample: <edit><file_path>${file_path}</file_path><symbol>${allMatches[0].qualifiedName}</symbol><new_string>...</new_string></edit>`;
+  }
+  const symbolInfo = allMatches[0];
 
   // Symbol content verification — check if symbol changed since LLM last read it
   if (fileTracker) {

@@ -996,6 +996,72 @@ if (!user.email) {
       expect(tracker.isTracked(newFile)).toBe(true);
     });
 
+    test('symbol edit returns disambiguation error for duplicate names', async () => {
+      const dupFile = join(testDir, 'dup.js');
+      await fs.writeFile(dupFile, [
+        'function process(data) {',
+        '  return data.map(x => x * 2);',
+        '}',
+        '',
+        'class DataProcessor {',
+        '  process(data) {',
+        '    return data.filter(x => x > 0);',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(dupFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: dupFile,
+        symbol: 'process',
+        new_string: 'function process() { return 1; }'
+      });
+
+      // Should get disambiguation error listing both symbols
+      expect(result).toContain('Found');
+      expect(result).toContain('symbols named "process"');
+      expect(result).toContain('qualified name');
+    });
+
+    test('symbol edit succeeds with qualified name for duplicate symbols', async () => {
+      const dupFile = join(testDir, 'dup2.js');
+      await fs.writeFile(dupFile, [
+        'function process(data) {',
+        '  return data.map(x => x * 2);',
+        '}',
+        '',
+        'class DataProcessor {',
+        '  process(data) {',
+        '    return data.filter(x => x > 0);',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(dupFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      // Use qualified name to target specific symbol
+      const result = await edit.execute({
+        file_path: dupFile,
+        symbol: 'DataProcessor.process',
+        new_string: 'process(data) {\n    return data.filter(x => x >= 0);\n  }'
+      });
+
+      expect(result).toContain('Successfully replaced symbol');
+    });
+
     test('symbol edit updates tracker after write', async () => {
       const jsFile = join(testDir, 'sym.js');
       await fs.writeFile(jsFile, 'function hello() {\n  return "hi";\n}\n');

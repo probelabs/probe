@@ -124,7 +124,8 @@ pub fn standalone_function() {
             false,
         );
 
-        if let Ok(search_result) = result {
+        if let Ok(results) = result {
+            let search_result = results.into_iter().next().unwrap();
             let output = &search_result.code;
             println!("✅ Successfully extracted Calculator.new: {output}");
             assert!(
@@ -145,7 +146,8 @@ pub fn standalone_function() {
             );
 
             match simple_result {
-                Ok(search_result) => {
+                Ok(results) => {
+                    let search_result = results.into_iter().next().unwrap();
                     let output = &search_result.code;
                     println!("✅ Successfully extracted with simple name: {output}");
                     assert!(
@@ -202,7 +204,8 @@ impl TestService {
         );
 
         match result {
-            Ok(search_result) => {
+            Ok(results) => {
+                let search_result = results.into_iter().next().unwrap();
                 println!(
                     "✅ End-to-end extraction successful: {}",
                     search_result.code

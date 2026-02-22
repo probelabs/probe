@@ -43,6 +43,44 @@ export async function findSymbol(filePath, symbolName, cwd) {
 }
 
 /**
+ * Look up ALL matching symbols in a file using probe's AST-based extract.
+ * When a bare name like "process" matches multiple definitions (e.g. a top-level
+ * function AND class methods), this returns all of them with qualified names.
+ * @param {string} filePath - Absolute path to the file
+ * @param {string} symbolName - Name of the symbol to find
+ * @param {string} cwd - Working directory for extract
+ * @returns {Promise<Array<Object>>} Array of symbol info objects (may be empty)
+ */
+export async function findAllSymbols(filePath, symbolName, cwd) {
+  try {
+    const result = await extract({
+      files: [`${filePath}#${symbolName}`],
+      format: 'json',
+      json: true,
+      cwd
+    });
+
+    if (!result || !result.results || result.results.length === 0) {
+      return [];
+    }
+
+    return result.results.map(match => ({
+      startLine: match.lines[0],
+      endLine: match.lines[1],
+      code: match.code,
+      nodeType: match.node_type,
+      file: match.file,
+      qualifiedName: match.symbol_signature || symbolName,
+    }));
+  } catch (error) {
+    if (process.env.DEBUG === '1') {
+      console.error(`[SymbolEdit] findAllSymbols error for "${symbolName}" in ${filePath}: ${error.message}`);
+    }
+    return [];
+  }
+}
+
+/**
  * Detect the base indentation of a code block (leading whitespace of first non-empty line)
  * @param {string} code - The code block
  * @returns {string} The leading whitespace string
