@@ -521,6 +521,94 @@ async function memoryEfficientSearch(query, path) {
 // node --expose-gc your-script.js
 ```
 
+## Code Editing with AI Tools
+
+Probe also provides code editing capabilities that can be integrated into AI workflows. The edit tool supports four modes: text replacement (with fuzzy matching), AST-aware symbol replacement, symbol insertion, and line-targeted editing.
+
+### Standalone Edit Tool
+
+```javascript
+import { editTool, createTool } from '@probelabs/probe';
+
+const edit = editTool({
+  allowedFolders: ['/path/to/project'],
+  cwd: '/path/to/project'
+});
+
+// Text edit — find and replace with fuzzy matching
+await edit.execute({
+  file_path: 'src/main.js',
+  old_string: 'return false;',
+  new_string: 'return true;'
+});
+
+// Symbol replace — rewrite a function by name (AST-aware, 16 languages)
+await edit.execute({
+  file_path: 'src/utils.js',
+  symbol: 'calculateTotal',
+  new_string: `function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}`
+});
+
+// Line-targeted edit — edit specific lines from extract output
+await edit.execute({
+  file_path: 'src/order.js',
+  start_line: '143',
+  end_line: '145',
+  new_string: '  const items = order.items.filter(i => i.active);'
+});
+```
+
+### Extract→Edit Workflow
+
+The most powerful pattern combines `extract` (to navigate by symbol name and get line numbers) with `edit` (to make precise line-targeted changes). This is ideal for editing inside large functions:
+
+```javascript
+import { extract, editTool } from '@probelabs/probe';
+
+const edit = editTool({
+  allowedFolders: ['/path/to/project'],
+  cwd: '/path/to/project'
+});
+
+// Step 1: Extract a function to see its line numbers
+const code = await extract({
+  files: ['/path/to/project/src/order.js#processOrder']
+});
+// Output includes line numbers: "142 | function processOrder(order) { ..."
+
+// Step 2: Edit specific lines within the function
+await edit.execute({
+  file_path: 'src/order.js',
+  start_line: '143',
+  end_line: '145',
+  new_string: '  const items = order.items.filter(i => i.active);'
+});
+```
+
+### Edit Tools with ProbeAgent
+
+When using ProbeAgent, edit tools are enabled with `allowEdit: true`:
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+const agent = new ProbeAgent({
+  path: '/path/to/project',
+  allowEdit: true,       // enables edit + create tools (hashLines defaults to true)
+  provider: 'anthropic'
+});
+
+// The agent automatically uses the extract→edit workflow for large functions
+// File state tracking ensures edits are never based on stale content
+const answer = await agent.answer("Fix the off-by-one error in calculateTotal");
+```
+
+When `allowEdit: true`, the agent automatically tracks which files have been read via `search`/`extract` and blocks edits to unread files. For symbol-level edits, content hashes are captured at extract time and verified before each write — if the target symbol's content hasn't changed, the edit proceeds even if other parts of the file were modified. After each successful write, the tracker re-reads the symbol to update its hash, enabling safe chaining of multiple edits.
+
+For complete edit tool documentation, see [Edit & Create Tools](../npm/docs/EDIT_CREATE_TOOLS.md).
+
 ## Next Steps
 
 - For individual developer workflows, see [Integrating Probe into AI Code Editors](/use-cases/integrating-probe-into-ai-code-editors)

@@ -343,6 +343,53 @@ fn format_extraction_internal(
             if results.is_empty() {
                 writeln!(output, "{}", "No results found.".yellow().bold())?;
             } else {
+                // Disambiguation hint: when multiple results from the same file share
+                // the same base symbol name, print a note with qualified selectors.
+                if results.len() > 1 {
+                    // Group by file to detect same-file duplicates
+                    use std::collections::HashMap;
+                    let mut by_file: HashMap<&str, Vec<&SearchResult>> = HashMap::new();
+                    for r in results {
+                        by_file.entry(&r.file).or_default().push(r);
+                    }
+                    for file_results in by_file.values() {
+                        // Only show hint if multiple results in the same file have symbol_signature
+                        let with_sig: Vec<_> = file_results
+                            .iter()
+                            .filter(|r| r.symbol_signature.is_some())
+                            .collect();
+                        if with_sig.len() > 1 {
+                            // Extract the base symbol name from the first signature
+                            let base_name = with_sig[0]
+                                .symbol_signature
+                                .as_ref()
+                                .map(|s| s.rsplit('.').next().unwrap_or(s.as_str()))
+                                .unwrap_or("unknown");
+                            writeln!(
+                                output,
+                                "{}",
+                                format!(
+                                    "Note: Found {} symbols named \"{}\". Use qualified names to disambiguate:",
+                                    with_sig.len(),
+                                    base_name
+                                )
+                                .yellow()
+                                .bold()
+                            )?;
+                            for r in &with_sig {
+                                writeln!(
+                                    output,
+                                    "  - {} ({}, line {})",
+                                    r.symbol_signature.as_deref().unwrap_or("?"),
+                                    r.node_type,
+                                    r.lines.0
+                                )?;
+                            }
+                            writeln!(output)?;
+                        }
+                    }
+                }
+
                 // For each result, we either skip the code if is_dry_run, or include it otherwise.
                 for result in results {
                     // Common: show file (with format-specific prefix)

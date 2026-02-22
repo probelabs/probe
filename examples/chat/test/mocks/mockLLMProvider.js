@@ -209,19 +209,6 @@ export const mockResponses = {
         ]
     },
 
-    // Implement tool call
-    implementToolCall: {
-        text: "I'll implement that feature for you.",
-        toolCalls: [{
-            toolName: 'implement',
-            args: {
-                request: 'Add a new function to calculate fibonacci numbers',
-                files: ['src/math.js'],
-                backend: 'mock'
-            }
-        }]
-    },
-
     // Error response
     errorResponse: {
         text: "I encountered an error processing your request.",
@@ -249,17 +236,12 @@ export function createMockProvider(scenario = 'simple', options = {}) {
             responses.push(mockResponses.withToolCall);
             responses.push(mockResponses.simpleText);
             break;
-        case 'implement':
-            responses.push(mockResponses.implementToolCall);
-            responses.push({ text: "The implementation is complete!" });
-            break;
         case 'error':
             return new MockLLMProvider({ ...options, throwError: 'Simulated API error' });
         case 'mixed':
             responses.push(mockResponses.simpleText);
             responses.push(mockResponses.withToolCall);
             responses.push(mockResponses.multipleToolCalls);
-            responses.push(mockResponses.implementToolCall);
             break;
         default:
             responses.push(mockResponses.simpleText);

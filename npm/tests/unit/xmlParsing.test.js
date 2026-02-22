@@ -15,7 +15,6 @@ describe('Shared Tool List', () => {
       'delegate',
       'listFiles',
       'searchFiles',
-      'implement',
       'bash',
       'attempt_completion'
     ];
@@ -106,8 +105,7 @@ describe('XML Tool Call Parsing', () => {
           { tool: 'query', xml: '<query><pattern>$NAME</pattern></query>', expected: { pattern: '$NAME' } },
           { tool: 'extract', xml: '<extract><targets>file.js</targets></extract>', expected: { targets: 'file.js' } },
           { tool: 'listFiles', xml: '<listFiles><directory>src</directory></listFiles>', expected: { directory: 'src' } },
-          { tool: 'searchFiles', xml: '<searchFiles><pattern>*.js</pattern></searchFiles>', expected: { pattern: '*.js' } },
-          { tool: 'implement', xml: '<implement><task>test</task></implement>', expected: { task: 'test' } }
+          { tool: 'searchFiles', xml: '<searchFiles><pattern>*.js</pattern></searchFiles>', expected: { pattern: '*.js' } }
         ];
 
         testCases.forEach(({ tool, xml, expected }) => {
@@ -477,35 +475,39 @@ describe('XML Tool Call Parsing', () => {
       });
     });
 
-    test('should handle implement tool when allowed', () => {
+    test('should handle edit tool when allowed', () => {
       const aiResponse = `
         <thinking>
-        I need to implement this feature using the implement tool.
+        I need to edit this file using the edit tool.
         </thinking>
 
-        <implement>
-          <task>Add user authentication</task>
-        </implement>
+        <edit>
+          <file_path>src/main.js</file_path>
+          <old_string>const x = 1;</old_string>
+          <new_string>const x = 2;</new_string>
+        </edit>
       `;
 
-      const validToolsWithImplement = ['search', 'query', 'extract', 'implement', 'attempt_completion'];
-      const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithImplement);
+      const validToolsWithEdit = ['search', 'query', 'extract', 'edit', 'attempt_completion'];
+      const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithEdit);
 
       expect(result).toMatchObject({
-        toolName: 'implement',
-        params: { task: 'Add user authentication' }
+        toolName: 'edit',
+        params: { file_path: 'src/main.js', old_string: 'const x = 1;', new_string: 'const x = 2;' }
       });
     });
 
-    test('should ignore implement tool when not allowed', () => {
+    test('should ignore edit tool when not allowed', () => {
       const aiResponse = `
-        <implement>
-          <task>Add user authentication</task>
-        </implement>
+        <edit>
+          <file_path>src/main.js</file_path>
+          <old_string>const x = 1;</old_string>
+          <new_string>const x = 2;</new_string>
+        </edit>
       `;
 
-      const validToolsWithoutImplement = ['search', 'query', 'extract', 'attempt_completion'];
-      const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithoutImplement);
+      const validToolsWithoutEdit = ['search', 'query', 'extract', 'attempt_completion'];
+      const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithoutEdit);
 
       expect(result).toBeNull();
     });
@@ -1050,6 +1052,167 @@ I need to rename this function to follow the naming convention.
           file_path: 'src/utils.js',
           old_string: 'const getUserName = () => {}',
           new_string: 'const getUsername = () => {}'
+        }
+      });
+    });
+  });
+
+  describe('Edit tool symbol mode parsing', () => {
+    test('should parse edit tool with symbol parameter (symbol replace mode)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/utils.js</file_path>
+<symbol>calculateTotal</symbol>
+<new_string>function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + item.price, 0);
+}</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/utils.js',
+          symbol: 'calculateTotal',
+          new_string: `function calculateTotal(items) {
+  return items.reduce((sum, item) => sum + item.price, 0);
+}`
+        }
+      });
+    });
+
+    test('should parse edit tool with symbol and position (symbol insert mode)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/utils.js</file_path>
+<symbol>calculateTotal</symbol>
+<new_string>function calculateTax(total) {
+  return total * 0.1;
+}</new_string>
+<position>after</position>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/utils.js',
+          symbol: 'calculateTotal',
+          new_string: `function calculateTax(total) {
+  return total * 0.1;
+}`,
+          position: 'after'
+        }
+      });
+    });
+
+    test('should parse edit tool with symbol and position before', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/utils.js</file_path>
+<symbol>calculateTotal</symbol>
+<position>before</position>
+<new_string>// Calculate the total price of items</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/utils.js',
+          symbol: 'calculateTotal',
+          position: 'before',
+          new_string: '// Calculate the total price of items'
+        }
+      });
+    });
+  });
+
+  describe('Edit tool line-targeted mode parsing', () => {
+    test('should parse edit tool with start_line (line replace mode)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<new_string>return processItems(order.items);</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: 42,  // XML parser coerces to number
+          new_string: 'return processItems(order.items);'
+        }
+      });
+    });
+
+    test('should parse edit tool with start_line and end_line (range replace)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<end_line>55</end_line>
+<new_string>// simplified
+return processItems(order.items);</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: 42,
+          end_line: 55,
+          new_string: '// simplified\nreturn processItems(order.items);'
+        }
+      });
+    });
+
+    test('should parse edit tool with start_line hash (preserves as string)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42:ab</start_line>
+<new_string>return true;</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: '42:ab',  // Contains non-numeric chars, stays string
+          new_string: 'return true;'
+        }
+      });
+    });
+
+    test('should parse edit tool with start_line and position (insert mode)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<position>after</position>
+<new_string>const validated = validate(input);</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'src/main.js',
+          start_line: 42,
+          position: 'after',
+          new_string: 'const validated = validate(input);'
         }
       });
     });

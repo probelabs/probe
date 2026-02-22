@@ -143,123 +143,6 @@ describe('Tool Calling Integration Tests', () => {
         });
     });
     
-    describe('Implement Tool', () => {
-        it('should handle implement tool calls', async () => {
-            const { probeChat, mockBackend } = await createTestProbeChat({
-                responses: [
-                    mockResponses.implementToolCall,
-                    { text: 'The implementation is complete!' }
-                ],
-                useMockBackend: true,
-                mockBackendResponses: [{
-                    filesModified: ['src/math.js'],
-                    summary: 'Added fibonacci function'
-                }]
-            });
-            
-            const results = await runChatInteraction(probeChat, 
-                [{ role: 'user', content: 'Add a fibonacci function to math.js' }]
-            );
-            
-            assert.strictEqual(results.toolCalls.length, 1);
-            assert.strictEqual(results.toolCalls[0].toolName, 'implement');
-            assert.strictEqual(mockBackend.capturedRequests.length, 1);
-            
-            const request = mockBackend.getLastRequest();
-            assert.strictEqual(request.request.request, 'Add a new function to calculate fibonacci numbers');
-            assert.deepStrictEqual(request.request.files, ['src/math.js']);
-            assert.strictEqual(request.request.backend, 'mock');
-        });
-        
-        it('should handle implement tool with streaming', async () => {
-            const { probeChat, mockBackend } = await createTestProbeChat({
-                responses: [
-                    mockResponses.implementToolCall,
-                    { text: 'Implementation completed with streaming!' }
-                ],
-                useMockBackend: true,
-                mockBackendResponses: [{
-                    stream: [
-                        { type: 'start', message: 'Starting implementation' },
-                        { type: 'progress', message: 'Generating code' },
-                        { type: 'file_update', file: 'src/math.js', action: 'modified' },
-                        { type: 'complete', message: 'Done' }
-                    ],
-                    filesModified: ['src/math.js']
-                }]
-            });
-            
-            mockBackend.setResponseDelay(50); // Fast streaming for tests
-            
-            let streamEvents = [];
-            const originalImplementExecute = probeChat.tools.implement.execute;
-            probeChat.tools.implement.execute = async function(args) {
-                return originalImplementExecute.call(this, args, {
-                    onProgress: (event) => {
-                        streamEvents.push(event);
-                    }
-                });
-            };
-            
-            await runChatInteraction(probeChat, 
-                [{ role: 'user', content: 'Implement fibonacci with streaming' }]
-            );
-            
-            assert.ok(streamEvents.length >= 4, 'Should receive multiple stream events');
-            assert.strictEqual(streamEvents[0].type, 'start');
-            assert.strictEqual(streamEvents[streamEvents.length - 1].type, 'complete');
-        });
-        
-        it('should handle backend selection', async () => {
-            const { probeChat, mockBackend } = await createTestProbeChat({
-                responses: [{
-                    text: 'I will use the mock backend.',
-                    toolCalls: [{
-                        toolName: 'implement',
-                        args: {
-                            request: 'Test backend selection',
-                            backend: 'mock'
-                        }
-                    }]
-                }, { text: 'Done with mock backend.' }],
-                useMockBackend: true
-            });
-            
-            await runChatInteraction(probeChat, 
-                [{ role: 'user', content: 'Implement something using mock backend' }]
-            );
-            
-            const request = mockBackend.getLastRequest();
-            assert.ok(request, 'Should capture the request');
-            assert.strictEqual(request.request.backend, 'mock');
-        });
-        
-        it('should handle backend errors', async () => {
-            const { probeChat, mockBackend } = await createTestProbeChat({
-                responses: [
-                    mockResponses.implementToolCall,
-                    { text: 'The implementation failed, but I handled it gracefully.' }
-                ],
-                useMockBackend: true
-            });
-            
-            mockBackend.setErrorMode(true);
-            
-            let toolError;
-            probeChat.tools.implement.handleError = (error) => {
-                toolError = error;
-            };
-            
-            const results = await runChatInteraction(probeChat, 
-                [{ role: 'user', content: 'Try to implement with error' }]
-            );
-            
-            // The tool should handle the error gracefully
-            assert.strictEqual(results.errors.length, 0, 'Chat should not error');
-            assert.ok(toolError, 'Tool should capture the error');
-        });
-    });
-    
     describe('Query Tool', () => {
         it('should handle semantic query tool calls', async () => {
             const { probeChat } = await createTestProbeChat({
@@ -417,8 +300,8 @@ describe('Tool Calling Integration Tests', () => {
     });
     
     describe('Complex Tool Sequences', () => {
-        it('should handle search → extract → implement workflow', async () => {
-            const { probeChat, mockBackend } = await createTestProbeChat({
+        it('should handle search → extract workflow', async () => {
+            const { probeChat } = await createTestProbeChat({
                 responses: [
                     {
                         text: 'Let me search for existing implementations.',
@@ -434,38 +317,24 @@ describe('Tool Calling Integration Tests', () => {
                             args: { location: 'src/math.js:fibonacci' }
                         }]
                     },
-                    {
-                        text: 'Implementing the optimized version.',
-                        toolCalls: [{
-                            toolName: 'implement',
-                            args: { 
-                                request: 'Optimize fibonacci with memoization',
-                                files: ['src/math.js'],
-                                backend: 'mock'
-                            }
-                        }]
-                    },
-                    { text: 'Successfully optimized the fibonacci function!' }
-                ],
-                useMockBackend: true
+                    { text: 'Here is the fibonacci function!' }
+                ]
             });
-            
+
             // Mock tool implementations
             probeChat.tools.probe_search.execute = async () => createMockProbeResults();
             probeChat.tools.probe_extract.execute = async () => ({
                 content: testData.sampleCode.javascript,
                 language: 'javascript'
             });
-            
-            const results = await runChatInteraction(probeChat, 
-                [{ role: 'user', content: 'Optimize the fibonacci function' }]
+
+            const results = await runChatInteraction(probeChat,
+                [{ role: 'user', content: 'Find and show the fibonacci function' }]
             );
-            
-            assert.strictEqual(results.toolCalls.length, 3);
+
+            assert.strictEqual(results.toolCalls.length, 2);
             assert.strictEqual(results.toolCalls[0].toolName, 'probe_search');
             assert.strictEqual(results.toolCalls[1].toolName, 'probe_extract');
-            assert.strictEqual(results.toolCalls[2].toolName, 'implement');
-            assert.strictEqual(mockBackend.capturedRequests.length, 1);
         });
     });
 });

@@ -57,7 +57,6 @@ import {
   useSkillToolDefinition,
   readImageToolDefinition,
   attemptCompletionToolDefinition,
-  implementToolDefinition,
   editToolDefinition,
   createToolDefinition,
   googleSearchToolDefinition,
@@ -66,6 +65,7 @@ import {
   parseXmlToolCallWithThinking
 } from './tools.js';
 import { createMessagePreview, detectUnrecognizedToolCall, detectStuckResponse, areBothStuckResponses } from '../tools/common.js';
+import { FileTracker } from '../tools/fileTracker.js';
 import {
   createWrappedTools,
   listFilesToolInstance,
@@ -178,7 +178,7 @@ export class ProbeAgent {
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
    * @param {string} [options.systemPrompt] - Alias for customPrompt; takes precedence when both are provided
    * @param {string} [options.promptType] - Predefined prompt type (code-explorer, code-searcher, architect, code-review, support)
-   * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
+   * @param {boolean} [options.allowEdit=false] - Allow the use of the 'edit' and 'create' tools
    * @param {boolean} [options.enableDelegate=false] - Enable the delegate tool for task distribution to subagents
    * @param {boolean} [options.enableExecutePlan=false] - Enable the execute_plan DSL orchestration tool
    * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present)
@@ -229,6 +229,7 @@ export class ProbeAgent {
     this.customPrompt = options.systemPrompt || options.customPrompt || null;
     this.promptType = options.promptType || 'code-explorer';
     this.allowEdit = !!options.allowEdit;
+    this.hashLines = options.hashLines !== undefined ? !!options.hashLines : this.allowEdit;
     this.enableDelegate = !!options.enableDelegate;
     this.enableExecutePlan = !!options.enableExecutePlan;
     this.debug = options.debug || process.env.DEBUG === '1';
@@ -328,7 +329,8 @@ export class ProbeAgent {
     if (this.debug) {
       console.log(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
       console.log(`[DEBUG] Maximum tool iterations configured: ${MAX_TOOL_ITERATIONS}`);
-      console.log(`[DEBUG] Allow Edit (implement tool): ${this.allowEdit}`);
+      console.log(`[DEBUG] Allow Edit: ${this.allowEdit}`);
+      console.log(`[DEBUG] Hash Lines: ${this.hashLines}`);
       console.log(`[DEBUG] Search delegation enabled: ${this.searchDelegate}`);
       console.log(`[DEBUG] Workspace root: ${this.workspaceRoot}`);
       console.log(`[DEBUG] Working directory (cwd): ${this.cwd}`);
@@ -831,9 +833,12 @@ export class ProbeAgent {
       cwd: this.cwd,
       workspaceRoot: this.workspaceRoot,
       allowedFolders: this.allowedFolders,
+      // File state tracking for safe multi-edit workflows (only when editing is enabled)
+      fileTracker: this.allowEdit ? new FileTracker({ debug: this.debug }) : null,
       outline: this.outline,
       searchDelegate: this.searchDelegate,
       allowEdit: this.allowEdit,
+      hashLines: this.hashLines,
       enableDelegate: this.enableDelegate,
       enableExecutePlan: this.enableExecutePlan,
       enableBash: this.enableBash,
@@ -2553,16 +2558,12 @@ ${extractGuidance}
     }
 
     // Edit tools (require both allowEdit flag AND allowedTools permission)
-    if (this.allowEdit && isToolAllowed('implement')) {
-      toolDefinitions += `${implementToolDefinition}\n`;
-    }
     if (this.allowEdit && isToolAllowed('edit')) {
       toolDefinitions += `${editToolDefinition}\n`;
     }
     if (this.allowEdit && isToolAllowed('create')) {
       toolDefinitions += `${createToolDefinition}\n`;
     }
-
     // Bash tool (require both enableBash flag AND allowedTools permission)
     if (this.enableBash && isToolAllowed('bash')) {
       toolDefinitions += `${bashToolDefinition}\n`;
@@ -2645,7 +2646,7 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
       availableToolsList += '- query: Search code using structural AST patterns.\n';
     }
     if (isToolAllowed('extract')) {
-      availableToolsList += '- extract: Extract specific code blocks or lines from files.\n';
+      availableToolsList += '- extract: Extract specific code blocks or lines from files. Use with symbol targets (e.g. "file.js#funcName") to get line numbers for line-targeted editing.\n';
     }
     if (isToolAllowed('listFiles')) {
       availableToolsList += '- listFiles: List files and directories in a specified location.\n';
@@ -2662,11 +2663,8 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
     if (isToolAllowed('readImage')) {
       availableToolsList += '- readImage: Read and load an image file for AI analysis.\n';
     }
-    if (this.allowEdit && isToolAllowed('implement')) {
-      availableToolsList += '- implement: Implement a feature or fix a bug using aider.\n';
-    }
     if (this.allowEdit && isToolAllowed('edit')) {
-      availableToolsList += '- edit: Edit files using exact string replacement.\n';
+      availableToolsList += '- edit: Edit files using text replacement, AST-aware symbol operations, or line-targeted editing.\n';
     }
     if (this.allowEdit && isToolAllowed('create')) {
       availableToolsList += '- create: Create new files with specified content.\n';
@@ -2757,8 +2755,14 @@ Follow these instructions carefully:
 8. Once the task is fully completed, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
 9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
 10. When modifying files, choose the appropriate tool:
-    - Use 'edit' for precise changes to existing files (requires exact string match)
-    - Use 'create' for new files or complete file rewrites` : ''}
+    - Use 'edit' for all code modifications:
+      * For small changes (a line or a few lines), use old_string + new_string — copy old_string verbatim from the file.
+      * For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
+      * For editing specific lines from search/extract output, use start_line (and optionally end_line) with the line numbers shown in the output.${this.hashLines ? ' Line references include content hashes (e.g. "42:ab") for integrity verification.' : ''}
+      * For editing inside large functions: first use extract with the symbol target (e.g. "file.js#myFunction") to see the function with line numbers${this.hashLines ? ' and hashes' : ''}, then use start_line/end_line to surgically edit specific lines within it.
+    - Use 'create' for new files or complete file rewrites.
+    - If an edit fails, read the error message — it tells you exactly how to fix the call and retry.
+    - The system tracks which files you've seen via search/extract. If you try to edit a file you haven't read, or one that changed since you last read it, the edit will fail with instructions to re-read first. Always use extract before editing to ensure you have current file content.` : ''}
 </instructions>
 `;
 
@@ -3420,8 +3424,11 @@ Follow these instructions carefully:
           validTools.push('attempt_completion');
 
           // Edit tools (require both allowEdit flag AND allowedTools permission)
-          if (this.allowEdit && this.allowedTools.isEnabled('implement')) {
-            validTools.push('implement', 'edit', 'create');
+          if (this.allowEdit && this.allowedTools.isEnabled('edit')) {
+            validTools.push('edit');
+          }
+          if (this.allowEdit && this.allowedTools.isEnabled('create')) {
+            validTools.push('create');
           }
           // Bash tool (require both enableBash flag AND allowedTools permission)
           if (this.enableBash && this.allowedTools.isEnabled('bash')) {
@@ -3804,6 +3811,7 @@ Follow these instructions carefully:
                       mcpConfigPath: this.mcpConfigPath, // Inherit MCP config path
                       enableBash: this.enableBash,      // Inherit bash enablement
                       bashConfig: this.bashConfig,      // Inherit bash configuration
+                      allowEdit: this.allowEdit,        // Inherit edit/create permission
                       allowedTools: allowedToolsForDelegate,  // Inherit allowed tools from parent
                       debug: this.debug,
                       tracer: this.tracer

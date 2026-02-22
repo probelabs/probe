@@ -78,7 +78,6 @@
   "files": [
     "bin/",
     "storage/",
-    "implement/",
     "test/",
     "index.js",
     "probeChat.js",

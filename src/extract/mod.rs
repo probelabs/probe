@@ -593,21 +593,27 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.specific_lines.as_ref(),
             false, // symbols functionality removed
         ) {
-            Ok(result) => {
+            Ok(result_vec) => {
                 if params.debug_mode {
-                    eprintln!("[DEBUG] Successfully extracted code from {:?}", params.path);
-                    eprintln!("[DEBUG] Extracted lines: {:?}", result.lines);
-                    eprintln!("[DEBUG] Node type: {}", result.node_type);
-                    eprintln!("[DEBUG] Code length: {} bytes", result.code.len());
                     eprintln!(
-                        "[DEBUG] Estimated tokens: {}",
-                        crate::search::search_tokens::count_tokens(&result.code)
+                        "[DEBUG] Successfully extracted {} result(s) from {:?}",
+                        result_vec.len(),
+                        params.path
                     );
+                    for result in &result_vec {
+                        eprintln!("[DEBUG] Extracted lines: {:?}", result.lines);
+                        eprintln!("[DEBUG] Node type: {}", result.node_type);
+                        eprintln!("[DEBUG] Code length: {} bytes", result.code.len());
+                        eprintln!(
+                            "[DEBUG] Estimated tokens: {}",
+                            crate::search::search_tokens::count_tokens(&result.code)
+                        );
+                    }
                 }
 
                 // Thread-safe addition to results
                 let mut results = results_mutex.lock().unwrap();
-                results.push(result);
+                results.extend(result_vec);
             }
             Err(e) => {
                 let error_msg = format!(

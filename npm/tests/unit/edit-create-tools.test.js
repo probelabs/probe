@@ -4,6 +4,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 import { editTool, createTool } from '../../src/tools/edit.js';
+import { FileTracker } from '../../src/tools/fileTracker.js';
 import { promises as fs } from 'fs';
 import { resolve, join } from 'path';
 import { existsSync } from 'fs';
@@ -404,21 +405,21 @@ export default hello;`;
         const edit = editTool({ allowedFolders: [testDir] });
         await fs.writeFile(testFile, 'test content');
 
-        // Undefined
+        // Undefined - should prompt to provide old_string or symbol
         let result = await edit.execute({
           file_path: testFile,
           old_string: undefined,
           new_string: 'bar'
         });
-        expect(result).toContain('Error editing file: Invalid old_string');
+        expect(result).toContain('Error editing file: Must provide either old_string');
 
-        // Null
+        // Null - should prompt to provide old_string or symbol
         result = await edit.execute({
           file_path: testFile,
           old_string: null,
           new_string: 'bar'
         });
-        expect(result).toContain('Error editing file: Invalid old_string');
+        expect(result).toContain('Error editing file: Must provide either old_string');
       });
 
       test('should handle invalid new_string', async () => {
@@ -604,6 +605,509 @@ export default hello;`;
 
       const content = await fs.readFile(lineEndingFile, 'utf-8');
       expect(content).toContain('modified');
+    });
+  });
+
+  describe('Fuzzy Matching Integration', () => {
+    test('should fall back to line-trimmed matching when exact match fails', async () => {
+      // File has specific indentation
+      const originalContent = `function greet() {
+  const name = "World";
+  console.log("Hello, " + name);
+}`;
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // Search string has different leading whitespace per line (no indent)
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'const name = "World";\nconsole.log("Hello, " + name);',
+        new_string: '  const name = "Universe";\n  console.log("Hello, " + name);'
+      });
+
+      expect(result).toContain('Successfully edited');
+      expect(result).toContain('matched via line-trimmed');
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toContain('const name = "Universe"');
+      expect(content).not.toContain('const name = "World"');
+    });
+
+    test('should fall back to whitespace-normalized matching', async () => {
+      // File has single spaces
+      const originalContent = 'const x = foo(a, b, c);';
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // Search string has extra spaces (double space after comma)
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'const x = foo(a,  b,  c);',
+        new_string: 'const x = bar(a, b, c);'
+      });
+
+      expect(result).toContain('Successfully edited');
+      expect(result).toContain('matched via whitespace-normalized');
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe('const x = bar(a, b, c);');
+    });
+
+    test('should fall back to fuzzy matching for different indentation', async () => {
+      // File uses 4-space indentation
+      const originalContent = `function test() {
+    const a = 1;
+    const b = 2;
+    return a + b;
+}`;
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // Search string uses 2-space indentation — line-trimmed will match first
+      // (it's more permissive than indent-flexible in the cascade)
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: '  const a = 1;\n  const b = 2;\n  return a + b;',
+        new_string: '    const a = 10;\n    const b = 20;\n    return a + b;'
+      });
+
+      expect(result).toContain('Successfully edited');
+      expect(result).toMatch(/matched via (line-trimmed|indent-flexible)/);
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toContain('const a = 10');
+      expect(content).toContain('const b = 20');
+    });
+
+    test('should use fuzzy matching with replace_all', async () => {
+      // File has two identical multiline blocks with 2-space indentation
+      const originalContent = `function a() {
+  doStuff();
+  log("done");
+}
+
+function b() {
+  doStuff();
+  log("done");
+}`;
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // Multiline search without indentation — NOT a substring because
+      // content has '\n  log' but search has '\nlog', forcing fuzzy fallback
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'doStuff();\nlog("done");',
+        new_string: '  doOtherStuff();\n  log("complete");',
+        replace_all: true
+      });
+
+      expect(result).toContain('Successfully edited');
+      expect(result).toContain('matched via line-trimmed');
+      expect(result).toContain('2 replacements');
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).not.toContain('doStuff()');
+      expect(content).toContain('doOtherStuff()');
+    });
+
+    test('should error on multiple fuzzy matches without replace_all', async () => {
+      // File has two identical multiline blocks with 4-space indentation
+      const originalContent = `function a() {
+    processData();
+    saveResult();
+}
+
+function b() {
+    processData();
+    saveResult();
+}`;
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // Multiline search without indentation — NOT a substring because
+      // content has '\n    saveResult' but search has '\nsaveResult'
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'processData();\nsaveResult();',
+        new_string: '    processOther();\n    saveOther();'
+      });
+
+      expect(result).toContain('Error editing file: Multiple occurrences found');
+      expect(result).toContain('2 times');
+    });
+
+    test('should return string not found when no fuzzy strategy matches', async () => {
+      const originalContent = 'function hello() { return 1; }';
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'this text does not exist anywhere at all',
+        new_string: 'replacement'
+      });
+
+      expect(result).toContain('Error editing file: String not found');
+    });
+
+    test('should prefer exact match over fuzzy match', async () => {
+      const originalContent = 'const x = 1;\nconst x = 1;';
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // This is an exact match (appears twice), so fuzzy matching is NOT triggered
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'const x = 1;',
+        new_string: 'const x = 2;'
+      });
+
+      // Exact match finds 2 occurrences → multiple occurrences error
+      expect(result).toContain('Error editing file: Multiple occurrences found');
+    });
+
+    test('fuzzy match success message includes strategy name', async () => {
+      const originalContent = '  const   value  =  42;';
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'const value = 42;',
+        new_string: 'const value = 99;'
+      });
+
+      expect(result).toContain('Successfully edited');
+      expect(result).toMatch(/matched via (line-trimmed|whitespace-normalized|indent-flexible)/);
+    });
+
+    test('realistic LLM scenario: code extracted then edited with stripped indentation', async () => {
+      // Simulates real usage: LLM sees indented code from extract output,
+      // strips the outer function indentation when referencing inner code
+      const originalContent = `function validateUser(user) {
+    if (!user.name) {
+        throw new Error('Name required');
+    }
+    if (!user.email) {
+        throw new Error('Email required');
+    }
+    return true;
+}`;
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // LLM references the inner code but strips the 4-space outer indent,
+      // using its own 0-space base. Multiline ensures NOT a substring.
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: `if (!user.name) {
+    throw new Error('Name required');
+}
+if (!user.email) {
+    throw new Error('Email required');
+}`,
+        new_string: `    if (!user.name || !user.email) {
+        throw new Error('Name and email required');
+    }`
+      });
+
+      expect(result).toContain('Successfully edited');
+      expect(result).toContain('matched via line-trimmed');
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toContain("throw new Error('Name and email required')");
+      expect(content).not.toContain("throw new Error('Name required')");
+      expect(content).toContain('return true;'); // Surrounding code preserved
+    });
+
+    test('realistic LLM scenario: extra spaces in operator expressions', async () => {
+      // LLM types code from memory with slightly different spacing around operators
+      const originalContent = `const result = items.filter(x => x.active).map(x => x.name);`;
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // LLM adds spaces around arrows — NOT an exact substring
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'const result = items.filter(x  =>  x.active).map(x  =>  x.name);',
+        new_string: 'const result = items.filter(x => x.enabled).map(x => x.label);'
+      });
+
+      expect(result).toContain('Successfully edited');
+      expect(result).toContain('matched via whitespace-normalized');
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toContain('x.enabled');
+      expect(content).toContain('x.label');
+    });
+  });
+
+  // ─── FileTracker Integration ───
+
+  describe('fileTracker integration', () => {
+    test('edit succeeds when file was seen', async () => {
+      const originalContent = 'Hello, world!\nThis is a test.';
+      await fs.writeFile(testFile, originalContent);
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(testFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'This is a test.',
+        new_string: 'This was edited.'
+      });
+
+      expect(result).toContain('Successfully edited');
+    });
+
+    test('edit fails with untracked message when file not seen', async () => {
+      const originalContent = 'Hello, world!';
+      await fs.writeFile(testFile, originalContent);
+
+      const tracker = new FileTracker();
+      // Do NOT mark file as seen
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'Hello',
+        new_string: 'Goodbye'
+      });
+
+      expect(result).toContain('not been read yet');
+      expect(result).toContain('extract');
+
+      // File should be unchanged
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe(originalContent);
+    });
+
+    test('edit succeeds even when file modified externally (seen-check only)', async () => {
+      // Key behavioral change: file-level mtime no longer blocks edits
+      await fs.writeFile(testFile, 'original content here');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(testFile);
+
+      // Modify the file externally
+      await fs.writeFile(testFile, 'modified content here that is now different length');
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'modified',
+        new_string: 'changed'
+      });
+
+      // Should succeed — file was seen, content matching handles the rest
+      expect(result).toContain('Successfully edited');
+    });
+
+    test('chained edits succeed with text mode', async () => {
+      await fs.writeFile(testFile, 'line 1\nline 2\nline 3');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(testFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      // First edit
+      const result1 = await edit.execute({
+        file_path: testFile,
+        old_string: 'line 2',
+        new_string: 'line TWO'
+      });
+      expect(result1).toContain('Successfully edited');
+
+      // Second edit — file was modified by first edit but seen-check passes
+      const result2 = await edit.execute({
+        file_path: testFile,
+        old_string: 'line 3',
+        new_string: 'line THREE'
+      });
+      expect(result2).toContain('Successfully edited');
+
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe('line 1\nline TWO\nline THREE');
+    });
+
+    test('standalone editTool without fileTracker works unchanged', async () => {
+      await fs.writeFile(testFile, 'standalone test');
+
+      // No fileTracker in options
+      const edit = editTool({
+        allowedFolders: [testDir]
+      });
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: 'standalone test',
+        new_string: 'still works'
+      });
+
+      expect(result).toContain('Successfully edited');
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe('still works');
+    });
+
+    test('createTool updates tracker after write', async () => {
+      const newFile = join(testDir, 'created.js');
+      const tracker = new FileTracker();
+
+      const create = createTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await create.execute({
+        file_path: newFile,
+        content: 'new file content'
+      });
+
+      expect(result).toContain('Successfully');
+      expect(tracker.isTracked(newFile)).toBe(true);
+    });
+
+    test('symbol edit returns disambiguation error for duplicate names', async () => {
+      const dupFile = join(testDir, 'dup.js');
+      await fs.writeFile(dupFile, [
+        'function process(data) {',
+        '  return data.map(x => x * 2);',
+        '}',
+        '',
+        'class DataProcessor {',
+        '  process(data) {',
+        '    return data.filter(x => x > 0);',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(dupFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: dupFile,
+        symbol: 'process',
+        new_string: 'function process() { return 1; }'
+      });
+
+      // Should get disambiguation error listing both symbols
+      expect(result).toContain('Found');
+      expect(result).toContain('symbols named "process"');
+      expect(result).toContain('qualified name');
+    });
+
+    test('symbol edit succeeds with qualified name for duplicate symbols', async () => {
+      const dupFile = join(testDir, 'dup2.js');
+      await fs.writeFile(dupFile, [
+        'function process(data) {',
+        '  return data.map(x => x * 2);',
+        '}',
+        '',
+        'class DataProcessor {',
+        '  process(data) {',
+        '    return data.filter(x => x > 0);',
+        '  }',
+        '}',
+      ].join('\n'));
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(dupFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      // Use qualified name to target specific symbol
+      const result = await edit.execute({
+        file_path: dupFile,
+        symbol: 'DataProcessor.process',
+        new_string: 'process(data) {\n    return data.filter(x => x >= 0);\n  }'
+      });
+
+      expect(result).toContain('Successfully replaced symbol');
+    });
+
+    test('symbol edit updates tracker after write', async () => {
+      const jsFile = join(testDir, 'sym.js');
+      await fs.writeFile(jsFile, 'function hello() {\n  return "hi";\n}\n');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(jsFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: jsFile,
+        symbol: 'hello',
+        new_string: 'function hello() {\n  return "world";\n}'
+      });
+
+      expect(result).toContain('Successfully replaced symbol');
+      // Tracker should be updated — second edit should work
+      const check = tracker.checkBeforeEdit(jsFile);
+      expect(check.ok).toBe(true);
+    });
+
+    test('line-targeted edit updates tracker after write', async () => {
+      const lineFile = join(testDir, 'lines.js');
+      await fs.writeFile(lineFile, 'line one\nline two\nline three\n');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(lineFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      const result = await edit.execute({
+        file_path: lineFile,
+        start_line: '2',
+        new_string: 'line TWO'
+      });
+
+      expect(result).toContain('Successfully edited');
+      // Tracker should be updated
+      const check = tracker.checkBeforeEdit(lineFile);
+      expect(check.ok).toBe(true);
     });
   });
 });

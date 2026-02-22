@@ -269,6 +269,8 @@ User: Read file inside the dependency
 </extract>
 
 </examples>
+
+**Edit Integration:** The line numbers shown in extract output (e.g. "42 | code") can be used directly with the edit tool's start_line/end_line parameters for precise line-targeted editing. To edit inside a large function: extract it by symbol name first (e.g. "file.js#myFunction"), then use the line numbers from the output to make surgical edits with start_line/end_line.
 `;
 
 export const delegateToolDefinition = `
@@ -431,7 +433,7 @@ Capabilities:
 
 export const searchDescription = 'Search code in the repository. Free-form questions are accepted, but Elasticsearch-style keyword queries work best. Use this tool first for any code-related questions.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
-export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files.';
+export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. Line numbers from output can be used with edit start_line/end_line for precise editing.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
 export const bashDescription = 'Execute bash commands for system exploration and development tasks. Secure by default with built-in allow/deny lists.';
 export const analyzeAllDescription = 'Answer questions that require analyzing ALL matching data in the codebase. Use for aggregate questions like "What features exist?", "List all API endpoints", "Count TODO comments". The AI automatically plans the search strategy, processes all results via map-reduce, and synthesizes a comprehensive answer. WARNING: Slower than search - only use when you need complete coverage.';
@@ -450,7 +452,6 @@ export const DEFAULT_VALID_TOOLS = [
 	'useSkill',
 	'listFiles',
 	'searchFiles',
-	'implement',
 	'bash',
 	'task',
 	'attempt_completion'
@@ -496,9 +497,9 @@ function getValidParamsForTool(toolName) {
 
 	const schema = schemaMap[toolName];
 	if (!schema) {
-		// For tools without schema (listFiles, searchFiles, implement), return common params
+		// For tools without schema (listFiles, searchFiles), return common params
 		// These are the shared params that appear across multiple tools
-		return ['path', 'directory', 'pattern', 'recursive', 'includeHidden', 'task', 'files', 'autoCommits', 'result'];
+		return ['path', 'directory', 'pattern', 'recursive', 'includeHidden', 'task', 'files', 'result'];
 	}
 
 	// For attempt_completion, it has custom validation, just return 'result'
@@ -688,7 +689,7 @@ export function detectUnrecognizedToolCall(xmlString, validTools) {
 	// Common tool names that AI might try to use (these should appear as top-level tags)
 	const knownToolNames = [
 		'search', 'query', 'extract', 'listFiles', 'searchFiles',
-		'listSkills', 'useSkill', 'readImage', 'implement', 'edit',
+		'listSkills', 'useSkill', 'readImage', 'edit',
 		'create', 'delegate', 'bash', 'task', 'attempt_completion',
 		'attempt_complete', 'read_file', 'write_file', 'run_command',
 		'grep', 'find', 'cat', 'list_directory'

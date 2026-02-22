@@ -83,17 +83,30 @@ describe('ProbeAgent enableDelegate option', () => {
       const agent1 = new ProbeAgent({ enableDelegate: true, allowEdit: false });
       const message1 = await agent1.getSystemMessage();
       expect(message1).toContain('delegate');
-      expect(message1).not.toContain('implement');
+      expect(message1).not.toContain('## edit');
 
       const agent2 = new ProbeAgent({ enableDelegate: false, allowEdit: true });
       const message2 = await agent2.getSystemMessage();
       expect(message2).not.toContain('## delegate');
-      expect(message2).toContain('implement');
+      expect(message2).toContain('edit');
 
       const agent3 = new ProbeAgent({ enableDelegate: true, allowEdit: true });
       const message3 = await agent3.getSystemMessage();
       expect(message3).toContain('delegate');
-      expect(message3).toContain('implement');
+      expect(message3).toContain('edit');
+    });
+
+    test('should include symbol mode in edit tool when allowEdit is enabled', async () => {
+      const agent = new ProbeAgent({ allowEdit: true });
+      const systemMessage = await agent.getSystemMessage();
+
+      // The unified edit tool now handles symbol mode too
+      expect(systemMessage).toContain('## edit');
+      expect(systemMessage).toContain('symbol');
+      // Separate symbol tools no longer exist
+      expect(systemMessage).not.toContain('## replace_symbol');
+      expect(systemMessage).not.toContain('## insert_symbol');
+      expect(systemMessage).not.toContain('## edit_lines');
     });
   });
 

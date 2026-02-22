@@ -3,7 +3,7 @@
 //! This module provides functions for processing files and extracting code blocks
 //! based on file paths and optional line numbers.
 use anyhow::{Context, Result};
-use probe_code::extract::symbol_finder::find_symbol_in_file;
+use probe_code::extract::symbol_finder::find_all_symbols_in_file;
 use probe_code::language::factory::get_language_impl;
 use probe_code::language::parser::parse_file_for_code_blocks;
 use probe_code::models::SearchResult;
@@ -20,8 +20,9 @@ use std::path::Path;
 /// If specific lines are provided, we find AST blocks for each line and merge them.
 /// If no lines or symbol are specified, return the entire file.
 ///
-/// This function returns a single SearchResult that includes either the merged AST code
-/// or the literal lines as a fallback.
+/// This function returns a Vec of SearchResults. For symbol lookups, multiple results
+/// may be returned when the name is ambiguous (e.g., "process" matches both a function
+/// and class methods). For all other modes, a single-element Vec is returned.
 #[allow(clippy::too_many_arguments)]
 pub fn process_file_for_extraction(
     path: &Path,
@@ -32,7 +33,7 @@ pub fn process_file_for_extraction(
     context_lines: usize,
     specific_lines: Option<&HashSet<usize>>,
     symbols: bool,
-) -> Result<SearchResult> {
+) -> Result<Vec<SearchResult>> {
     // Check if debug mode is enabled
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
@@ -65,13 +66,13 @@ pub fn process_file_for_extraction(
         eprintln!("[DEBUG] Line count: {}", lines.len());
     }
 
-    // If we have a symbol, find it in the file
+    // If we have a symbol, find ALL matching symbols in the file
     if let Some(symbol_name) = symbol {
         if debug_mode {
             eprintln!("[DEBUG] Looking for symbol: {symbol_name}");
         }
-        // Find the symbol in the file
-        return find_symbol_in_file(path, symbol_name, &content, allow_tests, context_lines);
+        // Find all matching symbols (returns Vec for disambiguation)
+        return find_all_symbols_in_file(path, symbol_name, &content, allow_tests, context_lines);
     }
 
     // If we have a line range (start_line, end_line), gather AST blocks overlapping that range.
@@ -181,7 +182,7 @@ pub fn process_file_for_extraction(
                     None
                 };
 
-                Ok(SearchResult {
+                Ok(vec![SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_range".to_string(),
@@ -214,7 +215,7 @@ pub fn process_file_for_extraction(
                     matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
-                })
+                }])
             }
             _ => {
                 // Fallback to literal extraction of lines [start..end]
@@ -234,7 +235,7 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&range_content, &filename);
 
-                Ok(SearchResult {
+                Ok(vec![SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start, end),
                     node_type: "range".to_string(),
@@ -263,7 +264,7 @@ pub fn process_file_for_extraction(
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
-                })
+                }])
             }
         }
     }
@@ -336,7 +337,7 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
-                Ok(SearchResult {
+                Ok(vec![SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_line".to_string(),
@@ -369,7 +370,7 @@ pub fn process_file_for_extraction(
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
-                })
+                }])
             }
             _ => {
                 // If no AST block found, fallback to the line + context
@@ -401,7 +402,7 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&context_code, &filename);
 
-                Ok(SearchResult {
+                Ok(vec![SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start_ctx, end_ctx),
                     node_type: "context".to_string(),
@@ -430,7 +431,7 @@ pub fn process_file_for_extraction(
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
-                })
+                }])
             }
         }
     } else if let Some(lines_set) = specific_lines {
@@ -452,7 +453,7 @@ pub fn process_file_for_extraction(
             let tokenized_content =
                 crate::ranking::preprocess_text_with_filename(&content, &filename);
 
-            return Ok(SearchResult {
+            return Ok(vec![SearchResult {
                 file: path.to_string_lossy().to_string(),
                 lines: (1, lines.len()),
                 node_type: "file".to_string(),
@@ -485,7 +486,7 @@ pub fn process_file_for_extraction(
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
                 parent_context: None,
-            });
+            }]);
         }
 
         // Clamp specific lines to valid range instead of failing
@@ -558,7 +559,7 @@ pub fn process_file_for_extraction(
                 let tokenized_content =
                     crate::ranking::preprocess_text_with_filename(&merged_content, &filename);
 
-                Ok(SearchResult {
+                Ok(vec![SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (merged_start, merged_end),
                     node_type: "merged_ast_specific_lines".to_string(),
@@ -591,7 +592,7 @@ pub fn process_file_for_extraction(
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
-                })
+                }])
             }
             _ => {
                 // Fallback to literal extraction of the specific lines
@@ -638,7 +639,7 @@ pub fn process_file_for_extraction(
                     None
                 };
 
-                Ok(SearchResult {
+                Ok(vec![SearchResult {
                     file: path.to_string_lossy().to_string(),
                     lines: (start, end),
                     node_type: "specific_lines".to_string(),
@@ -667,7 +668,7 @@ pub fn process_file_for_extraction(
                     matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
                     parent_context: None,
-                })
+                }])
             }
         }
     } else {
@@ -683,7 +684,7 @@ pub fn process_file_for_extraction(
             .unwrap_or_default();
         let tokenized_content = crate::ranking::preprocess_text_with_filename(&content, &filename);
 
-        Ok(SearchResult {
+        Ok(vec![SearchResult {
             file: path.to_string_lossy().to_string(),
             lines: (1, lines.len()),
             node_type: "file".to_string(),
@@ -716,7 +717,7 @@ pub fn process_file_for_extraction(
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
             parent_context: None,
-        })
+        }])
     }
 }
 

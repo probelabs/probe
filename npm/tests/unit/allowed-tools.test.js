@@ -399,6 +399,19 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.isEnabled('search')).toBe(true);
       expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(true);
     });
+
+    test('should include edit tool in validTools when in allowedTools with allowEdit', async () => {
+      const agent = new ProbeAgent({
+        path: process.cwd(),
+        allowEdit: true,
+        allowedTools: ['search', 'edit', 'create', 'attempt_completion']
+      });
+      await agent.initialize();
+
+      expect(agent.allowedTools.isEnabled('edit')).toBe(true);
+      expect(agent.allowedTools.isEnabled('create')).toBe(true);
+      expect(agent.allowedTools.isEnabled('search')).toBe(true);
+    });
   });
 
   describe('disableTools convenience flag', () => {

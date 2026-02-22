@@ -51,6 +51,7 @@ import { searchTool, queryTool, extractTool, delegateTool, analyzeAllTool } from
 import { createExecutePlanTool, getExecutePlanToolDefinition, createCleanupExecutePlanTool, getCleanupExecutePlanToolDefinition } from './tools/executePlan.js';
 import { bashTool } from './tools/bash.js';
 import { editTool, createTool } from './tools/edit.js';
+import { FileTracker } from './tools/fileTracker.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
 import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
@@ -98,6 +99,7 @@ export {
 	bashTool,
 	editTool,
 	createTool,
+	FileTracker,
 	// Export tool instances
 	listFilesToolInstance,
 	searchFilesToolInstance,

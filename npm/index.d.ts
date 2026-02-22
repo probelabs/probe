@@ -13,8 +13,10 @@ export interface ProbeAgentOptions {
   systemPrompt?: string;
   /** Predefined prompt type (persona) */
   promptType?: 'code-explorer' | 'engineer' | 'code-review' | 'support' | 'architect';
-  /** Allow the use of the 'implement' tool for code editing */
+  /** Allow the use of the 'edit' and 'create' tools for code editing */
   allowEdit?: boolean;
+  /** Annotate search/extract output with line hashes for integrity verification */
+  hashLines?: boolean;
   /** Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present) */
   architectureFileName?: string;
   /** Search directory path */
@@ -563,11 +565,195 @@ export declare function listFilesByLevel(
 export declare const DEFAULT_SYSTEM_MESSAGE: string;
 
 /**
+ * Content record for a tracked symbol
+ */
+export interface ContentRecord {
+  /** SHA-256 content hash (first 16 hex chars) */
+  contentHash: string;
+  /** 1-indexed start line */
+  startLine: number;
+  /** 1-indexed end line */
+  endLine: number;
+  /** Symbol name, if from a symbol extract */
+  symbolName: string | null;
+  /** How the content was obtained: 'extract' or 'edit' */
+  source: string;
+  /** When the record was created (ms since epoch) */
+  timestamp: number;
+}
+
+/**
+ * Result of a staleness check
+ */
+export interface FileCheckResult {
+  /** Whether the file is safe to edit */
+  ok: boolean;
+  /** Reason for rejection: 'untracked' or 'stale' */
+  reason?: 'untracked' | 'stale';
+  /** Human-readable message explaining the rejection */
+  message?: string;
+}
+
+/**
+ * Compute a SHA-256 content hash for a code block.
+ * Normalizes trailing whitespace per line for robustness.
+ */
+export declare function computeContentHash(content: string): string;
+
+/**
+ * Per-session content-aware file state tracker for safe multi-edit workflows.
+ * Two-tier tracking: file-level "seen" flag + symbol-level content hashes.
+ * Edits proceed when the target symbol hasn't changed, even if other parts of the file changed.
+ */
+export declare class FileTracker {
+  constructor(options?: { debug?: boolean });
+
+  /** Mark a file as seen (read via search/extract) */
+  markFileSeen(resolvedPath: string): void;
+
+  /** Check if a file has been seen in this session */
+  isFileSeen(resolvedPath: string): boolean;
+
+  /** Store a content hash for a symbol */
+  trackSymbolContent(resolvedPath: string, symbolName: string, code: string, startLine: number, endLine: number, source?: string): void;
+
+  /** Look up a stored content record for a symbol */
+  getSymbolRecord(resolvedPath: string, symbolName: string): ContentRecord | null;
+
+  /** Check if a symbol's current content matches what was stored */
+  checkSymbolContent(resolvedPath: string, symbolName: string, currentCode: string): FileCheckResult;
+
+  /** Track files from extract target strings (marks as seen, hashes symbol targets) */
+  trackFilesFromExtract(targets: string[], cwd: string): Promise<void>;
+
+  /** Track files from probe search/extract output text (marks as seen) */
+  trackFilesFromOutput(output: string, cwd: string): Promise<void>;
+
+  /** Check if a file is safe to edit (seen-check only) */
+  checkBeforeEdit(resolvedPath: string): FileCheckResult;
+
+  /** Mark file as seen after write, invalidate content records */
+  trackFileAfterWrite(resolvedPath: string): Promise<void>;
+
+  /** Update stored hash after successful symbol write */
+  trackSymbolAfterWrite(resolvedPath: string, symbolName: string, code: string, startLine: number, endLine: number): void;
+
+  /** Remove all content records for a file */
+  invalidateFileRecords(resolvedPath: string): void;
+
+  /** Quick sync check if a file is being tracked (alias for isFileSeen) */
+  isTracked(resolvedPath: string): boolean;
+
+  /** Clear all tracking state */
+  clear(): void;
+}
+
+/**
+ * Edit tool configuration options
+ */
+export interface EditToolOptions {
+  /** Debug mode */
+  debug?: boolean;
+  /** Allowed directories for file operations */
+  allowedFolders?: string[];
+  /** Working directory for resolving relative paths */
+  cwd?: string;
+  /** Workspace root for relative path display */
+  workspaceRoot?: string;
+  /** File tracker for staleness detection (created automatically by ProbeAgent) */
+  fileTracker?: FileTracker;
+}
+
+/**
+ * Edit tool parameters (text mode)
+ */
+export interface EditTextParams {
+  /** Path to the file to edit */
+  file_path: string;
+  /** Text to find in the file (copy verbatim) */
+  old_string: string;
+  /** Replacement text */
+  new_string: string;
+  /** Replace all occurrences (default: false) */
+  replace_all?: boolean;
+}
+
+/**
+ * Edit tool parameters (symbol replace mode)
+ */
+export interface EditSymbolReplaceParams {
+  /** Path to the file to edit */
+  file_path: string;
+  /** Symbol name to replace (e.g. "myFunction", "MyClass.myMethod") */
+  symbol: string;
+  /** New code to replace the symbol with */
+  new_string: string;
+}
+
+/**
+ * Edit tool parameters (symbol insert mode)
+ */
+export interface EditSymbolInsertParams {
+  /** Path to the file to edit */
+  file_path: string;
+  /** Symbol name to insert near */
+  symbol: string;
+  /** New code to insert */
+  new_string: string;
+  /** Insert before or after the symbol */
+  position: 'before' | 'after';
+}
+
+/**
+ * Line-targeted edit parameters
+ */
+export interface EditLineTargetedParams {
+  /** Path to the file to edit */
+  file_path: string;
+  /** New code content */
+  new_string: string;
+  /** Line reference (e.g. "42" or "42:ab" with hash) */
+  start_line: string;
+  /** End of line range, inclusive (e.g. "55" or "55:cd"). Defaults to start_line. */
+  end_line?: string;
+  /** Insert before or after the line instead of replacing */
+  position?: 'before' | 'after';
+}
+
+/**
+ * Create tool parameters
+ */
+export interface CreateParams {
+  /** Path where the file should be created */
+  file_path: string;
+  /** Content to write to the file */
+  content: string;
+  /** Overwrite if file exists (default: false) */
+  overwrite?: boolean;
+}
+
+/**
+ * Create edit tool instance
+ */
+export declare function editTool(options?: EditToolOptions): {
+  execute(params: EditTextParams | EditSymbolReplaceParams | EditSymbolInsertParams | EditLineTargetedParams): Promise<string>;
+};
+
+/**
+ * Create create tool instance
+ */
+export declare function createTool(options?: EditToolOptions): {
+  execute(params: CreateParams): Promise<string>;
+};
+
+/**
  * Schema definitions
  */
 export declare const searchSchema: any;
 export declare const querySchema: any;
 export declare const extractSchema: any;
+export declare const editSchema: any;
+export declare const createSchema: any;
 export declare const attemptCompletionSchema: any;
 
 /**
@@ -576,6 +762,8 @@ export declare const attemptCompletionSchema: any;
 export declare const searchToolDefinition: any;
 export declare const queryToolDefinition: any;
 export declare const extractToolDefinition: any;
+export declare const editToolDefinition: string;
+export declare const createToolDefinition: string;
 export declare const attemptCompletionToolDefinition: any;
 
 /**

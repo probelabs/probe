@@ -253,7 +253,7 @@ export class ProbeChat {
    * @param {boolean} [options.isNonInteractive=false] - Suppress internal logs if true
    * @param {string} [options.customPrompt] - Custom prompt to replace the default system message
    * @param {string} [options.promptType] - Predefined prompt type (architect, code-review, support)
-   * @param {boolean} [options.allowEdit=false] - Allow the use of the 'implement' tool
+   * @param {boolean} [options.allowEdit=false] - Allow the use of the 'edit' and 'create' tools
    * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present)
    * @param {string} [options.provider] - Force specific AI provider
    * @param {string} [options.model] - Override model name

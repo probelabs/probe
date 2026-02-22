@@ -124,7 +124,8 @@ function parseArgs() {
     schema: null,
     provider: null,
     model: null,
-    allowEdit: false,
+    allowEdit: process.env.ALLOW_EDIT === '1' || false,
+    hashLines: process.env.HASH_LINES !== undefined ? process.env.HASH_LINES === '1' : undefined,
     enableDelegate: false,
     verbose: false,
     help: false,
@@ -167,6 +168,10 @@ function parseArgs() {
       config.verbose = true;
     } else if (arg === '--allow-edit') {
       config.allowEdit = true;
+    } else if (arg === '--hash-lines') {
+      config.hashLines = true;
+    } else if (arg === '--no-hash-lines') {
+      config.hashLines = false;
     } else if (arg === '--enable-delegate') {
       config.enableDelegate = true;
     } else if (arg === '--no-delegate') {
@@ -275,12 +280,14 @@ Options:
   --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
-  --allow-edit                     Enable code modification capabilities
+  --allow-edit                     Enable code modification capabilities (edit + create tools)
+  --hash-lines                     Annotate search/extract output with line hashes (default: on when --allow-edit)
+  --no-hash-lines                  Disable line hash annotations even with --allow-edit
   --enable-delegate                Enable delegate tool for task distribution to subagents
   --allowed-tools <tools>          Filter available tools (comma-separated list)
                                    Use '*' or 'all' for all tools (default)
                                    Use 'none' or '' for no tools (raw AI mode)
-                                   Specific tools: search,query,extract,listFiles,searchFiles,listSkills,useSkill
+                                   Specific tools: search,query,extract,edit,create,listFiles,searchFiles,listSkills,useSkill
                                    Supports exclusion: '*,!bash' (all except bash)
   --disable-tools                  Disable all tools (raw AI mode, no code analysis)
                                    Convenience flag equivalent to --allowed-tools none
@@ -318,6 +325,8 @@ Environment Variables:
   FORCE_PROVIDER                  Force specific provider (anthropic, openai, google)
   MODEL_NAME                      Override model name
   MAX_RESPONSE_TOKENS             Maximum tokens for AI response
+  ALLOW_EDIT                      Enable code modification (set to '1')
+  HASH_LINES                      Annotate output with line hashes (set to '1'; default: on with ALLOW_EDIT)
   DEBUG                           Enable verbose mode (set to '1')
 
 Examples:
@@ -334,6 +343,8 @@ Examples:
   probe agent "Explain this code" --allowed-tools search,extract  # Only search and extract
   probe agent "What is this project about?" --allowed-tools none  # Raw AI mode (no tools)
   probe agent "Tell me about this project" --disable-tools        # Raw AI mode (convenience flag)
+  probe agent "Fix the off-by-one error" --allow-edit --path ./src  # Enable code editing
+  ALLOW_EDIT=1 probe agent "Refactor the login flow"                # Edit via env var
   probe agent --mcp               # Start MCP server mode
   probe agent --acp               # Start ACP server mode
 

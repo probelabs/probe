@@ -23,6 +23,9 @@ fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
             None,
             false,
         )
+        .unwrap()
+        .into_iter()
+        .next()
         .unwrap();
 
         // Compare outputs against the expected output structure

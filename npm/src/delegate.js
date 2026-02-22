@@ -346,6 +346,7 @@ const DEFAULT_DELEGATE_TIMEOUT = parseInt(process.env.DELEGATE_TIMEOUT, 10) || 3
  * @param {Object} [options.tracer=null] - Telemetry tracer instance
  * @param {boolean} [options.enableBash=false] - Enable bash tool (inherited from parent)
  * @param {Object} [options.bashConfig] - Bash configuration (inherited from parent)
+ * @param {boolean} [options.allowEdit=false] - Allow edit/create tools (inherited from parent)
  * @param {string} [options.architectureFileName] - Architecture context filename to embed from repo root
  * @param {string} [options.promptType='code-researcher'] - Prompt type for the subagent
  * @param {Array<string>|null} [options.allowedTools] - Allowed tools for the subagent (null = default)
@@ -373,6 +374,7 @@ export async function delegate({
 	model = null,
 	enableBash = false,
 	bashConfig = null,
+	allowEdit = false,
 	architectureFileName = null,
 	promptType = 'code-researcher',
 	allowedTools = null,
@@ -462,6 +464,7 @@ export async function delegate({
 			model,      // Inherit from parent
 			enableBash, // Inherit from parent
 			bashConfig, // Inherit from parent
+			allowEdit,  // Inherit from parent
 			architectureFileName,
 			allowedTools,
 			disableTools,
