@@ -38,8 +38,8 @@ function extractFilePath(target) {
   if (hashIdx !== -1) {
     return target.slice(0, hashIdx);
   }
-  // Strip :line or :start-end suffix
-  const colonIdx = target.indexOf(':');
+  // Strip :line or :start-end suffix (use lastIndexOf to skip Windows drive letter colons)
+  const colonIdx = target.lastIndexOf(':');
   if (colonIdx !== -1) {
     // Only strip if what follows looks like a line reference (digits, dash)
     const after = target.slice(colonIdx + 1);
