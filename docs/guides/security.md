@@ -135,6 +135,8 @@ Bash permissions use colon-separated patterns that match commands and arguments:
 
 A pattern like `git:push` matches the command `git` with first argument `push`, regardless of any additional arguments. The pattern only checks the parts it specifies — extra arguments in the actual command are ignored.
 
+**Note on wildcards:** `git:push` and `git:push:*` are functionally identical. The `*` wildcard matches any argument **or no argument**, so it adds no additional coverage. Prefer the shorter form `git:push` for clarity.
+
 ### Permission Resolution Priority
 
 Permissions are resolved using a **strict 4-level priority system**. Higher priority always wins:
