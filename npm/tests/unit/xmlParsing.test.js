@@ -1,5 +1,5 @@
 import { parseXmlToolCall, parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
-import { DEFAULT_VALID_TOOLS, buildToolTagPattern, detectUnrecognizedToolCall } from '../../src/tools/common.js';
+import { DEFAULT_VALID_TOOLS, buildToolTagPattern, detectUnrecognizedToolCall, unescapeXmlEntities } from '../../src/tools/common.js';
 import { removeThinkingTags, extractThinkingContent } from '../../src/agent/xmlParsingUtils.js';
 
 describe('Shared Tool List', () => {
@@ -1655,6 +1655,124 @@ assistant only performed the initial steps...
       // With the fix, we get clean content without any thinking tags
       expect(result).not.toContain('<thinking>');
       expect(result).toBe('actual content');
+    });
+  });
+});
+
+describe('XML entity unescaping', () => {
+  describe('unescapeXmlEntities', () => {
+    test('should unescape &amp; to &', () => {
+      expect(unescapeXmlEntities('foo &amp; bar')).toBe('foo & bar');
+    });
+
+    test('should unescape &lt; to <', () => {
+      expect(unescapeXmlEntities('a &lt; b')).toBe('a < b');
+    });
+
+    test('should unescape &gt; to >', () => {
+      expect(unescapeXmlEntities('a &gt; b')).toBe('a > b');
+    });
+
+    test('should unescape &quot; to "', () => {
+      expect(unescapeXmlEntities('say &quot;hello&quot;')).toBe('say "hello"');
+    });
+
+    test('should unescape &apos; to \'', () => {
+      expect(unescapeXmlEntities("it&apos;s")).toBe("it's");
+    });
+
+    test('should handle multiple entities in one string', () => {
+      expect(unescapeXmlEntities('a &amp; b &lt; c &gt; d')).toBe('a & b < c > d');
+    });
+
+    test('should not double-decode &amp;lt; (should become &lt;, not <)', () => {
+      expect(unescapeXmlEntities('&amp;lt;')).toBe('&lt;');
+    });
+
+    test('should not double-decode &amp;amp; (should become &amp;, not &)', () => {
+      expect(unescapeXmlEntities('&amp;amp;')).toBe('&amp;');
+    });
+
+    test('should return non-string values unchanged', () => {
+      expect(unescapeXmlEntities(42)).toBe(42);
+      expect(unescapeXmlEntities(true)).toBe(true);
+      expect(unescapeXmlEntities(null)).toBe(null);
+    });
+
+    test('should handle string with no entities', () => {
+      expect(unescapeXmlEntities('plain text')).toBe('plain text');
+    });
+  });
+
+  describe('parseXmlToolCall with XML entities', () => {
+    test('should unescape &amp;&amp; in bash command', () => {
+      const xmlString = '<bash><command>cd tyk &amp;&amp; git status</command></bash>';
+      const result = parseXmlToolCall(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'bash',
+        params: { command: 'cd tyk && git status' }
+      });
+    });
+
+    test('should unescape &lt; and &gt; in bash command', () => {
+      const xmlString = '<bash><command>echo &quot;hello&quot; &gt; output.txt</command></bash>';
+      const result = parseXmlToolCall(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'bash',
+        params: { command: 'echo "hello" > output.txt' }
+      });
+    });
+
+    test('should unescape entities in search query', () => {
+      const xmlString = '<search><query>foo &amp; bar &lt;T&gt;</query></search>';
+      const result = parseXmlToolCall(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'search',
+        params: { query: 'foo & bar <T>' }
+      });
+    });
+
+    test('should unescape entities in attempt_completion content', () => {
+      const xmlString = '<attempt_completion>Result: x &lt; y &amp;&amp; a &gt; b</attempt_completion>';
+      const result = parseXmlToolCall(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'attempt_completion',
+        params: { result: 'Result: x < y && a > b' }
+      });
+    });
+
+    test('should unescape entities in edit tool old_string/new_string', () => {
+      const validTools = ['edit'];
+      const xmlString = `<edit>
+<file_path>test.js</file_path>
+<old_string>if (a &amp;&amp; b &lt; c)</old_string>
+<new_string>if (a &amp;&amp; b &lt;= c)</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(xmlString, validTools);
+
+      expect(result).toMatchObject({
+        toolName: 'edit',
+        params: {
+          file_path: 'test.js',
+          old_string: 'if (a && b < c)',
+          new_string: 'if (a && b <= c)'
+        }
+      });
+    });
+
+    test('should handle complex bash command with pipes and redirects', () => {
+      const xmlString = '<bash><command>cat file.txt | grep &quot;pattern&quot; &amp;&amp; echo &quot;done&quot; &gt; /dev/null</command></bash>';
+      const result = parseXmlToolCall(xmlString);
+
+      expect(result).toMatchObject({
+        toolName: 'bash',
+        params: { command: 'cat file.txt | grep "pattern" && echo "done" > /dev/null' }
+      });
     });
   });
 });

@@ -521,6 +521,23 @@ function getValidParamsForTool(toolName) {
 	return [];
 }
 
+/**
+ * Unescape standard XML entities in a string value.
+ * Order matters: &amp; must be decoded LAST to avoid double-decoding
+ * (e.g., &amp;lt; should become &lt;, not <).
+ * @param {string} str - The string to unescape
+ * @returns {string} The unescaped string
+ */
+export function unescapeXmlEntities(str) {
+	if (typeof str !== 'string') return str;
+	return str
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&apos;/g, "'")
+		.replace(/&amp;/g, '&');
+}
+
 // Simple XML parser helper - safer string-based approach
 export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 	// Find the tool that appears EARLIEST in the string
@@ -609,10 +626,10 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			paramCloseIndex = nextTagIndex;
 		}
 
-		let paramValue = innerContent.substring(
+		let paramValue = unescapeXmlEntities(innerContent.substring(
 			paramOpenIndex + paramOpenTag.length,
 			paramCloseIndex
-		).trim();
+		).trim());
 
 		// Basic type inference (can be improved)
 		if (paramValue.toLowerCase() === 'true') {
@@ -633,7 +650,7 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 
 	// Special handling for attempt_completion - use entire inner content as result
 	if (toolName === 'attempt_completion') {
-		params['result'] = innerContent.trim();
+		params['result'] = unescapeXmlEntities(innerContent.trim());
 		// Remove command parameter if it was parsed by generic logic above (legacy compatibility)
 		if (params.command) {
 			delete params.command;
