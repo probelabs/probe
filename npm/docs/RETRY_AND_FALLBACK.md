@@ -49,7 +49,7 @@ const agent = new ProbeAgent({
         provider: 'anthropic',
         apiKey: process.env.ANTHROPIC_API_KEY,
         baseURL: 'https://api.anthropic.com/v1',
-        model: 'claude-3-7-sonnet-20250219',
+        model: 'claude-sonnet-4-6',
         maxRetries: 5  // Retry 5 times on this provider
       },
       {
@@ -57,13 +57,13 @@ const agent = new ProbeAgent({
         region: 'us-west-2',
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        model: 'anthropic.claude-sonnet-4-20250514-v1:0',
+        model: 'anthropic.claude-sonnet-4-6',
         maxRetries: 3
       },
       {
         provider: 'openai',
         apiKey: process.env.OPENAI_API_KEY,
-        model: 'gpt-4o',
+        model: 'gpt-5.2',
         maxRetries: 3
       }
     ],
@@ -158,19 +158,19 @@ FALLBACK_PROVIDERS='[
   {
     "provider": "anthropic",
     "apiKey": "sk-ant-xxx",
-    "model": "claude-3-7-sonnet-20250219"
+    "model": "claude-sonnet-4-6"
   },
   {
     "provider": "bedrock",
     "region": "us-west-2",
     "accessKeyId": "xxx",
     "secretAccessKey": "xxx",
-    "model": "anthropic.claude-sonnet-4-20250514-v1:0"
+    "model": "anthropic.claude-sonnet-4-6"
   }
 ]'
 
 # Fallback models (JSON array, for same-provider fallback)
-FALLBACK_MODELS='["claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022"]'
+FALLBACK_MODELS='["claude-sonnet-4-6", "claude-sonnet-4-6"]'
 
 # Max total attempts across all providers
 FALLBACK_MAX_TOTAL_ATTEMPTS=15
@@ -192,14 +192,14 @@ const agent = new ProbeAgent({
         provider: 'anthropic',
         apiKey: process.env.AZURE_CLAUDE_API_KEY,
         baseURL: 'https://your-azure-endpoint.com/v1',
-        model: 'claude-3-7-sonnet-20250219'
+        model: 'claude-sonnet-4-6'
       },
       {
         provider: 'bedrock',
         region: 'us-west-2',
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        model: 'anthropic.claude-sonnet-4-20250514-v1:0'
+        model: 'anthropic.claude-sonnet-4-6'
       }
     ]
   }
@@ -219,17 +219,17 @@ const agent = new ProbeAgent({
       {
         provider: 'anthropic',
         apiKey: process.env.ANTHROPIC_API_KEY,
-        model: 'claude-3-7-sonnet-20250219'
+        model: 'claude-sonnet-4-6'
       },
       {
         provider: 'anthropic',
         apiKey: process.env.ANTHROPIC_API_KEY,
-        model: 'claude-3-5-sonnet-20241022'
+        model: 'claude-sonnet-4-6'
       },
       {
         provider: 'openai',
         apiKey: process.env.OPENAI_API_KEY,
-        model: 'gpt-4o'
+        model: 'gpt-5.2'
       }
     ]
   }
@@ -389,11 +389,11 @@ if (agent.fallbackManager) {
   // {
   //   totalAttempts: 3,
   //   providerAttempts: {
-  //     'anthropic/claude-3-7-sonnet-20250219': 1,
-  //     'bedrock/anthropic.claude-sonnet-4-20250514-v1:0': 1,
-  //     'openai/gpt-4o': 1
+  //     'anthropic/claude-sonnet-4-6': 1,
+  //     'bedrock/anthropic.claude-sonnet-4-6': 1,
+  //     'openai/gpt-5.2': 1
   //   },
-  //   successfulProvider: 'openai/gpt-4o',
+  //   successfulProvider: 'openai/gpt-5.2',
   //   failedProviders: [
   //     { provider: 'anthropic/...', error: {...} },
   //     { provider: 'bedrock/...', error: {...} }
@@ -419,7 +419,7 @@ const agent = new ProbeAgent({
 // [FallbackManager] Attempting provider: anthropic/claude-3-7-... (attempt 1/10)
 // [FallbackManager] ❌ Failed with provider: anthropic/claude-3-7-...
 // [FallbackManager] Trying next provider (2 remaining)...
-// [FallbackManager] ✅ Success with provider: openai/gpt-4o
+// [FallbackManager] ✅ Success with provider: openai/gpt-5.2
 ```
 
 ## Best Practices

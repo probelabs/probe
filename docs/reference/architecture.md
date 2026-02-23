@@ -252,7 +252,7 @@ import { streamText } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 
 const result = await streamText({
-  model: createAnthropic()('claude-sonnet-4-5-20250929'),
+  model: createAnthropic()('claude-sonnet-4-6'),
   system: systemPrompt,
   messages: history,
   tools: toolDefinitions

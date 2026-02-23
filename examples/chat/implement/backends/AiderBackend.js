@@ -315,7 +315,7 @@ class AiderBackend extends BaseBackend {
       if (geminiApiKey) {
         return 'gemini/gemini-2.5-pro';
       } else if (anthropicApiKey) {
-        return 'claude-3-5-sonnet-20241022';
+        return 'claude-sonnet-4-6';
       } else if (openaiApiKey) {
         return 'gpt-4';
       }

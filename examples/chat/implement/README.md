@@ -54,7 +54,7 @@ export AIDER_AUTO_COMMIT=false                    # Auto-commit changes
 export AIDER_TIMEOUT=300000                       # Aider-specific timeout (deprecated - use IMPLEMENT_TOOL_TIMEOUT)
 
 # Claude Code Configuration  
-export CLAUDE_CODE_MODEL=claude-3-5-sonnet-20241022  # Claude model
+export CLAUDE_CODE_MODEL=claude-sonnet-4-6  # Claude model
 export CLAUDE_CODE_MAX_TOKENS=8000                # Max tokens
 export CLAUDE_CODE_TEMPERATURE=0.3                # Temperature (0-2)
 export CLAUDE_CODE_MAX_TURNS=10                   # Max conversation turns
@@ -79,7 +79,7 @@ Create `implement-config.json` in your project root:
       "additionalArgs": ["--no-auto-commits"]
     },
     "claude-code": {
-      "model": "claude-3-5-sonnet-20241022",
+      "model": "claude-sonnet-4-6",
       "maxTokens": 8000,
       "temperature": 0.3,
       "tools": ["edit", "search", "bash"]
@@ -136,7 +136,7 @@ const implementTool = createImplementTool({
     backends: {
       'claude-code': {
         apiKey: process.env.MY_CLAUDE_KEY,
-        model: 'claude-3-5-sonnet-20241022',
+        model: 'claude-sonnet-4-6',
         systemPrompt: 'You are an expert TypeScript developer...'
       }
     }

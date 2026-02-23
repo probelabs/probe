@@ -48,8 +48,8 @@ DEBUG=false
 
 # Default model (optional)
 # For Anthropic: MODEL_NAME=claude-3-7-sonnet-latest
-# For OpenAI: MODEL_NAME=gpt-4o-2024-05-13
-# For Google: MODEL_NAME=gemini-2.0-flash
+# For OpenAI: MODEL_NAME=gpt-5.2
+# For Google: MODEL_NAME=gemini-2.5-flash
 
 # API URL configuration (optional)
 # Generic base URL for all providers (if provider-specific URL not set)
@@ -123,7 +123,7 @@ This will override any ALLOWED_FOLDERS setting in your .env file.
 ### Command-line Options
 
 - `-d, --debug`: Enable debug mode for verbose logging
-- `-m, --model <model>`: Specify the model to use (e.g., `claude-3-7-sonnet-latest`, `gpt-4o-2024-05-13`, `gemini-2.0-flash`)
+- `-m, --model <model>`: Specify the model to use (e.g., `claude-3-7-sonnet-latest`, `gpt-5.2`, `gemini-2.5-flash`)
 - `-f, --force-provider <provider>`: Force a specific provider (options: `anthropic`, `openai`, `google`)
 - `-w, --web`: Run in web interface mode
 - `-p, --port <port>`: Port to run web server on (default: 8080)
@@ -166,12 +166,12 @@ Probe Chat supports multiple AI providers, giving you flexibility in choosing wh
    - Best for: Complex code analysis, detailed explanations, and understanding nuanced patterns
 
 2. **OpenAI GPT**
-   - Default model: `gpt-4o-2024-05-13`
+   - Default model: `gpt-5.2`
    - Environment variable: `OPENAI_API_KEY`
    - Best for: General code search, pattern recognition, and concise explanations
 
 3. **Google Gemini**
-   - Default model: `gemini-2.0-flash`
+   - Default model: `gemini-2.5-flash`
    - Environment variable: `GOOGLE_API_KEY`
    - Best for: Fast responses, code generation, and efficient search
 
@@ -201,8 +201,8 @@ You can specify which model to use for each provider:
 1. **Using the command line option**:
    ```bash
    node index.js --model claude-3-7-sonnet-latest
-   node index.js --model gpt-4o-2024-05-13
-   node index.js --model gemini-2.0-flash
+   node index.js --model gpt-5.2
+   node index.js --model gemini-2.5-flash
    ```
 
 2. **Using the environment variable**:

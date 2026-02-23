@@ -41,10 +41,10 @@ export const FALLBACK_STRATEGIES = {
  * Default model mappings for each provider
  */
 const DEFAULT_MODELS = {
-  anthropic: 'claude-sonnet-4-5-20250929',
-  openai: 'gpt-4o',
-  google: 'gemini-2.0-flash-exp',
-  bedrock: 'anthropic.claude-sonnet-4-20250514-v1:0'
+  anthropic: 'claude-sonnet-4-6',
+  openai: 'gpt-5.2',
+  google: 'gemini-2.5-flash',
+  bedrock: 'anthropic.claude-sonnet-4-6'
 };
 
 /**

@@ -101,7 +101,7 @@ async function testMCPWithAI() {
     const google = createGoogleGenerativeAI({
       apiKey: process.env.GOOGLE_API_KEY || process.env.GOOGLE_AI_API_KEY
     });
-    model = google('gemini-2.0-flash-exp');
+    model = google('gemini-2.5-flash');
     console.log('🤖 Using Google Gemini 2.0 Flash');
   } else if (hasAnthropic) {
     const anthropic = createAnthropic();
@@ -109,7 +109,7 @@ async function testMCPWithAI() {
     console.log('🤖 Using Claude 3.5 Haiku');
   } else {
     const openai = createOpenAI();
-    model = openai('gpt-4o-mini');
+    model = openai('gpt-5.2-mini');
     console.log('🤖 Using GPT-4o Mini');
   }
 

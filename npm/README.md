@@ -91,7 +91,7 @@ const agent = new ProbeAgent({
   sessionId: 'my-session',  // Optional: for conversation continuity
   path: '/path/to/your/project',
   provider: 'anthropic',   // or 'openai', 'google'
-  model: 'claude-3-5-sonnet-20241022',  // Optional: override model
+  model: 'claude-sonnet-4-6',  // Optional: override model
   allowEdit: true,         // Optional: enable edit + create tools for code modification
   debug: true,            // Optional: enable debug logging
   allowedTools: ['*'],    // Optional: filter available tools (see Tool Filtering below)
@@ -128,7 +128,7 @@ export GOOGLE_API_KEY=your_google_key
 export FORCE_PROVIDER=anthropic
 
 # Optional: Override model name
-export MODEL_NAME=claude-3-5-sonnet-20241022
+export MODEL_NAME=claude-sonnet-4-6
 ```
 
 **ProbeAgent Features:**
@@ -204,12 +204,12 @@ const agent = new ProbeAgent({
         region: 'us-west-2',
         accessKeyId: process.env.AWS_ACCESS_KEY_ID,
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-        model: 'anthropic.claude-sonnet-4-20250514-v1:0'
+        model: 'anthropic.claude-sonnet-4-6'
       },
       {
         provider: 'openai',
         apiKey: process.env.OPENAI_API_KEY,
-        model: 'gpt-4o'
+        model: 'gpt-5.2'
       }
     ],
     maxTotalAttempts: 15  // Maximum attempts across all providers
@@ -919,7 +919,7 @@ const extractTool = tools.createExtractTool();
 
 // Create a ChatOpenAI instance with tools
 const model = new ChatOpenAI({
-  modelName: "gpt-4o",
+  modelName: "gpt-5.2",
   temperature: 0.7
 }).withTools([searchTool, queryTool, extractTool]);
 

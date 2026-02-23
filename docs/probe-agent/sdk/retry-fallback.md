@@ -113,8 +113,8 @@ const agent = new ProbeAgent({
   fallback: {
     strategy: 'custom',
     providers: [
-      { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-      { provider: 'openai', model: 'gpt-4o' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'openai', model: 'gpt-5.2' },
       { provider: 'google', model: 'gemini-2.0-flash' }
     ],
     stopOnSuccess: true,
@@ -140,7 +140,7 @@ GOOGLE_API_KEY=...     # → google (3rd)
 ```javascript
 {
   provider: 'anthropic',
-  model: 'claude-sonnet-4-5-20250929',
+  model: 'claude-sonnet-4-6',
   apiKey: 'sk-ant-...',           // Override env var
   baseURL: 'https://proxy.com',   // Custom endpoint
   maxRetries: 5                   // Provider-specific retries
@@ -152,7 +152,7 @@ GOOGLE_API_KEY=...     # → google (3rd)
 ```javascript
 {
   provider: 'bedrock',
-  model: 'anthropic.claude-sonnet-4-20250514-v1:0',
+  model: 'anthropic.claude-sonnet-4-6',
   region: 'us-east-1',
   accessKeyId: 'AKIA...',
   secretAccessKey: '...',
@@ -267,8 +267,8 @@ const agent = new ProbeAgent({
   fallback: {
     strategy: 'custom',
     providers: [
-      { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-      { provider: 'openai', model: 'gpt-4o' },
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'openai', model: 'gpt-5.2' },
       { provider: 'google', model: 'gemini-2.0-flash' }
     ]
   }
@@ -282,9 +282,9 @@ const agent = new ProbeAgent({
   fallback: {
     strategy: 'same-provider',
     models: [
-      'claude-sonnet-4-5-20250929',
-      'claude-3-5-sonnet-20241022',
-      'claude-3-haiku-20240307'
+      'claude-sonnet-4-6',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5-20251001'
     ]
   }
 });

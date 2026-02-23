@@ -262,7 +262,7 @@ async function langchainToolsExample() {
 		console.log(`
 async function chatWithAI(userMessage) {
   const model = new ChatOpenAI({
-    modelName: "gpt-4o",
+    modelName: "gpt-5.2",
     temperature: 0.7
   }).withTools([searchTool, queryTool, extractTool]);
   
@@ -305,7 +305,7 @@ const result = await generateText({
 
 // Example with LangChain
 const model = new ChatOpenAI({
-  modelName: "gpt-4o",
+  modelName: "gpt-5.2",
   temperature: 0.7
 }).withTools([searchTool, queryTool, extractTool]);
 

@@ -101,7 +101,7 @@ const extractTool = tools.createExtractTool();
 
 // Create a ChatOpenAI instance with tools
 const model = new ChatOpenAI({
-  modelName: "gpt-4o",
+  modelName: "gpt-5.2",
   temperature: 0.7
 }).withTools([searchTool, queryTool, extractTool]);
 
@@ -138,7 +138,7 @@ import { StringOutputParser } from '@langchain/core/output_parsers';
 async function createCodeExplainer() {
   // Create a chat model
   const model = new ChatOpenAI({
-    modelName: "gpt-4o",
+    modelName: "gpt-5.2",
     temperature: 0.5
   });
   

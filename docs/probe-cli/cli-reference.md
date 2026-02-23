@@ -283,7 +283,7 @@ probe-chat [PATH] [OPTIONS]
 |--------|----------|
 | `[PATH]` | Path to the codebase to search (overrides `ALLOWED_FOLDERS` env var) |
 | `-d, --debug` | Enable debug mode for verbose logging |
-| `--model-name <model>` | Specify the AI model to use (e.g., `claude-3-opus-20240229`, `gpt-4o`) |
+| `--model-name <model>` | Specify the AI model to use (e.g., `claude-3-opus-20240229`, `gpt-5.2`) |
 | `-f, --force-provider <provider>` | Force a specific provider (`anthropic`, `openai`, `google`) |
 | `-w, --web` | Run in web interface mode instead of CLI |
 | `-p, --port <port>` | Port for web server (default: 8080) |

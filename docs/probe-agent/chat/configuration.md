@@ -26,7 +26,7 @@ GOOGLE_API_KEY=...
 FORCE_PROVIDER=anthropic  # anthropic, openai, google
 
 # Model override
-MODEL_NAME=claude-sonnet-4-5-20250929
+MODEL_NAME=claude-sonnet-4-6
 
 # Custom API endpoints
 LLM_BASE_URL=https://your-proxy.com
@@ -107,7 +107,7 @@ AIDER_ADDITIONAL_ARGS=--no-auto-commits
 ### Claude Code Backend
 
 ```bash
-CLAUDE_CODE_MODEL=claude-3-5-sonnet-20241022
+CLAUDE_CODE_MODEL=claude-sonnet-4-6
 CLAUDE_CODE_MAX_TOKENS=8000
 CLAUDE_CODE_TEMPERATURE=0.3
 CLAUDE_CODE_MAX_TURNS=100
@@ -185,7 +185,7 @@ OTEL_ENABLE_CONSOLE=true
       "timeout": 300000,
       "maxTokens": 8000,
       "temperature": 0.3,
-      "model": "claude-3-5-sonnet-20241022",
+      "model": "claude-sonnet-4-6",
       "systemPrompt": null,
       "tools": ["edit", "search", "bash"],
       "maxTurns": 100
@@ -344,7 +344,7 @@ probe-chat ./my-project
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 export FORCE_PROVIDER=anthropic
-export MODEL_NAME=claude-sonnet-4-5-20250929
+export MODEL_NAME=claude-sonnet-4-6
 export ENABLE_MCP=1
 export DEBUG=true
 

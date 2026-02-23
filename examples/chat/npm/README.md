@@ -50,7 +50,7 @@ You can configure the chat using environment variables:
 
 - `ANTHROPIC_API_KEY`: Your Anthropic API key
 - `OPENAI_API_KEY`: Your OpenAI API key
-- `MODEL_NAME`: The model to use (e.g., 'claude-3-7-sonnet-latest', 'gpt-4o-2024-05-13')
+- `MODEL_NAME`: The model to use (e.g., 'claude-3-7-sonnet-latest', 'gpt-5.2')
 - `ALLOWED_FOLDERS`: Comma-separated list of folders to search in
 - `DEBUG`: Set to 'true' to enable debug mode
 - `ANTHROPIC_API_URL`: Custom Anthropic API URL (optional)
@@ -140,15 +140,15 @@ const systemMessage = tools.DEFAULT_SYSTEM_MESSAGE;
 ### Anthropic Models
 - `claude-3-7-sonnet-latest` (default)
 - `claude-3-7-opus-latest`
-- `claude-3-5-sonnet-20241022`
-- `claude-3-5-sonnet-20240620`
+- `claude-sonnet-4-6`
+- `claude-sonnet-4-6`
 - `claude-3-opus-20240229`
 - `claude-3-sonnet-20240229`
 - `claude-3-haiku-20240307`
 
 ### OpenAI Models
-- `gpt-4o-2024-05-13` (default)
-- `gpt-4o`
+- `gpt-5.2` (default)
+- `gpt-5.2`
 - `gpt-4-turbo`
 - `gpt-4`
 

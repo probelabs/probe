@@ -95,7 +95,7 @@ export class ProbeChat {
         return openai(modelName);
       };
 
-      this.model = this.options.model || 'gpt-4o-2024-05-13';
+      this.model = this.options.model || 'gpt-5.2';
       this.apiType = 'openai';
 
       if (this.options.debug) {

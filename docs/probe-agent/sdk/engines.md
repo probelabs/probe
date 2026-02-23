@@ -14,7 +14,7 @@ const agent = new ProbeAgent({ path: './src' });
 const agent = new ProbeAgent({
   path: './src',
   provider: 'anthropic',
-  model: 'claude-sonnet-4-5-20250929'
+  model: 'claude-sonnet-4-6'
 });
 ```
 
@@ -26,10 +26,10 @@ const agent = new ProbeAgent({
 
 | Provider | Environment Variable | Default Model |
 |----------|---------------------|---------------|
-| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-5-20250929` |
-| OpenAI | `OPENAI_API_KEY` | `gpt-4o` |
-| Google | `GOOGLE_GENERATIVE_AI_API_KEY` | `gemini-2.0-flash-exp` |
-| AWS Bedrock | AWS credentials | `anthropic.claude-sonnet-4-20250514-v1:0` |
+| Anthropic | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| OpenAI | `OPENAI_API_KEY` | `gpt-5.2` |
+| Google | `GOOGLE_GENERATIVE_AI_API_KEY` | `gemini-2.5-flash` |
+| AWS Bedrock | AWS credentials | `anthropic.claude-sonnet-4-6` |
 
 ### CLI-Based Providers
 
@@ -52,12 +52,12 @@ export ANTHROPIC_API_KEY=sk-ant-...
 const agent = new ProbeAgent({
   path: './src',
   provider: 'anthropic',
-  model: 'claude-sonnet-4-5-20250929'  // Optional
+  model: 'claude-sonnet-4-6'  // Optional
 });
 ```
 
 **Available Models:**
-- `claude-sonnet-4-5-20250929` (default)
+- `claude-sonnet-4-6` (default)
 - `claude-opus-4-20250514`
 - `claude-3-haiku-20240307`
 
@@ -71,13 +71,13 @@ export OPENAI_API_KEY=sk-...
 const agent = new ProbeAgent({
   path: './src',
   provider: 'openai',
-  model: 'gpt-4o'  // Optional
+  model: 'gpt-5.2'  // Optional
 });
 ```
 
 **Available Models:**
-- `gpt-4o` (default)
-- `gpt-4o-mini`
+- `gpt-5.2` (default)
+- `gpt-5.2-mini`
 - `gpt-4-turbo`
 
 ### Google Gemini
@@ -90,12 +90,12 @@ export GOOGLE_GENERATIVE_AI_API_KEY=...
 const agent = new ProbeAgent({
   path: './src',
   provider: 'google',
-  model: 'gemini-2.0-flash-exp'  // Optional
+  model: 'gemini-2.5-flash'  // Optional
 });
 ```
 
 **Available Models:**
-- `gemini-2.0-flash-exp` (default)
+- `gemini-2.5-flash` (default)
 - `gemini-1.5-pro`
 - `gemini-1.5-flash`
 
@@ -112,7 +112,7 @@ export AWS_REGION=us-east-1
 const agent = new ProbeAgent({
   path: './src',
   provider: 'bedrock',
-  model: 'anthropic.claude-sonnet-4-20250514-v1:0'  // Optional
+  model: 'anthropic.claude-sonnet-4-6'  // Optional
 });
 ```
 
@@ -243,7 +243,7 @@ const agent = new ProbeAgent({
   provider: 'anthropic',
   fallback: {
     strategy: 'same-model',
-    models: ['claude-sonnet-4-5-20250929']
+    models: ['claude-sonnet-4-6']
   }
 });
 ```
@@ -258,7 +258,7 @@ const agent = new ProbeAgent({
   provider: 'anthropic',
   fallback: {
     strategy: 'same-provider',
-    models: ['claude-sonnet-4-5-20250929', 'claude-3-haiku-20240307']
+    models: ['claude-sonnet-4-6', 'claude-3-haiku-20240307']
   }
 });
 ```
@@ -273,9 +273,9 @@ const agent = new ProbeAgent({
   fallback: {
     strategy: 'custom',
     providers: [
-      { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-      { provider: 'openai', model: 'gpt-4o' },
-      { provider: 'google', model: 'gemini-2.0-flash-exp' }
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'openai', model: 'gpt-5.2' },
+      { provider: 'google', model: 'gemini-2.5-flash' }
     ],
     stopOnSuccess: true,
     maxTotalAttempts: 10
@@ -387,7 +387,7 @@ const agent = new ProbeAgent({
 // Complex analysis: use capable model
 const analyzerAgent = new ProbeAgent({
   provider: 'anthropic',
-  model: 'claude-sonnet-4-5-20250929'
+  model: 'claude-sonnet-4-6'
 });
 
 // Simple queries: use fast model

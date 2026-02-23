@@ -127,7 +127,7 @@ const agent = new ProbeAgent({
 
   // Provider Configuration
   provider: 'anthropic',            // 'anthropic', 'openai', 'google', 'bedrock'
-  model: 'claude-sonnet-4-5-20250929',  // Override default model
+  model: 'claude-sonnet-4-6',  // Override default model
 
   // Behavior
   debug: false,                     // Enable debug output
@@ -180,8 +180,8 @@ const agent = new ProbeAgent({
     strategy: 'any',  // Try any available provider
     // Or custom provider list:
     // providers: [
-    //   { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-    //   { provider: 'openai', model: 'gpt-4o' }
+    //   { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+    //   { provider: 'openai', model: 'gpt-5.2' }
     // ]
   }
 });

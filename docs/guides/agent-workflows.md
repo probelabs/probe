@@ -311,7 +311,7 @@ async function routedAgent(task, complexity) {
     config.model = 'claude-3-haiku-20240307';  // Fast, cost-effective
   } else if (complexity === 'complex') {
     config.provider = 'anthropic';
-    config.model = 'claude-sonnet-4-5-20250929';
+    config.model = 'claude-sonnet-4-6';
   }
 
   const agent = new ProbeAgent(config);
