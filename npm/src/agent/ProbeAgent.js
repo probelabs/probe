@@ -83,7 +83,8 @@ import {
   isJsonSchemaDefinition,
   createSchemaDefinitionCorrectionPrompt,
   validateAndFixMermaidResponse,
-  tryAutoWrapForSimpleSchema
+  tryAutoWrapForSimpleSchema,
+  tryExtractValidJsonPrefix
 } from './schemaUtils.js';
 import { removeThinkingTags, extractThinkingContent } from './xmlParsingUtils.js';
 import { predefinedPrompts } from './shared/prompts.js';
@@ -3027,8 +3028,9 @@ Follow these instructions carefully:
       // +1 for schema formatting
       // +2 for potential Mermaid validation retries (can be multiple diagrams)
       // +1 for potential JSON correction
-      const baseMaxIterations = this.maxIterations || MAX_TOOL_ITERATIONS;
-      const maxIterations = options.schema ? baseMaxIterations + 4 : baseMaxIterations;
+      // _maxIterationsOverride: used by correction calls to cap iterations (issue #447)
+      const baseMaxIterations = options._maxIterationsOverride || this.maxIterations || MAX_TOOL_ITERATIONS;
+      const maxIterations = (options._maxIterationsOverride) ? baseMaxIterations : (options.schema ? baseMaxIterations + 4 : baseMaxIterations);
 
       // Check if we're using CLI-based engines which handle their own agentic loop
       const isClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
@@ -4693,11 +4695,14 @@ Convert your previous response content into actual JSON data that follows this s
                 0
               );
               
+              // Strip schema from correction options to prevent inflated iteration budget (issue #447)
+              const { schema: _unusedSchema1, ...schemaDefCorrectionOptions } = options;
               finalResult = await this.answer(schemaDefinitionPrompt, [], {
-                ...options,
+                ...schemaDefCorrectionOptions,
                 _schemaFormatted: true,
                 _skipValidation: true,  // Skip validation in recursive correction calls to prevent loops
-                _completionPromptProcessed: true  // Prevent cascading completion prompts in retry calls
+                _completionPromptProcessed: true,  // Prevent cascading completion prompts in retry calls
+                _maxIterationsOverride: 3  // Correction should complete in 1-2 iterations (issue #447)
               });
               finalResult = cleanSchemaResponse(finalResult);
               validation = validateJsonResponse(finalResult);
@@ -4753,12 +4758,15 @@ Convert your previous response content into actual JSON data that follows this s
                 );
               }
               
+              // Strip schema from correction options to prevent inflated iteration budget (issue #447)
+              const { schema: _unusedSchema2, ...correctionOptions } = options;
               finalResult = await this.answer(correctionPrompt, [], {
-                ...options,
+                ...correctionOptions,
                 _schemaFormatted: true,
                 _skipValidation: true,  // Skip validation in recursive correction calls to prevent loops
                 _disableTools: true,    // Only allow attempt_completion - prevent AI from using search/query tools
-                _completionPromptProcessed: true  // Prevent cascading completion prompts in retry calls
+                _completionPromptProcessed: true,  // Prevent cascading completion prompts in retry calls
+                _maxIterationsOverride: 3  // Correction should complete in 1-2 iterations (issue #447)
               });
               finalResult = cleanSchemaResponse(finalResult);
               

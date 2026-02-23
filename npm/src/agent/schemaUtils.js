@@ -603,6 +603,17 @@ export function validateJsonResponse(response, options = {}) {
       }
     }
 
+    // Quick recovery: try to extract a valid JSON prefix before returning error.
+    // This handles the common case where AI returns valid JSON followed by markdown content,
+    // e.g., "Unexpected non-whitespace character after JSON at position 477" (issue #447).
+    const prefixResult = tryExtractValidJsonPrefix(responseToValidate, { schema, debug });
+    if (prefixResult && prefixResult.isValid) {
+      if (debug) {
+        console.log(`[DEBUG] JSON validation: Recovered valid JSON prefix (${prefixResult.extracted.length} chars) from response with trailing content`);
+      }
+      return { isValid: true, parsed: prefixResult.parsed };
+    }
+
     // Create enhanced error message with context snippet
     let enhancedError = error.message;
     let errorContext = null;
@@ -664,6 +675,122 @@ ${pointer} here`;
       enhancedError: enhancedError,
       errorContext: errorContext
     };
+  }
+}
+
+/**
+ * Try to extract a valid JSON prefix from a string that has trailing non-JSON content.
+ * This handles the common case where an AI returns valid JSON followed by markdown text.
+ *
+ * Uses bracket-matching to find the end of the first complete JSON object/array,
+ * then validates the prefix with JSON.parse(). Optionally validates against a schema.
+ *
+ * @param {string} response - The full response string
+ * @param {Object} [options] - Options
+ * @param {Object|string} [options.schema] - JSON schema to validate against
+ * @param {boolean} [options.debug=false] - Enable debug logging
+ * @returns {Object|null} - {isValid: true, parsed: Object, extracted: string} or null if no valid prefix found
+ */
+export function tryExtractValidJsonPrefix(response, options = {}) {
+  const { schema = null, debug = false } = options;
+
+  if (!response || typeof response !== 'string') {
+    return null;
+  }
+
+  const trimmed = response.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  // Must start with { or [
+  const firstChar = trimmed[0];
+  if (firstChar !== '{' && firstChar !== '[') {
+    return null;
+  }
+
+  // First, check if the full string already parses - no need to extract prefix
+  try {
+    JSON.parse(trimmed);
+    return null; // Full string is valid JSON, no extraction needed
+  } catch {
+    // Expected - continue with prefix extraction
+  }
+
+  // Find the end of the first complete JSON object/array using bracket matching
+  const openChar = firstChar;
+  const closeChar = openChar === '{' ? '}' : ']';
+  let depth = 0;
+  let inString = false;
+  let escapeNext = false;
+  let endPos = -1;
+
+  for (let i = 0; i < trimmed.length; i++) {
+    const char = trimmed[i];
+
+    if (escapeNext) {
+      escapeNext = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escapeNext = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      continue;
+    }
+
+    if (char === openChar) {
+      depth++;
+    } else if (char === closeChar) {
+      depth--;
+      if (depth === 0) {
+        endPos = i + 1;
+        break;
+      }
+    }
+  }
+
+  if (endPos <= 0 || endPos >= trimmed.length) {
+    return null; // No complete JSON found, or JSON spans the entire string
+  }
+
+  // Check that there's actual non-whitespace trailing content
+  const remainder = trimmed.substring(endPos).trim();
+  if (remainder.length === 0) {
+    return null; // Only whitespace after JSON, no trailing content issue
+  }
+
+  // Try to parse the prefix
+  const prefix = trimmed.substring(0, endPos);
+  try {
+    const parsed = JSON.parse(prefix);
+
+    if (debug) {
+      console.log(`[DEBUG] tryExtractValidJsonPrefix: Extracted valid JSON prefix (${prefix.length} chars), stripped trailing content (${remainder.length} chars)`);
+    }
+
+    // If schema provided, validate against it
+    if (schema) {
+      const schemaValidation = validateJsonResponse(prefix, { debug, schema });
+      if (!schemaValidation.isValid) {
+        if (debug) {
+          console.log(`[DEBUG] tryExtractValidJsonPrefix: Prefix is valid JSON but fails schema validation: ${schemaValidation.error}`);
+        }
+        return null;
+      }
+    }
+
+    return { isValid: true, parsed, extracted: prefix };
+  } catch {
+    return null;
   }
 }
 
