@@ -438,6 +438,470 @@ describe('Bash Permission Telemetry', () => {
   });
 });
 
+describe('Pattern "git:push" matches push with all CLI flags', () => {
+  test('git:push pattern matches bare "git push"', () => {
+    const parsed = { command: 'git', args: ['push'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push origin main"', () => {
+    const parsed = { command: 'git', args: ['push', 'origin', 'main'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push --force"', () => {
+    const parsed = { command: 'git', args: ['push', '--force'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push --force-with-lease origin main"', () => {
+    const parsed = { command: 'git', args: ['push', '--force-with-lease', 'origin', 'main'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push -u origin feature-branch"', () => {
+    const parsed = { command: 'git', args: ['push', '-u', 'origin', 'feature-branch'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push --set-upstream origin HEAD"', () => {
+    const parsed = { command: 'git', args: ['push', '--set-upstream', 'origin', 'HEAD'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push --tags"', () => {
+    const parsed = { command: 'git', args: ['push', '--tags'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push --delete origin old-branch"', () => {
+    const parsed = { command: 'git', args: ['push', '--delete', 'origin', 'old-branch'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern matches "git push origin HEAD:refs/for/main"', () => {
+    const parsed = { command: 'git', args: ['push', 'origin', 'HEAD:refs/for/main'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(true);
+  });
+
+  test('git:push pattern does NOT match "git pull"', () => {
+    const parsed = { command: 'git', args: ['pull'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(false);
+  });
+
+  test('git:push pattern does NOT match "git status"', () => {
+    const parsed = { command: 'git', args: ['status'] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(false);
+  });
+
+  test('git:push pattern does NOT match bare "git" (no subcommand)', () => {
+    const parsed = { command: 'git', args: [] };
+    expect(matchesPattern(parsed, 'git:push')).toBe(false);
+  });
+
+  test('git:push deny works end-to-end via BashPermissionChecker', () => {
+    const checker = new BashPermissionChecker({ debug: false });
+
+    // All of these should be denied by the default deny list containing "git:push"
+    const pushCommands = [
+      'git push',
+      'git push origin main',
+      'git push --force',
+      'git push --force-with-lease origin main',
+      'git push -u origin feature',
+      'git push --set-upstream origin HEAD',
+      'git push --tags',
+      'git push --delete origin old-branch',
+      'git push --all',
+      'git push --mirror',
+      'git push origin HEAD:refs/for/main',
+    ];
+
+    for (const cmd of pushCommands) {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('deny pattern');
+    }
+  });
+
+  test('git:push allow pattern permits all push variants when deny is disabled', () => {
+    const checker = new BashPermissionChecker({
+      allow: ['git:push'],
+      disableDefaultAllow: true,
+      disableDefaultDeny: true,
+      debug: false
+    });
+
+    const pushCommands = [
+      'git push',
+      'git push origin main',
+      'git push --force',
+      'git push -u origin feature',
+      'git push --tags',
+    ];
+
+    for (const cmd of pushCommands) {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(true);
+    }
+
+    // But non-push git commands should NOT be allowed
+    expect(checker.check('git status').allowed).toBe(false);
+    expect(checker.check('git pull').allowed).toBe(false);
+    expect(checker.check('ls').allowed).toBe(false);
+  });
+
+  test('git:push:* is redundant when git:push exists (both match same commands)', () => {
+    // Demonstrate that git:push already covers everything git:push:* covers
+    const pushVariants = [
+      { command: 'git', args: ['push'] },
+      { command: 'git', args: ['push', 'origin'] },
+      { command: 'git', args: ['push', '--force'] },
+      { command: 'git', args: ['push', 'origin', 'main'] },
+      { command: 'git', args: ['push', '--force-with-lease', 'origin', 'main'] },
+    ];
+
+    for (const parsed of pushVariants) {
+      const matchesPush = matchesPattern(parsed, 'git:push');
+      const matchesPushStar = matchesPattern(parsed, 'git:push:*');
+      // Both patterns match the same set of commands
+      expect(matchesPush).toBe(true);
+      expect(matchesPushStar).toBe(true);
+    }
+  });
+});
+
+describe('Git read-only allow and destructive deny patterns', () => {
+  let checker;
+
+  beforeEach(() => {
+    checker = new BashPermissionChecker({ debug: false });
+  });
+
+  describe('Additional git read-only commands are allowed', () => {
+    const allowedGitCommands = [
+      'git status',
+      'git status --short',
+      'git log --oneline -10',
+      'git diff HEAD~1',
+      'git show HEAD',
+      'git branch -a',
+      'git branch --list',
+      'git tag -l',
+      'git tag --list',
+      'git remote -v',
+      'git blame src/main.rs',
+      'git shortlog -s -n',
+      'git reflog show',
+      'git ls-files --cached',
+      'git ls-tree HEAD',
+      'git ls-remote origin',
+      'git rev-parse HEAD',
+      'git rev-list --count HEAD',
+      'git cat-file -t HEAD',
+      'git diff-tree --no-commit-id -r HEAD',
+      'git diff-files --stat',
+      'git diff-index HEAD',
+      'git for-each-ref refs/heads',
+      'git merge-base main feature',
+      'git name-rev HEAD',
+      'git count-objects -v',
+      'git verify-commit HEAD',
+      'git verify-tag v1.0',
+      'git check-ignore node_modules',
+      'git check-attr diff README.md',
+      'git stash list',
+      'git stash show 0',
+      'git worktree list',
+      'git notes list',
+      'git notes show HEAD',
+      'git describe --tags',
+      'git config user.name',
+    ];
+
+    test.each(allowedGitCommands)('allows "%s"', (cmd) => {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe('Destructive git commands are denied', () => {
+    const deniedGitCommands = [
+      'git push',
+      'git push origin main',
+      'git push --force',
+      'git push --force-with-lease origin main',
+      'git reset HEAD~1',
+      'git reset --hard HEAD~1',
+      'git reset --soft HEAD~1',
+      'git clean -fd',
+      'git clean -f',
+      'git rm file.txt',
+      'git rm -r directory/',
+      'git commit -m "message"',
+      'git commit --amend',
+      'git merge feature-branch',
+      'git merge --no-ff feature',
+      'git rebase main',
+      'git rebase -i HEAD~3',
+      'git cherry-pick abc123',
+      'git stash drop',
+      'git stash drop 0',
+      'git stash pop',
+      'git stash pop 0',
+      'git stash push -m "wip"',
+      'git stash clear',
+      'git branch -d feature',
+      'git branch -D feature',
+      'git branch --delete feature',
+      'git tag -d v1.0',
+      'git tag --delete v1.0',
+      'git remote remove origin',
+      'git remote rm upstream',
+      'git checkout --force main',
+      'git checkout -f main',
+      'git submodule deinit my-module',
+      'git notes add -m "note"',
+      'git notes remove HEAD',
+      'git worktree add ../feature feature-branch',
+      'git worktree remove ../feature',
+    ];
+
+    test.each(deniedGitCommands)('denies "%s"', (cmd) => {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  describe('Deny takes precedence over allow for destructive branch/tag/remote ops', () => {
+    test('git branch -D is denied even though git:branch:* is in allow list', () => {
+      const result = checker.check('git branch -D feature-branch');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('deny pattern');
+    });
+
+    test('git tag -d is denied even though git:tag:* is in allow list', () => {
+      const result = checker.check('git tag -d v1.0');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('deny pattern');
+    });
+
+    test('git remote remove is denied even though git:remote:* is in allow list', () => {
+      const result = checker.check('git remote remove origin');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain('deny pattern');
+    });
+  });
+});
+
+describe('GitHub CLI (gh) read-only allow and write deny patterns', () => {
+  let checker;
+
+  beforeEach(() => {
+    checker = new BashPermissionChecker({ debug: false });
+  });
+
+  describe('gh read-only commands are allowed', () => {
+    const allowedGhCommands = [
+      'gh --version',
+      'gh help',
+      'gh status',
+      'gh auth status',
+      'gh issue list',
+      'gh issue list --state open',
+      'gh issue view 123',
+      'gh issue view 123 --comments',
+      'gh issue status',
+      'gh pr list',
+      'gh pr list --state merged',
+      'gh pr view 456',
+      'gh pr view 456 --comments',
+      'gh pr status',
+      'gh pr diff 456',
+      'gh pr checks 456',
+      'gh repo list',
+      'gh repo view owner/repo',
+      'gh release list',
+      'gh release view v1.0',
+      'gh run list',
+      'gh run view 789',
+      'gh workflow list',
+      'gh workflow view deploy.yml',
+      'gh gist list',
+      'gh gist view abc123',
+      'gh search issues "bug"',
+      'gh search prs "fix"',
+      'gh search repos "probe"',
+      'gh search code "function"',
+      'gh search commits "fix bug"',
+      'gh api repos/owner/repo/pulls',
+      'gh api /user',
+    ];
+
+    test.each(allowedGhCommands)('allows "%s"', (cmd) => {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe('gh write/mutating commands are denied', () => {
+    const deniedGhCommands = [
+      'gh issue create --title "new issue"',
+      'gh issue close 123',
+      'gh issue delete 123',
+      'gh issue edit 123 --title "updated"',
+      'gh issue reopen 123',
+      'gh issue comment 123 --body "hello"',
+      'gh pr create --title "new PR"',
+      'gh pr close 456',
+      'gh pr merge 456',
+      'gh pr edit 456 --title "updated"',
+      'gh pr reopen 456',
+      'gh pr review 456 --approve',
+      'gh pr comment 456 --body "lgtm"',
+      'gh repo create my-repo',
+      'gh repo delete owner/repo',
+      'gh repo fork owner/repo',
+      'gh repo rename new-name',
+      'gh repo archive owner/repo',
+      'gh repo clone owner/repo',
+      'gh release create v2.0',
+      'gh release delete v1.0',
+      'gh release edit v1.0 --notes "updated"',
+      'gh run cancel 789',
+      'gh run rerun 789',
+      'gh workflow run deploy.yml',
+      'gh workflow enable deploy.yml',
+      'gh workflow disable deploy.yml',
+      'gh gist create file.txt',
+      'gh gist delete abc123',
+      'gh gist edit abc123',
+      'gh secret set MY_SECRET',
+      'gh secret delete MY_SECRET',
+      'gh variable set MY_VAR',
+      'gh variable delete MY_VAR',
+      'gh label create "bug"',
+      'gh label delete "bug"',
+      'gh ssh-key add key.pub',
+      'gh ssh-key delete 123',
+    ];
+
+    test.each(deniedGhCommands)('denies "%s"', (cmd) => {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(false);
+    });
+  });
+});
+
+describe('Complex commands with && || and pipes', () => {
+  let checker;
+
+  beforeEach(() => {
+    checker = new BashPermissionChecker({ debug: false });
+  });
+
+  describe('Allowed complex commands (all components safe)', () => {
+    const allowedComplex = [
+      'cd /tmp && git status',
+      'cd /tmp && ls -la',
+      'git status && git log --oneline -5',
+      'git diff HEAD~1 && git log --oneline',
+      'echo hello && pwd',
+      'ls -la || echo "no files"',
+      'cat package.json | grep name',
+      'git log --oneline | head -10',
+      'git branch -a | grep feature',
+      'git diff --stat | tail -5',
+      'gh pr list | grep open',
+      'gh issue list --state open | head -5',
+      'cd src && ls && pwd',
+      'git status && git diff && git log --oneline -3',
+      'echo "starting" && git status && echo "done"',
+      'ls src/ || ls lib/ || echo "not found"',
+      'git rev-parse HEAD && git log --oneline -1',
+      'gh pr view 123 | grep title',
+      'git ls-files | wc -l',
+      'git shortlog -s -n | head -10',
+    ];
+
+    test.each(allowedComplex)('allows "%s"', (cmd) => {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+    });
+  });
+
+  describe('Denied complex commands (at least one component unsafe)', () => {
+    const deniedComplex = [
+      'cd /tmp && git push origin main',
+      'git status && git commit -m "auto"',
+      'git diff && git reset --hard HEAD',
+      'echo "deploying" && git push --force',
+      'ls && rm -rf /tmp/cache',
+      'git log && git rebase main',
+      'git status && git merge feature',
+      'git branch -a && git branch -D old-branch',
+      'git tag -l && git tag -d v1.0',
+      'echo "cleaning" && git clean -fd',
+      'git status | git push',
+      'gh pr list && gh pr merge 456',
+      'gh issue list && gh issue close 123',
+      'cd /tmp && npm install express',
+      'ls && sudo rm -rf /',
+      'git diff && git cherry-pick abc123',
+      'echo ok && gh repo delete owner/repo',
+      'git remote -v && git remote remove origin',
+      'git stash list && git stash drop',
+      'git log && git commit -m "msg" && git push',
+    ];
+
+    test.each(deniedComplex)('denies "%s"', (cmd) => {
+      const result = checker.check(cmd);
+      expect(result.allowed).toBe(false);
+      expect(result.isComplex).toBe(true);
+    });
+  });
+
+  describe('Mixed operator chains', () => {
+    test('allows three safe commands chained with &&', () => {
+      const result = checker.check('pwd && ls && echo done');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+      expect(result.allowedByComponents).toBe(true);
+    });
+
+    test('denies if last command in chain is unsafe', () => {
+      const result = checker.check('git status && git diff && git push');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('denies if first command in chain is unsafe', () => {
+      const result = checker.check('git push && git status && ls');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('denies if middle command in chain is unsafe', () => {
+      const result = checker.check('git status && git commit -m "x" && git log');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('allows piped safe git and gh commands', () => {
+      const result = checker.check('gh pr list --json number | grep 42');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('allows || fallback between safe commands', () => {
+      const result = checker.check('git describe --tags || git rev-parse --short HEAD');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('denies pipe into unsafe command', () => {
+      const result = checker.check('echo "y" | rm -rf /tmp/data');
+      expect(result.allowed).toBe(false);
+    });
+  });
+});
+
 describe('Security Tests (Updated)', () => {
   let checker;
 
