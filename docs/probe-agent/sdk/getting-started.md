@@ -144,8 +144,8 @@ const agent = new ProbeAgent({
   allowEdit: true,     // Enable edit/create tools
   enableBash: true,    // Enable bash command execution
   bashConfig: {
-    allow: ['npm test', 'npm run build'],  // Allowed commands
-    deny: ['rm -rf']                        // Blocked commands
+    allow: ['git:push'],              // Override default deny (priority 2)
+    deny: ['git:push:--force']        // Always block (priority 1)
   }
 });
 ```

@@ -545,8 +545,8 @@ const agent = new ProbeAgent({
   path: './src',
   enableBash: true,
   bashConfig: {
-    allow: ['npm test', 'npm run *', 'git status'],
-    deny: ['rm -rf', 'sudo *'],
+    allow: ['git:push'],                // Override default deny for git push
+    deny: ['git:push:--force'],         // But always block force push
     disableDefaultAllow: false,
     disableDefaultDeny: false,
     debug: false
@@ -554,16 +554,25 @@ const agent = new ProbeAgent({
 });
 ```
 
+**Permission Priority (highest to lowest):**
+1. **Custom deny** (`bashConfig.deny`) — always blocks, cannot be overridden
+2. **Custom allow** (`bashConfig.allow`) — overrides default deny patterns
+3. **Default deny** — built-in list of dangerous commands
+4. **Allow list** — built-in + custom allow patterns for safe commands
+
+This means `--bash-allow "git:push"` overrides the default deny for `git push` without disabling any other default protections. See the [Security Guide](../../guides/security.md#permission-resolution-priority) for detailed examples.
+
 **Default Allowed Commands:**
-- `npm`, `yarn`, `pnpm` (package managers)
-- `node`, `npx` (Node.js)
-- `git` (version control)
-- `cat`, `ls`, `pwd`, `echo` (basic utilities)
+- `ls`, `cat`, `head`, `tail`, `find`, `grep` (file exploration)
+- `git:status`, `git:log`, `git:diff`, `git:show`, `git:branch` (git read-only)
+- `gh:issue:list`, `gh:pr:view`, `gh:search:*`, `gh:api` (GitHub CLI reads)
+- `npm:list`, `pip:list` (package info)
 
 **Default Denied Commands:**
-- `rm -rf /`, `rm -rf ~` (destructive)
-- `sudo` (privilege escalation)
-- `chmod 777` (dangerous permissions)
+- `rm:-rf`, `sudo`, `chmod:777` (destructive/privilege escalation)
+- `git:push`, `git:reset`, `git:commit`, `git:merge` (git write operations)
+- `gh:issue:create`, `gh:pr:merge`, `gh:repo:delete` (GitHub CLI writes)
+- `npm:install`, `pip:install` (package installation)
 
 ---
 

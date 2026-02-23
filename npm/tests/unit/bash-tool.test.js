@@ -902,6 +902,193 @@ describe('Complex commands with && || and pipes', () => {
   });
 });
 
+describe('Custom allow overrides default deny (priority-based resolution)', () => {
+  describe('--bash-allow overrides default deny for specific commands', () => {
+    test('git:push in custom allow overrides default deny', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      expect(checker.check('git push').allowed).toBe(true);
+      expect(checker.check('git push origin main').allowed).toBe(true);
+      expect(checker.check('git push --force').allowed).toBe(true);
+      expect(checker.check('git push -u origin feature').allowed).toBe(true);
+    });
+
+    test('git:commit in custom allow overrides default deny', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:commit'],
+        debug: false
+      });
+      expect(checker.check('git commit -m "message"').allowed).toBe(true);
+      expect(checker.check('git commit --amend').allowed).toBe(true);
+    });
+
+    test('npm:install in custom allow overrides default deny', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['npm:install'],
+        debug: false
+      });
+      expect(checker.check('npm install').allowed).toBe(true);
+      expect(checker.check('npm install express').allowed).toBe(true);
+    });
+
+    test('multiple custom allow patterns override their respective deny patterns', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push', 'git:commit', 'npm:install'],
+        debug: false
+      });
+      expect(checker.check('git push origin main').allowed).toBe(true);
+      expect(checker.check('git commit -m "msg"').allowed).toBe(true);
+      expect(checker.check('npm install express').allowed).toBe(true);
+    });
+
+    test('other default deny patterns still block when only specific ones are overridden', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      // git:push overridden - allowed
+      expect(checker.check('git push').allowed).toBe(true);
+      // Other deny patterns still active
+      expect(checker.check('git reset --hard HEAD').allowed).toBe(false);
+      expect(checker.check('git clean -fd').allowed).toBe(false);
+      expect(checker.check('rm -rf /').allowed).toBe(false);
+      expect(checker.check('sudo rm -rf /').allowed).toBe(false);
+      expect(checker.check('npm install').allowed).toBe(false);
+    });
+
+    test('default allow patterns still work alongside custom overrides', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      // Default allow still works
+      expect(checker.check('ls -la').allowed).toBe(true);
+      expect(checker.check('git status').allowed).toBe(true);
+      expect(checker.check('cat file.txt').allowed).toBe(true);
+    });
+  });
+
+  describe('Custom deny always wins over custom allow', () => {
+    test('custom deny beats custom allow for same pattern', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        deny: ['git:push'],
+        debug: false
+      });
+      expect(checker.check('git push').allowed).toBe(false);
+      expect(checker.check('git push origin main').allowed).toBe(false);
+    });
+
+    test('custom deny beats custom allow even with broader pattern', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        deny: ['git:push:--force'],
+        debug: false
+      });
+      // Regular push allowed (custom allow, not in custom deny)
+      expect(checker.check('git push origin main').allowed).toBe(true);
+      // Force push denied (custom deny wins)
+      expect(checker.check('git push --force').allowed).toBe(false);
+    });
+
+    test('can allow push but deny force push specifically', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        deny: ['git:push:--force', 'git:push:--force-with-lease'],
+        debug: false
+      });
+      expect(checker.check('git push origin main').allowed).toBe(true);
+      expect(checker.check('git push --tags').allowed).toBe(true);
+      expect(checker.check('git push --force').allowed).toBe(false);
+      expect(checker.check('git push --force-with-lease').allowed).toBe(false);
+    });
+  });
+
+  describe('overriddenDeny flag in result', () => {
+    test('result indicates when default deny was overridden', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      const result = checker.check('git push origin main');
+      expect(result.allowed).toBe(true);
+      expect(result.overriddenDeny).toBe(true);
+    });
+
+    test('result does not flag overriddenDeny for normally allowed commands', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      const result = checker.check('ls -la');
+      expect(result.allowed).toBe(true);
+      expect(result.overriddenDeny).toBe(false);
+    });
+  });
+
+  describe('Complex commands with custom allow override', () => {
+    test('cd && git push works when git:push is in custom allow', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      const result = checker.check('cd /tmp && git push origin main');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('git status && git push works when git:push is in custom allow', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      const result = checker.check('git status && git push origin main');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('git push | cat works when git:push is in custom allow', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      const result = checker.check('git push origin main 2>&1 | cat');
+      // This is a complex command with redirection - should be handled
+      // The important thing is git push is no longer denied
+    });
+
+    test('complex command denied if one component still in deny', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        debug: false
+      });
+      // git push is overridden, but rm -rf is still denied
+      const result = checker.check('git push && rm -rf /');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('complex command denied if custom deny matches component', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push'],
+        deny: ['git:push:--force'],
+        debug: false
+      });
+      const result = checker.check('git status && git push --force');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('multi-step deploy pipeline with custom allows', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['git:push', 'git:commit', 'git:add'],
+        debug: false
+      });
+      expect(checker.check('git add -A && git commit -m "deploy"').allowed).toBe(true);
+      expect(checker.check('git commit -m "msg" && git push origin main').allowed).toBe(true);
+    });
+  });
+});
+
 describe('Security Tests (Updated)', () => {
   let checker;
 

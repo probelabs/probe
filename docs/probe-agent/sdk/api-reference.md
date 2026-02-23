@@ -205,11 +205,13 @@ interface ProbeAgentOptions {
   searchDelegate?: boolean;
 
   // Bash Configuration
+  // Priority: custom deny > custom allow > default deny > allow list
+  // See security guide for details
   bashConfig?: {
-    allow?: string[];
-    deny?: string[];
-    disableDefaultAllow?: boolean;
-    disableDefaultDeny?: boolean;
+    allow?: string[];                // Override default deny (e.g., ['git:push'])
+    deny?: string[];                 // Always block (e.g., ['git:push:--force'])
+    disableDefaultAllow?: boolean;   // Remove built-in allow list
+    disableDefaultDeny?: boolean;    // Remove built-in deny list (not recommended)
     debug?: boolean;
   };
 

@@ -134,13 +134,25 @@ probe-chat --allow-edit --implement-tool-backend claude-code ./src
 | Flag | Description |
 |------|-------------|
 | `--enable-bash` | Enable bash commands |
-| `--bash-allow <patterns>` | Additional allowed patterns |
-| `--bash-deny <patterns>` | Additional denied patterns |
+| `--bash-allow <patterns>` | Allow patterns (override default deny) |
+| `--bash-deny <patterns>` | Deny patterns (always win, highest priority) |
+| `--no-default-bash-allow` | Disable built-in allow list |
+| `--no-default-bash-deny` | Disable built-in deny list (not recommended) |
 | `--bash-timeout <ms>` | Command timeout |
 
+Patterns use colon-separated syntax: `git:push`, `npm:install`, `git:push:--force`.
+
+**Priority:** Custom deny > Custom allow > Default deny > Allow list. Use `--bash-allow` to selectively override default deny patterns without weakening other protections.
+
 ```bash
-probe-chat --enable-bash --bash-timeout 60000 ./src
+# Allow git push but block force push
+probe-chat --enable-bash \
+  --bash-allow "git:push" \
+  --bash-deny "git:push:--force" \
+  ./src
 ```
+
+See the [Security Guide](../../guides/security.md#permission-resolution-priority) for detailed priority rules and examples.
 
 ### Tool Iterations
 

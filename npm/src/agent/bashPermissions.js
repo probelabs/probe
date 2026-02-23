@@ -79,9 +79,19 @@ function matchesAnyPattern(parsedCommand, patterns) {
 export class BashPermissionChecker {
   /**
    * Create a permission checker
+   *
+   * Priority order (highest to lowest):
+   *   1. Custom deny  — always blocks (user explicitly blocked it)
+   *   2. Custom allow — overrides default deny (user explicitly allowed it)
+   *   3. Default deny — blocks by default
+   *   4. Allow list   — allows recognized safe commands
+   *
+   * This means `--bash-allow "git:push"` overrides the default deny for git:push
+   * without requiring `--no-default-bash-deny`.
+   *
    * @param {Object} config - Configuration options
-   * @param {string[]} [config.allow] - Additional allow patterns
-   * @param {string[]} [config.deny] - Additional deny patterns
+   * @param {string[]} [config.allow] - Additional allow patterns (override default deny)
+   * @param {string[]} [config.deny] - Additional deny patterns (always win)
    * @param {boolean} [config.disableDefaultAllow] - Disable default allow list
    * @param {boolean} [config.disableDefaultDeny] - Disable default deny list
    * @param {boolean} [config.debug] - Enable debug logging
@@ -90,38 +100,19 @@ export class BashPermissionChecker {
   constructor(config = {}) {
     this.debug = config.debug || false;
     this.tracer = config.tracer || null;
-    
-    // Build allow patterns
-    this.allowPatterns = [];
-    if (!config.disableDefaultAllow) {
-      this.allowPatterns.push(...DEFAULT_ALLOW_PATTERNS);
-      if (this.debug) {
-        console.log(`[BashPermissions] Added ${DEFAULT_ALLOW_PATTERNS.length} default allow patterns`);
-      }
-    }
-    if (config.allow && Array.isArray(config.allow)) {
-      this.allowPatterns.push(...config.allow);
-      if (this.debug) {
-        console.log(`[BashPermissions] Added ${config.allow.length} custom allow patterns:`, config.allow);
-      }
-    }
 
-    // Build deny patterns
-    this.denyPatterns = [];
-    if (!config.disableDefaultDeny) {
-      this.denyPatterns.push(...DEFAULT_DENY_PATTERNS);
-      if (this.debug) {
-        console.log(`[BashPermissions] Added ${DEFAULT_DENY_PATTERNS.length} default deny patterns`);
-      }
-    }
-    if (config.deny && Array.isArray(config.deny)) {
-      this.denyPatterns.push(...config.deny);
-      if (this.debug) {
-        console.log(`[BashPermissions] Added ${config.deny.length} custom deny patterns:`, config.deny);
-      }
-    }
+    // Separate default and custom patterns for priority-based resolution
+    this.defaultAllowPatterns = config.disableDefaultAllow ? [] : [...DEFAULT_ALLOW_PATTERNS];
+    this.customAllowPatterns = (config.allow && Array.isArray(config.allow)) ? [...config.allow] : [];
+    this.allowPatterns = [...this.defaultAllowPatterns, ...this.customAllowPatterns];
+
+    this.defaultDenyPatterns = config.disableDefaultDeny ? [] : [...DEFAULT_DENY_PATTERNS];
+    this.customDenyPatterns = (config.deny && Array.isArray(config.deny)) ? [...config.deny] : [];
+    this.denyPatterns = [...this.defaultDenyPatterns, ...this.customDenyPatterns];
 
     if (this.debug) {
+      console.log(`[BashPermissions] Default allow: ${this.defaultAllowPatterns.length}, Custom allow: ${this.customAllowPatterns.length}`);
+      console.log(`[BashPermissions] Default deny: ${this.defaultDenyPatterns.length}, Custom deny: ${this.customDenyPatterns.length}`);
       console.log(`[BashPermissions] Total patterns - Allow: ${this.allowPatterns.length}, Deny: ${this.denyPatterns.length}`);
     }
 
@@ -129,8 +120,8 @@ export class BashPermissionChecker {
     this.recordBashEvent('permissions.initialized', {
       allowPatternCount: this.allowPatterns.length,
       denyPatternCount: this.denyPatterns.length,
-      hasCustomAllowPatterns: !!(config.allow && config.allow.length > 0),
-      hasCustomDenyPatterns: !!(config.deny && config.deny.length > 0),
+      hasCustomAllowPatterns: this.customAllowPatterns.length > 0,
+      hasCustomDenyPatterns: this.customDenyPatterns.length > 0,
       disableDefaultAllow: !!config.disableDefaultAllow,
       disableDefaultDeny: !!config.disableDefaultDeny
     });
@@ -212,9 +203,18 @@ export class BashPermissionChecker {
       console.log(`[BashPermissions] Parsed: ${parsed.command} with args: [${parsed.args.join(', ')}]`);
     }
 
-    // Check deny patterns first (deny takes precedence)
-    if (matchesAnyPattern(parsed, this.denyPatterns)) {
-      const matchedPatterns = this.denyPatterns.filter(pattern => matchesPattern(parsed, pattern));
+    // Priority-based permission check:
+    // 1. Custom deny always wins
+    // 2. Custom allow overrides default deny
+    // 3. Default deny blocks
+    // 4. Allow list permits
+
+    // Step 1: Custom deny always wins
+    if (matchesAnyPattern(parsed, this.customDenyPatterns)) {
+      const matchedPatterns = this.customDenyPatterns.filter(pattern => matchesPattern(parsed, pattern));
+      if (this.debug) {
+        console.log(`[BashPermissions] DENIED - matches custom deny pattern: ${matchedPatterns[0]}`);
+      }
       const result = {
         allowed: false,
         reason: `Command matches deny pattern: ${matchedPatterns[0]}`,
@@ -227,12 +227,40 @@ export class BashPermissionChecker {
         parsedCommand: parsed.command,
         reason: 'matches_deny_pattern',
         matchedPattern: matchedPatterns[0],
-        isComplex: false
+        isComplex: false,
+        isCustomDeny: true
       });
       return result;
     }
 
-    // Check allow patterns
+    // Step 2: Custom allow overrides default deny
+    const matchesCustomAllow = matchesAnyPattern(parsed, this.customAllowPatterns);
+
+    // Step 3: Default deny (skipped if custom allow matches)
+    if (!matchesCustomAllow && matchesAnyPattern(parsed, this.defaultDenyPatterns)) {
+      const matchedPatterns = this.defaultDenyPatterns.filter(pattern => matchesPattern(parsed, pattern));
+      if (this.debug) {
+        console.log(`[BashPermissions] DENIED - matches default deny pattern: ${matchedPatterns[0]}`);
+      }
+      const result = {
+        allowed: false,
+        reason: `Command matches deny pattern: ${matchedPatterns[0]}`,
+        command: command,
+        parsed: parsed,
+        matchedPatterns: matchedPatterns
+      };
+      this.recordBashEvent('permission.denied', {
+        command,
+        parsedCommand: parsed.command,
+        reason: 'matches_deny_pattern',
+        matchedPattern: matchedPatterns[0],
+        isComplex: false,
+        isCustomDeny: false
+      });
+      return result;
+    }
+
+    // Step 4: Check allow patterns
     if (this.allowPatterns.length > 0) {
       if (!matchesAnyPattern(parsed, this.allowPatterns)) {
         const result = {
@@ -256,17 +284,23 @@ export class BashPermissionChecker {
       allowed: true,
       command: command,
       parsed: parsed,
-      isComplex: false
+      isComplex: false,
+      overriddenDeny: matchesCustomAllow && matchesAnyPattern(parsed, this.defaultDenyPatterns)
     };
 
     if (this.debug) {
-      console.log(`[BashPermissions] ALLOWED - command passed all checks`);
+      if (result.overriddenDeny) {
+        console.log(`[BashPermissions] ALLOWED - custom allow overrides default deny`);
+      } else {
+        console.log(`[BashPermissions] ALLOWED - command passed all checks`);
+      }
     }
 
     this.recordBashEvent('permission.allowed', {
       command,
       parsedCommand: parsed.command,
-      isComplex: false
+      isComplex: false,
+      overriddenDeny: result.overriddenDeny || false
     });
 
     return result;
@@ -477,10 +511,11 @@ export class BashPermissionChecker {
           break;
         }
 
-        // Check against deny patterns
-        if (matchesAnyPattern(parsed, this.denyPatterns)) {
+        // Check using same priority logic as simple commands:
+        // 1. Custom deny always wins
+        if (matchesAnyPattern(parsed, this.customDenyPatterns)) {
           if (this.debug) {
-            console.log(`[BashPermissions] Component "${component}" matches deny pattern`);
+            console.log(`[BashPermissions] Component "${component}" matches custom deny pattern`);
           }
           allAllowed = false;
           deniedComponent = component;
@@ -488,7 +523,21 @@ export class BashPermissionChecker {
           break;
         }
 
-        // Check against allow patterns
+        // 2. Custom allow overrides default deny
+        const componentMatchesCustomAllow = matchesAnyPattern(parsed, this.customAllowPatterns);
+
+        // 3. Default deny (skipped if custom allow matches)
+        if (!componentMatchesCustomAllow && matchesAnyPattern(parsed, this.defaultDenyPatterns)) {
+          if (this.debug) {
+            console.log(`[BashPermissions] Component "${component}" matches default deny pattern`);
+          }
+          allAllowed = false;
+          deniedComponent = component;
+          deniedReason = 'Component matches deny pattern';
+          break;
+        }
+
+        // 4. Check allow patterns
         if (!matchesAnyPattern(parsed, this.allowPatterns)) {
           if (this.debug) {
             console.log(`[BashPermissions] Component "${component}" not in allow list`);
@@ -567,6 +616,10 @@ export class BashPermissionChecker {
     return {
       allowPatterns: this.allowPatterns.length,
       denyPatterns: this.denyPatterns.length,
+      customAllowPatterns: this.customAllowPatterns.length,
+      customDenyPatterns: this.customDenyPatterns.length,
+      defaultAllowPatterns: this.defaultAllowPatterns.length,
+      defaultDenyPatterns: this.defaultDenyPatterns.length,
       totalPatterns: this.allowPatterns.length + this.denyPatterns.length
     };
   }

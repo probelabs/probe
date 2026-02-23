@@ -115,27 +115,151 @@ The bash tool requires explicit opt-in:
 const agent = new ProbeAgent({
   enableBash: true,
   bashConfig: {
-    allow: ['npm test', 'git status'],
-    deny: ['rm -rf', 'sudo', 'curl'],
+    allow: ['git:push'],           // Custom allow (overrides default deny)
+    deny: ['git:push:--force'],    // Custom deny (always wins)
     disableDefaultDeny: false
   }
 });
 ```
 
-### Default Deny Patterns
+### Pattern Syntax
 
-Dangerous commands blocked by default:
+Bash permissions use colon-separated patterns that match commands and arguments:
+
+| Pattern | Matches | Does NOT match |
+|---------|---------|----------------|
+| `git:push` | `git push`, `git push origin main`, `git push --force` | `git pull`, `git status` |
+| `git:push:--force` | `git push --force`, `git push --force origin` | `git push`, `git push origin main` |
+| `git:branch:*` | `git branch -a`, `git branch --list` | `git status` |
+| `npm:install` | `npm install`, `npm install express` | `npm test` |
+
+A pattern like `git:push` matches the command `git` with first argument `push`, regardless of any additional arguments. The pattern only checks the parts it specifies — extra arguments in the actual command are ignored.
+
+**Note on wildcards:** `git:push` and `git:push:*` are functionally identical. The `*` wildcard matches any argument **or no argument**, so it adds no additional coverage. Prefer the shorter form `git:push` for clarity.
+
+### Permission Resolution Priority
+
+Permissions are resolved using a **strict 4-level priority system**. Higher priority always wins:
+
+```
+Priority 1 (highest): Custom deny   — --bash-deny patterns, ALWAYS block
+Priority 2:           Custom allow  — --bash-allow patterns, override default deny
+Priority 3:           Default deny  — built-in deny list, block by default
+Priority 4 (lowest):  Allow list    — built-in + custom allow, permit safe commands
+```
+
+**How this works in practice:**
+
+1. **Custom deny always wins.** If a command matches a `--bash-deny` pattern, it is blocked regardless of any allow patterns. This is the user's explicit "never allow this" list.
+
+2. **Custom allow overrides default deny.** If a command matches a `--bash-allow` pattern, it bypasses the built-in default deny list. This lets users selectively allow specific commands (like `git push`) without disabling all default protections.
+
+3. **Default deny blocks by default.** If a command matches the built-in deny list and is NOT in the custom allow list, it is blocked.
+
+4. **Allow list permits.** If a command matches the combined allow list (built-in defaults + custom), it is permitted.
+
+### Example: Allow Push but Block Force Push
+
+```bash
+# CLI usage
+probe-chat --enable-bash \
+  --bash-allow "git:push" \
+  --bash-deny "git:push:--force" "git:push:--force-with-lease" \
+  ./my-project
+```
 
 ```javascript
-const DEFAULT_DENY = [
-  'rm -rf',
-  'sudo',
-  'chmod 777',
-  'curl | sh',
-  'wget -O- | sh',
-  // ... more patterns
-];
+// SDK usage
+const agent = new ProbeAgent({
+  enableBash: true,
+  bashConfig: {
+    allow: ['git:push'],
+    deny: ['git:push:--force', 'git:push:--force-with-lease']
+  }
+});
 ```
+
+| Command | Result | Reason |
+|---------|--------|--------|
+| `git push origin main` | Allowed | Custom allow `git:push` overrides default deny |
+| `git push --tags` | Allowed | Custom allow `git:push` overrides default deny |
+| `git push --force` | **Denied** | Custom deny `git:push:--force` wins over custom allow |
+| `git push --force-with-lease` | **Denied** | Custom deny wins over custom allow |
+| `git reset --hard HEAD` | **Denied** | Still in default deny, not overridden |
+| `git status` | Allowed | In default allow list (no conflict) |
+| `rm -rf /` | **Denied** | Still in default deny, not overridden |
+
+### Example: CI/CD Pipeline Permissions
+
+```javascript
+// Allow git operations needed for deployment
+const agent = new ProbeAgent({
+  enableBash: true,
+  bashConfig: {
+    allow: ['git:push', 'git:commit', 'git:add', 'npm:install', 'npm:run'],
+    deny: [
+      'git:push:--force',              // No force push
+      'git:push:--force-with-lease',   // No force push variants
+      'npm:run:eject',                 // Don't allow eject
+    ]
+  }
+});
+```
+
+### Complex Commands (&&, ||, pipes)
+
+When a command contains `&&`, `||`, or `|`, each component is checked independently using the same priority rules. **All components must be allowed** for the command to execute:
+
+```bash
+# Allowed: both components pass
+git status && git push origin main   # (with --bash-allow "git:push")
+
+# Denied: git push --force is in custom deny
+git status && git push --force       # (with --bash-deny "git:push:--force")
+
+# Denied: rm -rf is in default deny, not overridden
+git push && rm -rf /                 # (with --bash-allow "git:push")
+```
+
+### Default Deny Patterns
+
+Dangerous commands blocked by default (partial list):
+
+| Category | Patterns |
+|----------|----------|
+| Destructive file ops | `rm:-rf`, `rm:-r`, `rmdir`, `mkfs` |
+| Privilege escalation | `sudo`, `su`, `doas` |
+| Git destructive | `git:push`, `git:reset`, `git:clean`, `git:commit`, `git:merge`, `git:rebase` |
+| Git branch/tag delete | `git:branch:-d`, `git:branch:-D`, `git:tag:-d` |
+| GitHub CLI writes | `gh:issue:create`, `gh:pr:merge`, `gh:repo:delete` |
+| Package installs | `npm:install`, `pip:install`, `cargo:install` |
+| Network downloads | `curl`, `wget`, `nc` |
+| System operations | `shutdown`, `reboot`, `mount`, `crontab` |
+
+### Default Allow Patterns
+
+Safe read-only commands allowed by default (partial list):
+
+| Category | Patterns |
+|----------|----------|
+| File exploration | `ls`, `cat`, `head`, `tail`, `find`, `grep`, `tree` |
+| Git read-only | `git:status`, `git:log`, `git:diff`, `git:show`, `git:branch`, `git:blame` |
+| Git plumbing | `git:cat-file`, `git:ls-files`, `git:rev-parse`, `git:merge-base` |
+| GitHub CLI reads | `gh:issue:list`, `gh:pr:view`, `gh:repo:list`, `gh:search:*`, `gh:api` |
+| Package info | `npm:list`, `pip:list`, `cargo:--version` |
+| System info | `whoami`, `pwd`, `uname`, `date`, `env` |
+
+### Nuclear Options (Not Recommended)
+
+```bash
+# Disable ALL default deny patterns (dangerous!)
+probe-chat --enable-bash --no-default-bash-deny ./my-project
+
+# Disable ALL default allow patterns (locks out all commands)
+probe-chat --enable-bash --no-default-bash-allow ./my-project
+```
+
+These flags are available for edge cases but are **not recommended**. Use `--bash-allow` to selectively override specific deny patterns instead.
 
 ### Safe Subprocess Execution
 
@@ -406,16 +530,11 @@ const agent = new ProbeAgent({
   enableBash: true,
   bashConfig: {
     allow: [
-      'npm test',
-      'npm run lint',
-      'git status',
-      'git log'
+      'git:push',          // Override default deny for push
+      'npm:run:test',      // Allow npm test
     ],
     deny: [
-      'rm',
-      'sudo',
-      'curl',
-      'wget'
+      'git:push:--force',  // But block force push (custom deny always wins)
     ]
   }
 });

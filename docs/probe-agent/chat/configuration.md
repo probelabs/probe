@@ -306,13 +306,16 @@ Priority order:
 
 ```bash
 --enable-bash                      # Enable bash
---bash-allow <patterns>            # Allowed patterns
---bash-deny <patterns>             # Denied patterns
---no-default-bash-allow            # Disable default allow
---no-default-bash-deny             # Disable default deny
+--bash-allow <patterns>            # Allow patterns (override default deny)
+--bash-deny <patterns>             # Deny patterns (always win, highest priority)
+--no-default-bash-allow            # Disable default allow list
+--no-default-bash-deny             # Disable default deny list (not recommended)
 --bash-timeout <ms>                # Command timeout
 --bash-working-dir <path>          # Working directory
 ```
+
+**Permission priority:** Custom deny > Custom allow > Default deny > Allow list.
+`--bash-allow "git:push"` overrides the default deny for git push while keeping all other deny rules active. See [Security Guide](../../guides/security.md#permission-resolution-priority).
 
 ### Tool Control
 

@@ -829,13 +829,14 @@ describe('Component-based Complex Command Evaluation', () => {
     });
 
     test('should deny dangerous commands even through component evaluation', () => {
-      // Using default deny patterns
+      // Custom allow overrides default deny, so to block rm -rf specifically
+      // while allowing rm, use custom deny (custom deny always wins)
       const checker = new BashPermissionChecker({
-        allow: ['ls', 'rm'],  // rm allowed in allow list
-        // default deny includes rm:-rf:*
+        allow: ['ls', 'rm'],  // rm allowed in custom allow list
+        deny: ['rm:-rf'],     // custom deny for rm -rf (always wins over custom allow)
       });
 
-      // Should be denied because rm -rf matches deny pattern
+      // Should be denied because rm -rf matches custom deny pattern
       const result = checker.check('ls && rm -rf /');
       expect(result.allowed).toBe(false);
     });
