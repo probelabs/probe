@@ -346,7 +346,7 @@ const { searchTool, queryTool, extractTool } = tools;
 
 // Use with Vercel AI SDK
 const result = await generateText({
-  model: anthropic('claude-sonnet-4-5-20250929'),
+  model: anthropic('claude-sonnet-4-6'),
   tools: {
     search: searchTool({ defaultPath: './src' }),
     query: queryTool({ defaultPath: './src' }),
@@ -470,7 +470,7 @@ GOOGLE_API_KEY=...
 
 # Provider Selection
 FORCE_PROVIDER=anthropic
-MODEL_NAME=claude-sonnet-4-5-20250929
+MODEL_NAME=claude-sonnet-4-6
 
 # Custom Endpoints
 ANTHROPIC_API_URL=https://your-proxy.com

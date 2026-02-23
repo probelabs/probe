@@ -29,7 +29,7 @@ class ClaudeCodeBackend extends BaseBackend {
   async initialize(config) {
     this.config = {
       apiKey: config.apiKey || process.env.ANTHROPIC_API_KEY,
-      model: config.model || 'claude-3-5-sonnet-20241022',
+      model: config.model || 'claude-sonnet-4-6',
       baseUrl: config.baseUrl,
       timeout: config.timeout || getDefaultTimeoutMs(), // Use centralized default (20 minutes)
       maxTokens: config.maxTokens || 8000,

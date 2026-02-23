@@ -220,14 +220,14 @@ const agent = new ProbeAgent({
 // Correct model names
 const agent = new ProbeAgent({
   provider: 'anthropic',
-  model: 'claude-sonnet-4-5-20250929'  // Not 'claude-3-sonnet'
+  model: 'claude-sonnet-4-6'  // Not 'claude-3-sonnet'
 });
 ```
 
 **Current default models:**
-- Anthropic: `claude-sonnet-4-5-20250929`
-- OpenAI: `gpt-4o`
-- Google: `gemini-2.0-flash-exp`
+- Anthropic: `claude-sonnet-4-6`
+- OpenAI: `gpt-5.2`
+- Google: `gemini-2.5-flash`
 
 ### Token limit exceeded
 

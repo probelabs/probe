@@ -719,7 +719,7 @@ export class ProbeAgent {
           // Set provider to claude-code
           this.clientApiProvider = 'claude-code';
           this.provider = null;
-          this.model = this.clientApiModel || 'claude-3-5-sonnet-20241022';
+          this.model = this.clientApiModel || 'claude-sonnet-4-6';
           this.apiType = 'claude-code';
         } else if (codexAvailable) {
           if (this.debug) {
@@ -729,7 +729,7 @@ export class ProbeAgent {
           // Set provider to codex
           this.clientApiProvider = 'codex';
           this.provider = null;
-          this.model = this.clientApiModel || 'gpt-4o';
+          this.model = this.clientApiModel || 'gpt-5.2';
           this.apiType = 'codex';
         } else {
           // Neither API keys nor CLI commands available
@@ -1041,7 +1041,7 @@ export class ProbeAgent {
       // Claude Code engine will be initialized lazily in getEngine()
       // Set minimal defaults for compatibility
       this.provider = null;
-      this.model = modelName || 'claude-3-5-sonnet-20241022';
+      this.model = modelName || 'claude-sonnet-4-6';
       this.apiType = 'claude-code';
       if (this.debug) {
         console.log('[DEBUG] Claude Code engine selected - will use built-in access if available');
@@ -1499,7 +1499,7 @@ export class ProbeAgent {
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }),
     });
-    this.model = modelName || 'claude-sonnet-4-5-20250929';
+    this.model = modelName || 'claude-sonnet-4-6';
     this.apiType = 'anthropic';
     
     if (this.debug) {
@@ -1516,7 +1516,7 @@ export class ProbeAgent {
       apiKey: apiKey,
       ...(apiUrl && { baseURL: apiUrl }),
     });
-    this.model = modelName || 'gpt-5-thinking';
+    this.model = modelName || 'gpt-5.2';
     this.apiType = 'openai';
     
     if (this.debug) {
@@ -1646,7 +1646,7 @@ export class ProbeAgent {
     }
     
     this.provider = createAmazonBedrock(config);
-    this.model = modelName || 'anthropic.claude-sonnet-4-20250514-v1:0';
+    this.model = modelName || 'anthropic.claude-sonnet-4-6';
     this.apiType = 'bedrock';
 
     if (this.debug) {
@@ -1715,7 +1715,7 @@ export class ProbeAgent {
           sessionId: this.options?.sessionId,
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
-          model: this.model  // Pass model name (e.g., gpt-4o, o3, etc.)
+          model: this.model  // Pass model name (e.g., gpt-5.2, o3, etc.)
         });
         if (this.debug) {
           console.log('[DEBUG] Using Codex CLI engine with Probe tools');
@@ -3249,9 +3249,7 @@ Follow these instructions carefully:
         if (!maxResponseTokens) {
           // Use model-based defaults if not explicitly configured
           maxResponseTokens = 4000;
-          if (this.model && this.model.includes('opus') || this.model && this.model.includes('sonnet') || this.model && this.model.startsWith('gpt-4-')) {
-            maxResponseTokens = 8192;
-          } else if (this.model && this.model.startsWith('gpt-4o')) {
+          if (this.model && this.model.includes('opus') || this.model && this.model.includes('sonnet') || this.model && this.model.startsWith('gpt-4') || this.model && this.model.startsWith('gpt-5')) {
             maxResponseTokens = 8192;
           } else if (this.model && this.model.startsWith('gemini')) {
             maxResponseTokens = 32000;

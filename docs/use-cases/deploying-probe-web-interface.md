@@ -96,7 +96,7 @@ You can specify which AI model to use:
 export MODEL_NAME=claude-3-opus-20240229
 
 # For OpenAI
-export MODEL_NAME=gpt-4o
+export MODEL_NAME=gpt-5.2
 ```
 
 ## Authentication & Environment Variables
@@ -120,7 +120,7 @@ export AUTH_PASSWORD=your_secure_password
 | `OPENAI_API_KEY` | Your OpenAI API key | (Required if not using Anthropic) |
 | `ALLOWED_FOLDERS` | Comma-separated list of folders to search | (Required) |
 | `PORT` | The port to run the server on | 8080 |
-| `MODEL_NAME` | Override the default model | claude-3-7-sonnet-latest or gpt-4o |
+| `MODEL_NAME` | Override the default model | claude-3-7-sonnet-latest or gpt-5.2 |
 | `AUTH_ENABLED` | Enable basic authentication | false |
 | `AUTH_USERNAME` | Username for authentication | admin |
 | `AUTH_PASSWORD` | Password for authentication | password |

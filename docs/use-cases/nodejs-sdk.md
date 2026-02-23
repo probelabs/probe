@@ -29,7 +29,7 @@ import { StringOutputParser } from '@langchain/core/output_parsers';
 async function createCodeAssistant() {
   // Create a chat model
   const model = new ChatOpenAI({
-    modelName: "gpt-4o",
+    modelName: "gpt-5.2",
     temperature: 0.7
   });
   
@@ -269,7 +269,7 @@ async function generateDocumentation(codebasePath, outputDir) {
   
   // Create AI model for documentation generation
   const model = new ChatOpenAI({
-    modelName: "gpt-4o",
+    modelName: "gpt-5.2",
     temperature: 0.2
   });
   
@@ -324,7 +324,7 @@ import fs from 'fs/promises';
 
 async function reviewPullRequest(repoPath, changedFiles) {
   const model = new ChatOpenAI({
-    modelName: "gpt-4o",
+    modelName: "gpt-5.2",
     temperature: 0.3
   });
   
@@ -442,7 +442,7 @@ const extractTool = tools.createExtractTool();
 
 // Create a ChatOpenAI instance with tools
 const model = new ChatOpenAI({
-  modelName: "gpt-4o",
+  modelName: "gpt-5.2",
   temperature: 0.7
 }).withTools([searchTool, queryTool, extractTool]);
 

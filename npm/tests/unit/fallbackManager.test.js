@@ -268,7 +268,7 @@ describe('FallbackManager', () => {
 
       await fallback.executeWithFallback(mockFn);
 
-      expect(receivedModel).toBe('claude-sonnet-4-5-20250929');
+      expect(receivedModel).toBe('claude-sonnet-4-6');
     });
 
     test('should throw error when no providers configured', async () => {

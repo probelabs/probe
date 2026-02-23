@@ -473,8 +473,8 @@ const agent = new ProbeAgent({
   fallback: {
     strategy: 'custom',
     providers: [
-      { provider: 'anthropic', model: 'claude-sonnet-4-5-20250929' },
-      { provider: 'openai', model: 'gpt-4o' }
+      { provider: 'anthropic', model: 'claude-sonnet-4-6' },
+      { provider: 'openai', model: 'gpt-5.2' }
     ]
   }
 });
@@ -657,7 +657,7 @@ GOOGLE_API_KEY=...
 
 ```bash
 FORCE_PROVIDER=anthropic
-MODEL_NAME=claude-sonnet-4-5-20250929
+MODEL_NAME=claude-sonnet-4-6
 REQUEST_TIMEOUT=120000
 MAX_OPERATION_TIMEOUT=600000
 DEBUG_CHAT=1

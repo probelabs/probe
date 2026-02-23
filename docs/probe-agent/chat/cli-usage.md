@@ -77,7 +77,7 @@ echo "Find error handling code" | probe-chat ./src
 | `-m, --model-name <model>` | Specify model name |
 
 ```bash
-probe-chat --force-provider anthropic --model-name claude-sonnet-4-5-20250929 ./src
+probe-chat --force-provider anthropic --model-name claude-sonnet-4-6 ./src
 ```
 
 ### Interface Mode
@@ -195,7 +195,7 @@ export GOOGLE_API_KEY=...
 export FORCE_PROVIDER=anthropic
 
 # Model
-export MODEL_NAME=claude-sonnet-4-5-20250929
+export MODEL_NAME=claude-sonnet-4-6
 
 # Paths
 export ALLOWED_FOLDERS=/path/to/project

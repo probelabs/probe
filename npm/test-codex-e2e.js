@@ -14,7 +14,7 @@ async function main() {
   let agent;
 
   try {
-    // Create agent with Codex provider (use default model, not gpt-4o)
+    // Create agent with Codex provider (use default model, not gpt-5.2)
     console.log('1️⃣  Creating ProbeAgent with provider: codex (using default model)');
     agent = new ProbeAgent({
       provider: 'codex',

@@ -129,7 +129,7 @@ describe('Retry and Fallback Integration', () => {
             provider: 'bedrock',
             region: 'us-west-2',
             apiKey: 'bedrock-key',
-            model: 'anthropic.claude-sonnet-4-20250514-v1:0'
+            model: 'anthropic.claude-sonnet-4-6'
           }
         ],
         debug: false

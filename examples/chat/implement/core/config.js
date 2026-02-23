@@ -137,7 +137,7 @@ class ConfigManager {
           timeout: getDefaultTimeoutMs(), // Use centralized default (20 minutes)
           maxTokens: 8000,
           temperature: 0.3,
-          model: 'claude-3-5-sonnet-20241022',
+          model: 'claude-sonnet-4-6',
           systemPrompt: null,
           tools: ['edit', 'search', 'bash'],
           maxTurns: 100

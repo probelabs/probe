@@ -202,12 +202,12 @@ agent.events.on('toolBatch', (batch) => {
 
 ### Model Selection
 
-Default model is `gpt-4o`. Override with:
+Default model is `gpt-5.2`. Override with:
 
 ```javascript
 const agent = new ProbeAgent({
   provider: 'codex',
-  model: 'gpt-4o-mini',  // Use faster model
+  model: 'gpt-5.2-mini',  // Use faster model
   allowedFolders: [process.cwd()]
 });
 ```
@@ -215,7 +215,7 @@ const agent = new ProbeAgent({
 Or via environment:
 
 ```bash
-MODEL_NAME=gpt-4o-mini USE_CODEX=true node script.js
+MODEL_NAME=gpt-5.2-mini USE_CODEX=true node script.js
 ```
 
 ### Tool Filtering
@@ -469,7 +469,7 @@ agent.events.on('toolBatch', (batch) => {
 **Issue:** Codex CLI is slow
 
 **Solutions:**
-1. Use faster model: `model: 'gpt-4o-mini'`
+1. Use faster model: `model: 'gpt-5.2-mini'`
 2. Limit tool access: `allowedTools: ['search']`
 3. Reduce workspace size: `allowedFolders: ['/specific/path']`
 
