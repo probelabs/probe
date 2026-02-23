@@ -146,8 +146,8 @@ Common reasons:
 2. The command is not in the allow list (not a recognized safe command)
 
 If you believe this command should be allowed, you can:
-- Use the --bash-allow option to add specific patterns
-- Use the --no-default-bash-deny flag to remove default restrictions (not recommended)
+- Use the --bash-allow option to add specific patterns (overrides default deny list)
+  Example: --bash-allow "git:push" allows git push while keeping all other deny rules
 
 For code exploration, try these safe alternatives:
 - ls, cat, head, tail for file operations
