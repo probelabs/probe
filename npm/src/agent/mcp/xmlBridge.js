@@ -6,6 +6,7 @@
 import { MCPClientManager } from './client.js';
 import { loadMCPConfiguration } from './config.js';
 import { processXmlWithThinkingAndRecovery } from '../xmlParsingUtils.js';
+import { unescapeXmlEntities } from '../../tools/common.js';
 
 /**
  * Convert MCP tool to XML definition format
@@ -111,7 +112,7 @@ export function parseXmlMcpToolCall(xmlString, mcpToolNames = []) {
       let match;
       while ((match = paramPattern.exec(content)) !== null) {
         const [, paramName, paramValue] = match;
-        params[paramName] = paramValue.trim();
+        params[paramName] = unescapeXmlEntities(paramValue.trim());
       }
     }
 
@@ -393,7 +394,7 @@ function parseNativeXmlTool(xmlString, toolName) {
     const [, paramName, paramValue] = match;
     // Skip if this is the params tag itself (MCP format)
     if (paramName !== 'params') {
-      params[paramName] = paramValue.trim();
+      params[paramName] = unescapeXmlEntities(paramValue.trim());
     }
   }
 
