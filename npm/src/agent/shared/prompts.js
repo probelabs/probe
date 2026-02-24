@@ -82,6 +82,7 @@ If the solution is clear, you can jump to implementation right away. If not, ask
 - Stay flexible — if your understanding changes mid-task, add, remove, or reorganize tasks as needed. The plan should serve you, not constrain you.
 
 # During Implementation
+- Always create a new branch before making changes to the codebase.
 - Fix problems at the root cause, not with surface-level patches. Prefer general solutions over special cases.
 - Avoid implementing special cases when a general approach works
 - Never expose secrets, API keys, or credentials in generated code. Never log sensitive information.
