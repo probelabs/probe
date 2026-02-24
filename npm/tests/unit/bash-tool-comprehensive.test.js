@@ -190,11 +190,11 @@ describe('Bash Tool - End-to-End Integration', () => {
 
       // Spot check critical patterns
       expect(DEFAULT_ALLOW_PATTERNS).toContain('ls');
-      expect(DEFAULT_ALLOW_PATTERNS).toContain('cat:*');
+      expect(DEFAULT_ALLOW_PATTERNS).toContain('cat');
       expect(DEFAULT_ALLOW_PATTERNS).toContain('git:status');
       
       expect(DEFAULT_DENY_PATTERNS).toContain('rm:-rf');
-      expect(DEFAULT_DENY_PATTERNS).toContain('sudo:*');
+      expect(DEFAULT_DENY_PATTERNS).toContain('sudo');
       expect(DEFAULT_DENY_PATTERNS).toContain('npm:install');
     });
   });
