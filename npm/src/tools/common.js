@@ -539,6 +539,15 @@ export function unescapeXmlEntities(str) {
 		.replace(/&amp;/g, '&');
 }
 
+// Parameters that contain arbitrary code/file content — use lastIndexOf for closing tag
+// to handle cases where the content itself contains the closing tag string.
+const RAW_CONTENT_PARAMS = new Set(['content', 'new_string', 'old_string']);
+
+// Tools whose content can include their own closing tag string (e.g., file content
+// containing </create> or </edit>). Use lastIndexOf for outer tag boundary, same
+// strategy already used for attempt_completion.
+const LAST_INDEX_TOOLS = new Set(['attempt_completion', 'create', 'edit']);
+
 // Simple XML parser helper - safer string-based approach
 export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 	// Find the tool that appears EARLIEST in the string
@@ -565,13 +574,13 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 	const closeTag = `</${toolName}>`;
 	const openIndex = earliestOpenIndex;
 
-	// For attempt_completion, use lastIndexOf to find the LAST occurrence of closing tag
-	// This prevents issues where the content contains the closing tag string (e.g., in regex patterns)
-	// For other tools, use indexOf from the opening tag position
+	// For tools that contain arbitrary content (file content, code), use lastIndexOf
+	// to find the LAST occurrence of the closing tag. This prevents issues where the
+	// content itself contains the closing tag string (e.g., file content with </create>).
+	// For other tools, use indexOf from the opening tag position.
 	let closeIndex;
-	if (toolName === 'attempt_completion') {
+	if (LAST_INDEX_TOOLS.has(toolName)) {
 		// Find the last occurrence of the closing tag in the entire string
-		// This assumes attempt_completion doesn't have nested tags of the same name
 		closeIndex = xmlString.lastIndexOf(closeTag);
 		// Make sure the closing tag is after the opening tag
 		if (closeIndex !== -1 && closeIndex <= openIndex + openTag.length) {
@@ -611,7 +620,19 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			continue; // Parameter not found
 		}
 
-		let paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
+		// For raw content params (file content, code), use lastIndexOf to find the
+		// LAST closing tag — the content itself may contain the closing tag string.
+		// For other params (file_path, overwrite, etc.), use indexOf (first match).
+		let paramCloseIndex;
+		if (RAW_CONTENT_PARAMS.has(paramName)) {
+			paramCloseIndex = innerContent.lastIndexOf(paramCloseTag);
+			// Ensure it's after the opening tag
+			if (paramCloseIndex !== -1 && paramCloseIndex <= paramOpenIndex + paramOpenTag.length) {
+				paramCloseIndex = -1;
+			}
+		} else {
+			paramCloseIndex = innerContent.indexOf(paramCloseTag, paramOpenIndex + paramOpenTag.length);
+		}
 
 		// Handle unclosed parameter tags - use content until next tag or end of content
 		if (paramCloseIndex === -1) {
@@ -627,23 +648,34 @@ export function parseXmlToolCall(xmlString, validTools = DEFAULT_VALID_TOOLS) {
 			paramCloseIndex = nextTagIndex;
 		}
 
-		let paramValue = unescapeXmlEntities(innerContent.substring(
+		const rawValue = innerContent.substring(
 			paramOpenIndex + paramOpenTag.length,
 			paramCloseIndex
-		).trim());
+		);
 
-		// Basic type inference (can be improved)
-		if (paramValue.toLowerCase() === 'true') {
-			paramValue = true;
-		} else if (paramValue.toLowerCase() === 'false') {
-			paramValue = false;
-		} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
-			// Check if it's potentially a number (handle integers and floats)
-			const num = Number(paramValue);
-			if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
-				paramValue = num;
+		// For raw content params, preserve whitespace (only strip XML formatting newlines).
+		// For other params, trim all whitespace.
+		let paramValue;
+		if (RAW_CONTENT_PARAMS.has(paramName)) {
+			paramValue = unescapeXmlEntities(rawValue.replace(/^\n/, '').replace(/\n$/, ''));
+		} else {
+			paramValue = unescapeXmlEntities(rawValue.trim());
+		}
+
+		// Type coercion for non-content params only (content/new_string/old_string must stay strings)
+		if (!RAW_CONTENT_PARAMS.has(paramName)) {
+			if (paramValue.toLowerCase() === 'true') {
+				paramValue = true;
+			} else if (paramValue.toLowerCase() === 'false') {
+				paramValue = false;
+			} else if (!isNaN(paramValue) && paramValue.trim() !== '') {
+				// Check if it's potentially a number (handle integers and floats)
+				const num = Number(paramValue);
+				if (Number.isFinite(num)) { // Use Number.isFinite to avoid Infinity/NaN
+					paramValue = num;
+				}
+				// Keep as string if not a valid finite number
 			}
-			// Keep as string if not a valid finite number
 		}
 
 		params[paramName] = paramValue;

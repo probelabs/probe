@@ -1775,4 +1775,172 @@ describe('XML entity unescaping', () => {
       });
     });
   });
+
+  describe('Raw content parameter handling (create/edit tools)', () => {
+    test('should preserve content containing </content> tag', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>doc.mdx</file_path>
+<content>Use the content tag:
+\`\`\`jsx
+<content>Your text</content>
+\`\`\`
+More text after.</content>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.toolName).toBe('create');
+      expect(result.params.file_path).toBe('doc.mdx');
+      expect(result.params.content).toContain('<content>Your text</content>');
+      expect(result.params.content).toContain('More text after.');
+    });
+
+    test('should preserve content containing </create> tag', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>example.md</file_path>
+<content>Example showing </create> tag in documentation.
+This line should also be included.</content>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.toolName).toBe('create');
+      expect(result.params.file_path).toBe('example.md');
+      expect(result.params.content).toContain('</create> tag in documentation');
+      expect(result.params.content).toContain('This line should also be included.');
+    });
+
+    test('should preserve new_string containing </new_string> tag', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>test.js</file_path>
+<old_string>old code</old_string>
+<new_string>// See </new_string> in XML docs
+more code here</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.toolName).toBe('edit');
+      expect(result.params.new_string).toContain('</new_string> in XML docs');
+      expect(result.params.new_string).toContain('more code here');
+    });
+
+    test('should preserve new_string containing </edit> tag', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>test.js</file_path>
+<old_string>placeholder</old_string>
+<new_string>// Reference: </edit> tag usage
+const x = 1;</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.toolName).toBe('edit');
+      expect(result.params.new_string).toContain('</edit> tag usage');
+      expect(result.params.new_string).toContain('const x = 1;');
+    });
+
+    test('should keep content "true" as string (no type coercion)', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>flag.txt</file_path>
+<content>true</content>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.params.content).toBe('true');
+      expect(typeof result.params.content).toBe('string');
+    });
+
+    test('should keep content "42" as string (no type coercion)', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>number.txt</file_path>
+<content>42</content>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.params.content).toBe('42');
+      expect(typeof result.params.content).toBe('string');
+    });
+
+    test('should keep new_string "false" as string (no type coercion)', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>test.js</file_path>
+<old_string>x</old_string>
+<new_string>false</new_string>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.params.new_string).toBe('false');
+      expect(typeof result.params.new_string).toBe('string');
+    });
+
+    test('should still coerce overwrite to boolean', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>test.txt</file_path>
+<content>hello</content>
+<overwrite>true</overwrite>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.params.overwrite).toBe(true);
+      expect(typeof result.params.overwrite).toBe('boolean');
+    });
+
+    test('should still coerce replace_all to boolean', () => {
+      const validTools = ['edit'];
+      const aiResponse = `<edit>
+<file_path>test.js</file_path>
+<old_string>foo</old_string>
+<new_string>bar</new_string>
+<replace_all>true</replace_all>
+</edit>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.params.replace_all).toBe(true);
+      expect(typeof result.params.replace_all).toBe('boolean');
+    });
+
+    test('should preserve leading whitespace in content', () => {
+      const validTools = ['create'];
+      const aiResponse = `<create>
+<file_path>indented.py</file_path>
+<content>  indented line
+  another line</content>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      expect(result.params.content).toBe('  indented line\n  another line');
+    });
+
+    test('should strip only XML formatting newlines from content', () => {
+      const validTools = ['create'];
+      // Content has newline after <content> and before </content> (XML formatting)
+      const aiResponse = `<create>
+<file_path>test.txt</file_path>
+<content>
+first line
+last line
+</content>
+</create>`;
+
+      const result = parseXmlToolCall(aiResponse, validTools);
+
+      // Leading/trailing XML newlines stripped, internal newlines preserved
+      expect(result.params.content).toBe('first line\nlast line');
+    });
+  });
 });
