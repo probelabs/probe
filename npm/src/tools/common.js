@@ -5,7 +5,7 @@
 
 import { z } from 'zod';
 import { resolve, isAbsolute } from 'path';
-import { editSchema, createSchema } from './edit.js';
+import { editSchema, createSchema, multiEditSchema } from './edit.js';
 import { taskSchema } from '../agent/tasks/taskTool.js';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
@@ -492,7 +492,8 @@ function getValidParamsForTool(toolName) {
 		task: taskSchema,
 		attempt_completion: attemptCompletionSchema,
 		edit: editSchema,
-		create: createSchema
+		create: createSchema,
+		multi_edit: multiEditSchema
 	};
 
 	const schema = schemaMap[toolName];
@@ -707,7 +708,7 @@ export function detectUnrecognizedToolCall(xmlString, validTools) {
 	const knownToolNames = [
 		'search', 'query', 'extract', 'listFiles', 'searchFiles',
 		'listSkills', 'useSkill', 'readImage', 'edit',
-		'create', 'delegate', 'bash', 'task', 'attempt_completion',
+		'create', 'multi_edit', 'delegate', 'bash', 'task', 'attempt_completion',
 		'attempt_complete', 'read_file', 'write_file', 'run_command',
 		'grep', 'find', 'cat', 'list_directory'
 	];

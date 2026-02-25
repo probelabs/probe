@@ -44,13 +44,15 @@ import {
 import {
 	editSchema,
 	createSchema,
+	multiEditSchema,
 	editToolDefinition,
-	createToolDefinition
+	createToolDefinition,
+	multiEditToolDefinition
 } from './tools/edit.js';
 import { searchTool, queryTool, extractTool, delegateTool, analyzeAllTool } from './tools/vercel.js';
 import { createExecutePlanTool, getExecutePlanToolDefinition, createCleanupExecutePlanTool, getCleanupExecutePlanToolDefinition } from './tools/executePlan.js';
 import { bashTool } from './tools/bash.js';
-import { editTool, createTool } from './tools/edit.js';
+import { editTool, createTool, multiEditTool } from './tools/edit.js';
 import { FileTracker } from './tools/fileTracker.js';
 import { ProbeAgent } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
@@ -99,6 +101,7 @@ export {
 	bashTool,
 	editTool,
 	createTool,
+	multiEditTool,
 	FileTracker,
 	// Export tool instances
 	listFilesToolInstance,
@@ -115,6 +118,7 @@ export {
 	bashSchema,
 	editSchema,
 	createSchema,
+	multiEditSchema,
 	// Export tool definitions
 	searchToolDefinition,
 	queryToolDefinition,
@@ -127,6 +131,7 @@ export {
 	bashToolDefinition,
 	editToolDefinition,
 	createToolDefinition,
+	multiEditToolDefinition,
 	googleSearchToolDefinition,
 	urlContextToolDefinition,
 	// Export parser function

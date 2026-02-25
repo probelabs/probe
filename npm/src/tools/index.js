@@ -6,7 +6,7 @@
 // Export Vercel AI SDK tool generators
 export { searchTool, queryTool, extractTool, delegateTool } from './vercel.js';
 export { bashTool } from './bash.js';
-export { editTool, createTool } from './edit.js';
+export { editTool, createTool, multiEditTool } from './edit.js';
 
 // Export LangChain tools
 export { createSearchTool, createQueryTool, createExtractTool } from './langchain.js';
@@ -39,10 +39,13 @@ export {
 export {
 	editSchema,
 	createSchema,
+	multiEditSchema,
 	editDescription,
 	createDescription,
+	multiEditDescription,
 	editToolDefinition,
-	createToolDefinition
+	createToolDefinition,
+	multiEditToolDefinition
 } from './edit.js';
 
 // Export system message

@@ -59,6 +59,7 @@ import {
   attemptCompletionToolDefinition,
   editToolDefinition,
   createToolDefinition,
+  multiEditToolDefinition,
   googleSearchToolDefinition,
   urlContextToolDefinition,
   attemptCompletionSchema,
@@ -963,6 +964,9 @@ export class ProbeAgent {
       }
       if (wrappedTools.createToolInstance && isToolAllowed('create')) {
         this.toolImplementations.create = wrappedTools.createToolInstance;
+      }
+      if (wrappedTools.multiEditToolInstance && isToolAllowed('multi_edit')) {
+        this.toolImplementations.multi_edit = wrappedTools.multiEditToolInstance;
       }
     }
 
@@ -2565,6 +2569,9 @@ ${extractGuidance}
     if (this.allowEdit && isToolAllowed('create')) {
       toolDefinitions += `${createToolDefinition}\n`;
     }
+    if (this.allowEdit && isToolAllowed('multi_edit')) {
+      toolDefinitions += `${multiEditToolDefinition}\n`;
+    }
     // Bash tool (require both enableBash flag AND allowedTools permission)
     if (this.enableBash && isToolAllowed('bash')) {
       toolDefinitions += `${bashToolDefinition}\n`;
@@ -2669,6 +2676,9 @@ The configuration is loaded from src/config.js lines 15-25 which contains the da
     }
     if (this.allowEdit && isToolAllowed('create')) {
       availableToolsList += '- create: Create new files with specified content.\n';
+    }
+    if (this.allowEdit && isToolAllowed('multi_edit')) {
+      availableToolsList += '- multi_edit: Apply multiple file edits in one call using a JSON array of operations.\n';
     }
     if (this.enableDelegate && isToolAllowed('delegate')) {
       availableToolsList += '- delegate: Delegate big distinct tasks to specialized probe subagents.\n';
@@ -3429,6 +3439,9 @@ Follow these instructions carefully:
           }
           if (this.allowEdit && this.allowedTools.isEnabled('create')) {
             validTools.push('create');
+          }
+          if (this.allowEdit && this.allowedTools.isEnabled('multi_edit')) {
+            validTools.push('multi_edit');
           }
           // Bash tool (require both enableBash flag AND allowedTools permission)
           if (this.enableBash && this.allowedTools.isEnabled('bash')) {

@@ -10,6 +10,7 @@ import {
   bashTool,
   editTool,
   createTool,
+  multiEditTool,
   DEFAULT_SYSTEM_MESSAGE,
   attemptCompletionSchema,
   attemptCompletionToolDefinition,
@@ -23,6 +24,7 @@ import {
   bashSchema,
   editSchema,
   createSchema,
+  multiEditSchema,
   searchToolDefinition,
   queryToolDefinition,
   extractToolDefinition,
@@ -33,6 +35,7 @@ import {
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,
+  multiEditToolDefinition,
   googleSearchToolDefinition,
   urlContextToolDefinition,
   parseXmlToolCall
@@ -87,6 +90,9 @@ export function createTools(configOptions) {
   if (configOptions.allowEdit && isToolAllowed('create')) {
     tools.createTool = createTool(configOptions);
   }
+  if (configOptions.allowEdit && isToolAllowed('multi_edit')) {
+    tools.multiEditTool = multiEditTool(configOptions);
+  }
   return tools;
 }
 
@@ -114,6 +120,7 @@ export {
   bashSchema,
   editSchema,
   createSchema,
+  multiEditSchema,
   attemptCompletionSchema,
   searchToolDefinition,
   queryToolDefinition,
@@ -125,6 +132,7 @@ export {
   bashToolDefinition,
   editToolDefinition,
   createToolDefinition,
+  multiEditToolDefinition,
   attemptCompletionToolDefinition,
   googleSearchToolDefinition,
   urlContextToolDefinition,

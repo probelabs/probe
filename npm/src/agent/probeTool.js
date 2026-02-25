@@ -256,6 +256,15 @@ export function createWrappedTools(baseTools) {
     );
   }
 
+  // Wrap multi_edit tool
+  if (baseTools.multiEditTool) {
+    wrappedTools.multiEditToolInstance = wrapToolWithEmitter(
+      baseTools.multiEditTool,
+      'multi_edit',
+      baseTools.multiEditTool.execute
+    );
+  }
+
   return wrappedTools;
 }
 

@@ -587,6 +587,86 @@ Important:
   });
 };
 
+/**
+ * Multi-edit tool — apply multiple edit operations in a single call.
+ * Reuses the edit tool internally; edits are applied sequentially.
+ *
+ * @param {Object} [options] - Same configuration as editTool
+ * @returns {Object} Configured multi_edit tool
+ */
+export const multiEditTool = (options = {}) => {
+  const editInstance = editTool(options);
+
+  return tool({
+    name: 'multi_edit',
+    description: 'Apply multiple file edits in a single tool call. Accepts a JSON array of edit operations.',
+
+    inputSchema: {
+      type: 'object',
+      properties: {
+        edits: {
+          type: 'string',
+          description: 'JSON array of edit operations. Each object supports: file_path, old_string, new_string, replace_all, symbol, position, start_line, end_line.'
+        }
+      },
+      required: ['edits']
+    },
+
+    execute: async ({ edits: rawEdits }) => {
+      let edits;
+      if (typeof rawEdits === 'string') {
+        try {
+          edits = JSON.parse(rawEdits);
+        } catch (e) {
+          return `Error: Invalid JSON in edits parameter - ${e.message}. Provide a raw JSON array between <edits> tags.`;
+        }
+      } else if (Array.isArray(rawEdits)) {
+        edits = rawEdits;
+      } else {
+        return 'Error: edits must be a JSON array of edit operations.';
+      }
+
+      if (!Array.isArray(edits) || edits.length === 0) {
+        return 'Error: edits must be a non-empty JSON array.';
+      }
+      if (edits.length > 50) {
+        return `Error: Too many edits (${edits.length}). Maximum 50 per batch.`;
+      }
+
+      const results = [];
+      let successCount = 0;
+      let failCount = 0;
+
+      for (let i = 0; i < edits.length; i++) {
+        const editOp = edits[i];
+        if (!editOp || typeof editOp !== 'object' || Array.isArray(editOp)) {
+          results.push(`[${i + 1}] FAIL: Invalid edit operation - must be an object`);
+          failCount++;
+          continue;
+        }
+        try {
+          const result = await editInstance.execute(editOp);
+          const isError = typeof result === 'string' && result.startsWith('Error');
+          if (isError) {
+            results.push(`[${i + 1}] FAIL: ${result}`);
+            failCount++;
+          } else {
+            results.push(`[${i + 1}] OK: ${result}`);
+            successCount++;
+          }
+        } catch (error) {
+          results.push(`[${i + 1}] FAIL: ${error.message}`);
+          failCount++;
+        }
+      }
+
+      const summary = `Multi-edit: ${successCount}/${edits.length} succeeded` +
+        (failCount > 0 ? `, ${failCount} failed` : '');
+      return summary + '\n\n' + results.join('\n');
+    }
+  });
+};
+
 // Export schemas for tool definitions
 export const editSchema = {
   type: 'object',
@@ -647,9 +727,21 @@ export const createSchema = {
   required: ['file_path', 'content']
 };
 
+export const multiEditSchema = {
+  type: 'object',
+  properties: {
+    edits: {
+      type: 'string',
+      description: 'JSON array of edit operations'
+    }
+  },
+  required: ['edits']
+};
+
 // Tool descriptions for XML definitions
 export const editDescription = 'Edit files using text replacement, AST-aware symbol operations, or line-targeted editing. Supports fuzzy matching for text edits and optional hash-based integrity verification for line edits.';
 export const createDescription = 'Create new files with specified content. Will create parent directories if needed.';
+export const multiEditDescription = 'Apply multiple file edits in a single tool call. Accepts a JSON array of edit operations, each supporting the same modes as the edit tool.';
 
 // XML tool definitions
 export const editToolDefinition = `
@@ -808,3 +900,42 @@ Examples:
 This is a new project.</content>
 <overwrite>true</overwrite>
 </create>`;
+
+export const multiEditToolDefinition = `
+## multi_edit
+Description: ${multiEditDescription}
+
+Apply multiple edits in one call. Each operation in the array uses the same parameters as the edit tool:
+- file_path, old_string, new_string (text mode)
+- file_path, symbol, new_string (symbol replace)
+- file_path, symbol, new_string, position (symbol insert)
+- file_path, start_line, new_string (line-targeted)
+
+Edits are applied sequentially. Failures do not stop remaining edits. Maximum 50 edits per call.
+
+Parameters:
+- edits: (required) JSON array of edit objects. Place raw JSON between tags.
+
+When to use multi_edit vs edit:
+- Use edit for a single change to one file
+- Use multi_edit when making 2+ related changes across files (e.g., rename a function and update all call sites)
+- Use multi_edit for coordinated multi-file refactoring where order matters
+
+Examples:
+
+Multiple text replacements across files:
+<multi_edit>
+<edits>[
+  {"file_path": "src/main.js", "old_string": "return false;", "new_string": "return true;"},
+  {"file_path": "src/config.js", "old_string": "debug: false", "new_string": "debug: true"}
+]</edits>
+</multi_edit>
+
+Mixed edit modes in one batch:
+<multi_edit>
+<edits>[
+  {"file_path": "src/utils.js", "symbol": "oldHelper", "new_string": "function newHelper() { return 42; }"},
+  {"file_path": "src/main.js", "old_string": "oldHelper()", "new_string": "newHelper()", "replace_all": true},
+  {"file_path": "src/index.js", "start_line": "10", "end_line": "12", "new_string": "export { newHelper };"}
+]</edits>
+</multi_edit>`;
