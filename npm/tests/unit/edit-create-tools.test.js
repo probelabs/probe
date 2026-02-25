@@ -1110,4 +1110,92 @@ if (!user.email) {
       expect(check.ok).toBe(true);
     });
   });
+
+  // ─── workingDirectory Integration ───
+
+  describe('workingDirectory parameter', () => {
+    let subDir;
+
+    beforeEach(async () => {
+      subDir = join(testDir, 'subproject');
+      await fs.mkdir(subDir, { recursive: true });
+    });
+
+    test('create tool uses workingDirectory for relative paths', async () => {
+      // Tool created with cwd=testDir (parent), but workingDirectory=subDir at runtime
+      const create = createTool({
+        cwd: testDir,
+        allowedFolders: [testDir]
+      });
+
+      const result = await create.execute({
+        file_path: 'new.txt',
+        content: 'created in subproject',
+        workingDirectory: subDir
+      });
+
+      expect(result).toContain('Successfully created');
+      // File should be in subDir, not testDir
+      expect(existsSync(join(subDir, 'new.txt'))).toBe(true);
+      expect(existsSync(join(testDir, 'new.txt'))).toBe(false);
+
+      const content = await fs.readFile(join(subDir, 'new.txt'), 'utf-8');
+      expect(content).toBe('created in subproject');
+    });
+
+    test('create tool falls back to cwd when workingDirectory not provided', async () => {
+      const create = createTool({
+        cwd: testDir,
+        allowedFolders: [testDir]
+      });
+
+      const result = await create.execute({
+        file_path: 'fallback.txt',
+        content: 'in parent dir'
+      });
+
+      expect(result).toContain('Successfully created');
+      expect(existsSync(join(testDir, 'fallback.txt'))).toBe(true);
+    });
+
+    test('edit tool uses workingDirectory for relative paths', async () => {
+      const targetFile = join(subDir, 'target.txt');
+      await fs.writeFile(targetFile, 'original text');
+
+      const edit = editTool({
+        cwd: testDir,
+        allowedFolders: [testDir]
+      });
+
+      const result = await edit.execute({
+        file_path: 'target.txt',
+        old_string: 'original text',
+        new_string: 'modified text',
+        workingDirectory: subDir
+      });
+
+      expect(result).toContain('Successfully edited');
+
+      const content = await fs.readFile(targetFile, 'utf-8');
+      expect(content).toBe('modified text');
+    });
+
+    test('create tool ignores workingDirectory for absolute paths', async () => {
+      const absolutePath = join(testDir, 'absolute.txt');
+
+      const create = createTool({
+        cwd: '/some/other/path',
+        allowedFolders: [testDir]
+      });
+
+      const result = await create.execute({
+        file_path: absolutePath,
+        content: 'absolute path content',
+        workingDirectory: '/yet/another/path'
+      });
+
+      expect(result).toContain('Successfully created');
+      expect(existsSync(absolutePath)).toBe(true);
+    });
+  });
 });

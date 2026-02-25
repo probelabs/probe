@@ -363,7 +363,7 @@ Parameters:
       required: ['file_path', 'new_string']
     },
 
-    execute: async ({ file_path, old_string, new_string, replace_all = false, symbol, position, start_line, end_line }) => {
+    execute: async ({ file_path, old_string, new_string, replace_all = false, symbol, position, start_line, end_line, workingDirectory }) => {
       try {
         // Validate input parameters
         if (!file_path || typeof file_path !== 'string' || file_path.trim() === '') {
@@ -373,8 +373,9 @@ Parameters:
           return `Error editing file: Invalid new_string - must be a string. Provide the replacement content as a string value (empty string "" is valid for deletions).`;
         }
 
-        // Resolve the file path
-        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(cwd || process.cwd(), file_path);
+        // Resolve the file path (workingDirectory from runtime takes priority over cwd from tool creation)
+        const effectiveCwd = workingDirectory || cwd || process.cwd();
+        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(effectiveCwd, file_path);
 
         if (debug) {
           console.error(`[Edit] Attempting to edit file: ${resolvedPath}`);
@@ -530,7 +531,7 @@ Important:
       required: ['file_path', 'content']
     },
 
-    execute: async ({ file_path, content, overwrite = false }) => {
+    execute: async ({ file_path, content, overwrite = false, workingDirectory }) => {
       try {
         // Validate input parameters
         if (!file_path || typeof file_path !== 'string' || file_path.trim() === '') {
@@ -540,8 +541,9 @@ Important:
           return `Error creating file: Invalid content - must be a string. Provide the file content as a string value (empty string "" is valid for an empty file).`;
         }
 
-        // Resolve the file path
-        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(cwd || process.cwd(), file_path);
+        // Resolve the file path (workingDirectory from runtime takes priority over cwd from tool creation)
+        const effectiveCwd = workingDirectory || cwd || process.cwd();
+        const resolvedPath = isAbsolute(file_path) ? file_path : resolve(effectiveCwd, file_path);
 
         if (debug) {
           console.error(`[Create] Attempting to create file: ${resolvedPath}`);
