@@ -402,6 +402,29 @@ export class BashPermissionChecker {
           i++;
           continue;
         }
+        // Check for newline (command separator in multi-line scripts)
+        // Also handle \r\n (CRLF) line endings
+        if (char === '\n' || (char === '\r' && nextChar === '\n')) {
+          if (current.trim()) {
+            components.push(current.trim());
+          }
+          current = '';
+          if (char === '\r') {
+            i += 2; // Skip \r\n
+          } else {
+            i++;
+          }
+          continue;
+        }
+        if (char === '\r') {
+          // Bare \r without \n
+          if (current.trim()) {
+            components.push(current.trim());
+          }
+          current = '';
+          i++;
+          continue;
+        }
       }
 
       current += char;

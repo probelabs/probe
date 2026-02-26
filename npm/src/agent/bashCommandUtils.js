@@ -127,6 +127,8 @@ export function parseSimpleCommand(command) {
     /&&/,           // Logical AND
     /\|\|/,         // Logical OR
     /(?<!\\);/,     // Command separator (but not escaped \;)
+    /\n/,           // Newline command separator (multi-line commands)
+    /\r/,           // Carriage return (CRLF line endings)
     /&$/,           // Background execution
     /\$\(/,         // Command substitution $()
     /`/,            // Command substitution ``
@@ -260,6 +262,7 @@ export function isComplexPattern(pattern) {
     /&&/,           // Logical AND
     /\|\|/,         // Logical OR
     /;/,            // Command separator
+    /\n/,           // Newline command separator
     /&$/,           // Background execution
     /\$\(/,         // Command substitution $()
     /`/,            // Command substitution ``
