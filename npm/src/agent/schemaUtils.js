@@ -267,6 +267,36 @@ function normalizeJsonQuotes(str) {
 }
 
 /**
+ * Check if a code block is embedded within a structured markdown document.
+ * Used to avoid extracting embedded JSON examples from markdown text.
+ * Issue #456: attempt_completion results containing markdown with JSON code block
+ * documentation examples were having the examples extracted as structured output.
+ *
+ * Normal AI behavior: AI wraps JSON answer in a code block with brief explanation text.
+ * Issue #456: AI returns a markdown document that contains JSON code blocks as examples.
+ *
+ * We distinguish these by checking if the surrounding text contains markdown structural
+ * elements (headings) which indicate a document rather than a brief explanation.
+ *
+ * @param {string} text - The full trimmed text
+ * @param {RegExpMatchArray} match - The regex match for the code block
+ * @returns {boolean} - true if the code block is embedded in a markdown document
+ */
+function isCodeBlockEmbeddedInDocument(text, match) {
+  const beforeBlock = text.substring(0, match.index).trim();
+  const afterBlock = text.substring(match.index + match[0].length).trim();
+
+  // Check if surrounding text contains markdown headings (lines starting with #)
+  // This is a strong signal that the content is a structured document, not just explanation text
+  const hasMarkdownHeadings = /^#{1,6}\s/m.test(beforeBlock) || /^#{1,6}\s/m.test(afterBlock);
+  if (hasMarkdownHeadings) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Clean AI response by extracting JSON content when response contains JSON
  * Only processes responses that contain JSON structures { or [
  *
@@ -311,15 +341,20 @@ export function cleanSchemaResponse(response) {
   }
 
   // First, look for JSON after code block markers - similar to mermaid extraction
+  // Only extract from code blocks when they are the primary content (not embedded examples in markdown).
+  // Issue #456: When attempt_completion result contains markdown with embedded JSON code blocks
+  // as documentation examples, extracting those blocks produces wrong structured output.
+  // We check that there's no significant text content outside the code block.
+
   // Try with json language specifier
   const jsonBlockMatch = trimmed.match(/```json\s*\n([\s\S]*?)\n```/);
-  if (jsonBlockMatch) {
+  if (jsonBlockMatch && !isCodeBlockEmbeddedInDocument(trimmed, jsonBlockMatch)) {
     return normalizeJsonQuotes(jsonBlockMatch[1].trim());
   }
 
   // Try any code block with JSON content
   const anyBlockMatch = trimmed.match(/```\s*\n([{\[][\s\S]*?[}\]])\s*```/);
-  if (anyBlockMatch) {
+  if (anyBlockMatch && !isCodeBlockEmbeddedInDocument(trimmed, anyBlockMatch)) {
     return normalizeJsonQuotes(anyBlockMatch[1].trim());
   }
 
@@ -331,7 +366,7 @@ export function cleanSchemaResponse(response) {
 
   for (const pattern of codeBlockPatterns) {
     const match = trimmed.match(pattern);
-    if (match) {
+    if (match && !isCodeBlockEmbeddedInDocument(trimmed, match)) {
       return normalizeJsonQuotes(match[1].trim());
     }
   }
@@ -345,10 +380,11 @@ export function cleanSchemaResponse(response) {
   }
 
   // Look for code block start followed immediately by JSON
+  // Only extract if the code block is not embedded in a structured markdown document
   const codeBlockStartPattern = /```(?:json)?\s*\n?\s*([{\[])/;
   const codeBlockMatch = trimmed.match(codeBlockStartPattern);
 
-  if (codeBlockMatch) {
+  if (codeBlockMatch && !isCodeBlockEmbeddedInDocument(trimmed, codeBlockMatch)) {
     const startIndex = codeBlockMatch.index + codeBlockMatch[0].length - 1; // Position of the bracket
 
     // Find the matching closing bracket

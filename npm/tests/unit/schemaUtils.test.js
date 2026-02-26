@@ -310,6 +310,76 @@ describe('Schema Utilities', () => {
         expect(result).toBe('{"message": "The <result> tag was found"}');
       });
     });
+
+    // Issue #456: attempt_completion result with embedded JSON code blocks
+    describe('embedded JSON code blocks in markdown (issue #456)', () => {
+      test('should not extract embedded JSON example from markdown text', () => {
+        // This is the exact scenario from issue #456:
+        // attempt_completion result contains markdown with a JSON code block as a documentation example.
+        // cleanSchemaResponse should NOT extract the embedded JSON as the structured output.
+        const attemptCompletionResult = `I am sorry, but I am unable to complete the original task of creating the webhook notification.
+
+Here is the full content for the documentation page:
+
+## Webhook Configuration
+
+To set up a Slack notification webhook, use the following configuration:
+
+\`\`\`json
+{
+  "name": "SlackNotification",
+  "method": "POST",
+  "target_path": "https://hooks.slack.com/services/T00000000/B00000000/XXX",
+  "template_path": "",
+  "header_map": {"Content-Type": "application/json"},
+  "event_timeout": 60
+}
+\`\`\`
+
+This configuration will send POST requests to the Slack webhook URL with JSON content.`;
+
+        const result = cleanSchemaResponse(attemptCompletionResult);
+
+        // The function should NOT extract the embedded JSON code block.
+        // It should return the original text since it's markdown, not a JSON response.
+        expect(result).toBe(attemptCompletionResult);
+
+        // Specifically, it should NOT return the Slack webhook config JSON
+        expect(result).not.toBe('{\n  "name": "SlackNotification",\n  "method": "POST",\n  "target_path": "https://hooks.slack.com/services/T00000000/B00000000/XXX",\n  "template_path": "",\n  "header_map": {"Content-Type": "application/json"},\n  "event_timeout": 60\n}');
+      });
+
+      test('should not extract JSON when markdown document has headings around the code block', () => {
+        const input = `## API Response Format
+
+Here is an example API response:
+
+\`\`\`json
+{"status": "ok", "data": [1, 2, 3]}
+\`\`\`
+
+Use this format for all API endpoints.`;
+
+        const result = cleanSchemaResponse(input);
+
+        // Should return original since the JSON block is embedded in a document with headings
+        expect(result).toBe(input);
+      });
+
+      test('should still extract JSON when the entire response is just a code block', () => {
+        // This is the normal case - AI wraps its JSON response in a code block
+        const input = '```json\n{"issues": [], "output": {"text": "All good"}}\n```';
+        const result = cleanSchemaResponse(input);
+
+        expect(result).toBe('{"issues": [], "output": {"text": "All good"}}');
+      });
+
+      test('should still extract JSON from code block with minimal surrounding whitespace', () => {
+        const input = '  ```json\n{"result": true}\n```  ';
+        const result = cleanSchemaResponse(input);
+
+        expect(result).toBe('{"result": true}');
+      });
+    });
   });
 
   describe('validateJsonResponse', () => {
