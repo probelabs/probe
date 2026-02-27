@@ -387,18 +387,42 @@ export function cleanSchemaResponse(response) {
   if (codeBlockMatch && !isCodeBlockEmbeddedInDocument(trimmed, codeBlockMatch)) {
     const startIndex = codeBlockMatch.index + codeBlockMatch[0].length - 1; // Position of the bracket
 
-    // Find the matching closing bracket
+    // Find the matching closing bracket (string-aware to avoid miscounting
+    // brackets inside JSON string values)
     const openChar = codeBlockMatch[1];
     const closeChar = openChar === '{' ? '}' : ']';
     let bracketCount = 1;
     let endIndex = startIndex + 1;
+    let inString = false;
+    let escapeNext = false;
 
     while (endIndex < trimmed.length && bracketCount > 0) {
       const char = trimmed[endIndex];
-      if (char === openChar) {
-        bracketCount++;
-      } else if (char === closeChar) {
-        bracketCount--;
+
+      if (escapeNext) {
+        escapeNext = false;
+        endIndex++;
+        continue;
+      }
+
+      if (char === '\\' && inString) {
+        escapeNext = true;
+        endIndex++;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        endIndex++;
+        continue;
+      }
+
+      if (!inString) {
+        if (char === openChar) {
+          bracketCount++;
+        } else if (char === closeChar) {
+          bracketCount--;
+        }
       }
       endIndex++;
     }
