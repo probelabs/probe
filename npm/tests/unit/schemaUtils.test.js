@@ -175,6 +175,24 @@ describe('Schema Utilities', () => {
       expect(cleanSchemaResponse(input)).toBe(expected);
     });
 
+    test('should not truncate when JSON string values contain brackets', () => {
+      // Regression: bracket counter must skip brackets inside quoted strings
+      const input = '```json\n{"text": "Configure with: \\\"http_server_options\\\": { \\\"use_ssl\\\": true } and restart."}\n```';
+      const result = cleanSchemaResponse(input);
+      const parsed = JSON.parse(result);
+      expect(parsed.text).toContain('use_ssl');
+      expect(parsed.text).toContain('and restart.');
+    });
+
+    test('should not truncate when JSON string values contain unescaped closing braces', () => {
+      // The text field contains } characters that look like JSON closing braces
+      const jsonObj = {"text": "Step 1: add { \"key\": \"val\" } to config. Step 2: restart. Step 3: verify."};
+      const input = '```json\n' + JSON.stringify(jsonObj) + '\n```';
+      const result = cleanSchemaResponse(input);
+      const parsed = JSON.parse(result);
+      expect(parsed.text).toBe(jsonObj.text);
+    });
+
     test('should not extract JSON when embedded in surrounding text', () => {
       const input = 'Here is some JSON: {"test": "value"} that should be extracted';
       // Should return original since JSON has text before and after it
