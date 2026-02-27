@@ -29,4 +29,16 @@ pub trait LanguageImpl {
         // Each language should implement this to extract clean signatures
         None
     }
+
+    /// Extract the receiver/associated type name from a method declaration node.
+    ///
+    /// For languages where methods are declared outside of type definitions
+    /// (e.g., Go receiver methods: `func (r *Type) Method()`), this method
+    /// extracts the type name ("Type") so that `Type.Method` lookups can
+    /// resolve correctly.
+    ///
+    /// Default: returns None (most languages use class nesting instead).
+    fn get_receiver_type(&self, _node: &Node, _source: &[u8]) -> Option<String> {
+        None
+    }
 }

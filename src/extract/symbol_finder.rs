@@ -22,7 +22,11 @@ fn get_qualified_name<'a>(
             // Try to get the identifier name of this parent node
             let mut cursor = parent.walk();
             for child in parent.children(&mut cursor) {
-                if child.kind() == "identifier" || child.kind() == "type_identifier" {
+                if child.kind() == "identifier"
+                    || child.kind() == "type_identifier"
+                    || child.kind() == "field_identifier"
+                    || child.kind() == "name"
+                {
                     if let Ok(name) = child.utf8_text(content) {
                         // Skip if the parent's name is the same as the symbol
                         // (e.g., the node IS the symbol, not a container)
@@ -75,6 +79,8 @@ fn find_all_symbol_nodes<'a>(
                 || child.kind() == "field_identifier"
                 || child.kind() == "type_identifier"
                 || child.kind() == "property_identifier"
+                || child.kind() == "name"
+            // PHP uses "name" for identifiers
             {
                 if let Ok(name) = child.utf8_text(content) {
                     if debug_mode {
@@ -427,6 +433,62 @@ pub fn find_all_symbols_in_file(
             "[DEBUG] Found {} AST matches for '{symbol}'",
             matched_nodes.len()
         );
+    }
+
+    // For nested symbols (e.g., "Type.Method"), if AST search failed,
+    // try receiver-based method resolution. This handles languages like Go
+    // where methods are declared at the module level with a receiver parameter
+    // (e.g., `func (r *Type) Method()`) instead of being nested inside the type.
+    if matched_nodes.is_empty() && symbol_parts.len() > 1 {
+        let parent_name = symbol_parts[0];
+        let method_name = symbol_parts[1];
+
+        if debug_mode {
+            println!(
+                "[DEBUG] Trying receiver-based method resolution for '{parent_name}.{method_name}'"
+            );
+        }
+
+        let mut cursor = root_node.walk();
+        for child in root_node.children(&mut cursor) {
+            if language_impl.is_acceptable_parent(&child) {
+                if let Some(receiver_type) =
+                    language_impl.get_receiver_type(&child, content.as_bytes())
+                {
+                    if receiver_type == parent_name {
+                        // Check if this node's method name matches
+                        let mut name_cursor = child.walk();
+                        for name_child in child.children(&mut name_cursor) {
+                            if name_child.kind() == "field_identifier"
+                                || name_child.kind() == "identifier"
+                                || name_child.kind() == "property_identifier"
+                            {
+                                if let Ok(name) = name_child.utf8_text(content.as_bytes()) {
+                                    if name == method_name {
+                                        if debug_mode {
+                                            println!(
+                                                "[DEBUG] Found receiver method '{parent_name}.{method_name}' at lines {}-{}",
+                                                child.start_position().row + 1,
+                                                child.end_position().row + 1
+                                            );
+                                        }
+                                        matched_nodes.push(child);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if debug_mode {
+            println!(
+                "[DEBUG] Receiver-based resolution found {} matches",
+                matched_nodes.len()
+            );
+        }
     }
 
     // If no AST matches, fall back to text search
