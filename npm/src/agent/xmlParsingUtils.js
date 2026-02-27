@@ -11,7 +11,7 @@ import { DEFAULT_VALID_TOOLS, buildToolTagPattern } from '../tools/common.js';
  * @param {string} xmlString - The XML string to clean
  * @returns {string} - Cleaned XML string without thinking tags
  */
-export function removeThinkingTags(xmlString) {
+export function removeThinkingTags(xmlString, validTools = DEFAULT_VALID_TOOLS) {
   let result = xmlString;
 
   // Remove all properly closed thinking tags first
@@ -26,8 +26,8 @@ export function removeThinkingTags(xmlString) {
     const afterThinking = result.substring(thinkingIndex + '<thinking>'.length);
 
     // Look for any tool tags in the remaining content
-    // Use the shared tool list to build the pattern dynamically
-    const toolPattern = buildToolTagPattern(DEFAULT_VALID_TOOLS);
+    // Use the provided valid tools list to build the pattern dynamically
+    const toolPattern = buildToolTagPattern(validTools);
     const toolMatch = afterThinking.match(toolPattern);
 
     if (toolMatch) {
@@ -201,7 +201,9 @@ export function processXmlWithThinkingAndRecovery(xmlString, validTools = []) {
   const thinkingContent = extractThinkingContent(xmlString);
 
   // Remove thinking tags and their content from the XML string
-  const cleanedXmlString = removeThinkingTags(xmlString);
+  // Forward validTools so that tool tags (e.g. edit, create) inside unclosed
+  // thinking blocks are preserved when they are in the valid tools list
+  const cleanedXmlString = removeThinkingTags(xmlString, validTools.length > 0 ? validTools : undefined);
 
   // Check for attempt_complete recovery patterns
   const recoveryResult = checkAttemptCompleteRecovery(cleanedXmlString, validTools);

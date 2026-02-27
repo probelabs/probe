@@ -1944,3 +1944,77 @@ last line
     });
   });
 });
+
+describe('Issue #459: removeThinkingTags drops edit/create tool calls in unclosed thinking tags', () => {
+  const VALID_TOOLS_WITH_EDIT = [...DEFAULT_VALID_TOOLS, 'edit', 'create'];
+
+  const EDIT_IN_UNCLOSED_THINKING = `<thinking>
+I will use the edit tool to insert new content.<edit>
+<file_path>docs/configuration.mdx</file_path>
+<old_string>## Sample config file</old_string>
+<new_string>## New section\n\n## Sample config file</new_string>
+</edit>`;
+
+  const CREATE_IN_UNCLOSED_THINKING = `<thinking>
+I will use the create tool to overwrite the file.<create>
+<file_path>docs/configuration.mdx</file_path>
+<content>New file content here.</content>
+</create>`;
+
+  describe('removeThinkingTags bug with DEFAULT_VALID_TOOLS', () => {
+    test('BUG: removeThinkingTags drops <edit> because edit is not in DEFAULT_VALID_TOOLS', () => {
+      // With default tools only, <edit> is not recognized and everything is stripped
+      const result = removeThinkingTags(EDIT_IN_UNCLOSED_THINKING);
+      expect(result).toBe(''); // BUG: everything stripped
+    });
+
+    test('BUG: removeThinkingTags drops <create> because create is not in DEFAULT_VALID_TOOLS', () => {
+      const result = removeThinkingTags(CREATE_IN_UNCLOSED_THINKING);
+      expect(result).toBe(''); // BUG: everything stripped
+    });
+
+    test('removeThinkingTags preserves <bash> because bash IS in DEFAULT_VALID_TOOLS', () => {
+      const input = '<thinking>Let me check.<bash><command>ls</command></bash>';
+      const result = removeThinkingTags(input);
+      expect(result).toContain('<bash>');
+    });
+  });
+
+  describe('removeThinkingTags fix with validTools parameter', () => {
+    test('removeThinkingTags preserves <edit> when edit is in validTools', () => {
+      const result = removeThinkingTags(EDIT_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
+      expect(result).toContain('<edit>');
+      expect(result).toContain('<file_path>');
+    });
+
+    test('removeThinkingTags preserves <create> when create is in validTools', () => {
+      const result = removeThinkingTags(CREATE_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
+      expect(result).toContain('<create>');
+      expect(result).toContain('<file_path>');
+    });
+  });
+
+  describe('parseXmlToolCallWithThinking end-to-end with edit/create', () => {
+    test('parses <edit> inside unclosed thinking when validTools includes edit', () => {
+      const result = parseXmlToolCallWithThinking(EDIT_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
+      expect(result).not.toBeNull();
+      expect(result.toolName).toBe('edit');
+      expect(result.params.file_path).toBe('docs/configuration.mdx');
+      expect(result.params.old_string).toBe('## Sample config file');
+    });
+
+    test('parses <create> inside unclosed thinking when validTools includes create', () => {
+      const result = parseXmlToolCallWithThinking(CREATE_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
+      expect(result).not.toBeNull();
+      expect(result.toolName).toBe('create');
+      expect(result.params.file_path).toBe('docs/configuration.mdx');
+    });
+
+    test('<edit> after closed </thinking> already works', () => {
+      const input = '<thinking>reasoning</thinking><edit><file_path>f.txt</file_path><old_string>a</old_string><new_string>b</new_string></edit>';
+      const result = parseXmlToolCallWithThinking(input, VALID_TOOLS_WITH_EDIT);
+      expect(result).not.toBeNull();
+      expect(result.toolName).toBe('edit');
+    });
+  });
+});
