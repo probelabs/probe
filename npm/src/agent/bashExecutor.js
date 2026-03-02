@@ -8,6 +8,191 @@ import { resolve, join } from 'path';
 import { existsSync } from 'fs';
 import { parseCommandForExecution, isComplexCommand } from './bashCommandUtils.js';
 
+// ─── Interactive Command Detection ─────────────────────────────────────────
+
+/**
+ * Split a command string by shell operators (&&, ||, |, ;) while respecting quotes.
+ * Used for interactive command detection in complex pipelines.
+ * @param {string} command - Command string to split
+ * @returns {string[]} Array of individual command strings
+ */
+function splitCommandComponents(command) {
+  const parts = [];
+  let current = '';
+  let inQuote = false;
+  let quoteChar = '';
+
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    const next = command[i + 1] || '';
+
+    // Handle escape sequences
+    if (c === '\\' && !inQuote) {
+      current += c + next;
+      i++;
+      continue;
+    }
+    if (inQuote && quoteChar === '"' && c === '\\' && next) {
+      current += c + next;
+      i++;
+      continue;
+    }
+
+    // Track quotes
+    if (!inQuote && (c === '"' || c === "'")) {
+      inQuote = true;
+      quoteChar = c;
+      current += c;
+      continue;
+    }
+    if (inQuote && c === quoteChar) {
+      inQuote = false;
+      current += c;
+      continue;
+    }
+
+    // Split on operators outside quotes
+    if (!inQuote) {
+      if ((c === '&' && next === '&') || (c === '|' && next === '|')) {
+        if (current.trim()) parts.push(current.trim());
+        current = '';
+        i++;
+        continue;
+      }
+      if (c === '|' || c === ';') {
+        if (current.trim()) parts.push(current.trim());
+        current = '';
+        continue;
+      }
+    }
+
+    current += c;
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+/**
+ * Check a single (non-compound) command for interactive behavior.
+ * Strips leading env-var assignments (e.g. GIT_EDITOR=true) before checking.
+ *
+ * @param {string} command - Single command string
+ * @returns {string|null} Error message with suggestion, or null if not interactive
+ */
+function checkSingleCommandInteractive(command) {
+  let effective = command.trim();
+
+  // Strip leading VAR=VALUE prefixes (e.g. "GIT_EDITOR=true git rebase --continue")
+  while (/^\w+=\S*\s/.test(effective)) {
+    effective = effective.replace(/^\w+=\S*\s+/, '');
+  }
+
+  const parts = effective.split(/\s+/);
+  const base = parts[0];
+  const args = parts.slice(1);
+
+  // ── Interactive editors ──
+  if (['vi', 'vim', 'nvim', 'nano', 'emacs', 'pico', 'joe', 'mcedit'].includes(base)) {
+    return `'${base}' is an interactive editor and cannot run without a terminal. Use non-interactive file manipulation commands instead.`;
+  }
+
+  // ── Interactive pagers ──
+  if (['less', 'more'].includes(base)) {
+    return `'${base}' is an interactive pager. Use 'cat', 'head', or 'tail' instead.`;
+  }
+
+  // ── Git commands that open an editor ──
+  if (base === 'git') {
+    const sub = args[0];
+
+    // git commit without -m / --message / -C / -c / --fixup / --squash / --no-edit
+    if (sub === 'commit') {
+      const hasNonInteractiveFlag = args.some(a =>
+        a === '-m' || a.startsWith('--message') ||
+        a === '-C' || a === '-c' ||
+        a.startsWith('--fixup') || a.startsWith('--squash') ||
+        a === '--allow-empty-message' || a === '--no-edit'
+      );
+      if (!hasNonInteractiveFlag) {
+        return "Interactive command: 'git commit' opens an editor for the commit message. Use 'git commit -m \"your message\"' instead.";
+      }
+    }
+
+    // git rebase --continue / --skip (opens editor for commit message)
+    if (sub === 'rebase' && (args.includes('--continue') || args.includes('--skip'))) {
+      return "Interactive command: 'git rebase --continue' opens an editor. Set environment variable GIT_EDITOR=true to accept default messages, e.g. pass env: {GIT_EDITOR: 'true'} or prepend GIT_EDITOR=true to the command.";
+    }
+
+    // git rebase -i / --interactive
+    if (sub === 'rebase' && (args.includes('-i') || args.includes('--interactive'))) {
+      return "Interactive command: 'git rebase -i' requires an interactive editor. Interactive rebase cannot run without a terminal.";
+    }
+
+    // git merge without --no-edit / --no-commit / --ff-only
+    if (sub === 'merge' && !args.includes('--no-edit') && !args.includes('--no-commit') && !args.includes('--ff-only')) {
+      return "Interactive command: 'git merge' may open an editor for the merge commit message. Add '--no-edit' to accept the default message.";
+    }
+
+    // git cherry-pick without --no-edit
+    if (sub === 'cherry-pick' && !args.includes('--no-edit')) {
+      return "Interactive command: 'git cherry-pick' may open an editor. Add '--no-edit' to accept the default message.";
+    }
+
+    // git revert without --no-edit
+    if (sub === 'revert' && !args.includes('--no-edit')) {
+      return "Interactive command: 'git revert' opens an editor. Add '--no-edit' to accept the default message.";
+    }
+
+    // git tag -a without -m
+    if (sub === 'tag' && args.includes('-a') && !args.some(a => a === '-m' || a.startsWith('--message'))) {
+      return "Interactive command: 'git tag -a' opens an editor for the tag message. Use 'git tag -a <name> -m \"message\"' instead.";
+    }
+
+    // git add -i / --interactive / -p / --patch
+    if (sub === 'add' && (args.includes('-i') || args.includes('--interactive') || args.includes('-p') || args.includes('--patch'))) {
+      return "Interactive command: 'git add -i/-p' requires interactive input. Use 'git add <files>' to stage specific files instead.";
+    }
+  }
+
+  // ── Interactive REPLs (no arguments = interactive mode) ──
+  if (['python', 'python3', 'node', 'irb', 'ghci', 'lua', 'R', 'ruby'].includes(base) && args.length === 0) {
+    return `Interactive command: '${base}' without arguments starts an interactive REPL. Provide a script file or use '-c'/'--eval' for inline code.`;
+  }
+
+  // ── Database clients without query flag ──
+  if (base === 'mysql' && !args.some(a => a === '-e' || a.startsWith('--execute'))) {
+    return "Interactive command: 'mysql' without -e flag starts an interactive session. Use 'mysql -e \"SQL QUERY\"' instead.";
+  }
+  if (base === 'psql' && !args.some(a => a === '-c' || a.startsWith('--command') || a === '-f' || a.startsWith('--file'))) {
+    return "Interactive command: 'psql' without -c flag starts an interactive session. Use 'psql -c \"SQL QUERY\"' instead.";
+  }
+
+  // ── Interactive TUI tools ──
+  if (['top', 'htop', 'btop', 'nmon'].includes(base)) {
+    return `Interactive command: '${base}' is an interactive TUI tool. Use 'ps aux' or 'top -b -n 1' for non-interactive process listing.`;
+  }
+
+  return null;
+}
+
+/**
+ * Check if a command (simple or complex) would require interactive TTY input.
+ * For complex commands (with &&, ||, |, ;), checks each component individually.
+ *
+ * @param {string} command - Full command string
+ * @returns {string|null} Error message with suggestion for non-interactive alternative, or null if OK
+ */
+export function checkInteractiveCommand(command) {
+  if (!command || typeof command !== 'string') return null;
+
+  const components = splitCommandComponents(command.trim());
+  for (const component of components) {
+    const result = checkSingleCommandInteractive(component);
+    if (result) return result;
+  }
+  return null;
+}
+
 /**
  * Execute a bash command with security controls
  * @param {string} command - Command to execute
@@ -50,6 +235,26 @@ export async function executeBashCommand(command, options = {}) {
 
   const startTime = Date.now();
 
+  // Check for interactive commands that would hang without a TTY
+  const interactiveError = checkInteractiveCommand(command);
+  if (interactiveError) {
+    if (debug) {
+      console.log(`[BashExecutor] Blocked interactive command: "${command}"`);
+      console.log(`[BashExecutor] Reason: ${interactiveError}`);
+    }
+    return {
+      success: false,
+      error: interactiveError,
+      stdout: '',
+      stderr: interactiveError,
+      exitCode: 1,
+      command,
+      workingDirectory: cwd,
+      duration: 0,
+      interactive: true
+    };
+  }
+
   if (debug) {
     console.log(`[BashExecutor] Executing command: "${command}"`);
     console.log(`[BashExecutor] Working directory: "${cwd}"`);
@@ -57,11 +262,16 @@ export async function executeBashCommand(command, options = {}) {
   }
 
   return new Promise((resolve, reject) => {
-    // Create environment
+    // Create environment with non-interactive safety defaults.
+    // These prevent commands from opening editors or TTY prompts
+    // when stdin is not available (which would cause hangs).
     const processEnv = {
       ...process.env,
       ...env
     };
+    // Only set defaults if not already provided by user config
+    if (!processEnv.GIT_EDITOR) processEnv.GIT_EDITOR = 'true';
+    if (!processEnv.GIT_TERMINAL_PROMPT) processEnv.GIT_TERMINAL_PROMPT = '0';
 
     // Check if this is a complex command (contains pipes, operators, etc.)
     const isComplex = isComplexCommand(command);
@@ -97,12 +307,17 @@ export async function executeBashCommand(command, options = {}) {
       useShell = false;
     }
 
-    // Spawn the process
+    // Spawn the process in a new session (detached: true → setsid on Linux).
+    // This detaches the child from the parent's controlling terminal, making
+    // /dev/tty unavailable. Any program that tries to open an interactive
+    // editor or TTY prompt (e.g. vim from git rebase) will get ENXIO and
+    // fail immediately instead of hanging forever.
     const child = spawn(cmd, cmdArgs, {
       cwd,
       env: processEnv,
       stdio: ['ignore', 'pipe', 'pipe'], // stdin ignored, capture stdout/stderr
       shell: useShell, // false for security
+      detached: true, // new session — no controlling terminal
       windowsHide: true
     });
 
@@ -111,17 +326,28 @@ export async function executeBashCommand(command, options = {}) {
     let killed = false;
     let timeoutHandle;
 
+    // Helper: kill the entire process group (negative PID) so that
+    // sub-processes spawned by the command (e.g. an editor) are also killed.
+    // Falls back to killing just the child if process.kill fails.
+    const killProcessGroup = (signal) => {
+      try {
+        if (child.pid) process.kill(-child.pid, signal);
+      } catch {
+        try { child.kill(signal); } catch { /* already dead */ }
+      }
+    };
+
     // Set timeout
     if (timeout > 0) {
       timeoutHandle = setTimeout(() => {
         if (!killed) {
           killed = true;
-          child.kill('SIGTERM');
-          
+          killProcessGroup('SIGTERM');
+
           // Force kill after 5 seconds if still running
           setTimeout(() => {
             if (child.exitCode === null) {
-              child.kill('SIGKILL');
+              killProcessGroup('SIGKILL');
             }
           }, 5000);
         }
@@ -137,7 +363,7 @@ export async function executeBashCommand(command, options = {}) {
         // Buffer overflow
         if (!killed) {
           killed = true;
-          child.kill('SIGTERM');
+          killProcessGroup('SIGTERM');
         }
       }
     });
@@ -151,7 +377,7 @@ export async function executeBashCommand(command, options = {}) {
         // Buffer overflow
         if (!killed) {
           killed = true;
-          child.kill('SIGTERM');
+          killProcessGroup('SIGTERM');
         }
       }
     });
