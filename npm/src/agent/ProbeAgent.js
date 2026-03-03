@@ -1836,9 +1836,13 @@ export class ProbeAgent {
     }
 
     // Add all enabled tools from toolImplementations
+    // Note: MCP tools are also in toolImplementations but have no schema in _getToolSchemaAndDescription.
+    // They are handled separately via mcpBridge.getVercelTools() below, so we skip them here.
     for (const [toolName, toolImpl] of Object.entries(this.toolImplementations)) {
       // Get schema and description for this tool
-      const { schema, description } = this._getToolSchemaAndDescription(toolName);
+      const toolInfo = this._getToolSchemaAndDescription(toolName);
+      if (!toolInfo) continue;
+      const { schema, description } = toolInfo;
       if (schema && description) {
         nativeTools[toolName] = wrapTool(toolName, schema, description, toolImpl.execute);
       }

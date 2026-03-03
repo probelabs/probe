@@ -116,6 +116,59 @@ describe('MCP Tool Native Integration', () => {
       expect(tools).toHaveProperty('attempt_completion');
       expect(tools).not.toHaveProperty('test_mcp_tool');
     });
+
+    test('should not crash when MCP tools are in toolImplementations (issue #469)', () => {
+      // Reproduce the exact scenario from the bug:
+      // After initializeMCP(), MCP tools are merged into toolImplementations.
+      // _buildNativeTools iterates ALL toolImplementations, including MCP tools.
+      // _getToolSchemaAndDescription returns null for MCP tools, causing a
+      // TypeError when destructuring: Cannot destructure property 'schema' of null.
+      const mcpToolName = '__tools___slack-send-dm';
+      agent.toolImplementations[mcpToolName] = {
+        execute: jest.fn(async () => 'MCP result')
+      };
+
+      // This should NOT throw "Cannot destructure property 'schema' of null"
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+
+      // MCP tools in toolImplementations should be skipped (no schema known)
+      // They get included via mcpBridge.getVercelTools() instead
+      expect(tools).not.toHaveProperty(mcpToolName);
+      // MCP tool from the bridge should still be present
+      expect(tools).toHaveProperty('test_mcp_tool');
+      expect(tools).toHaveProperty('attempt_completion');
+    });
+
+    test('should handle multiple MCP tools in toolImplementations without crash', () => {
+      // Simulate what initializeMCP does: merge all MCP tools into toolImplementations
+      const mcpTools = {
+        '__tools___slack-send-dm': { execute: jest.fn() },
+        '__tools___slack-search': { execute: jest.fn() },
+        '__tools___slack-read-thread': { execute: jest.fn() },
+        '__tools___slack-download-file': { execute: jest.fn() },
+      };
+      for (const [name, impl] of Object.entries(mcpTools)) {
+        agent.toolImplementations[name] = impl;
+      }
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      // None of the MCP tools from toolImplementations should be in native tools
+      for (const name of Object.keys(mcpTools)) {
+        expect(tools).not.toHaveProperty(name);
+      }
+      // But the bridge-provided MCP tool should be there
+      expect(tools).toHaveProperty('test_mcp_tool');
+    });
   });
 
   describe('MCP bridge API surface', () => {
