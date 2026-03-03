@@ -94,7 +94,7 @@ jobs:
 
     - name: Link Probe package locally
       run: |
-        cd npm && npm link
+        cd npm && npm link --ignore-scripts
 
     - name: Verify Probe installation
       run: probe --version
