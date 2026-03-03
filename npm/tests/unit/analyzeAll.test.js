@@ -4,8 +4,7 @@
 
 import {
   analyzeAllSchema,
-  analyzeAllDescription,
-  analyzeAllToolDefinition
+  analyzeAllDescription
 } from '../../src/tools/common.js';
 
 describe('analyzeAll schemas and definitions', () => {
@@ -65,43 +64,5 @@ describe('analyzeAll schemas and definitions', () => {
     });
   });
 
-  describe('analyzeAllToolDefinition', () => {
-    test('should be a string', () => {
-      expect(typeof analyzeAllToolDefinition).toBe('string');
-    });
-
-    test('should start with tool name', () => {
-      expect(analyzeAllToolDefinition).toContain('## analyze_all');
-    });
-
-    test('should describe the question parameter', () => {
-      expect(analyzeAllToolDefinition).toContain('question');
-    });
-
-    test('should describe the path parameter', () => {
-      expect(analyzeAllToolDefinition).toContain('path');
-    });
-
-    test('should describe the 3-phase approach', () => {
-      expect(analyzeAllToolDefinition).toContain('PLANNING');
-      expect(analyzeAllToolDefinition).toContain('PROCESSING');
-      expect(analyzeAllToolDefinition).toContain('SYNTHESIS');
-    });
-
-    test('should include warning about cost', () => {
-      expect(analyzeAllToolDefinition.toUpperCase()).toContain('WARNING');
-    });
-
-    test('should include usage examples', () => {
-      expect(analyzeAllToolDefinition).toContain('<analyze_all>');
-      expect(analyzeAllToolDefinition).toContain('<question>');
-    });
-  });
 });
 
-describe('analyzeAll integration with tool list', () => {
-  test('analyze_all should be in DEFAULT_VALID_TOOLS', async () => {
-    const { DEFAULT_VALID_TOOLS } = await import('../../src/tools/common.js');
-    expect(DEFAULT_VALID_TOOLS).toContain('analyze_all');
-  });
-});

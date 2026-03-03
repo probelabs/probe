@@ -3,7 +3,7 @@
  *
  * This module provides:
  * - MCP client management for connecting to MCP servers
- * - XML/JSON hybrid tool interface
+ * - Native Vercel AI SDK tool interface
  * - Configuration management
  */
 
@@ -18,10 +18,7 @@ export {
 } from './config.js';
 export {
   MCPXmlBridge,
-  mcpToolToXmlDefinition,
-  parseXmlMcpToolCall,
-  parseHybridXmlToolCall,
-  createHybridSystemMessage
+  mcpToolToDescription
 } from './xmlBridge.js';
 
 // Import for default export
@@ -35,10 +32,7 @@ import {
 } from './config.js';
 import {
   MCPXmlBridge,
-  mcpToolToXmlDefinition,
-  parseXmlMcpToolCall,
-  parseHybridXmlToolCall,
-  createHybridSystemMessage
+  mcpToolToDescription
 } from './xmlBridge.js';
 
 // Default export for convenience
@@ -55,10 +49,7 @@ export default {
   createSampleConfig,
   saveConfig,
 
-  // XML Bridge
+  // MCP Bridge
   MCPXmlBridge,
-  mcpToolToXmlDefinition,
-  parseXmlMcpToolCall,
-  parseHybridXmlToolCall,
-  createHybridSystemMessage
+  mcpToolToDescription
 };

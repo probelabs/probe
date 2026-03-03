@@ -307,10 +307,10 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
     });
 
-    test('should always allow attempt_completion in validTools even when disableTools is true (fixes #333)', async () => {
-      // This test verifies that attempt_completion is always recognized as valid
-      // even when disableTools: true, because it's a completion signal not a tool.
-      // Without this fix, the agent would loop infinitely when tools are disabled.
+    test('should always include attempt_completion in native tools even when disableTools is true (fixes #333)', async () => {
+      // This test verifies that attempt_completion is always available as a native tool
+      // even when disableTools: true, because it's a completion signal not a regular tool.
+      // Without this, the agent would loop infinitely when tools are disabled.
       const agent = new ProbeAgent({
         path: process.cwd(),
         disableTools: true
@@ -321,22 +321,13 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.mode).toBe('none');
       expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
 
-      // But attempt_completion should still be parsed and recognized
-      // We test this by verifying the parsing logic works
-      const { parseXmlToolCallWithRecovery } = await import('../../src/agent/tools.js');
+      // But _buildNativeTools should always include attempt_completion
+      const nativeTools = agent._buildNativeTools({ _disableTools: true }, () => {});
+      expect(nativeTools.attempt_completion).toBeDefined();
 
-      // Build validTools the same way the agentic loop does - always include attempt_completion
-      const validTools = ['attempt_completion'];
-
-      const response = `<attempt_completion>
-<result>{"answer": "test"}</result>
-</attempt_completion>`;
-
-      const parsed = parseXmlToolCallWithRecovery(response, validTools);
-      expect(parsed).not.toBeNull();
-      expect(parsed.toolName).toBe('attempt_completion');
-      // The result contains the JSON content (may include wrapper tags depending on parser)
-      expect(parsed.params.result).toContain('{"answer": "test"}');
+      // No other tools should be present when _disableTools is true
+      const toolNames = Object.keys(nativeTools);
+      expect(toolNames).toEqual(['attempt_completion']);
     });
 
     test('should respect both enableBash flag and allowedTools in validTools', async () => {

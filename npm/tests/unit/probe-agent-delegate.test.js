@@ -40,101 +40,59 @@ describe('ProbeAgent enableDelegate option', () => {
     });
   });
 
-  describe('System message integration', () => {
-    test('should include delegate tool definition when enabled', async () => {
+  describe('Tool registration integration', () => {
+    test('should register delegate in toolImplementations when enabled', () => {
       const agent = new ProbeAgent({ enableDelegate: true });
-      const systemMessage = await agent.getSystemMessage();
-
-      expect(systemMessage).toContain('delegate');
-      expect(systemMessage).toContain('Delegate big distinct tasks to specialized probe subagents');
-      expect(systemMessage).toMatch(/##\s*delegate/);
+      expect(agent.toolImplementations).toHaveProperty('delegate');
     });
 
-    test('should not include delegate tool definition when disabled', async () => {
+    test('should not register delegate in toolImplementations when disabled', () => {
       const agent = new ProbeAgent({ enableDelegate: false });
-      const systemMessage = await agent.getSystemMessage();
-
-      // Should not contain delegate tool definition section
-      expect(systemMessage).not.toMatch(/##\s*delegate/);
-      expect(systemMessage).not.toContain('Delegate big distinct tasks to specialized probe subagents');
+      expect(agent.toolImplementations).not.toHaveProperty('delegate');
     });
 
-    test('should include delegate in available tools list when enabled', async () => {
-      const agent = new ProbeAgent({ enableDelegate: true });
-      const systemMessage = await agent.getSystemMessage();
-
-      // Check for delegate in the available tools list
-      expect(systemMessage).toContain('- delegate: Delegate big distinct tasks to specialized probe subagents');
-    });
-
-    test('should not include delegate in available tools list when disabled', async () => {
-      const agent = new ProbeAgent({ enableDelegate: false });
-      const systemMessage = await agent.getSystemMessage();
-
-      // Should not contain delegate in tools list
-      const toolsSection = systemMessage.match(/Available Tools:([\s\S]*?)(?=\n\n|$)/);
-      if (toolsSection) {
-        expect(toolsSection[1]).not.toContain('- delegate:');
-      }
-    });
-
-    test('should work independently from allowEdit option', async () => {
-      // Test all combinations
+    test('should register delegate independently from allowEdit option', () => {
       const agent1 = new ProbeAgent({ enableDelegate: true, allowEdit: false });
-      const message1 = await agent1.getSystemMessage();
-      expect(message1).toContain('delegate');
-      expect(message1).not.toContain('## edit');
+      expect(agent1.toolImplementations).toHaveProperty('delegate');
+      expect(agent1.toolImplementations).not.toHaveProperty('edit');
 
       const agent2 = new ProbeAgent({ enableDelegate: false, allowEdit: true });
-      const message2 = await agent2.getSystemMessage();
-      expect(message2).not.toContain('## delegate');
-      expect(message2).toContain('edit');
+      expect(agent2.toolImplementations).not.toHaveProperty('delegate');
+      expect(agent2.toolImplementations).toHaveProperty('edit');
 
       const agent3 = new ProbeAgent({ enableDelegate: true, allowEdit: true });
-      const message3 = await agent3.getSystemMessage();
-      expect(message3).toContain('delegate');
-      expect(message3).toContain('edit');
+      expect(agent3.toolImplementations).toHaveProperty('delegate');
+      expect(agent3.toolImplementations).toHaveProperty('edit');
     });
 
-    test('should include symbol mode in edit tool when allowEdit is enabled', async () => {
+    test('should include edit-related instructions in system message when allowEdit is enabled', async () => {
       const agent = new ProbeAgent({ allowEdit: true });
       const systemMessage = await agent.getSystemMessage();
 
-      // The unified edit tool now handles symbol mode too
-      expect(systemMessage).toContain('## edit');
+      // The system message contains edit instructions (not tool definitions)
+      expect(systemMessage).toContain('edit');
       expect(systemMessage).toContain('symbol');
-      // Separate symbol tools no longer exist
-      expect(systemMessage).not.toContain('## replace_symbol');
-      expect(systemMessage).not.toContain('## insert_symbol');
-      expect(systemMessage).not.toContain('## edit_lines');
     });
   });
 
   describe('Valid tools array', () => {
-    test('should include delegate in validTools when parsing tool calls', async () => {
+    test('should include delegate in toolImplementations when enabled', () => {
       const agent = new ProbeAgent({
         enableDelegate: true,
         provider: 'anthropic'
       });
 
-      // We need to check that delegate is in validTools during answer() execution
-      // This is tested indirectly by ensuring the system message is correct
-      const systemMessage = await agent.getSystemMessage();
-
-      // Verify the tool definition exists, which means it should be in validTools
-      expect(systemMessage).toContain('## delegate');
+      // delegate should be registered in toolImplementations
+      expect(agent.toolImplementations).toHaveProperty('delegate');
     });
 
-    test('should not include delegate in validTools when disabled', async () => {
+    test('should not include delegate in toolImplementations when disabled', () => {
       const agent = new ProbeAgent({
         enableDelegate: false,
         provider: 'anthropic'
       });
 
-      const systemMessage = await agent.getSystemMessage();
-
-      // Verify the tool definition doesn't exist
-      expect(systemMessage).not.toMatch(/##\s*delegate/);
+      expect(agent.toolImplementations).not.toHaveProperty('delegate');
     });
   });
 
@@ -173,10 +131,11 @@ describe('ProbeAgent enableDelegate option', () => {
       const systemMessage = await agent.getSystemMessage();
 
       expect(systemMessage).toContain(customPrompt);
-      expect(systemMessage).toContain('delegate');
+      // delegate is registered as a native tool, not in system message
+      expect(agent.toolImplementations).toHaveProperty('delegate');
     });
 
-    test('should work with different prompt types', async () => {
+    test('should work with different prompt types', () => {
       const promptTypes = ['code-explorer', 'engineer', 'code-review', 'support', 'architect'];
 
       for (const promptType of promptTypes) {
@@ -185,8 +144,8 @@ describe('ProbeAgent enableDelegate option', () => {
           promptType
         });
 
-        const systemMessage = await agent.getSystemMessage();
-        expect(systemMessage).toContain('delegate');
+        // delegate is registered as a native tool
+        expect(agent.toolImplementations).toHaveProperty('delegate');
       }
     });
 
@@ -229,30 +188,20 @@ describe('ProbeAgent enableDelegate option', () => {
     });
   });
 
-  describe('System message structure', () => {
-    test('should maintain proper tool definition format when delegate is enabled', async () => {
+  describe('Native tool registration', () => {
+    test('should register delegate as a native tool with correct schema', () => {
       const agent = new ProbeAgent({ enableDelegate: true });
-      const systemMessage = await agent.getSystemMessage();
 
-      // Check for proper markdown structure
-      expect(systemMessage).toMatch(/##\s*delegate/);
-      expect(systemMessage).toMatch(/Description:.*delegate/i);
-      expect(systemMessage).toMatch(/Parameters:/);
-      expect(systemMessage).toContain('task:');
+      // delegate is registered in toolImplementations
+      expect(agent.toolImplementations).toHaveProperty('delegate');
+      expect(typeof agent.toolImplementations.delegate.execute).toBe('function');
     });
 
-    test('should place delegate tool in logical position', async () => {
+    test('should register both search and delegate when delegate is enabled', () => {
       const agent = new ProbeAgent({ enableDelegate: true });
-      const systemMessage = await agent.getSystemMessage();
 
-      // Delegate should appear after attempt_completion (at the end with optional tools)
-      const searchIndex = systemMessage.indexOf('## search');
-      const completionIndex = systemMessage.indexOf('## attempt_completion');
-      const delegateIndex = systemMessage.indexOf('## delegate');
-
-      expect(searchIndex).toBeGreaterThan(-1);
-      expect(completionIndex).toBeGreaterThan(searchIndex);
-      expect(delegateIndex).toBeGreaterThan(completionIndex);
+      expect(agent.toolImplementations).toHaveProperty('search');
+      expect(agent.toolImplementations).toHaveProperty('delegate');
     });
   });
 

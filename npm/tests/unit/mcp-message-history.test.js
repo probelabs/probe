@@ -1,69 +1,62 @@
 /**
- * Tests for MCP tool execution message history integrity
+ * Tests for MCP tool integration with native Vercel AI SDK tools
  *
- * This test verifies that MCP tool execution correctly adds both:
- * 1. The assistant message containing the tool call
- * 2. The user message containing the tool result
- *
- * Bug reference: https://github.com/probelabs/probe/issues/393
+ * After the migration from XML-based tool calling to native Vercel AI SDK tools,
+ * message history is managed automatically by the SDK's streamText/maxSteps.
+ * These tests verify that MCP tools are properly included in the native tools
+ * passed to the AI SDK, and that the MCP bridge is correctly wired up.
  */
 
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
+import { z } from 'zod';
 
 // Set environment to use mock AI provider
 process.env.USE_MOCK_AI = 'true';
 
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
-describe('MCP Tool Message History', () => {
+describe('MCP Tool Native Integration', () => {
   let agent;
   let mockMcpBridge;
-  let mockCallCount;
-  let mockResponses;
 
   beforeEach(() => {
-    // Reset mock call count and responses
-    mockCallCount = 0;
-    mockResponses = [];
-
-    // Create a mock MCP bridge with all required methods
+    // Create a mock MCP bridge with the current API surface
     mockMcpBridge = {
       isMcpTool: jest.fn((name) => name === 'test_mcp_tool'),
       getToolNames: jest.fn(() => ['test_mcp_tool']),
-      getToolDefinitions: jest.fn(() => ({
-        test_mcp_tool: {
-          description: 'A test MCP tool',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: { type: 'string', description: 'Test query' }
-            }
+      getVercelTools: jest.fn((filterNames) => {
+        const tools = {
+          test_mcp_tool: {
+            description: 'A test MCP tool',
+            parameters: z.object({
+              query: z.string().optional().describe('Test query')
+            }),
+            execute: jest.fn(async (params) => `MCP tool result for: ${params.query}`)
           }
+        };
+        if (filterNames) {
+          const filtered = {};
+          for (const name of filterNames) {
+            if (tools[name]) filtered[name] = tools[name];
+          }
+          return filtered;
         }
-      })),
-      getXmlToolDefinitions: jest.fn(() => `
-## test_mcp_tool
-Description: A test MCP tool
-Parameters:
-- query: string (optional) - Test query
-
-Example:
-<test_mcp_tool>
-<params>
-{"query": "example"}
-</params>
-</test_mcp_tool>
-`),
+        return tools;
+      }),
       mcpTools: {
         test_mcp_tool: {
-          execute: jest.fn(async () => 'MCP tool result')
+          description: 'A test MCP tool',
+          parameters: z.object({
+            query: z.string().optional().describe('Test query')
+          }),
+          execute: jest.fn(async (params) => `MCP tool result for: ${params.query}`)
         }
       },
       cleanup: jest.fn()
     };
 
     agent = new ProbeAgent({
-      sessionId: 'test-mcp-history',
+      sessionId: 'test-mcp-native',
       path: process.cwd(),
       debug: false
     });
@@ -73,32 +66,6 @@ Example:
 
     // Fix the provider to be a callable function (matching real provider interface)
     agent.provider = (modelName) => `mock-${modelName}`;
-
-    // Mock the streamTextWithRetryAndFallback method to return controlled responses
-    agent.streamTextWithRetryAndFallback = jest.fn(async () => {
-      const response = mockResponses[mockCallCount] || { text: '<attempt_completion>\n<result>Default</result>\n</attempt_completion>' };
-      mockCallCount++;
-
-      // Create a mock async iterator for textStream
-      const textParts = [response.text];
-      let index = 0;
-
-      return {
-        textStream: {
-          [Symbol.asyncIterator]: () => ({
-            next: async () => {
-              if (index < textParts.length) {
-                const value = textParts[index++];
-                return { value, done: false };
-              }
-              return { value: undefined, done: true };
-            }
-          })
-        },
-        text: Promise.resolve(response.text),
-        usage: Promise.resolve({ promptTokens: 100, completionTokens: 50 })
-      };
-    });
   });
 
   afterEach(async () => {
@@ -107,175 +74,133 @@ Example:
     }
   });
 
-  describe('MCP tool success path', () => {
-    test('should add assistant message before tool result on successful MCP execution', async () => {
-      // Set up mock responses
-      mockResponses = [
-        { text: '<test_mcp_tool>\n<params>\n{"query": "test"}\n</params>\n</test_mcp_tool>' },
-        { text: '<attempt_completion>\n<result>Done</result>\n</attempt_completion>' }
-      ];
+  describe('MCP tools in _buildNativeTools', () => {
+    test('should include MCP tools in the native tools object', () => {
+      let completionCalled = false;
+      const onComplete = (result) => { completionCalled = true; };
 
-      // Only set system message - answer() will add the user message
-      agent.history = [
-        { role: 'system', content: 'You are a helpful assistant.' }
-      ];
+      const tools = agent._buildNativeTools({}, onComplete);
 
-      // Run the answer loop
-      await agent.answer('Use the test tool', [], {
-        maxIterations: 3
-      });
-
-      // Verify MCP tool was called
-      expect(mockMcpBridge.mcpTools.test_mcp_tool.execute).toHaveBeenCalledWith({ query: 'test' });
-
-      // Verify the message history pattern
-      const historyAfterToolCall = agent.history;
-
-      // Find the MCP tool call and result in history
-      const assistantWithToolCall = historyAfterToolCall.find(
-        m => m.role === 'assistant' && m.content && m.content.includes('<test_mcp_tool>')
-      );
-      const userWithToolResult = historyAfterToolCall.find(
-        m => m.role === 'user' && m.content && m.content.includes('<tool_result>')
-      );
-
-      // Both messages should exist (this is what issue #393 fixed)
-      expect(assistantWithToolCall).toBeDefined();
-      expect(userWithToolResult).toBeDefined();
-
-      // Verify the assistant message comes before the tool result
-      const assistantIndex = historyAfterToolCall.indexOf(assistantWithToolCall);
-      const userIndex = historyAfterToolCall.indexOf(userWithToolResult);
-      expect(assistantIndex).toBeLessThan(userIndex);
-
-      // Verify proper alternation: assistant should be immediately followed by user
-      expect(historyAfterToolCall[assistantIndex + 1]).toBe(userWithToolResult);
+      // The tools object should contain the MCP tool
+      expect(tools).toHaveProperty('test_mcp_tool');
+      // It should also contain standard tools like attempt_completion
+      expect(tools).toHaveProperty('attempt_completion');
     });
 
-    test('should maintain proper message alternation after multiple MCP tool calls', async () => {
-      // Set up mock responses for multiple tool calls
-      mockResponses = [
-        { text: '<test_mcp_tool>\n<params>\n{"query": "first"}\n</params>\n</test_mcp_tool>' },
-        { text: '<test_mcp_tool>\n<params>\n{"query": "second"}\n</params>\n</test_mcp_tool>' },
-        { text: '<attempt_completion>\n<result>All done</result>\n</attempt_completion>' }
-      ];
+    test('should not include MCP tools when _disableTools is set', () => {
+      let completionCalled = false;
+      const onComplete = (result) => { completionCalled = true; };
 
-      // Only set system message - answer() will add the user message
-      agent.history = [
-        { role: 'system', content: 'System' }
-      ];
+      const tools = agent._buildNativeTools({ _disableTools: true }, onComplete);
 
-      await agent.answer('Run two tools', [], { maxIterations: 5 });
+      // With _disableTools, only attempt_completion should be present
+      expect(tools).toHaveProperty('attempt_completion');
+      expect(tools).not.toHaveProperty('test_mcp_tool');
+    });
 
-      // Verify two MCP tool calls were made
-      expect(mockMcpBridge.mcpTools.test_mcp_tool.execute).toHaveBeenCalledTimes(2);
+    test('should call getVercelTools on the bridge', () => {
+      const onComplete = () => {};
+      agent._buildNativeTools({}, onComplete);
 
-      // Check for proper alternation pattern - no two consecutive user messages
-      const history = agent.history;
-      let prevRole = null;
-      let foundAlternationError = false;
+      // getVercelTools should have been called to retrieve MCP tools
+      expect(mockMcpBridge.getVercelTools).toHaveBeenCalled();
+    });
 
-      for (let i = 1; i < history.length; i++) {
-        const msg = history[i];
-        // Two consecutive user messages would indicate the bug
-        if (prevRole === 'user' && msg.role === 'user') {
-          foundAlternationError = true;
-          break;
-        }
-        prevRole = msg.role;
-      }
+    test('should not include MCP tools when mcpBridge is null', () => {
+      agent.mcpBridge = null;
 
-      expect(foundAlternationError).toBe(false);
+      const onComplete = () => {};
+      const tools = agent._buildNativeTools({}, onComplete);
+
+      // Should still have standard tools but no MCP tools
+      expect(tools).toHaveProperty('attempt_completion');
+      expect(tools).not.toHaveProperty('test_mcp_tool');
     });
   });
 
-  describe('MCP tool error path', () => {
-    test('should add assistant message before error result on failed MCP execution', async () => {
-      // Make the MCP tool throw an error
+  describe('MCP bridge API surface', () => {
+    test('isMcpTool should correctly identify MCP tools', () => {
+      expect(agent.mcpBridge.isMcpTool('test_mcp_tool')).toBe(true);
+      expect(agent.mcpBridge.isMcpTool('search')).toBe(false);
+      expect(agent.mcpBridge.isMcpTool('nonexistent')).toBe(false);
+    });
+
+    test('getToolNames should return all MCP tool names', () => {
+      const names = agent.mcpBridge.getToolNames();
+      expect(names).toEqual(['test_mcp_tool']);
+    });
+
+    test('getVercelTools should return tool objects with execute functions', () => {
+      const tools = agent.mcpBridge.getVercelTools();
+      expect(tools).toHaveProperty('test_mcp_tool');
+      expect(tools.test_mcp_tool).toHaveProperty('execute');
+      expect(typeof tools.test_mcp_tool.execute).toBe('function');
+    });
+
+    test('getVercelTools with filter should return only matching tools', () => {
+      const filtered = agent.mcpBridge.getVercelTools(['test_mcp_tool']);
+      expect(filtered).toHaveProperty('test_mcp_tool');
+
+      const empty = agent.mcpBridge.getVercelTools(['nonexistent_tool']);
+      expect(Object.keys(empty)).toHaveLength(0);
+    });
+  });
+
+  describe('MCP tool execution via bridge', () => {
+    test('should execute MCP tool directly via the bridge tool object', async () => {
+      const tools = agent.mcpBridge.getVercelTools();
+      const result = await tools.test_mcp_tool.execute({ query: 'test' });
+      expect(result).toBe('MCP tool result for: test');
+    });
+
+    test('should handle MCP tool execution errors', async () => {
+      // Replace the execute function with one that throws
       mockMcpBridge.mcpTools.test_mcp_tool.execute = jest.fn(async () => {
         throw new Error('MCP tool failed');
       });
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        test_mcp_tool: {
+          description: 'A test MCP tool',
+          parameters: z.object({ query: z.string().optional() }),
+          execute: mockMcpBridge.mcpTools.test_mcp_tool.execute
+        }
+      }));
 
-      // Set up mock responses
-      mockResponses = [
-        { text: '<test_mcp_tool>\n<params>\n{"query": "test"}\n</params>\n</test_mcp_tool>' },
-        { text: '<attempt_completion>\n<result>Handled error</result>\n</attempt_completion>' }
-      ];
-
-      // Only set system message - answer() will add the user message
-      agent.history = [
-        { role: 'system', content: 'System' }
-      ];
-
-      await agent.answer('Use tool that will fail', [], { maxIterations: 3 });
-
-      // Verify the tool was attempted
-      expect(mockMcpBridge.mcpTools.test_mcp_tool.execute).toHaveBeenCalled();
-
-      // Verify assistant message exists before error result
-      const history = agent.history;
-
-      const assistantWithToolCall = history.find(
-        m => m.role === 'assistant' && m.content && m.content.includes('<test_mcp_tool>')
-      );
-      const userWithError = history.find(
-        m => m.role === 'user' && m.content && m.content.includes('<tool_result>')
-      );
-
-      // Both messages should exist
-      expect(assistantWithToolCall).toBeDefined();
-      expect(userWithError).toBeDefined();
-
-      // Verify proper ordering
-      const assistantIndex = history.indexOf(assistantWithToolCall);
-      const errorIndex = history.indexOf(userWithError);
-      expect(assistantIndex).toBeLessThan(errorIndex);
-
-      // Assistant should be immediately followed by error result
-      expect(history[assistantIndex + 1]).toBe(userWithError);
+      const tools = agent.mcpBridge.getVercelTools();
+      await expect(tools.test_mcp_tool.execute({ query: 'test' }))
+        .rejects.toThrow('MCP tool failed');
     });
   });
 
-  describe('Message pattern consistency', () => {
-    test('should never have consecutive user messages in MCP flow', async () => {
-      // This is the core test that would catch issue #393
-      // Before the fix, MCP tools would produce [user, user] pattern
-
-      mockResponses = [
-        { text: '<test_mcp_tool>\n<params>\n{"query": "call1"}\n</params>\n</test_mcp_tool>' },
-        { text: '<test_mcp_tool>\n<params>\n{"query": "call2"}\n</params>\n</test_mcp_tool>' },
-        { text: '<test_mcp_tool>\n<params>\n{"query": "call3"}\n</params>\n</test_mcp_tool>' },
-        { text: '<attempt_completion>\n<result>Done after multiple calls</result>\n</attempt_completion>' }
-      ];
-
-      // Only set system message - answer() will add the user message
-      agent.history = [
-        { role: 'system', content: 'System prompt' }
-      ];
-
-      await agent.answer('Execute multiple tools', [], { maxIterations: 10 });
-
-      // The fix ensures proper alternation
-      const history = agent.history;
-
-      // Count consecutive user messages (which would indicate the bug)
-      let consecutiveUserCount = 0;
-      for (let i = 1; i < history.length; i++) {
-        if (history[i].role === 'user' && history[i - 1].role === 'user') {
-          consecutiveUserCount++;
+  describe('Multiple MCP tools', () => {
+    test('should handle multiple MCP tools in _buildNativeTools', () => {
+      // Set up bridge with multiple tools
+      mockMcpBridge.getToolNames = jest.fn(() => ['tool_a', 'tool_b', 'tool_c']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        tool_a: {
+          description: 'Tool A',
+          parameters: z.object({}),
+          execute: jest.fn(async () => 'A result')
+        },
+        tool_b: {
+          description: 'Tool B',
+          parameters: z.object({}),
+          execute: jest.fn(async () => 'B result')
+        },
+        tool_c: {
+          description: 'Tool C',
+          parameters: z.object({}),
+          execute: jest.fn(async () => 'C result')
         }
-      }
+      }));
 
-      // With the fix, there should be no consecutive user messages
-      expect(consecutiveUserCount).toBe(0);
+      const onComplete = () => {};
+      const tools = agent._buildNativeTools({}, onComplete);
 
-      // Verify the pattern is always: assistant -> user for tool calls
-      const toolResults = history.filter(m => m.role === 'user' && m.content && m.content.includes('<tool_result>'));
-      for (const toolResult of toolResults) {
-        const idx = history.indexOf(toolResult);
-        // The message before a tool result should always be an assistant message
-        expect(history[idx - 1].role).toBe('assistant');
-      }
+      expect(tools).toHaveProperty('tool_a');
+      expect(tools).toHaveProperty('tool_b');
+      expect(tools).toHaveProperty('tool_c');
+      expect(tools).toHaveProperty('attempt_completion');
     });
   });
 });

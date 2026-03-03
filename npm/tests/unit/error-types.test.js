@@ -379,65 +379,6 @@ describe('formatErrorForAI', () => {
   });
 });
 
-describe('detectUnrecognizedToolCall', () => {
-  // Import the function for testing
-  let detectUnrecognizedToolCall;
-
-  beforeAll(async () => {
-    const module = await import('../../src/tools/common.js');
-    detectUnrecognizedToolCall = module.detectUnrecognizedToolCall;
-  });
-
-  test('should return null when no tool tags found', () => {
-    const response = 'Just some text without any tool calls';
-    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
-    expect(result).toBeNull();
-  });
-
-  test('should return null when only valid tools are used', () => {
-    const response = '<search><query>test</query></search>';
-    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
-    expect(result).toBeNull();
-  });
-
-  test('should detect extract when not in valid tools', () => {
-    const response = '<extract><targets>file.js:10-20</targets></extract>';
-    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
-    expect(result).toBe('extract');
-  });
-
-  test('should detect query when not in valid tools', () => {
-    const response = '<query><pattern>fn test</pattern></query>';
-    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
-    expect(result).toBe('query');
-  });
-
-  test('should detect bash when not in valid tools', () => {
-    const response = '<bash><command>ls -la</command></bash>';
-    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
-    expect(result).toBe('bash');
-  });
-
-  test('should ignore non-tool tags like thinking', () => {
-    const response = '<thinking>Let me analyze this...</thinking>';
-    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
-    expect(result).toBeNull();
-  });
-
-  test('should not detect tool names appearing as text inside valid tool parameters', () => {
-    // 'grep' and 'bash' are in knownToolNames, but they appear as text values, not as tool tags
-    const response = '<search><query>grep pattern in bash scripts</query></search>';
-    const result = detectUnrecognizedToolCall(response, ['search', 'attempt_completion']);
-    expect(result).toBeNull();
-  });
-
-  test('should handle null/undefined input', () => {
-    expect(detectUnrecognizedToolCall(null, ['search'])).toBeNull();
-    expect(detectUnrecognizedToolCall(undefined, ['search'])).toBeNull();
-    expect(detectUnrecognizedToolCall('', ['search'])).toBeNull();
-  });
-});
-
 describe('Integration scenarios', () => {
   test('should handle typical path not found scenario', () => {
     const error = new Error('Path does not exist: /tmp/nonexistent');

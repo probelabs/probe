@@ -12,8 +12,6 @@
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import { parseSimpleCommand, isComplexCommand, parseCommandForExecution } from '../../src/agent/bashCommandUtils.js';
 import { BashPermissionChecker } from '../../src/agent/bashPermissions.js';
-import { parseXmlToolCall } from '../../src/tools/common.js';
-
 // Mock the 'ai' package since it may not be available in test environment
 jest.mock('ai', () => ({
   tool: jest.fn((config) => ({
@@ -254,66 +252,6 @@ describe('Multi-line commands with mixed operators', () => {
     const result = checker.check(cmd);
     // head is not in our allow list, so let's just check it's detected as complex
     expect(result.isComplex).toBe(true);
-  });
-});
-
-describe('XML parsing of multi-line bash commands', () => {
-  test('should preserve multi-line content in bash command parameter', () => {
-    const aiResponse = `<bash>
-<command>
-set -e
-cd tyk-docs
-git status
-</command>
-</bash>`;
-
-    const result = parseXmlToolCall(aiResponse);
-    expect(result.toolName).toBe('bash');
-    // The command should preserve internal newlines
-    expect(result.params.command).toContain('\n');
-    expect(result.params.command).toContain('set -e');
-    expect(result.params.command).toContain('cd tyk-docs');
-    expect(result.params.command).toContain('git status');
-  });
-
-  test('should preserve newlines inside quoted strings in bash command', () => {
-    const aiResponse = `<bash>
-<command>gh pr create --title "Add docs" --body "Line 1
-Line 2
-Line 3"</command>
-</bash>`;
-
-    const result = parseXmlToolCall(aiResponse);
-    expect(result.toolName).toBe('bash');
-    expect(result.params.command).toContain('Line 1\nLine 2\nLine 3');
-  });
-
-  test('should parse full multi-line script from XML', () => {
-    const aiResponse = `<bash>
-<command>
-set -e
-cd tyk-docs
-git checkout -b feat/webhooks
-git add docs/webhooks.mdx
-git commit -m "feat: add webhooks docs"
-git push origin feat/webhooks
-gh pr create --title "Add webhooks docs" --body "Summary of changes.
-
-Details:
-- Added webhooks page
-- Added examples"
-</command>
-</bash>`;
-
-    const result = parseXmlToolCall(aiResponse);
-    expect(result.toolName).toBe('bash');
-    const cmd = result.params.command;
-    expect(cmd).toContain('set -e');
-    expect(cmd).toContain('git checkout -b feat/webhooks');
-    expect(cmd).toContain('gh pr create');
-    // The body should have preserved newlines
-    expect(cmd).toContain('Summary of changes.');
-    expect(cmd).toContain('- Added webhooks page');
   });
 });
 

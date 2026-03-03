@@ -393,7 +393,7 @@ export function createExecutePlanTool(options) {
     description: 'Execute a JavaScript DSL program to orchestrate tool calls. ' +
       'Use for batch processing, paginated APIs, multi-step workflows where intermediate data is large. ' +
       'Write simple synchronous-looking code — do NOT use async/await.',
-    parameters: executePlanSchema,
+    inputSchema: executePlanSchema,
     execute: async ({ code, description }) => {
       // Generate a unique session ID for this execute_plan invocation
       // This ensures search pagination is isolated per execute_plan call
@@ -1051,7 +1051,7 @@ export function createCleanupExecutePlanTool(options) {
   return tool({
     description: 'Clean up output buffer and session store from previous execute_plan calls. ' +
       'Use this when a previous execute_plan failed and left stale data, or before starting a fresh analysis.',
-    parameters: cleanupExecutePlanSchema,
+    inputSchema: cleanupExecutePlanSchema,
     execute: async ({ clearOutputBuffer = true, clearSessionStore = false }) => {
       const span = tracer?.createToolSpan?.('cleanup_execute_plan', {
         'cleanup.clear_output_buffer': clearOutputBuffer,

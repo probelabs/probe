@@ -377,41 +377,4 @@ Not JSON
     });
   });
 
-  describe('ProbeAgent.js structural verification', () => {
-    test('should have the fix for issue #443 in ProbeAgent.js', () => {
-      const probeAgentPath = join(__dirname, '../../src/agent/ProbeAgent.js');
-      const sourceCode = readFileSync(probeAgentPath, 'utf-8');
-
-      // Verify the fix comment is present
-      expect(sourceCode).toContain('Issue #443');
-      expect(sourceCode).toContain('Check if response contains valid schema-matching JSON');
-
-      // Verify the fix logic pattern is present
-      expect(sourceCode).toContain('cleanSchemaResponse(contentToCheck)');
-      expect(sourceCode).toContain('validateJsonResponse(cleanedJson');
-
-      // Verify it's in the "no tool call found" section
-      expect(sourceCode).toContain('// No tool call found');
-    });
-
-    test('should check options.schema before accepting JSON without attempt_completion', () => {
-      const probeAgentPath = join(__dirname, '../../src/agent/ProbeAgent.js');
-      const sourceCode = readFileSync(probeAgentPath, 'utf-8');
-
-      // The fix should only apply when options.schema is set
-      // Find the section with Issue #443 and verify it checks options.schema
-      const issue443Pattern = /Issue #443[\s\S]*?if \(options\.schema\)/;
-      expect(sourceCode).toMatch(issue443Pattern);
-    });
-
-    test('should remove thinking tags before checking for valid JSON', () => {
-      const probeAgentPath = join(__dirname, '../../src/agent/ProbeAgent.js');
-      const sourceCode = readFileSync(probeAgentPath, 'utf-8');
-
-      // The fix should remove thinking tags before validating JSON
-      // This is important for models that include <thinking> before JSON
-      const thinkingRemovalPattern = /Issue #443[\s\S]*?<thinking>[\s\S]*?<\/thinking>/;
-      expect(sourceCode).toMatch(thinkingRemovalPattern);
-    });
-  });
 });
