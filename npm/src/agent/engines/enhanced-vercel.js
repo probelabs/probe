@@ -46,13 +46,6 @@ export function createEnhancedVercelEngine(agent) {
         yield { type: 'text', content: chunk };
       }
 
-      // Parse XML tool calls from the response if any
-      // This maintains compatibility with existing XML tool format
-      const toolCalls = agent.parseXmlToolCalls ? agent.parseXmlToolCalls(fullContent) : null;
-      if (toolCalls && toolCalls.length > 0) {
-        yield { type: 'tool_calls', toolCalls };
-      }
-
       // Handle finish reason
       if (result.finishReason) {
         yield { type: 'finish', reason: result.finishReason };

@@ -126,6 +126,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure git to use HTTPS for GitHub repos
+        run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:

@@ -6,7 +6,6 @@
 export { TaskManager, default as TaskManagerDefault } from './TaskManager.js';
 export {
   taskSchema,
-  taskToolDefinition,
   taskSystemPrompt,
   taskGuidancePrompt,
   createTaskCompletionBlockedMessage,

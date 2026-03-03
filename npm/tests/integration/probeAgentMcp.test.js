@@ -53,10 +53,9 @@ describe('ProbeAgent MCP Integration', () => {
         path: tempDir
       });
 
-      // Verify system message doesn't include MCP tools
+      // Verify system message doesn't include MCP tools section
       const systemMessage = await agent.getSystemMessage();
       expect(systemMessage).not.toContain('MCP Tools');
-      expect(systemMessage).not.toContain('JSON parameters in <params> tag');
 
       await agent.cleanup();
     });
@@ -172,18 +171,47 @@ describe('ProbeAgent MCP Integration', () => {
     }, 10000);
   });
 
-  describe('System Message with MCP', () => {
-    test('should include MCP tools in system message when available', async () => {
-      // Mock MCP bridge for testing
-      const mockMcpBridge = {
-        getToolNames: () => ['test_foobar', 'test_calculator'],
-        getXmlToolDefinitions: () => `
-## test_foobar
-Description: Mock foobar tool
+  describe('MCP Tools via Native Tool Calling', () => {
+    test('should include MCP tools in _buildNativeTools when bridge is available', async () => {
+      const { z } = await import('zod');
 
-## test_calculator
-Description: Mock calculator tool
-        `
+      // Mock MCP bridge with the current API surface (Vercel AI SDK tools)
+      const mockMcpBridge = {
+        getToolNames: jest.fn(() => ['test_foobar', 'test_calculator']),
+        getVercelTools: jest.fn((filterNames) => {
+          const tools = {
+            test_foobar: {
+              description: 'Mock foobar tool',
+              parameters: z.object({}),
+              execute: jest.fn(async () => 'foobar result')
+            },
+            test_calculator: {
+              description: 'Mock calculator tool',
+              parameters: z.object({}),
+              execute: jest.fn(async () => 'calculator result')
+            }
+          };
+          if (filterNames) {
+            const filtered = {};
+            for (const name of filterNames) {
+              if (tools[name]) filtered[name] = tools[name];
+            }
+            return filtered;
+          }
+          return tools;
+        }),
+        isMcpTool: (name) => ['test_foobar', 'test_calculator'].includes(name),
+        mcpTools: {
+          test_foobar: {
+            description: 'Mock foobar tool',
+            execute: jest.fn(async () => 'foobar result')
+          },
+          test_calculator: {
+            description: 'Mock calculator tool',
+            execute: jest.fn(async () => 'calculator result')
+          }
+        },
+        cleanup: jest.fn()
       };
 
       const agent = new ProbeAgent({
@@ -195,21 +223,27 @@ Description: Mock calculator tool
       // Manually set mock bridge for testing
       agent.mcpBridge = mockMcpBridge;
 
-      const systemMessage = await agent.getSystemMessage();
+      // Build native tools and verify MCP tools are included
+      const tools = agent._buildNativeTools({}, () => {});
 
-      expect(systemMessage).toContain('MCP Tools (JSON parameters in <params> tag)');
-      expect(systemMessage).toContain('test_foobar');
-      expect(systemMessage).toContain('test_calculator');
-      expect(systemMessage).toContain('For MCP tools, use JSON format within the params tag');
+      expect(tools).toHaveProperty('test_foobar');
+      expect(tools).toHaveProperty('test_calculator');
+      expect(tools).toHaveProperty('attempt_completion');
+
+      // Verify getVercelTools was called
+      expect(mockMcpBridge.getVercelTools).toHaveBeenCalled();
 
       await agent.cleanup();
     });
 
-    test('should not include MCP section when no tools available', async () => {
+    test('should not include MCP tools in native tools when no tools available', async () => {
       // Mock empty MCP bridge
       const mockMcpBridge = {
         getToolNames: () => [],
-        getXmlToolDefinitions: () => ''
+        getVercelTools: jest.fn(() => ({})),
+        isMcpTool: () => false,
+        mcpTools: {},
+        cleanup: jest.fn()
       };
 
       const agent = new ProbeAgent({
@@ -220,9 +254,29 @@ Description: Mock calculator tool
 
       agent.mcpBridge = mockMcpBridge;
 
-      const systemMessage = await agent.getSystemMessage();
+      const tools = agent._buildNativeTools({}, () => {});
 
-      expect(systemMessage).not.toContain('MCP Tools');
+      // Should have standard tools but no MCP tools
+      expect(tools).toHaveProperty('attempt_completion');
+      // No extra MCP tools should be present
+      const toolNames = Object.keys(tools);
+      const mcpToolNames = toolNames.filter(name => mockMcpBridge.isMcpTool(name));
+      expect(mcpToolNames).toHaveLength(0);
+
+      await agent.cleanup();
+    });
+
+    test('should not include MCP section in system message (tools are native now)', async () => {
+      const agent = new ProbeAgent({
+        enableMcp: true,
+        debug: false,
+        path: tempDir
+      });
+
+      // Even with MCP enabled, system message should not have XML tool definitions
+      const systemMessage = await agent.getSystemMessage();
+      expect(systemMessage).not.toContain('MCP Tools (JSON parameters in <params> tag)');
+      expect(systemMessage).not.toContain('For MCP tools, use JSON format within the params tag');
 
       await agent.cleanup();
     });
@@ -384,10 +438,16 @@ Description: Mock calculator tool
         expect(toolNames.some(name => name.includes('calculator'))).toBe(true);
         expect(toolNames.some(name => name.includes('echo'))).toBe(true);
 
-        // Test system message includes these tools
-        const systemMessage = await agent.getSystemMessage();
-        expect(systemMessage).toContain('foobar');
-        expect(systemMessage).toContain('calculator');
+        // Verify MCP tools are available via getVercelTools (native tool calling)
+        const vercelTools = agent.mcpBridge.getVercelTools();
+        const vercelToolNames = Object.keys(vercelTools);
+        expect(vercelToolNames.some(name => name.includes('foobar'))).toBe(true);
+        expect(vercelToolNames.some(name => name.includes('calculator'))).toBe(true);
+
+        // Verify MCP tools are included in _buildNativeTools
+        const nativeTools = agent._buildNativeTools({}, () => {});
+        expect(Object.keys(nativeTools).some(name => name.includes('foobar'))).toBe(true);
+        expect(Object.keys(nativeTools).some(name => name.includes('calculator'))).toBe(true);
       } else {
         console.warn('Mock server connection failed - this may be expected in CI environment');
       }

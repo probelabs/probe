@@ -1,5 +1,9 @@
 /**
  * Robustness tests for MCP integration under stress and edge conditions
+ *
+ * After the migration to native Vercel AI SDK tools, MCP tools are executed
+ * directly via their execute() functions rather than through XML parsing.
+ * These tests verify robustness of direct tool execution under load.
  */
 
 import { jest } from '@jest/globals';
@@ -44,13 +48,13 @@ describe('MCP Robustness Tests', () => {
         }
       };
 
-      // Execute 50 tool calls rapidly
+      // Execute 50 tool calls rapidly via direct execute
       const startTime = Date.now();
       const promises = [];
 
       for (let i = 0; i < 50; i++) {
         promises.push(
-          bridge.executeFromXml(`<fast_tool><params>{"input": "request_${i}"}</params></fast_tool>`)
+          bridge.mcpTools.fast_tool.execute({ input: `request_${i}` })
         );
       }
 
@@ -59,8 +63,7 @@ describe('MCP Robustness Tests', () => {
 
       expect(results).toHaveLength(50);
       results.forEach((result, index) => {
-        expect(result.success).toBe(true);
-        expect(result.result).toContain(`request_${index}`);
+        expect(result).toContain(`request_${index}`);
       });
 
       console.log(`Executed 50 tool calls in ${endTime - startTime}ms`);
@@ -92,14 +95,14 @@ describe('MCP Robustness Tests', () => {
         }
       };
 
-      // Execute mixed pattern of tools
+      // Execute mixed pattern of tools via direct execute
       const promises = [];
-      const tools = ['instant_tool', 'slow_tool', 'variable_tool'];
+      const toolNames = ['instant_tool', 'slow_tool', 'variable_tool'];
 
       for (let i = 0; i < 30; i++) {
-        const tool = tools[i % tools.length];
+        const toolName = toolNames[i % toolNames.length];
         promises.push(
-          bridge.executeFromXml(`<${tool}><params>{"id": ${i}}</params></${tool}>`)
+          bridge.mcpTools[toolName].execute({ id: i })
         );
       }
 
@@ -107,8 +110,7 @@ describe('MCP Robustness Tests', () => {
 
       expect(results).toHaveLength(30);
       results.forEach((result, index) => {
-        expect(result.success).toBe(true);
-        expect(result.result).toContain(`${index}`);
+        expect(result).toContain(`${index}`);
       });
 
       await bridge.cleanup();
@@ -193,13 +195,12 @@ describe('MCP Robustness Tests', () => {
         }
       };
 
-      const results = [];
       const promises = [];
 
-      // Execute 10 tool calls with increasing delays
+      // Execute 10 tool calls with increasing delays via direct execute
       for (let i = 0; i < 10; i++) {
         promises.push(
-          bridge.executeFromXml(`<degrading_tool><params>{"call": ${i}}</params></degrading_tool>`)
+          bridge.mcpTools.degrading_tool.execute({ call: i })
         );
       }
 
@@ -207,7 +208,8 @@ describe('MCP Robustness Tests', () => {
 
       expect(allResults).toHaveLength(10);
       allResults.forEach((result) => {
-        expect(result.success).toBe(true);
+        expect(typeof result).toBe('string');
+        expect(result).toContain('Response after');
       });
 
       await bridge.cleanup();
@@ -233,24 +235,18 @@ describe('MCP Robustness Tests', () => {
         }
       };
 
-      // Test with increasing payload sizes
+      // Test with increasing payload sizes via direct execute
       const sizes = [100, 1000, 5000, 10000];
       const results = [];
 
       for (const size of sizes) {
-        const result = await bridge.executeFromXml(
-          `<large_data_tool><params>{"size": ${size}}</params></large_data_tool>`
-        );
+        const result = await bridge.mcpTools.large_data_tool.execute({ size });
         results.push(result);
       }
 
       expect(results).toHaveLength(4);
       results.forEach((result, index) => {
-        expect(result.success).toBe(true);
-        const parsed = typeof result.result === 'string'
-          ? JSON.parse(result.result)
-          : result.result;
-        expect(parsed.processed_items).toBe(sizes[index]);
+        expect(result.processed_items).toBe(sizes[index]);
       });
 
       await bridge.cleanup();
@@ -274,11 +270,11 @@ describe('MCP Robustness Tests', () => {
         }
       };
 
-      // Execute multiple memory-intensive operations
+      // Execute multiple memory-intensive operations via direct execute
       const promises = [];
       for (let i = 0; i < 20; i++) {
         promises.push(
-          bridge.executeFromXml(`<memory_pressure_tool><params>{"iteration": ${i}}</params></memory_pressure_tool>`)
+          bridge.mcpTools.memory_pressure_tool.execute({ iteration: i })
         );
       }
 
@@ -286,7 +282,8 @@ describe('MCP Robustness Tests', () => {
 
       expect(results).toHaveLength(20);
       results.forEach((result) => {
-        expect(result.success).toBe(true);
+        expect(typeof result).toBe('string');
+        expect(result).toContain('Processed memory pressure test');
       });
 
       await bridge.cleanup();
@@ -330,10 +327,10 @@ describe('MCP Robustness Tests', () => {
         mcpServers: {
           'unicode_server': {
             command: 'echo',
-            args: ['🚀', '测试', '🌟'],
+            args: ['\u{1F680}', '\u{6D4B}\u{8BD5}', '\u{1F31F}'],
             transport: 'stdio',
             enabled: false,
-            description: 'Server with unicode characters: émojis 🎉'
+            description: 'Server with unicode characters'
           },
           'special_chars': {
             command: 'echo',
@@ -343,7 +340,7 @@ describe('MCP Robustness Tests', () => {
             env: {
               'VAR_WITH_SPACES': 'value with spaces',
               'VAR_WITH_QUOTES': 'value "with" quotes',
-              'VAR_WITH_UNICODE': '🌍 global variable'
+              'VAR_WITH_UNICODE': 'global variable'
             }
           }
         }
@@ -387,7 +384,7 @@ describe('MCP Robustness Tests', () => {
         }
       };
 
-      // Execute many operations over time
+      // Execute many operations over time via direct execute
       const totalOperations = 200;
       const batchSize = 20;
       const results = [];
@@ -398,7 +395,7 @@ describe('MCP Robustness Tests', () => {
         for (let i = 0; i < batchSize; i++) {
           const opNumber = batch * batchSize + i;
           batchPromises.push(
-            bridge.executeFromXml(`<stateful_tool><params>{"input": "op_${opNumber}"}</params></stateful_tool>`)
+            bridge.mcpTools.stateful_tool.execute({ input: `op_${opNumber}` })
           );
         }
 
@@ -411,11 +408,7 @@ describe('MCP Robustness Tests', () => {
 
       expect(results).toHaveLength(totalOperations);
       results.forEach((result, index) => {
-        expect(result.success).toBe(true);
-        const parsed = typeof result.result === 'string'
-          ? JSON.parse(result.result)
-          : result.result;
-        expect(parsed.call_number).toBe(index + 1);
+        expect(result.call_number).toBe(index + 1);
       });
 
       await bridge.cleanup();
@@ -441,21 +434,25 @@ describe('MCP Robustness Tests', () => {
         }
       };
 
+      // Execute tool calls, catching individual errors
+      const results = [];
       const promises = [];
       for (let i = 0; i < 50; i++) {
         promises.push(
-          bridge.executeFromXml(`<flaky_tool><params>{"call": ${i}}</params></flaky_tool>`)
+          bridge.mcpTools.flaky_tool.execute({ call: i })
+            .then(result => ({ success: true, result }))
+            .catch(error => ({ success: false, error: error.message }))
         );
       }
 
-      const results = await Promise.all(promises);
+      const allResults = await Promise.all(promises);
 
-      expect(results).toHaveLength(50);
+      expect(allResults).toHaveLength(50);
 
       let successCount = 0;
       let failureCount = 0;
 
-      results.forEach((result) => {
+      allResults.forEach((result) => {
         if (result.success) {
           successCount++;
         } else {
@@ -504,19 +501,17 @@ describe('MCP Robustness Tests', () => {
       await new Promise(resolve => setTimeout(resolve, 3000));
 
       if (agent.mcpBridge && agent.mcpBridge.getToolNames().length > 0) {
-        // Test system message generation under rapid calls
-        const systemMessagePromises = [];
+        // Test that MCP tools are available via getVercelTools
+        const vercelTools = agent.mcpBridge.getVercelTools();
+        expect(Object.keys(vercelTools).length).toBeGreaterThan(0);
+
+        // Verify tools are consistent across multiple calls
+        const toolSnapshots = [];
         for (let i = 0; i < 10; i++) {
-          systemMessagePromises.push(agent.getSystemMessage());
+          toolSnapshots.push(Object.keys(agent.mcpBridge.getVercelTools()));
         }
-
-        const systemMessages = await Promise.all(systemMessagePromises);
-        expect(systemMessages).toHaveLength(10);
-
-        // All messages should be identical and contain MCP tools
-        systemMessages.forEach(message => {
-          expect(message).toContain('foobar');
-          expect(message).toBe(systemMessages[0]);
+        toolSnapshots.forEach(snapshot => {
+          expect(snapshot).toEqual(toolSnapshots[0]);
         });
 
         console.log('Stress test completed successfully');

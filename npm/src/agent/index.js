@@ -152,7 +152,9 @@ function parseArgs() {
     bashTimeout: null,
     bashWorkingDir: null,
     disableDefaultBashAllow: false,
-    disableDefaultBashDeny: false
+    disableDefaultBashDeny: false,
+    // Native thinking/reasoning effort
+    thinkingEffort: null
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -241,6 +243,10 @@ function parseArgs() {
       config.disableDefaultBashAllow = true;
     } else if (arg === '--no-default-bash-deny') {
       config.disableDefaultBashDeny = true;
+    } else if (arg === '--thinking-effort' && i + 1 < args.length) {
+      const val = args[++i];
+      const num = parseInt(val, 10);
+      config.thinkingEffort = !isNaN(num) && num > 0 ? num : val;
     } else if (!arg.startsWith('--') && !config.question) {
       // First non-flag argument is the question
       config.question = arg;
@@ -304,6 +310,7 @@ Options:
   --trace-remote <endpoint>        Enable tracing to remote OTLP endpoint
   --trace-console                  Enable tracing to console output
   --no-mermaid-validation          Disable automatic mermaid diagram validation and fixing
+  --thinking-effort <level>        Native LLM thinking/reasoning effort: off, low, medium, high, or budget tokens (number)
   --help, -h                      Show this help message
 
 DSL Orchestration:
@@ -864,7 +871,8 @@ async function main() {
       enableExecutePlan: config.enableExecutePlan,
       enableBash: config.enableBash,
       bashConfig: bashConfig,
-      enableTasks: config.enableTasks
+      enableTasks: config.enableTasks,
+      thinkingEffort: config.thinkingEffort
     };
 
     const agent = new ProbeAgent(agentConfig);

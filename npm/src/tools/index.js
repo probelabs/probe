@@ -12,7 +12,7 @@ export { editTool, createTool, multiEditTool } from './edit.js';
 export { createSearchTool, createQueryTool, createExtractTool } from './langchain.js';
 
 // Export execute_plan and cleanup_execute_plan tools
-export { createExecutePlanTool, getExecutePlanToolDefinition, createCleanupExecutePlanTool, getCleanupExecutePlanToolDefinition } from './executePlan.js';
+export { createExecutePlanTool, createCleanupExecutePlanTool } from './executePlan.js';
 
 // Export common schemas and utilities
 export {
@@ -24,15 +24,15 @@ export {
 	executePlanSchema,
 	cleanupExecutePlanSchema,
 	delegateDescription,
-	delegateToolDefinition,
 	bashDescription,
-	bashToolDefinition,
 	attemptCompletionSchema,
-	attemptCompletionToolDefinition,
 	parseAndResolvePaths,
 	resolveTargetPath,
-	DEFAULT_VALID_TOOLS,
-	buildToolTagPattern
+	listFilesSchema,
+	searchFilesSchema,
+	readImageSchema,
+	listSkillsSchema,
+	useSkillSchema
 } from './common.js';
 
 // Export edit and create schemas
@@ -42,10 +42,7 @@ export {
 	multiEditSchema,
 	editDescription,
 	createDescription,
-	multiEditDescription,
-	editToolDefinition,
-	createToolDefinition,
-	multiEditToolDefinition
+	multiEditDescription
 } from './edit.js';
 
 // Export system message

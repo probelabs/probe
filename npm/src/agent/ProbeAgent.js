@@ -31,7 +31,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
-import { streamText } from 'ai';
+import { streamText, tool, stepCountIs, jsonSchema } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
@@ -43,29 +43,26 @@ import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
 import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES, isFormatSupportedByProvider } from './imageConfig.js';
 import {
   createTools,
-  searchToolDefinition,
-  queryToolDefinition,
-  extractToolDefinition,
-  delegateToolDefinition,
-  analyzeAllToolDefinition,
-  getExecutePlanToolDefinition,
-  getCleanupExecutePlanToolDefinition,
-  bashToolDefinition,
-  listFilesToolDefinition,
-  searchFilesToolDefinition,
-  listSkillsToolDefinition,
-  useSkillToolDefinition,
-  readImageToolDefinition,
-  attemptCompletionToolDefinition,
-  editToolDefinition,
-  createToolDefinition,
-  multiEditToolDefinition,
-  googleSearchToolDefinition,
-  urlContextToolDefinition,
   attemptCompletionSchema,
-  parseXmlToolCallWithThinking
+  searchSchema,
+  querySchema,
+  extractSchema,
+  delegateSchema,
+  analyzeAllSchema,
+  executePlanSchema,
+  cleanupExecutePlanSchema,
+  bashSchema,
+  editSchema,
+  createSchema,
+  multiEditSchema,
+  listFilesSchema,
+  searchFilesSchema,
+  readImageSchema,
+  listSkillsSchema,
+  useSkillSchema
 } from './tools.js';
-import { createMessagePreview, detectUnrecognizedToolCall, detectStuckResponse, areBothStuckResponses } from '../tools/common.js';
+import { createMessagePreview } from '../tools/common.js';
+import { taskSchema } from './tasks/taskTool.js';
 import { FileTracker } from '../tools/fileTracker.js';
 import {
   createWrappedTools,
@@ -87,15 +84,13 @@ import {
   tryAutoWrapForSimpleSchema,
   tryExtractValidJsonPrefix
 } from './schemaUtils.js';
-import { removeThinkingTags, extractThinkingContent } from './xmlParsingUtils.js';
 import { predefinedPrompts } from './shared/prompts.js';
 import {
   MCPXmlBridge,
-  parseHybridXmlToolCall,
   loadMCPConfigurationFromPath
 } from './mcp/index.js';
 import { SkillRegistry } from './skills/registry.js';
-import { formatAvailableSkillsXml } from './skills/formatting.js';
+import { formatAvailableSkillsXml as formatAvailableSkills } from './skills/formatting.js';
 import { createSkillToolInstances } from './skills/tools.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
@@ -108,11 +103,11 @@ import { extractRawOutputBlocks } from '../tools/executePlan.js';
 import {
   TaskManager,
   createTaskTool,
-  taskToolDefinition,
   taskSystemPrompt,
   taskGuidancePrompt,
   createTaskCompletionBlockedMessage
 } from './tasks/index.js';
+import { z } from 'zod';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -125,44 +120,6 @@ const MAX_TOOL_ITERATIONS = (() => {
 })();
 const MAX_HISTORY_MESSAGES = 100;
 
-/**
- * Extract tool name from wrapped_tool:toolName format
- * @param {string} wrappedToolError - Error string in format 'wrapped_tool:toolName'
- * @returns {string} The extracted tool name or 'unknown' if format is invalid
- */
-function extractWrappedToolName(wrappedToolError) {
-  if (!wrappedToolError || typeof wrappedToolError !== 'string') {
-    return 'unknown';
-  }
-  const colonIndex = wrappedToolError.indexOf(':');
-  return colonIndex !== -1 ? wrappedToolError.slice(colonIndex + 1) : 'unknown';
-}
-
-/**
- * Check if an error indicates a wrapped tool format error
- * @param {string|null} error - Error from detectUnrecognizedToolCall
- * @returns {boolean} True if it's a wrapped tool error
- */
-function isWrappedToolError(error) {
-  return error && typeof error === 'string' && error.startsWith('wrapped_tool:');
-}
-
-/**
- * Create error message for wrapped tool format issues
- * @param {string} wrappedToolName - The tool name that was incorrectly wrapped
- * @returns {string} User-friendly error message with correct format instructions
- */
-function createWrappedToolErrorMessage(wrappedToolName) {
-  return `Your response contained an incorrectly formatted tool call (${wrappedToolName} wrapped in XML tags). This cannot be used.
-
-Please use the CORRECT format:
-
-<${wrappedToolName}>
-Your content here
-</${wrappedToolName}>
-
-Do NOT wrap in other tags like <api_call>, <tool_name>, <function>, etc.`;
-}
 
 // Supported image file extensions (imported from shared config)
 
@@ -223,6 +180,7 @@ export class ProbeAgent {
    * @param {number} [options.maxOutputTokens] - Maximum tokens for tool output before truncation (default: 20000, can also be set via PROBE_MAX_OUTPUT_TOKENS env var)
    * @param {number} [options.requestTimeout] - Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests.
    * @param {number} [options.maxOperationTimeout] - Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback.
+   * @param {string|number} [options.thinkingEffort] - Native thinking/reasoning effort level: 'low', 'medium', 'high', or a number (budget tokens). When set, passes provider-specific thinking options to the LLM via providerOptions.
    */
   constructor(options = {}) {
     // Basic configuration
@@ -263,6 +221,10 @@ export class ProbeAgent {
 
     // Completion prompt for post-completion validation/review
     this.completionPrompt = options.completionPrompt || null;
+
+    // Native thinking/reasoning effort for LLM providers
+    // Accepted values: 'off' (default), 'low', 'medium', 'high', or a number (budget tokens)
+    this.thinkingEffort = options.thinkingEffort || null;
 
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
@@ -538,30 +500,6 @@ export class ProbeAgent {
         'error.message': message,
         'error.recoverable': errorType !== 'circuit_breaker',
         'error.context': JSON.stringify(context).substring(0, 1000),
-        'iteration': iteration
-      });
-    }
-  }
-
-  /**
-   * Record AI thinking content for telemetry
-   * @param {string} thinkingContent - The thinking content
-   * @param {number} iteration - Current iteration number
-   * @private
-   */
-  _recordThinkingTelemetry(thinkingContent, iteration) {
-    if (!this.tracer || !thinkingContent) return;
-
-    if (this._isAppTracerStyle() && typeof this.tracer.recordThinkingContent === 'function') {
-      // AppTracer style: (sessionId, iteration, content)
-      this.tracer.recordThinkingContent(this.sessionId, iteration, thinkingContent);
-    } else if (typeof this.tracer.recordThinkingContent === 'function') {
-      // SimpleAppTracer style: (content, metadata)
-      this.tracer.recordThinkingContent(thinkingContent, { iteration });
-    } else {
-      this.tracer.addEvent('ai.thinking', {
-        'ai.thinking.content': thinkingContent.substring(0, 50000),
-        'ai.thinking.length': thinkingContent.length,
         'iteration': iteration
       });
     }
@@ -1622,6 +1560,474 @@ export class ProbeAgent {
   }
 
   /**
+   * Build providerOptions for native thinking/reasoning based on thinkingEffort setting.
+   * Maps effort levels to provider-specific parameters.
+   * @param {number} maxResponseTokens - Current max response tokens for budget calculation
+   * @returns {Object|undefined} providerOptions object or undefined if thinking is off
+   * @private
+   */
+  _buildThinkingProviderOptions(maxResponseTokens) {
+    if (!this.thinkingEffort) return undefined;
+
+    const effort = this.thinkingEffort;
+
+    // Map string effort levels to budget tokens
+    const effortToBudget = {
+      low: 4000,
+      medium: 10000,
+      high: 32000,
+    };
+
+    if (this.apiType === 'anthropic') {
+      const budgetTokens = typeof effort === 'number'
+        ? effort
+        : effortToBudget[effort];
+      if (!budgetTokens) return undefined;
+      return {
+        anthropic: {
+          thinking: { type: 'enabled', budgetTokens },
+        },
+      };
+    }
+
+    if (this.apiType === 'openai') {
+      // OpenAI reasoning models use reasoningEffort: 'low' | 'medium' | 'high'
+      const reasoningEffort = typeof effort === 'number'
+        ? (effort <= 4000 ? 'low' : effort <= 10000 ? 'medium' : 'high')
+        : effort;
+      if (!['low', 'medium', 'high'].includes(reasoningEffort)) return undefined;
+      return {
+        openai: {
+          reasoningEffort,
+        },
+      };
+    }
+
+    if (this.apiType === 'google') {
+      const thinkingBudget = typeof effort === 'number'
+        ? effort
+        : effortToBudget[effort];
+      if (!thinkingBudget) return undefined;
+      return {
+        google: {
+          thinkingConfig: { thinkingBudget },
+        },
+      };
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Build native Vercel AI SDK tools object for use with streamText().
+   * Each tool wraps the existing toolImplementations with:
+   * - sessionId and workingDirectory injection
+   * - Event emission
+   * - Output truncation
+   * - Raw output block extraction
+   * - Telemetry recording
+   * - Delegate tool param injection
+   *
+   * @param {Object} options - Options from the answer() call
+   * @param {Function} onComplete - Callback when attempt_completion is called (receives result string)
+   * @param {Object} context - Execution context { maxIterations, currentMessages }
+   * @returns {Object} Tools object for streamText()
+   * @private
+   */
+  _buildNativeTools(options, onComplete, context = {}) {
+    const { maxIterations = 30 } = context;
+    const nativeTools = {};
+    const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
+
+    // Helper to wrap a tool implementation into a Vercel AI SDK tool
+    const wrapTool = (toolName, schema, description, executeFn) => {
+      // Auto-wrap plain JSON Schema objects with jsonSchema() for AI SDK 5 compatibility
+      // Zod schemas have a _def property; plain objects need wrapping
+      const resolvedSchema = schema && schema._def ? schema : jsonSchema(schema);
+      return tool({
+        description,
+        inputSchema: resolvedSchema,
+        execute: async (params) => {
+          // Add sessionId and workingDirectory to params
+          let resolvedWorkingDirectory = this.workspaceRoot || this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
+          if (params.workingDirectory) {
+            const requestedDir = safeRealpath(isAbsolute(params.workingDirectory)
+              ? resolve(params.workingDirectory)
+              : resolve(resolvedWorkingDirectory, params.workingDirectory));
+            const isWithinAllowed = !this.allowedFolders || this.allowedFolders.length === 0 ||
+              this.allowedFolders.some(folder => {
+                const resolvedFolder = safeRealpath(folder);
+                return requestedDir === resolvedFolder || requestedDir.startsWith(resolvedFolder + sep);
+              });
+            if (isWithinAllowed) {
+              resolvedWorkingDirectory = requestedDir;
+            } else if (this.debug) {
+              console.error(`[DEBUG] Rejected workingDirectory "${params.workingDirectory}" - not within allowed folders`);
+            }
+          }
+          const toolParams = {
+            ...params,
+            sessionId: this.sessionId,
+            workingDirectory: resolvedWorkingDirectory
+          };
+
+          // Log tool execution in debug mode
+          if (this.debug) {
+            console.error(`\n[DEBUG] ========================================`);
+            console.error(`[DEBUG] Executing tool: ${toolName}`);
+            console.error(`[DEBUG] Arguments:`);
+            for (const [key, value] of Object.entries(params)) {
+              const displayValue = typeof value === 'string' && value.length > 100
+                ? value.substring(0, 100) + '...'
+                : value;
+              console.error(`[DEBUG]   ${key}: ${JSON.stringify(displayValue)}`);
+            }
+            console.error(`[DEBUG] ========================================\n`);
+          }
+
+          // Emit tool start event
+          this.events.emit('toolCall', {
+            timestamp: new Date().toISOString(),
+            name: toolName,
+            args: toolParams,
+            status: 'started',
+            pauseStream: true
+          });
+
+          const toolStartTime = Date.now();
+          try {
+            // For delegate tool, inject additional params
+            let result;
+            if (toolName === 'delegate') {
+              let allowedToolsForDelegate = null;
+              if (this.allowedTools.mode === 'whitelist') {
+                allowedToolsForDelegate = [...this.allowedTools.allowed];
+              } else if (this.allowedTools.mode === 'none') {
+                allowedToolsForDelegate = [];
+              } else if (this.allowedTools.mode === 'all' && this.allowedTools.exclusions?.length > 0) {
+                allowedToolsForDelegate = ['*', ...this.allowedTools.exclusions.map(t => '!' + t)];
+              }
+
+              const enhancedParams = {
+                ...toolParams,
+                currentIteration: context.currentIteration || 0,
+                maxIterations,
+                parentSessionId: this.sessionId,
+                path: this.searchPath,
+                provider: this.apiType,
+                model: this.model,
+                searchDelegate: this.searchDelegate,
+                enableTasks: this.enableTasks,
+                enableMcp: !!this.mcpBridge,
+                mcpConfig: this.mcpConfig,
+                mcpConfigPath: this.mcpConfigPath,
+                enableBash: this.enableBash,
+                bashConfig: this.bashConfig,
+                allowEdit: this.allowEdit,
+                allowedTools: allowedToolsForDelegate,
+                debug: this.debug,
+                tracer: this.tracer
+              };
+
+              if (this.debug) {
+                console.log(`[DEBUG] Executing delegate tool`);
+                console.log(`[DEBUG] Parent session: ${this.sessionId}`);
+              }
+
+              if (this.tracer) {
+                this.tracer.recordDelegationEvent('tool_started', {
+                  'delegation.task_preview': toolParams.task?.substring(0, 200)
+                });
+              }
+
+              result = await executeFn(enhancedParams);
+            } else {
+              result = await executeFn(toolParams);
+            }
+
+            const toolDurationMs = Date.now() - toolStartTime;
+            this._recordToolResultTelemetry(toolName, result, true, toolDurationMs, context.currentIteration || 0);
+
+            // Emit tool success event
+            this.events.emit('toolCall', {
+              timestamp: new Date().toISOString(),
+              name: toolName,
+              args: toolParams,
+              resultPreview: typeof result === 'string'
+                ? (result.length > 200 ? result.substring(0, 200) + '...' : result)
+                : (result ? JSON.stringify(result).substring(0, 200) + '...' : 'No Result'),
+              status: 'completed'
+            });
+
+            let toolResultContent = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+
+            // Convert absolute workspace paths to relative
+            if (this.workspaceRoot && toolResultContent) {
+              const wsPrefix = this.workspaceRoot.endsWith(sep) ? this.workspaceRoot : this.workspaceRoot + sep;
+              toolResultContent = toolResultContent.split(wsPrefix).join('');
+            }
+
+            // Extract raw output blocks from tool result (before truncation)
+            const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent);
+            if (extractedBlocks.length > 0) {
+              toolResultContent = cleanedContent;
+              this._extractedRawBlocks.push(...extractedBlocks);
+              if (this.debug) {
+                console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks from tool result`);
+              }
+            }
+
+            // Truncate if output exceeds token limit
+            try {
+              const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
+              if (truncateResult.truncated) {
+                toolResultContent = truncateResult.content;
+                if (this.debug) {
+                  console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens`);
+                }
+              }
+            } catch (truncateError) {
+              console.error(`[WARN] Tool output truncation failed: ${truncateError.message}`);
+            }
+
+            if (this.debug) {
+              console.log(`[DEBUG] Tool ${toolName} executed successfully. Result length: ${toolResultContent.length}`);
+            }
+
+            return toolResultContent;
+          } catch (error) {
+            const toolDurationMs = Date.now() - toolStartTime;
+            this._recordToolResultTelemetry(toolName, null, false, toolDurationMs, context.currentIteration || 0);
+
+            // Emit tool error event
+            this.events.emit('toolCall', {
+              timestamp: new Date().toISOString(),
+              name: toolName,
+              args: toolParams,
+              error: error.message || 'Unknown error',
+              status: 'error'
+            });
+
+            if (this.debug) {
+              console.error(`[DEBUG] Tool '${toolName}' failed: ${error.message}`);
+            }
+
+            // Format error for AI
+            const errorMsg = formatErrorForAI(error);
+            return errorMsg;
+          }
+        }
+      });
+    };
+
+    // Only include attempt_completion when _disableTools is set
+    if (options._disableTools) {
+      nativeTools.attempt_completion = tool({
+        description: 'Signal task completion and provide the final result to the user',
+        inputSchema: z.object({
+          result: z.string().describe('The final result to present to the user')
+        }),
+        execute: async ({ result }) => {
+          onComplete(result);
+          return result;
+        }
+      });
+      return nativeTools;
+    }
+
+    // Add all enabled tools from toolImplementations
+    for (const [toolName, toolImpl] of Object.entries(this.toolImplementations)) {
+      // Get schema and description for this tool
+      const { schema, description } = this._getToolSchemaAndDescription(toolName);
+      if (schema && description) {
+        nativeTools[toolName] = wrapTool(toolName, schema, description, toolImpl.execute);
+      }
+    }
+
+    // Always add attempt_completion
+    nativeTools.attempt_completion = tool({
+      description: 'Signal task completion and provide the final result to the user',
+      inputSchema: z.object({
+        result: z.string().describe('The final result to present to the user')
+      }),
+      execute: async ({ result }) => {
+        // Task completion blocking
+        if (this.enableTasks && this.taskManager && this.taskManager.hasIncompleteTasks()) {
+          const incompleteTasks = this.taskManager.getIncompleteTasks();
+          const highIterationCount = (context.currentIteration || 0) > maxIterations * 0.7;
+
+          if (!highIterationCount) {
+            const taskSummary = this.taskManager.getTaskSummary();
+            const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
+            if (this.debug) {
+              console.log('[DEBUG] Task checkpoint: Blocking completion due to incomplete tasks');
+            }
+            return blockedMessage;
+          }
+        }
+
+        onComplete(result);
+        return result;
+      }
+    });
+
+    // Add MCP tools if available
+    if (this.mcpBridge && !options._disableTools) {
+      const mcpTools = this.mcpBridge.getVercelTools(this._filterMcpTools(this.mcpBridge.getToolNames()));
+      for (const [name, mcpTool] of Object.entries(mcpTools)) {
+        nativeTools[name] = mcpTool;
+      }
+    }
+
+    // Add Gemini provider tools as wrapper function tools.
+    // The Gemini API does not allow mixing provider-defined tools with function tools
+    // in the same request. To work around this, we create regular function tools that
+    // internally make a separate API call using only the provider-defined tool.
+    if (this.apiType === 'google' && this._geminiToolsEnabled && !options._disableTools) {
+      const { googleSearch, urlContext } = this._geminiToolsEnabled;
+
+      if (googleSearch && isToolAllowed('gemini_google_search')) {
+        nativeTools.google_search = tool({
+          description: 'Search the web using Google Search for current information, recent events, or real-time data.',
+          inputSchema: z.object({
+            query: z.string().describe('The search query to find information on the web')
+          }),
+          execute: async ({ query }) => {
+            if (this.debug) {
+              console.log(`[DEBUG] google_search wrapper: querying "${query}"`);
+            }
+            try {
+              const { generateText: genText } = await import('ai');
+              const searchResult = await genText({
+                model: this.provider(this.model.includes('flash') ? this.model : this.model.replace('pro', 'flash')),
+                messages: [{ role: 'user', content: query }],
+                tools: { google_search: this.provider.tools.googleSearch({}) },
+                stopWhen: stepCountIs(2),
+                maxTokens: 4000
+              });
+              return searchResult.text || 'No search results found.';
+            } catch (err) {
+              if (this.debug) console.error(`[DEBUG] google_search wrapper error:`, err.message);
+              return `Search failed: ${err.message}`;
+            }
+          }
+        });
+      }
+
+      if (urlContext && isToolAllowed('gemini_url_context')) {
+        nativeTools.url_context = tool({
+          description: 'Fetch and analyze content from a specific URL. Use this to read web pages, documentation, or online resources.',
+          inputSchema: z.object({
+            url: z.string().describe('The URL to fetch and analyze')
+          }),
+          execute: async ({ url }) => {
+            if (this.debug) {
+              console.log(`[DEBUG] url_context wrapper: fetching "${url}"`);
+            }
+            try {
+              const { generateText: genText } = await import('ai');
+              const fetchResult = await genText({
+                model: this.provider(this.model.includes('flash') ? this.model : this.model.replace('pro', 'flash')),
+                messages: [{ role: 'user', content: `Summarize the content at this URL: ${url}` }],
+                tools: { url_context: this.provider.tools.urlContext({}) },
+                stopWhen: stepCountIs(2),
+                maxTokens: 4000
+              });
+              return fetchResult.text || 'Could not fetch URL content.';
+            } catch (err) {
+              if (this.debug) console.error(`[DEBUG] url_context wrapper error:`, err.message);
+              return `URL fetch failed: ${err.message}`;
+            }
+          }
+        });
+      }
+    }
+
+    return nativeTools;
+  }
+
+  /**
+   * Get the Zod schema and description for a tool by name
+   * @param {string} toolName - Tool name
+   * @returns {{ schema: z.ZodObject, description: string } | null}
+   * @private
+   */
+  _getToolSchemaAndDescription(toolName) {
+    const toolMap = {
+      search: {
+        schema: searchSchema,
+        description: 'Search code in the repository using keyword queries with Elasticsearch syntax.'
+      },
+      query: {
+        schema: querySchema,
+        description: 'Search code using ast-grep structural pattern matching.'
+      },
+      extract: {
+        schema: extractSchema,
+        description: 'Extract code blocks from files based on file paths and optional line numbers.'
+      },
+      delegate: {
+        schema: delegateSchema,
+        description: 'Delegate big distinct tasks to specialized probe subagents.'
+      },
+      analyze_all: {
+        schema: analyzeAllSchema,
+        description: 'Process ALL data matching a query using map-reduce for aggregate questions.'
+      },
+      execute_plan: {
+        schema: executePlanSchema,
+        description: 'Execute a DSL program to orchestrate tool calls.'
+      },
+      cleanup_execute_plan: {
+        schema: cleanupExecutePlanSchema,
+        description: 'Clean up output buffer and session store from previous execute_plan calls.'
+      },
+      bash: {
+        schema: bashSchema,
+        description: 'Execute bash commands for system exploration and development tasks.'
+      },
+      edit: {
+        schema: editSchema,
+        description: 'Edit files using text replacement, AST-aware symbol operations, or line-targeted editing.'
+      },
+      create: {
+        schema: createSchema,
+        description: 'Create new files with specified content.'
+      },
+      multi_edit: {
+        schema: multiEditSchema,
+        description: 'Apply multiple file edits in one call using a JSON array of operations.'
+      },
+      listFiles: {
+        schema: listFilesSchema,
+        description: 'List files and directories in a specified location.'
+      },
+      searchFiles: {
+        schema: searchFilesSchema,
+        description: 'Find files matching a glob pattern with recursive search capability.'
+      },
+      readImage: {
+        schema: readImageSchema,
+        description: 'Read and load an image file for AI analysis.'
+      },
+      listSkills: {
+        schema: listSkillsSchema,
+        description: 'List available agent skills discovered in the repository.'
+      },
+      useSkill: {
+        schema: useSkillSchema,
+        description: 'Load and activate a specific skill\'s instructions.'
+      },
+      task: {
+        schema: taskSchema,
+        description: 'Manage tasks for tracking progress (create, update, complete, delete, list).'
+      }
+    };
+
+    return toolMap[toolName] || null;
+  }
+
+  /**
    * Initialize AWS Bedrock model
    */
   initializeBedrockModel(accessKeyId, secretAccessKey, region, sessionToken, apiKey, baseURL, modelName) {
@@ -2369,7 +2775,7 @@ export class ProbeAgent {
   async _getAvailableSkillsXml() {
     const skills = await this._loadSkillsMetadata();
     if (!skills.length) return '';
-    return formatAvailableSkillsXml(skills);
+    return formatAvailableSkills(skills);
   }
 
   /**
@@ -2527,245 +2933,16 @@ ${extractGuidance}
       }
     }
 
-    // Build tool definitions based on allowedTools configuration
-    let toolDefinitions = '';
-
-    // Helper to check if a tool is allowed
-    const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
-
-    // Core tools (filtered by allowedTools)
-    if (isToolAllowed('search')) {
-      const searchDefinition = this.searchDelegate
-        ? `${searchToolDefinition}\n**Note:** This search tool delegates code searching to a dedicated subagent and returns extracted code blocks. Use extract only to expand context or if search returns no code.`
-        : searchToolDefinition;
-      toolDefinitions += `${searchDefinition}\n`;
-    }
-    if (isToolAllowed('query')) {
-      toolDefinitions += `${queryToolDefinition}\n`;
-    }
-    if (isToolAllowed('extract')) {
-      toolDefinitions += `${extractToolDefinition}\n`;
-    }
-    if (isToolAllowed('listFiles')) {
-      toolDefinitions += `${listFilesToolDefinition}\n`;
-    }
-    if (isToolAllowed('searchFiles')) {
-      toolDefinitions += `${searchFilesToolDefinition}\n`;
-    }
-    if (this.enableSkills && isToolAllowed('listSkills')) {
-      toolDefinitions += `${listSkillsToolDefinition}\n`;
-    }
-    if (this.enableSkills && isToolAllowed('useSkill')) {
-      toolDefinitions += `${useSkillToolDefinition}\n`;
-    }
-    if (isToolAllowed('readImage')) {
-      toolDefinitions += `${readImageToolDefinition}\n`;
-    }
-
-    // Edit tools (require both allowEdit flag AND allowedTools permission)
-    if (this.allowEdit && isToolAllowed('edit')) {
-      toolDefinitions += `${editToolDefinition}\n`;
-    }
-    if (this.allowEdit && isToolAllowed('create')) {
-      toolDefinitions += `${createToolDefinition}\n`;
-    }
-    if (this.allowEdit && isToolAllowed('multi_edit')) {
-      toolDefinitions += `${multiEditToolDefinition}\n`;
-    }
-    // Bash tool (require both enableBash flag AND allowedTools permission)
-    if (this.enableBash && isToolAllowed('bash')) {
-      toolDefinitions += `${bashToolDefinition}\n`;
-    }
-
-    // Task tool (require both enableTasks flag AND allowedTools permission)
-    if (this.enableTasks && isToolAllowed('task')) {
-      toolDefinitions += `${taskToolDefinition}\n`;
-    }
-
-    // Always include attempt_completion unconditionally - it's a completion signal, not a tool
-    // This ensures agents can always complete their work, regardless of tool restrictions
-    toolDefinitions += `${attemptCompletionToolDefinition}\n`;
-
-    // Delegate tool (require both enableDelegate flag AND allowedTools permission)
-    // Place after attempt_completion as it's an optional tool
-    if (this.enableDelegate && isToolAllowed('delegate')) {
-      toolDefinitions += `${delegateToolDefinition}\n`;
-    }
-
-    // Execute Plan tool for DSL-based orchestration (requires enableExecutePlan flag, supersedes analyze_all)
-    if (this.enableExecutePlan && isToolAllowed('execute_plan')) {
-      // Build available function list based on what tools are registered
-      const dslFunctions = ['LLM', 'map', 'chunk', 'batch', 'log', 'range', 'flatten', 'unique', 'groupBy', 'parseJSON', 'storeSet', 'storeGet', 'storeAppend', 'storeKeys', 'storeGetAll', 'output'];
-      if (isToolAllowed('search')) dslFunctions.unshift('search');
-      if (isToolAllowed('query')) dslFunctions.unshift('query');
-      if (isToolAllowed('extract')) dslFunctions.unshift('extract');
-      if (isToolAllowed('listFiles')) dslFunctions.push('listFiles');
-      if (this.enableBash && isToolAllowed('bash')) dslFunctions.push('bash');
-      toolDefinitions += `${getExecutePlanToolDefinition(dslFunctions)}\n`;
-      // cleanup_execute_plan is enabled together with execute_plan
-      if (isToolAllowed('cleanup_execute_plan')) {
-        toolDefinitions += `${getCleanupExecutePlanToolDefinition()}\n`;
-      }
-    } else if (isToolAllowed('analyze_all')) {
-      // Fallback: only register analyze_all if execute_plan is not available
-      toolDefinitions += `${analyzeAllToolDefinition}\n`;
-    }
-
-    // Gemini built-in tools (only when using Google provider)
-    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('gemini_google_search')) {
-      toolDefinitions += `${googleSearchToolDefinition}\n`;
-    }
-    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('gemini_url_context')) {
-      toolDefinitions += `${urlContextToolDefinition}\n`;
-    }
-
-    // Build XML tool guidelines with dynamic examples based on allowed tools
-    // Build examples only for allowed tools
-    let toolExamples = '';
-    if (isToolAllowed('search')) {
-      toolExamples += `
-<search>
-<query>error handling</query>
-<path>src/search</path>
-</search>
-`;
-    }
-    if (isToolAllowed('extract')) {
-      toolExamples += `
-<extract>
-<targets>src/config.js:15-25</targets>
-</extract>
-`;
-    }
-    if (isToolAllowed('attempt_completion')) {
-      toolExamples += `
-<attempt_completion>
-The configuration is loaded from src/config.js lines 15-25 which contains the database settings.
-</attempt_completion>
-`;
-    }
-
-    // Build available tools list dynamically based on allowedTools
-    let availableToolsList = '';
-    if (isToolAllowed('search')) {
-      availableToolsList += `- search: Search code using keyword queries${this.searchDelegate ? ' (returns extracted code blocks via a dedicated subagent)' : ''}.\n`;
-    }
-    if (isToolAllowed('query')) {
-      availableToolsList += '- query: Search code using structural AST patterns.\n';
-    }
-    if (isToolAllowed('extract')) {
-      availableToolsList += '- extract: Extract specific code blocks or lines from files. Use with symbol targets (e.g. "file.js#funcName") to get line numbers for line-targeted editing.\n';
-    }
-    if (isToolAllowed('listFiles')) {
-      availableToolsList += '- listFiles: List files and directories in a specified location.\n';
-    }
-    if (isToolAllowed('searchFiles')) {
-      availableToolsList += '- searchFiles: Find files matching a glob pattern with recursive search capability.\n';
-    }
-    if (this.enableSkills && isToolAllowed('listSkills')) {
-      availableToolsList += '- listSkills: List available agent skills discovered in the repository.\n';
-    }
-    if (this.enableSkills && isToolAllowed('useSkill')) {
-      availableToolsList += '- useSkill: Load and activate a specific skill\'s instructions.\n';
-    }
-    if (isToolAllowed('readImage')) {
-      availableToolsList += '- readImage: Read and load an image file for AI analysis.\n';
-    }
-    if (this.allowEdit && isToolAllowed('edit')) {
-      availableToolsList += '- edit: Edit files using text replacement, AST-aware symbol operations, or line-targeted editing.\n';
-    }
-    if (this.allowEdit && isToolAllowed('create')) {
-      availableToolsList += '- create: Create new files with specified content.\n';
-    }
-    if (this.allowEdit && isToolAllowed('multi_edit')) {
-      availableToolsList += '- multi_edit: Apply multiple file edits in one call using a JSON array of operations.\n';
-    }
-    if (this.enableDelegate && isToolAllowed('delegate')) {
-      availableToolsList += '- delegate: Delegate big distinct tasks to specialized probe subagents.\n';
-    }
-    if (this.enableExecutePlan && isToolAllowed('execute_plan')) {
-      availableToolsList += '- execute_plan: Execute a DSL program to orchestrate tool calls. ALWAYS use this for: questions containing "all"/"every"/"comprehensive"/"complete inventory", multi-topic analysis, open-ended discovery questions, or any task requiring full codebase coverage.\n';
-      if (isToolAllowed('cleanup_execute_plan')) {
-        availableToolsList += '- cleanup_execute_plan: Clean up output buffer and session store from previous execute_plan calls.\n';
-      }
-    } else if (isToolAllowed('analyze_all')) {
-      availableToolsList += '- analyze_all: Process ALL data matching a query using map-reduce (for aggregate questions needing 100% coverage).\n';
-    }
-    if (this.enableBash && isToolAllowed('bash')) {
-      availableToolsList += '- bash: Execute bash commands for system operations.\n';
-    }
-    if (this.enableTasks && isToolAllowed('task')) {
-      availableToolsList += '- task: Manage tasks for tracking progress (create, update, complete, delete, list).\n';
-    }
-    if (isToolAllowed('attempt_completion')) {
-      availableToolsList += '- attempt_completion: Finalize the task and provide the result to the user.\n';
-      availableToolsList += '- attempt_complete: Quick completion using previous response (shorthand).\n';
-    }
-    if (this._geminiToolsEnabled?.googleSearch && isToolAllowed('gemini_google_search')) {
-      availableToolsList += '- gemini_google_search: (auto) Web search via Google — invoked automatically by the model when it needs current information.\n';
-    }
-    if (this._geminiToolsEnabled?.urlContext && isToolAllowed('gemini_url_context')) {
-      availableToolsList += '- gemini_url_context: (auto) URL content reader via Google — automatically fetches and reads URLs mentioned in the conversation.\n';
-    }
-
-    let xmlToolGuidelines = `
-# Tool Use Formatting
-
-Tool use MUST be formatted using XML-style tags. Each tool call requires BOTH opening and closing tags with the exact tool name. Each parameter is similarly enclosed within its own set of opening and closing tags. You MUST use exactly ONE tool call per message until you are ready to complete the task.
-
-**CRITICAL: Every XML tag MUST have both opening <tag> and closing </tag> parts.**
-
-Structure (note the closing tags):
-<tool_name>
-<parameter1_name>value1</parameter1_name>
-<parameter2_name>value2</parameter2_name>
-...
-</tool_name>
-
-Examples:${toolExamples}
-# Special Case: Quick Completion
-If your previous response was already correct and complete, you may respond with just:
-<attempt_complete>
-This signals to use your previous response as the final answer without repeating content.
-
-# Thinking Process
-
-Before using a tool, analyze the situation within <thinking></thinking> tags. This helps you organize your thoughts and make better decisions.
-
-Example:
-<thinking>
-I need to find code related to error handling in the search module. The most appropriate tool for this is the search tool, which requires a query parameter and a path parameter. I have both the query ("error handling") and the path ("src/search"), so I can proceed with the search.
-</thinking>
-
-# Tool Use Guidelines
-
-1. Think step-by-step about how to achieve the user's goal.
-2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool.
-3. Choose **one** tool that helps achieve the current step.
-4. Format the tool call using the specified XML format with BOTH opening and closing tags. Ensure all required parameters are included.
-5. **You MUST respond with exactly one tool call in the specified XML format in each turn.**
-6. Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
-7. Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
-8. If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
-9. If you cannot proceed (e.g., missing information, invalid request), use \`<attempt_completion>\` to explain the issue clearly with an appropriate message directly inside the tags.
-10. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
-
-Available Tools:
-${availableToolsList}`;
-
-    // Common instructions
+    // Common instructions (simplified - tools are now provided via native tool calling)
     const commonInstructions = `<instructions>
 Follow these instructions carefully:
 1. Analyze the user's request.
-2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
-3. Use the available tools step-by-step to fulfill the request.
-4. You should always prefer the \`search\` tool for code-related questions.${this.searchDelegate ? ' It already returns extracted code blocks; use \`extract\` only to expand context or read full files.' : ' Read full files only if really necessary.'}
-5. Ensure to get really deep and understand the full picture before answering.
-6. You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
-7. Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
-8. Once the task is fully completed, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
-9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
-10. When modifying files, choose the appropriate tool:
+2. Use the available tools step-by-step to fulfill the request.
+3. You should always prefer the search tool for code-related questions.${this.searchDelegate ? ' It already returns extracted code blocks; use extract only to expand context or read full files.' : ' Read full files only if really necessary.'}
+4. Ensure to get really deep and understand the full picture before answering.
+5. Once the task is fully completed, use the attempt_completion tool to provide the final result.
+6. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
+7. When modifying files, choose the appropriate tool:
     - Use 'edit' for all code modifications:
       * For small changes (a line or a few lines), use old_string + new_string — copy old_string verbatim from the file.
       * For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
@@ -2794,7 +2971,6 @@ Follow these instructions carefully:
       if (this.debug) {
         console.log(`[DEBUG] Using predefined prompt: ${this.promptType}`);
       }
-      // Add common instructions to predefined prompts
       systemMessage += commonInstructions;
     } else {
       // Use the default prompt (code explorer) if no prompt type is specified
@@ -2802,15 +2978,8 @@ Follow these instructions carefully:
       if (this.debug) {
         console.log(`[DEBUG] Using default prompt: code explorer`);
       }
-      // Add common instructions to the default prompt
       systemMessage += commonInstructions;
     }
-
-    // Add XML Tool Guidelines
-    systemMessage += `\n${xmlToolGuidelines}\n`;
-
-    // Add Tool Definitions
-    systemMessage += `\n# Tools Available\n${toolDefinitions}\n`;
 
     // Add available skills (metadata only)
     if (this.enableSkills) {
@@ -2823,19 +2992,6 @@ Follow these instructions carefully:
     // Add task management system prompt if enabled
     if (this.enableTasks) {
       systemMessage += `\n${taskSystemPrompt}\n`;
-    }
-
-    // Add MCP tools if available (filtered by allowedTools)
-    if (this.mcpBridge && this.mcpBridge.getToolNames().length > 0) {
-      const allMcpTools = this.mcpBridge.getToolNames();
-      const allowedMcpTools = this._filterMcpTools(allMcpTools);
-
-      if (allowedMcpTools.length > 0) {
-        systemMessage += `\n## MCP Tools (JSON parameters in <params> tag)\n`;
-        // Get only allowed MCP tool definitions
-        systemMessage += this.mcpBridge.getXmlToolDefinitions(allowedMcpTools);
-        systemMessage += `\n\nFor MCP tools, use JSON format within the params tag, e.g.:\n<mcp_tool>\n<params>\n{"key": "value"}\n</params>\n</mcp_tool>\n`;
-      }
     }
 
     // Add folder information using workspace root and relative paths
@@ -3195,1127 +3351,190 @@ Follow these instructions carefully:
         }
       }
 
-      // Circuit breaker for repeated format errors
-      let lastFormatErrorType = null;
-      let sameFormatErrorCount = 0;
-      const MAX_REPEATED_FORMAT_ERRORS = 3;
+      // Iteration counter for telemetry
 
-      // Circuit breaker for repeated identical responses without tool calls
-      let lastNoToolResponse = null;
-      let sameResponseCount = 0;
-      const MAX_REPEATED_IDENTICAL_RESPONSES = 3;
+      // Native tool calling via Vercel AI SDK streamText + maxSteps
+      let completionResult = null;
+      const toolContext = { maxIterations, currentIteration: 0, currentMessages };
 
-      // Circuit breaker for consecutive no-tool responses (regardless of content)
-      // This catches cases where agent alternates between similar "stuck" messages
-      let consecutiveNoToolCount = 0;
-      const MAX_CONSECUTIVE_NO_TOOL = 5;
+      const tools = this._buildNativeTools(options, (result) => {
+        completionResult = result;
+        completionAttempted = true;
+      }, toolContext);
 
-      // Tool iteration loop (only for non-CLI engines like Vercel/Anthropic/OpenAI)
-      while (currentIteration < maxIterations && !completionAttempted) {
-        currentIteration++;
-        if (this.cancelled) throw new Error('Request was cancelled by the user');
-
-        if (this.debug) {
-          console.log(`\n[DEBUG] --- Tool Loop Iteration ${currentIteration}/${maxIterations} ---`);
-          console.log(`[DEBUG] Current messages count for AI call: ${currentMessages.length}`);
-          
-          // Log preview of the latest user message (helpful for debugging loops)
-          const lastUserMessage = [...currentMessages].reverse().find(msg => msg.role === 'user');
-          if (lastUserMessage && lastUserMessage.content) {
-            const userPreview = createMessagePreview(lastUserMessage.content);
-            console.log(`[DEBUG] Latest user message (${lastUserMessage.content.length} chars): ${userPreview}`);
-          }
+      let maxResponseTokens = this.maxResponseTokens;
+      if (!maxResponseTokens) {
+        maxResponseTokens = 4000;
+        if (this.model && this.model.includes('opus') || this.model && this.model.includes('sonnet') || this.model && this.model.startsWith('gpt-4') || this.model && this.model.startsWith('gpt-5')) {
+          maxResponseTokens = 8192;
+        } else if (this.model && this.model.startsWith('gemini')) {
+          maxResponseTokens = 32000;
         }
+      }
 
-        // Add iteration tracing event
-        if (this.tracer) {
-          this.tracer.addEvent('iteration.start', {
-            'iteration': currentIteration,
-            'max_iterations': maxIterations,
-            'message_count': currentMessages.length
-          });
-        }
+      // Context compaction retry loop
+      let compactionAttempted = false;
+      while (true) {
+        try {
+          const messagesForAI = this.prepareMessagesWithImages(currentMessages);
 
-        // Add warning message when reaching the last iteration
-        if (currentIteration === maxIterations) {
-          const warningMessage = `⚠️ WARNING: You have reached the maximum tool iterations limit (${maxIterations}). This is your final message. Please respond with the data you have so far. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`;
-          
-          currentMessages.push({
-            role: 'user',
-            content: warningMessage
-          });
-          
-          if (this.debug) {
-            console.log(`[DEBUG] Added max iterations warning message at iteration ${currentIteration}`);
-          }
-        }
+          const streamOptions = {
+            model: this.provider ? this.provider(this.model) : this.model,
+            messages: messagesForAI,
+            tools,
+            stopWhen: stepCountIs(maxIterations),
+            maxTokens: maxResponseTokens,
+            temperature: 0.3,
+            onStepFinish: ({ toolResults, text, finishReason, usage }) => {
+              currentIteration++;
+              toolContext.currentIteration = currentIteration;
 
-        // Calculate context size
-        this.tokenCounter.calculateContextSize(currentMessages);
-        if (this.debug) {
-          console.log(`[DEBUG] Estimated context tokens BEFORE LLM call (Iter ${currentIteration}): ${this.tokenCounter.contextSize}`);
-        }
-
-        let maxResponseTokens = this.maxResponseTokens;
-        if (!maxResponseTokens) {
-          // Use model-based defaults if not explicitly configured
-          maxResponseTokens = 4000;
-          if (this.model && this.model.includes('opus') || this.model && this.model.includes('sonnet') || this.model && this.model.startsWith('gpt-4') || this.model && this.model.startsWith('gpt-5')) {
-            maxResponseTokens = 8192;
-          } else if (this.model && this.model.startsWith('gemini')) {
-            maxResponseTokens = 32000;
-          }
-        }
-
-        // Make AI request
-        let assistantResponseContent = '';
-        let compactionAttempted = false;
-
-        // Retry loop for context compaction - separate from streamTextWithRetryAndFallback
-        // which handles transient errors (rate limits, network issues, etc.)
-        while (true) {
-          try {
-            // Wrap AI request with tracing if available
-            const executeAIRequest = async () => {
-              // Prepare messages with potential image content
-              const messagesForAI = this.prepareMessagesWithImages(currentMessages);
-
-              // Build streamText options, including Gemini provider-defined tools if applicable
-              const streamOptions = {
-                model: this.provider ? this.provider(this.model) : this.model,
-                messages: messagesForAI,
-                maxTokens: maxResponseTokens,
-                temperature: 0.3,
-              };
-
-              // Inject Gemini built-in tools (gemini_google_search, gemini_url_context) when using Google provider
-              const geminiProviderTools = this._buildGeminiProviderTools();
-              if (geminiProviderTools) {
-                streamOptions.tools = geminiProviderTools;
+              // Record telemetry
+              if (this.tracer) {
+                this.tracer.addEvent('iteration.step', {
+                  'iteration': currentIteration,
+                  'max_iterations': maxIterations,
+                  'finish_reason': finishReason,
+                  'has_tool_calls': !!(toolResults && toolResults.length > 0)
+                });
               }
 
-              const result = await this.streamTextWithRetryAndFallback(streamOptions);
-
-              // Get the promise reference BEFORE consuming stream (doesn't lock it)
-              const usagePromise = result.usage;
-
-              // Collect the streamed response - stream all content for now
-              for await (const delta of result.textStream) {
-                assistantResponseContent += delta;
-                // For now, stream everything - we'll handle segmentation after tools execute
-                if (options.onStream) {
-                  options.onStream(delta);
-                }
-              }
-
-              // Record token usage - await the promise AFTER stream is consumed
-              const usage = await usagePromise;
+              // Record token usage
               if (usage) {
-                this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+                this.tokenCounter.recordUsage(usage);
               }
 
-              return result;
-            };
-
-            if (this.tracer) {
-              // Prepare input preview for tracing (truncate if very long)
-              const inputPreview = message.length > 1000
-                ? message.substring(0, 1000) + '... [truncated]'
-                : message;
-
-              await this.tracer.withSpan('ai.request', executeAIRequest, {
-                'ai.model': this.model,
-                'ai.provider': this.clientApiProvider || 'auto',
-                'ai.input': inputPreview,
-                'ai.input_length': message.length,
-                'iteration': currentIteration,
-                'max_tokens': maxResponseTokens,
-                'temperature': 0.3,
-                'message_count': currentMessages.length
-              });
-            } else {
-              await executeAIRequest();
-            }
-
-            // Success - break out of compaction retry loop
-            break;
-
-          } catch (error) {
-            // Check if this is a context limit error (only try compaction once per iteration)
-            if (!compactionAttempted && handleContextLimitError) {
-              const compactionResult = handleContextLimitError(error, currentMessages, {
-                keepLastSegment: true,
-                minSegmentsToKeep: 1
-              });
-
-              if (compactionResult) {
-                // Context limit error detected - compact and retry once
-                const { messages: compactedMessages, stats } = compactionResult;
-
-                // Check if compaction actually reduced message count
-                if (stats.removed === 0) {
-                  // No messages removed - compaction won't help, fail immediately
-                  console.error(`[ERROR] Context window exceeded but no messages can be compacted.`);
-                  console.error(`[ERROR] The conversation history is already minimal (${stats.originalCount} messages).`);
-                  finalResult = `Error: Context window limit exceeded and conversation cannot be compacted further. Consider starting a new session or reducing system message size.`;
-                  throw new Error(finalResult);
-                }
-
-                compactionAttempted = true;
-
-                console.log(`[INFO] Context window limit exceeded. Compacting conversation...`);
-                console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
-                console.log(`[INFO] Estimated token savings: ${stats.tokensSaved} tokens`);
-
-                if (this.debug) {
-                  console.log(`[DEBUG] Compaction stats:`, stats);
-                  console.log(`[DEBUG] Original message count: ${stats.originalCount}`);
-                  console.log(`[DEBUG] Compacted message count: ${stats.compactedCount}`);
-                }
-
-                // Replace currentMessages with compacted version (creates new array reference)
-                // This ensures we don't mutate the original history array
-                currentMessages = [...compactedMessages];
-
-                // Log compaction event if tracer is available
-                if (this.tracer) {
-                  this.tracer.addEvent('context.compacted', {
-                    'iteration': currentIteration,
-                    'original_count': stats.originalCount,
-                    'compacted_count': stats.compactedCount,
-                    'reduction_percent': stats.reductionPercent,
-                    'tokens_saved': stats.tokensSaved
-                  });
-                }
-
-                // Continue to retry with compacted messages
-                continue;
+              // Stream text to callback if present
+              if (options.onStream && text) {
+                options.onStream(text);
               }
-            }
 
-            // Not a context limit error, compaction already attempted, or compaction not available
-            // IMPORTANT: This break prevents infinite loop if compacted messages still exceed limit
-            console.error(`Error during streamText (Iter ${currentIteration}):`, error);
-            finalResult = `Error: Failed to get response from AI model during iteration ${currentIteration}. ${error.message}`;
-            throw new Error(finalResult);
-          }
-        }
-
-        // Log preview of assistant response for debugging loops
-        if (this.debug && assistantResponseContent) {
-          const assistantPreview = createMessagePreview(assistantResponseContent);
-          console.log(`[DEBUG] Assistant response (${assistantResponseContent.length} chars): ${assistantPreview}`);
-        }
-
-        // Images in assistant responses are not automatically processed
-        // AI can use the readImage tool to explicitly request reading an image
-
-        // Parse tool call from response with valid tools list
-        // Build validTools based on allowedTools configuration (same pattern as getSystemMessage)
-        // When _disableTools is set, only allow attempt_completion for JSON correction flows
-        const validTools = [];
-        if (options._disableTools) {
-          // Only allow attempt_completion for JSON correction - no search/query/edit tools
-          validTools.push('attempt_completion');
-          if (this.debug) {
-            console.log(`[DEBUG] Tools disabled for this call - only attempt_completion allowed`);
-          }
-        } else {
-          if (this.allowedTools.isEnabled('search')) validTools.push('search');
-          if (this.allowedTools.isEnabled('query')) validTools.push('query');
-          if (this.allowedTools.isEnabled('extract')) validTools.push('extract');
-          if (this.allowedTools.isEnabled('listFiles')) validTools.push('listFiles');
-          if (this.allowedTools.isEnabled('searchFiles')) validTools.push('searchFiles');
-          if (this.enableSkills && this.allowedTools.isEnabled('listSkills')) validTools.push('listSkills');
-          if (this.enableSkills && this.allowedTools.isEnabled('useSkill')) validTools.push('useSkill');
-          if (this.allowedTools.isEnabled('readImage')) validTools.push('readImage');
-          // Always allow attempt_completion in validTools - it's a completion signal, not a tool
-          // This ensures agents can complete even when disableTools: true is set (fixes #333)
-          // The tool DEFINITION may be hidden in raw AI mode, but we still need to recognize it
-          validTools.push('attempt_completion');
-
-          // Edit tools (require both allowEdit flag AND allowedTools permission)
-          if (this.allowEdit && this.allowedTools.isEnabled('edit')) {
-            validTools.push('edit');
-          }
-          if (this.allowEdit && this.allowedTools.isEnabled('create')) {
-            validTools.push('create');
-          }
-          if (this.allowEdit && this.allowedTools.isEnabled('multi_edit')) {
-            validTools.push('multi_edit');
-          }
-          // Bash tool (require both enableBash flag AND allowedTools permission)
-          if (this.enableBash && this.allowedTools.isEnabled('bash')) {
-            validTools.push('bash');
-          }
-          // Delegate tool (require both enableDelegate flag AND allowedTools permission)
-          if (this.enableDelegate && this.allowedTools.isEnabled('delegate')) {
-            validTools.push('delegate');
-          }
-          // Execute Plan tool (requires enableExecutePlan flag, supersedes analyze_all)
-          if (this.enableExecutePlan && this.allowedTools.isEnabled('execute_plan')) {
-            validTools.push('execute_plan');
-            // cleanup_execute_plan is enabled together with execute_plan
-            if (this.allowedTools.isEnabled('cleanup_execute_plan')) {
-              validTools.push('cleanup_execute_plan');
-            }
-          } else if (this.allowedTools.isEnabled('analyze_all')) {
-            validTools.push('analyze_all');
-          }
-          // Task tool (require both enableTasks flag AND allowedTools permission)
-          if (this.enableTasks && this.allowedTools.isEnabled('task')) {
-            validTools.push('task');
-          }
-        }
-
-        // Try parsing with hybrid parser that supports both native and MCP tools
-        // When _disableTools is set, skip MCP tools entirely
-        const nativeTools = validTools;
-        const parsedTool = (this.mcpBridge && !options._disableTools)
-          ? parseHybridXmlToolCall(assistantResponseContent, nativeTools, this.mcpBridge)
-          : parseXmlToolCallWithThinking(assistantResponseContent, validTools);
-
-        // Capture AI thinking content if present (for debugging and telemetry)
-        if (parsedTool?.thinkingContent) {
-          this._recordThinkingTelemetry(parsedTool.thinkingContent, currentIteration);
-        }
-
-        if (parsedTool) {
-          const { toolName, params } = parsedTool;
-
-          // Record AI tool decision for telemetry
-          this._recordToolDecisionTelemetry(toolName, params, assistantResponseContent.length, currentIteration);
-
-          if (this.debug) console.log(`[DEBUG] Parsed tool call: ${toolName} with params:`, params);
-
-          // Reset consecutive no-tool counter since we got a valid tool call
-          consecutiveNoToolCount = 0;
-
-          if (toolName === 'attempt_completion') {
-            completionAttempted = true;
-
-            // END CHECKPOINT: Block completion if there are incomplete tasks
-            // However, allow completion if the agent is stuck and genuinely cannot proceed
-            if (this.enableTasks && this.taskManager && this.taskManager.hasIncompleteTasks()) {
-              const completionResult = typeof params.result === 'string' ? params.result : '';
-              const isStuckCompletion = detectStuckResponse(completionResult);
-              const highIterationCount = currentIteration > maxIterations * 0.7; // >70% of max iterations
-
-              // Allow stuck completions after many iterations to prevent infinite loops
-              if (isStuckCompletion && highIterationCount) {
-                if (this.debug) {
-                  console.log('[DEBUG] Task checkpoint: Allowing stuck completion (agent genuinely cannot proceed)');
-                  console.log('[DEBUG] Incomplete tasks will remain:', this.taskManager.getTaskSummary());
-                }
-                // Record telemetry for forced completion
-                if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
-                  this.tracer.recordTaskEvent('forced_stuck_completion', {
-                    'task.incomplete_count': this.taskManager.getIncompleteTasks().length,
-                    'task.iteration': currentIteration,
-                    'task.max_iterations': maxIterations
-                  });
-                }
-                // Continue to process the completion instead of blocking
-              } else {
-                const taskSummary = this.taskManager.getTaskSummary();
-                const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
-                const incompleteTasks = this.taskManager.getIncompleteTasks();
-
-                // Record telemetry for blocked completion
-                if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
-                  this.tracer.recordTaskEvent('completion_blocked', {
-                    'task.incomplete_count': incompleteTasks.length,
-                    'task.incomplete_ids': incompleteTasks.map(t => t.id).join(', '),
-                    'task.iteration': currentIteration
-                  });
-                }
-
-                if (this.debug) {
-                  console.log('[DEBUG] Task checkpoint: Blocking completion due to incomplete tasks');
-                  console.log('[DEBUG] Incomplete tasks:', taskSummary);
-                }
-
-                // Add reminder message and continue the loop
-                currentMessages.push({
-                  role: 'assistant',
-                  content: assistantResponseContent
-                });
-                currentMessages.push({
-                  role: 'user',
-                  content: blockedMessage
-                });
-
-                completionAttempted = false; // Reset to allow more iterations
-                continue; // Skip the break and continue the loop
-              }
-            }
-
-            // Handle attempt_complete shorthand - use previous response
-            if (params.result === '__PREVIOUS_RESPONSE__') {
-              // Find the last assistant message with actual content (not tool calls)
-              const lastAssistantMessage = [...currentMessages].reverse().find(msg =>
-                msg.role === 'assistant' &&
-                msg.content &&
-                !(this.mcpBridge
-                  ? parseHybridXmlToolCall(msg.content, validTools, this.mcpBridge)
-                  : parseXmlToolCallWithThinking(msg.content, validTools))
-              );
-
-              if (lastAssistantMessage) {
-                const prevContent = lastAssistantMessage.content;
-
-                // Check for patterns indicating a failed/wrapped tool call attempt
-                // Use detectUnrecognizedToolCall for consistent detection logic
-                const wrappedToolError = detectUnrecognizedToolCall(prevContent, validTools);
-
-                if (isWrappedToolError(wrappedToolError)) {
-                  // Previous response was a broken tool call attempt - don't reuse it
-                  const wrappedToolName = extractWrappedToolName(wrappedToolError);
-                  if (this.debug) {
-                    console.log(`[DEBUG] Previous response contains wrapped tool '${wrappedToolName}' - rejecting for __PREVIOUS_RESPONSE__`);
-                  }
-                  currentMessages.push({ role: 'assistant', content: assistantResponseContent });
-                  currentMessages.push({
-                    role: 'user',
-                    content: createWrappedToolErrorMessage(wrappedToolName)
-                  });
-                  completionAttempted = false;
-                  continue; // Don't use broken response, continue the loop
-                }
-
-                // Pre-strip thinking tags to avoid losing content at final cleanup stage
-                const strippedContent = removeThinkingTags(prevContent);
-                if (strippedContent.length > 50) {
-                  // Enough content outside thinking tags — use stripped version directly
-                  finalResult = strippedContent;
-                  if (this.debug) console.log(`[DEBUG] Using previous response (thinking-stripped) as completion: ${finalResult.substring(0, 100)}...`);
-                } else {
-                  // Content was mostly/entirely inside thinking tags.
-                  // Extract thinking content and use it as the actual answer.
-                  // extractThinkingContent now handles nested thinking tags (issue #439)
-                  let thinkingContent = extractThinkingContent(prevContent);
-                  // Also apply removeThinkingTags as extra safety to catch any edge cases
-                  if (thinkingContent) {
-                    thinkingContent = removeThinkingTags(thinkingContent) || thinkingContent.replace(/<\/?thinking>/g, '');
-                  }
-                  if (thinkingContent && thinkingContent.length > 50) {
-                    finalResult = thinkingContent;
-                    if (this.debug) console.log(`[DEBUG] Previous response was mostly in thinking tags — using thinking content as completion: ${finalResult.substring(0, 100)}...`);
-                  } else {
-                    // Neither stripped nor thinking content is substantive — use raw as fallback
-                    finalResult = prevContent;
-                    if (this.debug) console.log(`[DEBUG] Using previous response as completion (raw): ${finalResult.substring(0, 100)}...`);
-                  }
-                }
-              } else {
-                finalResult = 'Error: No previous response found to use as completion.';
-                if (this.debug) console.log(`[DEBUG] No suitable previous response found for attempt_complete shorthand`);
-              }
-            } else {
-              // Standard attempt_completion handling
-              const validation = attemptCompletionSchema.safeParse(params);
-              if (validation.success) {
-                finalResult = validation.data.result;
-
-                // Stream the final result if callback is provided
-                if (options.onStream && finalResult) {
-                  const chunkSize = 50; // Characters per chunk for smoother streaming
-                  for (let i = 0; i < finalResult.length; i += chunkSize) {
-                    const chunk = finalResult.slice(i, Math.min(i + chunkSize, finalResult.length));
-                    options.onStream(chunk);
-                  }
-                }
-
-                if (this.debug) console.log(`[DEBUG] Task completed successfully with result: ${finalResult.substring(0, 100)}...`);
-              } else {
-                console.error(`[ERROR] Invalid attempt_completion parameters:`, validation.error);
-                finalResult = 'Error: Invalid completion attempt. The task could not be completed properly.';
-              }
-            }
-            break;
-          } else {
-            // Check tool type and execute accordingly
-            const { type } = parsedTool;
-
-            if (type === 'mcp' && this.mcpBridge && this.mcpBridge.isMcpTool(toolName)) {
-              // Execute MCP tool
-              const mcpStartTime = Date.now();
-              this._recordMcpToolTelemetry('start', toolName, params, currentIteration);
-
-              try {
-                // Log MCP tool execution in debug mode
-                if (this.debug) {
-                  console.error(`\n[DEBUG] ========================================`);
-                  console.error(`[DEBUG] Executing MCP tool: ${toolName}`);
-                  console.error(`[DEBUG] Arguments:`);
-                  for (const [key, value] of Object.entries(params)) {
-                    const displayValue = typeof value === 'string' && value.length > 100
-                      ? value.substring(0, 100) + '...'
-                      : value;
-                    console.error(`[DEBUG]   ${key}: ${JSON.stringify(displayValue)}`);
-                  }
-                  console.error(`[DEBUG] ========================================\n`);
-                }
-
-                // Execute MCP tool through the bridge
-                const executionResult = await this.mcpBridge.mcpTools[toolName].execute(params);
-
-                let toolResultContent = typeof executionResult === 'string' ? executionResult : JSON.stringify(executionResult, null, 2);
-
-                // Extract raw output blocks from tool result (before truncation)
-                // This prevents LLM from processing/hallucinating large structured output from execute_plan
-                // Push to _extractedRawBlocks (NOT _outputBuffer) to prevent the cycle where:
-                // formatSuccess wraps → extract re-adds → next execute_plan re-wraps (issue #438)
-                const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent);
-                if (extractedBlocks.length > 0) {
-                  toolResultContent = cleanedContent;
-                  // Accumulate extracted blocks separately from DSL output() buffer
-                  this._extractedRawBlocks.push(...extractedBlocks);
-                  if (this.debug) {
-                    console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) from tool result`);
-                  }
-                }
-
-                // Truncate if output exceeds token limit
-                try {
-                  const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
-                  if (truncateResult.truncated) {
-                    toolResultContent = truncateResult.content;
-                    if (this.debug) {
-                      console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath || 'N/A'}`);
-                      if (truncateResult.error) {
-                        console.log(`[DEBUG] Truncation file error: ${truncateResult.error}`);
-                      }
-                    }
-                  }
-                } catch (truncateError) {
-                  // If truncation fails entirely, log and continue with original content
-                  console.error(`[WARN] Tool output truncation failed: ${truncateError.message}`);
-                }
-
-                // Record MCP tool end event (success)
-                const mcpDurationMs = Date.now() - mcpStartTime;
-                this._recordMcpToolTelemetry('end', toolName, null, currentIteration, {
-                  result: toolResultContent,
-                  success: true,
-                  durationMs: mcpDurationMs,
-                  error: null
-                });
-
-                // Log MCP tool result in debug mode
-                if (this.debug) {
-                  const preview = toolResultContent.length > 500 ? toolResultContent.substring(0, 500) + '...' : toolResultContent;
-                  console.error(`[DEBUG] ========================================`);
-                  console.error(`[DEBUG] MCP tool '${toolName}' completed successfully`);
-                  console.error(`[DEBUG] Result preview:`);
-                  console.error(preview);
-                  console.error(`[DEBUG] ========================================\n`);
-                }
-
-                // Add assistant message with tool call (matching native tool pattern)
-                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
-                currentMessages.push({ role: 'user', content: `<tool_result>\n${toolResultContent}\n</tool_result>` });
-              } catch (error) {
-                // Record MCP tool end event (failure)
-                const mcpDurationMs = Date.now() - mcpStartTime;
-                this._recordMcpToolTelemetry('end', toolName, null, currentIteration, {
-                  result: null,
-                  success: false,
-                  durationMs: mcpDurationMs,
-                  error: error.message
-                });
-
-                console.error(`Error executing MCP tool ${toolName}:`, error);
-
-                // Log MCP tool error in debug mode
-                if (this.debug) {
-                  console.error(`[DEBUG] ========================================`);
-                  console.error(`[DEBUG] MCP tool '${toolName}' failed with error:`);
-                  console.error(`[DEBUG] ${error.message}`);
-                  console.error(`[DEBUG] ========================================\n`);
-                }
-
-                // Format error with structured information for AI
-                const errorXml = formatErrorForAI(error);
-                // Add assistant message with tool call (matching native tool pattern)
-                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
-                currentMessages.push({ role: 'user', content: `<tool_result>\n${errorXml}\n</tool_result>` });
-              }
-            } else if (this.toolImplementations[toolName]) {
-              // Execute native tool
-              try {
-                // Add sessionId and workingDirectory to params for tool execution
-                // Validate and resolve workingDirectory using safeRealpath for symlink security
-                // Consistent fallback chain: workspaceRoot > cwd > allowedFolders[0] > process.cwd()
-                let resolvedWorkingDirectory = this.workspaceRoot || this.cwd || (this.allowedFolders && this.allowedFolders[0]) || process.cwd();
-                if (params.workingDirectory) {
-                  // Resolve relative paths against the current working directory context, not process.cwd()
-                  // Use safeRealpath to resolve symlinks and prevent bypass attacks
-                  const requestedDir = safeRealpath(isAbsolute(params.workingDirectory)
-                    ? resolve(params.workingDirectory)
-                    : resolve(resolvedWorkingDirectory, params.workingDirectory));
-                  // Check if the requested directory is within allowed folders
-                  const isWithinAllowed = !this.allowedFolders || this.allowedFolders.length === 0 ||
-                    this.allowedFolders.some(folder => {
-                      const resolvedFolder = safeRealpath(folder);
-                      return requestedDir === resolvedFolder || requestedDir.startsWith(resolvedFolder + sep);
-                    });
-                  if (isWithinAllowed) {
-                    resolvedWorkingDirectory = requestedDir;
-                  } else if (this.debug) {
-                    console.error(`[DEBUG] Rejected workingDirectory "${params.workingDirectory}" - not within allowed folders`);
-                  }
-                }
-                const toolParams = {
-                  ...params,
-                  sessionId: this.sessionId,
-                  workingDirectory: resolvedWorkingDirectory
-                };
-
-                // Log tool execution in debug mode
-                if (this.debug) {
-                  console.error(`\n[DEBUG] ========================================`);
-                  console.error(`[DEBUG] Executing tool: ${toolName}`);
-                  console.error(`[DEBUG] Arguments:`);
-                  for (const [key, value] of Object.entries(params)) {
-                    const displayValue = typeof value === 'string' && value.length > 100
-                      ? value.substring(0, 100) + '...'
-                      : value;
-                    console.error(`[DEBUG]   ${key}: ${JSON.stringify(displayValue)}`);
-                  }
-                  console.error(`[DEBUG] ========================================\n`);
-                }
-
-                // Emit tool start event with stream pause signal
-                this.events.emit('toolCall', {
-                  timestamp: new Date().toISOString(),
-                  name: toolName,
-                  args: toolParams,
-                  status: 'started',
-                  pauseStream: true  // Signal to pause text streaming
-                });
-                
-                // Execute tool with tracing if available
-                const executeToolCall = async () => {
-                  // For delegate tool, pass current iteration, max iterations, session ID, and config
-                  if (toolName === 'delegate') {
-                    // Reconstruct allowedTools array preserving all modes (same logic as clone())
-                    let allowedToolsForDelegate = null;
-                    if (this.allowedTools.mode === 'whitelist') {
-                      allowedToolsForDelegate = [...this.allowedTools.allowed];
-                    } else if (this.allowedTools.mode === 'none') {
-                      allowedToolsForDelegate = [];
-                    } else if (this.allowedTools.mode === 'all' && this.allowedTools.exclusions?.length > 0) {
-                      allowedToolsForDelegate = ['*', ...this.allowedTools.exclusions.map(t => '!' + t)];
-                    }
-                    // If mode is 'all' with no exclusions, leave as null (default)
-
-                    const enhancedParams = {
-                      ...toolParams,
-                      currentIteration,
-                      maxIterations,
-                      parentSessionId: this.sessionId,  // Pass parent session ID for tracking
-                      path: this.searchPath,            // Inherit search path
-                      provider: this.apiType,           // Inherit AI provider (string identifier)
-                      model: this.model,                // Inherit model
-                      searchDelegate: this.searchDelegate,
-                      enableTasks: this.enableTasks,    // Inherit task management (subagent gets isolated TaskManager)
-                      enableMcp: !!this.mcpBridge,      // Inherit MCP enablement
-                      mcpConfig: this.mcpConfig,        // Inherit MCP configuration
-                      mcpConfigPath: this.mcpConfigPath, // Inherit MCP config path
-                      enableBash: this.enableBash,      // Inherit bash enablement
-                      bashConfig: this.bashConfig,      // Inherit bash configuration
-                      allowEdit: this.allowEdit,        // Inherit edit/create permission
-                      allowedTools: allowedToolsForDelegate,  // Inherit allowed tools from parent
-                      debug: this.debug,
-                      tracer: this.tracer
-                    };
-
-                    if (this.debug) {
-                      console.log(`[DEBUG] Executing delegate tool at iteration ${currentIteration}/${maxIterations}`);
-                      console.log(`[DEBUG] Parent session: ${this.sessionId}`);
-                      console.log(`[DEBUG] Inherited config: path=${this.searchPath}, provider=${this.apiType}, model=${this.model}`);
-                      console.log(`[DEBUG] Delegate task: ${toolParams.task?.substring(0, 100)}...`);
-                    }
-                    
-                    // Record delegation start in telemetry
-                    if (this.tracer) {
-                      this.tracer.recordDelegationEvent('tool_started', {
-                        'delegation.iteration': currentIteration,
-                        'delegation.max_iterations': maxIterations,
-                        'delegation.task_preview': toolParams.task?.substring(0, 200) + (toolParams.task?.length > 200 ? '...' : '')
-                      });
-                    }
-                    
-                    return await this.toolImplementations[toolName].execute(enhancedParams);
-                  }
-                  return await this.toolImplementations[toolName].execute(toolParams);
-                };
-
-                let toolResult;
-                const toolStartTime = Date.now();
-                try {
-                  if (this.tracer) {
-                    toolResult = await this.tracer.withSpan('tool.call', executeToolCall, {
-                      'tool.name': toolName,
-                      'tool.params': JSON.stringify(toolParams).substring(0, 500),
-                      'iteration': currentIteration
-                    });
-                  } else {
-                    toolResult = await executeToolCall();
-                  }
-
-                  // Record tool result in telemetry
-                  const toolDurationMs = Date.now() - toolStartTime;
-                  this._recordToolResultTelemetry(toolName, toolResult, true, toolDurationMs, currentIteration);
-
-                  // Log tool result in debug mode
-                  if (this.debug) {
-                    const resultPreview = typeof toolResult === 'string'
-                      ? (toolResult.length > 500 ? toolResult.substring(0, 500) + '...' : toolResult)
-                      : (toolResult ? JSON.stringify(toolResult, null, 2).substring(0, 500) + '...' : 'No Result');
-                    console.error(`[DEBUG] ========================================`);
-                    console.error(`[DEBUG] Tool '${toolName}' completed successfully`);
-                    console.error(`[DEBUG] Result preview:`);
-                    console.error(resultPreview);
-                    console.error(`[DEBUG] ========================================\n`);
-                  }
-
-                  // Emit tool success event
-                  this.events.emit('toolCall', {
-                    timestamp: new Date().toISOString(),
-                    name: toolName,
-                    args: toolParams,
-                    resultPreview: typeof toolResult === 'string'
-                      ? (toolResult.length > 200 ? toolResult.substring(0, 200) + '...' : toolResult)
-                      : (toolResult ? JSON.stringify(toolResult).substring(0, 200) + '...' : 'No Result'),
-                    status: 'completed'
-                  });
-
-                } catch (toolError) {
-                  // Log tool error in debug mode
-                  if (this.debug) {
-                    console.error(`[DEBUG] ========================================`);
-                    console.error(`[DEBUG] Tool '${toolName}' failed with error:`);
-                    console.error(`[DEBUG] ${toolError.message}`);
-                    console.error(`[DEBUG] ========================================\n`);
-                  }
-
-                  // Emit tool error event
-                  this.events.emit('toolCall', {
-                    timestamp: new Date().toISOString(),
-                    name: toolName,
-                    args: toolParams,
-                    error: toolError.message || 'Unknown error',
-                    status: 'error'
-                  });
-                  throw toolError; // Re-throw to be handled by outer catch
-                }
-                
-                // Add assistant response and tool result to conversation
-                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
-
-                let toolResultContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult, null, 2);
-
-                // Convert absolute workspace paths to relative in tool results
-                if (this.workspaceRoot && toolResultContent) {
-                  const wsPrefix = this.workspaceRoot.endsWith(sep) ? this.workspaceRoot : this.workspaceRoot + sep;
-                  toolResultContent = toolResultContent.split(wsPrefix).join('');
-                }
-
-                // Extract raw output blocks from tool result (before truncation)
-                // This prevents LLM from processing/hallucinating large structured output from execute_plan
-                // Push to _extractedRawBlocks (NOT _outputBuffer) to prevent the cycle where:
-                // formatSuccess wraps → extract re-adds → next execute_plan re-wraps (issue #438)
-                const { cleanedContent, extractedBlocks } = extractRawOutputBlocks(toolResultContent);
-                if (extractedBlocks.length > 0) {
-                  toolResultContent = cleanedContent;
-                  // Accumulate extracted blocks separately from DSL output() buffer
-                  this._extractedRawBlocks.push(...extractedBlocks);
-                  if (this.debug) {
-                    console.log(`[DEBUG] Extracted ${extractedBlocks.length} raw output blocks (${extractedBlocks.reduce((sum, b) => sum + b.length, 0)} chars) from tool result`);
-                  }
-                }
-
-                // Truncate if output exceeds token limit
-                try {
-                  const truncateResult = await truncateIfNeeded(toolResultContent, this.tokenCounter, this.sessionId, this.maxOutputTokens);
-                  if (truncateResult.truncated) {
-                    toolResultContent = truncateResult.content;
-                    if (this.debug) {
-                      console.log(`[DEBUG] Tool output truncated: ${truncateResult.originalTokens} tokens -> saved to ${truncateResult.tempFilePath || 'N/A'}`);
-                      if (truncateResult.error) {
-                        console.log(`[DEBUG] Truncation file error: ${truncateResult.error}`);
-                      }
-                    }
-                  }
-                } catch (truncateError) {
-                  // If truncation fails entirely, log and continue with original content
-                  console.error(`[WARN] Tool output truncation failed: ${truncateError.message}`);
-                }
-
-                const toolResultMessage = `<tool_result>\n${toolResultContent}\n</tool_result>`;
-
-                currentMessages.push({
-                  role: 'user',
-                  content: toolResultMessage
-                });
-
-                // Record conversation turns in telemetry
-                if (this.tracer) {
-                  if (typeof this.tracer.recordConversationTurn === 'function') {
-                    this.tracer.recordConversationTurn('assistant', assistantResponseContent, {
-                      iteration: currentIteration,
-                      has_tool_call: true,
-                      tool_name: toolName
-                    });
-                    this.tracer.recordConversationTurn('tool_result', toolResultContent, {
-                      iteration: currentIteration,
-                      tool_name: toolName,
-                      tool_success: true
-                    });
-                  }
-                }
-
-                // NOTE: Automatic image processing removed (GitHub issue #305)
-                // Images are now only loaded when the AI explicitly calls the readImage tool
-                // This prevents: 1) implicit behavior that users don't expect
-                //                2) crashes with unsupported MIME types (e.g., SVG on Gemini)
-
-                if (this.debug) {
-                  console.log(`[DEBUG] Tool ${toolName} executed successfully. Result length: ${typeof toolResult === 'string' ? toolResult.length : JSON.stringify(toolResult).length}`);
-                }
-              } catch (error) {
-                console.error(`[ERROR] Tool execution failed for ${toolName}:`, error);
-                currentMessages.push({ role: 'assistant', content: assistantResponseContent });
-                // Format error with structured information for AI
-                const errorXml = formatErrorForAI(error);
-                currentMessages.push({
-                  role: 'user',
-                  content: `<tool_result>\n${errorXml}\n</tool_result>`
-                });
-              }
-            } else {
-              console.error(`[ERROR] Unknown tool: ${toolName}`);
-              currentMessages.push({ role: 'assistant', content: assistantResponseContent });
-
-              // Build list of available tools including MCP tools
-              const nativeTools = Object.keys(this.toolImplementations);
-              const mcpTools = this.mcpBridge ? this.mcpBridge.getToolNames() : [];
-              const allAvailableTools = [...nativeTools, ...mcpTools];
-
-              currentMessages.push({
-                role: 'user',
-                content: `<tool_result>\n<error type="parameter_error" recoverable="true">\n<message>Unknown tool '${toolName}'</message>\n<suggestion>Available tools: ${allAvailableTools.join(', ')}. Please use one of these tools.</suggestion>\n</error>\n</tool_result>`
-              });
-            }
-          }
-        } else {
-          // No tool call found
-          // Special case: If response contains a mermaid code block and no schema was provided,
-          // treat it as a valid completion (for mermaid diagram fixing workflow)
-          const hasMermaidCodeBlock = /```mermaid\s*\n[\s\S]*?\n```/.test(assistantResponseContent);
-          const hasNoSchemaOrTools = !options.schema && validTools.length === 0;
-
-          if (hasMermaidCodeBlock && hasNoSchemaOrTools) {
-            // Accept mermaid code block as final answer for diagram fixing
-            finalResult = assistantResponseContent;
-            completionAttempted = true;
-            if (this.debug) {
-              console.error(`[DEBUG] Accepting mermaid code block as valid completion (no schema, no tools)`);
-            }
-            break;
-          }
-
-          // Issue #443: Check if response contains valid schema-matching JSON
-          // Before triggering error.no_tool_call, strip markdown fences and validate
-          // This handles cases where AI returns valid JSON without using attempt_completion
-          if (options.schema) {
-            // Remove thinking tags first
-            let contentToCheck = assistantResponseContent;
-            contentToCheck = contentToCheck.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
-            contentToCheck = contentToCheck.replace(/<thinking>[\s\S]*$/gi, '').trim();
-
-            // Try to extract and validate JSON
-            const cleanedJson = cleanSchemaResponse(contentToCheck);
-            try {
-              JSON.parse(cleanedJson);
-              const validation = validateJsonResponse(cleanedJson, { debug: this.debug, schema: options.schema });
-              if (validation.isValid) {
-                if (this.debug) {
-                  console.log(`[DEBUG] Issue #443: Accepting valid JSON response without attempt_completion (${cleanedJson.length} chars)`);
-                }
-                finalResult = cleanedJson;
-                completionAttempted = true;
-                break;
-              }
-            } catch {
-              // Not valid JSON - continue to standard no_tool_call handling
-            }
-          }
-
-          // Increment consecutive no-tool counter (catches alternating stuck responses)
-          consecutiveNoToolCount++;
-
-          // Check for repeated identical responses OR semantically similar "stuck" responses
-          // This catches cases where AI alternates between slightly different "I cannot proceed" messages
-          const isIdentical = lastNoToolResponse !== null && assistantResponseContent === lastNoToolResponse;
-          const isSemanticallyStuck = lastNoToolResponse !== null && areBothStuckResponses(lastNoToolResponse, assistantResponseContent);
-
-          if (isIdentical || isSemanticallyStuck) {
-            sameResponseCount++;
-            if (this.debug && isSemanticallyStuck && !isIdentical) {
-              console.log(`[DEBUG] Detected semantically similar stuck response (count: ${sameResponseCount})`);
-            }
-            if (sameResponseCount >= MAX_REPEATED_IDENTICAL_RESPONSES) {
-              // Clean up the response - remove thinking tags
-              let cleanedResponse = assistantResponseContent;
-              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
-              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*$/gi, '').trim();
-
-              const hasSubstantialContent = cleanedResponse.length > 50 &&
-                !cleanedResponse.includes('<api_call>') &&
-                !cleanedResponse.includes('<tool_name>') &&
-                !cleanedResponse.includes('<function>');
-
-              if (hasSubstantialContent) {
-                if (this.debug) {
-                  console.log(`[DEBUG] ${isIdentical ? 'Same' : 'Stuck'} response repeated ${sameResponseCount} times - accepting as final answer (${cleanedResponse.length} chars)`);
-                }
-                finalResult = cleanedResponse;
-                completionAttempted = true;
-                break;
-              }
-            }
-          } else {
-            // Different response (and not both stuck), reset counter
-            lastNoToolResponse = assistantResponseContent;
-            sameResponseCount = 1;
-          }
-
-          // Circuit breaker: If we've had MAX_CONSECUTIVE_NO_TOOL iterations without any tool call,
-          // force completion to avoid infinite loops (e.g., agent alternating between "can't proceed" variations)
-          if (consecutiveNoToolCount >= MAX_CONSECUTIVE_NO_TOOL) {
-            let cleanedResponse = assistantResponseContent;
-            cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
-            cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*$/gi, '').trim();
-
-            if (cleanedResponse.length > 50) {
               if (this.debug) {
-                console.log(`[DEBUG] Circuit breaker: ${consecutiveNoToolCount} consecutive no-tool responses - forcing completion`);
+                console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
               }
-              // Record this in telemetry
-              this._recordErrorTelemetry('consecutive_no_tool_circuit_breaker', `Forced completion after ${consecutiveNoToolCount} consecutive no-tool responses`, { responsePreview: cleanedResponse.substring(0, 500) }, currentIteration);
-              finalResult = cleanedResponse;
-              completionAttempted = true;
-              break;
             }
+          };
+
+          // Add native thinking/reasoning providerOptions when thinkingEffort is set
+          const providerOpts = this._buildThinkingProviderOptions(maxResponseTokens);
+          if (providerOpts) {
+            streamOptions.providerOptions = providerOpts;
           }
 
-          // Add assistant response and ask for tool usage
-          currentMessages.push({ role: 'assistant', content: assistantResponseContent });
+          const executeAIRequest = async () => {
+            const result = await this.streamTextWithRetryAndFallback(streamOptions);
 
-          // Check if the AI tried to use a tool that's not in the valid tools list
-          const unrecognizedTool = detectUnrecognizedToolCall(assistantResponseContent, validTools);
+            // Collect the final text
+            const finalText = await result.text;
 
-          let reminderContent;
-          if (isWrappedToolError(unrecognizedTool)) {
-            // AI wrapped a valid tool name in arbitrary XML tags - provide clear format error
-            const wrappedToolName = extractWrappedToolName(unrecognizedTool);
             if (this.debug) {
-              console.log(`[DEBUG] Detected wrapped tool '${wrappedToolName}' in assistant response - wrong XML format.`);
+              const steps = await result.steps;
+              console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars, completion=${!!completionResult}`);
             }
 
-            // Record wrapped tool error in telemetry
-            this._recordErrorTelemetry('wrapped_tool', 'Tool call wrapped in markdown', { toolName: wrappedToolName }, currentIteration);
-
-            const toolError = new ParameterError(
-              `Tool '${wrappedToolName}' found but in WRONG FORMAT - do not wrap tools in other XML tags.`,
-              {
-                suggestion: `Use the tool tag DIRECTLY without any wrapper:
-
-CORRECT FORMAT:
-<${wrappedToolName}>
-<param>value</param>
-</${wrappedToolName}>
-
-WRONG (what you did - do not wrap in other tags):
-<api_call><tool_name>${wrappedToolName}</tool_name>...</api_call>
-<function>${wrappedToolName}</function>
-<call name="${wrappedToolName}">...</call>
-
-Remove ALL wrapper tags and use <${wrappedToolName}> directly as the outermost tag.`
-              }
-            );
-            reminderContent = `<tool_result>\n${formatErrorForAI(toolError)}\n</tool_result>`;
-          } else if (unrecognizedTool) {
-            // AI tried to use a tool that's not available - provide clear error
-            if (this.debug) {
-              console.log(`[DEBUG] Detected unrecognized tool '${unrecognizedTool}' in assistant response.`);
+            // Record final token usage
+            const usage = await result.usage;
+            if (usage) {
+              this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
             }
 
-            // Record unrecognized tool error in telemetry
-            this._recordErrorTelemetry('unrecognized_tool', `Unknown tool: ${unrecognizedTool}`, { toolName: unrecognizedTool, validTools }, currentIteration);
+            return { finalText, result };
+          };
 
-            const toolError = new ParameterError(`Tool '${unrecognizedTool}' is not available in this context.`, {
-              suggestion: `Available tools: ${validTools.join(', ')}. Please use one of these tools instead.`
-            });
-            reminderContent = `<tool_result>\n${formatErrorForAI(toolError)}\n</tool_result>`;
-          } else {
-            // No tool call detected at all - record in telemetry
-            this._recordErrorTelemetry('no_tool_call', 'AI response did not contain tool call', { responsePreview: assistantResponseContent.substring(0, 500) }, currentIteration);
+          let aiResult;
+          if (this.tracer) {
+            const inputPreview = message.length > 1000
+              ? message.substring(0, 1000) + '... [truncated]'
+              : message;
 
-            // Check if this is the last iteration
-            // On the last iteration, if the AI gave a substantive response without using
-            // attempt_completion, accept it as the final answer rather than losing the content
-            if (currentIteration >= maxIterations) {
-              // Clean up the response - remove thinking tags
-              let cleanedResponse = assistantResponseContent;
-              // Remove <thinking>...</thinking> blocks
-              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*?<\/thinking>/gi, '').trim();
-              // Also remove unclosed thinking tags
-              cleanedResponse = cleanedResponse.replace(/<thinking>[\s\S]*$/gi, '').trim();
-
-              // Only use if there's substantial content (not just a failed tool call attempt)
-              const hasSubstantialContent = cleanedResponse.length > 50 &&
-                !cleanedResponse.includes('<api_call>') &&
-                !cleanedResponse.includes('<tool_name>') &&
-                !cleanedResponse.includes('<function>');
-
-              if (hasSubstantialContent) {
-                if (this.debug) {
-                  console.log(`[DEBUG] Max iterations reached - accepting AI response as final answer (${cleanedResponse.length} chars)`);
-                }
-                finalResult = cleanedResponse;
-                completionAttempted = true;
-                break;
-              }
-            }
-
-            // Standard reminder - no tool call detected at all
-            reminderContent = `Please use one of the available tools to help answer the question, or use attempt_completion if you have enough information to provide a final answer.
-
-Remember: Use proper XML format with BOTH opening and closing tags:
-
-<tool_name>
-<parameter>value</parameter>
-</tool_name>
-
-Available tools: ${validTools.join(', ')}
-
-To complete with a direct answer:
-<attempt_completion>Your final answer here</attempt_completion>
-
-Or if your previous response already contains a complete, direct answer (not a thinking block or JSON):
-<attempt_complete></attempt_complete>
-
-Note: <attempt_complete></attempt_complete> reuses your PREVIOUS assistant message as the final answer. Only use this if that message was already a valid, complete response to the user's question.`;
-          }
-
-          // Check if we should replace the previous reminder instead of appending
-          // After pushing assistant message, the previous user message (if a reminder) is at length - 2
-          // Message pattern: [..., prev_assistant, prev_user_reminder, current_assistant]
-          const prevUserMsgIndex = currentMessages.length - 2;
-          const prevUserMsg = currentMessages[prevUserMsgIndex];
-          const isExistingReminder = prevUserMsg && prevUserMsg.role === 'user' &&
-            (prevUserMsg.content.includes('Please use one of the available tools') ||
-             prevUserMsg.content.includes('<tool_result>'));
-
-          if (isExistingReminder && sameResponseCount > 1) {
-            // Replace the previous reminder with updated content and remove duplicated assistant message
-            // This prevents context bloat from repeated identical exchanges
-            // Pattern: [..., prev_assistant, prev_user_reminder, current_assistant] -> [..., current_assistant, new_reminder]
-            const prevAssistantIndex = prevUserMsgIndex - 1;
-
-            // Validate the expected pattern before splicing:
-            // 1. prevAssistantIndex must be valid (>= 0)
-            // 2. If there's a system message at index 0, don't remove it (prevAssistantIndex > 0)
-            // 3. Must be an assistant message at prevAssistantIndex
-            // 4. After removal, array should have at least 2 messages (current assistant + new reminder)
-            const hasSystemMessage = currentMessages.length > 0 && currentMessages[0].role === 'system';
-            const minValidIndex = hasSystemMessage ? 1 : 0;
-            const canSafelyRemove = prevAssistantIndex >= minValidIndex &&
-              currentMessages[prevAssistantIndex] &&
-              currentMessages[prevAssistantIndex].role === 'assistant' &&
-              (currentMessages.length - 2) >= (hasSystemMessage ? 2 : 1); // After removal: at least system+assistant or just assistant
-
-            if (canSafelyRemove) {
-              // Remove the duplicate assistant and old reminder (2 messages starting at prevAssistantIndex)
-              currentMessages.splice(prevAssistantIndex, 2);
-              if (this.debug) {
-                console.log(`[DEBUG] Removed duplicate assistant+reminder pair (iteration ${currentIteration}, same response #${sameResponseCount})`);
-              }
-            } else if (this.debug) {
-              console.log(`[DEBUG] Skipped deduplication: pattern validation failed (prevAssistantIndex=${prevAssistantIndex}, arrayLength=${currentMessages.length})`);
-            }
-
-            // Add iteration context to help the AI understand this is a repeated attempt
-            const iterationHint = `\n\n(Attempt #${sameResponseCount}: Your previous ${sameResponseCount} responses were identical. If you have a complete answer, use <attempt_complete></attempt_complete> to finalize it.)`;
-            currentMessages.push({
-              role: 'user',
-              content: reminderContent + iterationHint
+            aiResult = await this.tracer.withSpan('ai.request', executeAIRequest, {
+              'ai.model': this.model,
+              'ai.provider': this.clientApiProvider || 'auto',
+              'ai.input': inputPreview,
+              'ai.input_length': message.length,
+              'max_steps': maxIterations,
+              'max_tokens': maxResponseTokens,
+              'temperature': 0.3,
+              'message_count': currentMessages.length
             });
           } else {
-            currentMessages.push({
-              role: 'user',
-              content: reminderContent
-            });
+            aiResult = await executeAIRequest();
           }
 
-          if (this.debug) {
-            if (unrecognizedTool) {
-              console.log(`[DEBUG] Unrecognized tool '${unrecognizedTool}' used. Providing error feedback.`);
-            } else {
-              console.log(`[DEBUG] No tool call detected in assistant response. Prompting for tool use.`);
-            }
-          }
+          // Use completion result if available, otherwise use final text
+          if (completionResult) {
+            finalResult = completionResult;
 
-          // Circuit breaker: track repeated format errors and break early
-          // For wrapped_tool errors, track them as a category (any wrapped_tool counts)
-          // For other errors, track the exact error type
-          if (unrecognizedTool) {
-            const isWrapped = isWrappedToolError(unrecognizedTool);
-            const errorCategory = isWrapped ? 'wrapped_tool' : unrecognizedTool;
-
-            if (errorCategory === lastFormatErrorType) {
-              sameFormatErrorCount++;
-              if (sameFormatErrorCount >= MAX_REPEATED_FORMAT_ERRORS) {
-                const errorDesc = isWrapped ? 'wrapped tool format' : unrecognizedTool;
-
-                // Record circuit breaker error in telemetry
-                this._recordErrorTelemetry('circuit_breaker', 'Format error limit exceeded', { formatErrorCount: sameFormatErrorCount, errorCategory }, currentIteration);
-
-                console.error(`[ERROR] Format error category '${errorCategory}' repeated ${sameFormatErrorCount} times. Breaking loop early to prevent infinite iteration.`);
-                finalResult = `Error: Unable to complete request. The AI model repeatedly used incorrect tool call format (${errorDesc}). Please try rephrasing your question or using a different model.`;
-                break;
+            // Stream the final result if callback is provided
+            if (options.onStream && finalResult) {
+              const chunkSize = 50;
+              for (let i = 0; i < finalResult.length; i += chunkSize) {
+                const chunk = finalResult.slice(i, Math.min(i + chunkSize, finalResult.length));
+                options.onStream(chunk);
               }
-            } else {
-              lastFormatErrorType = errorCategory;
-              sameFormatErrorCount = 1;
             }
-          } else {
-            // Reset counter if it's a different kind of "no tool call" situation
-            lastFormatErrorType = null;
-            sameFormatErrorCount = 0;
+          } else if (aiResult.finalText) {
+            finalResult = aiResult.finalText;
+            completionAttempted = true;
           }
-        }
 
-        // Record iteration end event
-        this._recordIterationTelemetry('end', currentIteration, {
-          'iteration.completed': completionAttempted,
-          'iteration.message_count': currentMessages.length
-        });
-
-        // Keep message history manageable
-        if (currentMessages.length > MAX_HISTORY_MESSAGES) {
-          const messagesBefore = currentMessages.length;
-          const systemMsg = currentMessages[0]; // Keep system message
-          const recentMessages = currentMessages.slice(-MAX_HISTORY_MESSAGES + 1);
-          currentMessages = [systemMsg, ...recentMessages];
-
-          if (this.debug) {
-            console.log(`[DEBUG] Trimmed message history from ${messagesBefore} to ${currentMessages.length} messages`);
+          // Update currentMessages from the result for history storage
+          // The SDK manages the full message history internally
+          const resultMessages = await aiResult.result.response?.messages;
+          if (resultMessages) {
+            // Append the AI-generated messages to our message list
+            for (const msg of resultMessages) {
+              currentMessages.push(msg);
+            }
           }
+
+          break; // Success
+
+        } catch (error) {
+          // Handle context-limit error: compact messages and retry (once)
+          if (!compactionAttempted && handleContextLimitError) {
+            const compactionResult = handleContextLimitError(error, currentMessages, {
+              keepLastSegment: true,
+              minSegmentsToKeep: 1
+            });
+
+            if (compactionResult) {
+              const { messages: compactedMessages, stats } = compactionResult;
+
+              if (stats.removed === 0) {
+                console.error(`[ERROR] Context window exceeded but no messages can be compacted.`);
+                finalResult = `Error: Context window limit exceeded and conversation cannot be compacted further.`;
+                throw new Error(finalResult);
+              }
+
+              compactionAttempted = true;
+              console.log(`[INFO] Context window limit exceeded. Compacting conversation...`);
+              console.log(`[INFO] Removed ${stats.removed} messages (${stats.reductionPercent}% reduction)`);
+
+              currentMessages = [...compactedMessages];
+
+              if (this.tracer) {
+                this.tracer.addEvent('context.compacted', {
+                  'original_count': stats.originalCount,
+                  'compacted_count': stats.compactedCount,
+                  'reduction_percent': stats.reductionPercent,
+                  'tokens_saved': stats.tokensSaved
+                });
+              }
+
+              continue; // Retry with compacted messages
+            }
+          }
+
+          // Handle AbortError from attempt_completion gracefully
+          if (completionResult) {
+            finalResult = completionResult;
+            break;
+          }
+
+          console.error(`Error during streamText:`, error);
+          finalResult = `Error: Failed to get response from AI model. ${error.message}`;
+          throw new Error(finalResult);
         }
       }
 
@@ -4854,28 +4073,7 @@ Convert your previous response content into actual JSON data that follows this s
         console.log(`[DEBUG] Mermaid validation: Skipped final validation due to disableMermaidValidation option`);
       }
 
-      // Remove thinking tags from final result before returning to user
-      // Skip for valid JSON to avoid destroying JSON structure when <thinking> appears
-      // inside string values (e.g., after tryAutoWrapForSimpleSchema embeds content with
-      // residual thinking tag fragments — issue #439)
-      if (!options._schemaFormatted) {
-        let isValidJson = false;
-        try {
-          JSON.parse(finalResult);
-          isValidJson = true;
-        } catch {
-          // Not valid JSON, proceed with thinking tag removal
-        }
 
-        if (!isValidJson) {
-          finalResult = removeThinkingTags(finalResult);
-          if (this.debug) {
-            console.log(`[DEBUG] Removed thinking tags from final result`);
-          }
-        } else if (this.debug) {
-          console.log(`[DEBUG] Skipped thinking tag removal for valid JSON result (issue #439)`);
-        }
-      }
 
       // Append DSL output buffer directly to response (bypasses LLM rewriting)
       // Skip during _completionPromptProcessed — only the parent answer() should append the buffer.

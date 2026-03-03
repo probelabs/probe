@@ -38,6 +38,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Configure git to use HTTPS for GitHub repos
+      run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+
     - name: Setup Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v4
       with:
@@ -94,7 +97,7 @@ jobs:
 
     - name: Link Probe package locally
       run: |
-        cd npm && npm link
+        cd npm && npm link --ignore-scripts
 
     - name: Verify Probe installation
       run: probe --version
@@ -383,6 +386,9 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
+
+    - name: Configure git to use HTTPS for GitHub repos
+      run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
 
     - name: Setup Node.js ${{ matrix.node-version }}
       uses: actions/setup-node@v4

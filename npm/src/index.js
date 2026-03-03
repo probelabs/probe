@@ -30,27 +30,19 @@ import {
 	cleanupExecutePlanSchema,
 	attemptCompletionSchema,
 	bashSchema,
-	searchToolDefinition,
-	queryToolDefinition,
-	extractToolDefinition,
-	delegateToolDefinition,
-	analyzeAllToolDefinition,
-	attemptCompletionToolDefinition,
-	bashToolDefinition,
-	googleSearchToolDefinition,
-	urlContextToolDefinition,
-	parseXmlToolCall
+	listFilesSchema,
+	searchFilesSchema,
+	readImageSchema,
+	listSkillsSchema,
+	useSkillSchema
 } from './tools/common.js';
 import {
 	editSchema,
 	createSchema,
-	multiEditSchema,
-	editToolDefinition,
-	createToolDefinition,
-	multiEditToolDefinition
+	multiEditSchema
 } from './tools/edit.js';
 import { searchTool, queryTool, extractTool, delegateTool, analyzeAllTool } from './tools/vercel.js';
-import { createExecutePlanTool, getExecutePlanToolDefinition, createCleanupExecutePlanTool, getCleanupExecutePlanToolDefinition } from './tools/executePlan.js';
+import { createExecutePlanTool, createCleanupExecutePlanTool } from './tools/executePlan.js';
 import { bashTool } from './tools/bash.js';
 import { editTool, createTool, multiEditTool } from './tools/edit.js';
 import { FileTracker } from './tools/fileTracker.js';
@@ -62,7 +54,6 @@ import { HookManager, HOOK_TYPES } from './agent/hooks/index.js';
 import {
 	TaskManager,
 	taskSchema,
-	taskToolDefinition,
 	taskSystemPrompt,
 	createTaskTool
 } from './agent/tasks/index.js';
@@ -119,27 +110,14 @@ export {
 	editSchema,
 	createSchema,
 	multiEditSchema,
-	// Export tool definitions
-	searchToolDefinition,
-	queryToolDefinition,
-	extractToolDefinition,
-	delegateToolDefinition,
-	analyzeAllToolDefinition,
-	getExecutePlanToolDefinition,
-	getCleanupExecutePlanToolDefinition,
-	attemptCompletionToolDefinition,
-	bashToolDefinition,
-	editToolDefinition,
-	createToolDefinition,
-	multiEditToolDefinition,
-	googleSearchToolDefinition,
-	urlContextToolDefinition,
-	// Export parser function
-	parseXmlToolCall,
+	listFilesSchema,
+	searchFilesSchema,
+	readImageSchema,
+	listSkillsSchema,
+	useSkillSchema,
 	// Export task management
 	TaskManager,
 	taskSchema,
-	taskToolDefinition,
 	taskSystemPrompt,
 	createTaskTool
 };
