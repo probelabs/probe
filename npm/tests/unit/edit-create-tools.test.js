@@ -184,6 +184,59 @@ describe('Edit and Create Tools', () => {
       expect(newContent).toContain('const message = "Goodbye"');
       expect(newContent).not.toContain('const message = "Hello"');
     });
+    test('should reject text edit when old_string is much larger than new_string', async () => {
+      // Create a file with 30+ lines
+      const lines = Array.from({ length: 35 }, (_, i) => `line ${i + 1}: some content here`);
+      const originalContent = lines.join('\n');
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // Try to replace 25 lines with just 2 lines (over-scoped edit)
+      const oldString = lines.slice(5, 30).join('\n'); // 25 lines
+      const newString = 'replacement line 1\nreplacement line 2'; // 2 lines
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: oldString,
+        new_string: newString
+      });
+
+      expect(result).toContain('Error editing file: Edit scope too large');
+      expect(result).toContain('25 lines with 2 lines');
+      expect(result).toContain('line-targeted editing');
+
+      // Verify file was not modified
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toBe(originalContent);
+    });
+
+    test('should allow text edit when replacement is proportional', async () => {
+      // Create a file with 30+ lines
+      const lines = Array.from({ length: 35 }, (_, i) => `line ${i + 1}: some content here`);
+      const originalContent = lines.join('\n');
+      await fs.writeFile(testFile, originalContent);
+
+      const edit = editTool({ allowedFolders: [testDir] });
+
+      // Replace 25 lines with 20 lines (proportional, no false positive)
+      const oldString = lines.slice(5, 30).join('\n'); // 25 lines
+      const newLines = Array.from({ length: 20 }, (_, i) => `new line ${i + 1}: updated content`);
+      const newString = newLines.join('\n'); // 20 lines
+
+      const result = await edit.execute({
+        file_path: testFile,
+        old_string: oldString,
+        new_string: newString
+      });
+
+      expect(result).toContain('Successfully edited');
+
+      // Verify the edit was applied
+      const content = await fs.readFile(testFile, 'utf-8');
+      expect(content).toContain('new line 1: updated content');
+      expect(content).not.toContain('line 10: some content here');
+    });
   });
 
   describe('createTool', () => {

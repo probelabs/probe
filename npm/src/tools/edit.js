@@ -448,6 +448,13 @@ Parameters:
           return `Error editing file: Multiple occurrences found - the old_string appears ${occurrences} times in ${file_path}. To fix: (1) Set replace_all=true to replace all occurrences, or (2) Include more surrounding lines in old_string to make the match unique (add the full line or adjacent lines for context).`;
         }
 
+        // Guard against over-scoped text edits (replacing large blocks with tiny replacements)
+        const oldLines = matchTarget.split('\n').length;
+        const newLines = new_string.split('\n').length;
+        if (oldLines >= 20 && newLines < oldLines * 0.5) {
+          return `Error editing file: Edit scope too large — replacing ${oldLines} lines with ${newLines} lines risks accidental content deletion. To fix: (1) Use line-targeted editing (start_line/end_line) instead to constrain scope, or (2) Split into smaller, focused edits that each target only the lines you intend to change.`;
+        }
+
         // Perform the replacement
         let newContent;
         if (replace_all) {

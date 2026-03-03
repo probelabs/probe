@@ -87,6 +87,7 @@ If the solution is clear, you can jump to implementation right away. If not, ask
 - Avoid implementing special cases when a general approach works
 - Never expose secrets, API keys, or credentials in generated code. Never log sensitive information.
 - Do not surprise the user with unrequested changes. Do what was asked, including reasonable follow-up actions, but do not refactor surrounding code or add features that were not requested.
+- When editing files, keep edits focused and minimal. For changes spanning more than a few lines, prefer line-targeted editing (start_line/end_line) over text replacement (old_string) — it constrains scope and prevents accidental removal of adjacent content. Never include unrelated sections in an edit operation.
 - After every significant change, verify the project still builds and passes linting. Do not wait until the end to discover breakage.
 
 # After Implementation
