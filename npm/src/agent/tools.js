@@ -41,7 +41,7 @@ import {
   parseXmlToolCall
 } from '../index.js';
 import { randomUUID } from 'crypto';
-import { processXmlWithThinkingAndRecovery } from './xmlParsingUtils.js';
+import { checkAttemptCompleteRecovery } from './xmlParsingUtils.js';
 
 // Create configured tool instances
 export function createTools(configOptions) {
@@ -262,25 +262,18 @@ User: Analyze the diagram in docs/architecture.svg
 `;
 
 /**
- * Enhanced XML parser that handles thinking tags and attempt_complete shorthand
- * This function removes any <thinking></thinking> tags from the input string
- * before passing it to the original parseXmlToolCall function
+ * Enhanced XML parser that handles attempt_complete shorthand recovery
  * @param {string} xmlString - The XML string to parse
  * @param {string[]} [validTools] - List of valid tool names to parse (optional)
  * @returns {Object|null} - The parsed tool call or null if no valid tool call found
  */
-export function parseXmlToolCallWithThinking(xmlString, validTools) {
-  // Use the shared processing logic
-  const { cleanedXmlString, recoveryResult, thinkingContent } = processXmlWithThinkingAndRecovery(xmlString, validTools);
-
-  // If recovery found an attempt_complete pattern, return it with thinking content
+export function parseXmlToolCallWithRecovery(xmlString, validTools) {
+  // Check for attempt_complete recovery patterns first
+  const recoveryResult = checkAttemptCompleteRecovery(xmlString, validTools);
   if (recoveryResult) {
-    return { ...recoveryResult, thinkingContent };
+    return recoveryResult;
   }
 
-  // Otherwise, use the original parseXmlToolCall function to parse the cleaned XML string
-  const toolCall = parseXmlToolCall(cleanedXmlString, validTools);
-
-  // Return tool call with thinking content attached
-  return toolCall ? { ...toolCall, thinkingContent } : null;
+  // Otherwise, use the original parseXmlToolCall function
+  return parseXmlToolCall(xmlString, validTools);
 }

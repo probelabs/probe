@@ -3,7 +3,7 @@
  * Tests the simplified parsing that uses entire inner content as result
  */
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
-import { parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
+import { parseXmlToolCallWithRecovery } from '../../src/agent/tools.js';
 
 describe('Direct Content attempt_completion Parsing', () => {
   test('should parse simple attempt_completion with direct content', () => {
@@ -11,7 +11,7 @@ describe('Direct Content attempt_completion Parsing', () => {
 The authentication system has been analyzed successfully. It uses secure JWT tokens.
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -33,7 +33,7 @@ Analysis Complete:
 3. Add audit logging
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -59,7 +59,7 @@ Analysis Complete:
 }
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -84,7 +84,7 @@ function authenticate(token) {
 This function validates JWT tokens using the secret key.
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -97,7 +97,7 @@ This function validates JWT tokens using the secret key.
 The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;/database&gt;
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toContain('&lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;/database&gt;');
@@ -106,7 +106,7 @@ The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;
   test('should handle empty content', () => {
     const xml = `<attempt_completion></attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toBe('');
@@ -117,7 +117,7 @@ The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;
 Found 5 files with "special" characters: @#$%^&*()[]{}|\\:";'<>?,./
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toContain('special');
@@ -131,7 +131,7 @@ Task completed successfully.
 <command>npm test</command>
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -150,7 +150,7 @@ Task completed successfully.
     Conclusion: System is secure.
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toContain('Indented analysis:');
@@ -166,7 +166,7 @@ describe('Direct Content vs Legacy <result> Tag', () => {
 <result>This should be treated as part of the content, not as a parameter</result>
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -185,7 +185,7 @@ describe('Direct Content vs Legacy <result> Tag', () => {
 </details>
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toContain('<title>Security Analysis Report</title>');
@@ -205,7 +205,7 @@ describe('Integration with Schema Response Flow', () => {
 
     const xml = `<attempt_completion>${jsonResponse}</attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result.trim()).toBe(jsonResponse);
@@ -225,7 +225,7 @@ describe('Integration with Schema Response Flow', () => {
 
     const xml = `<attempt_completion>${mermaidResponse}</attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result.trim()).toBe(mermaidResponse);

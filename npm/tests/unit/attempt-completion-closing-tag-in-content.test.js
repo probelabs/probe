@@ -1,4 +1,4 @@
-import { parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
+import { parseXmlToolCallWithRecovery } from '../../src/agent/tools.js';
 
 /**
  * Test for fixing issue where JSON content containing "</attempt_completion>" string
@@ -30,7 +30,7 @@ describe('attempt_completion with closing tag in content', () => {
 }
 </attempt_completion>`;
 
-    const result = parseXmlToolCallWithThinking(xmlString);
+    const result = parseXmlToolCallWithRecovery(xmlString);
 
     expect(result).toBeDefined();
     expect(result.toolName).toBe('attempt_completion');
@@ -50,7 +50,7 @@ which finds the first occurrence rather than the actual closing tag. This causes
 when the content contains strings like </attempt_completion> in regex patterns or code examples.
 </attempt_completion>`;
 
-    const result = parseXmlToolCallWithThinking(xmlString);
+    const result = parseXmlToolCallWithRecovery(xmlString);
 
     expect(result).toBeDefined();
     expect(result.toolName).toBe('attempt_completion');
@@ -70,7 +70,7 @@ when the content contains strings like </attempt_completion> in regex patterns o
 }
 </attempt_completion>`;
 
-    const result = parseXmlToolCallWithThinking(xmlString);
+    const result = parseXmlToolCallWithRecovery(xmlString);
 
     expect(result).toBeDefined();
     expect(result.toolName).toBe('attempt_completion');
@@ -100,7 +100,7 @@ const closeIndex = xmlString.lastIndexOf('</attempt_completion>');
 This ensures we find the actual closing tag, not one in the content.
 </attempt_completion>`;
 
-    const result = parseXmlToolCallWithThinking(xmlString);
+    const result = parseXmlToolCallWithRecovery(xmlString);
 
     expect(result).toBeDefined();
     expect(result.toolName).toBe('attempt_completion');
@@ -118,7 +118,7 @@ This ensures we find the actual closing tag, not one in the content.
 </analysis>
 </attempt_completion>`;
 
-    const result = parseXmlToolCallWithThinking(xmlString);
+    const result = parseXmlToolCallWithRecovery(xmlString);
 
     expect(result).toBeDefined();
     expect(result.toolName).toBe('attempt_completion');
@@ -168,7 +168,7 @@ This ensures we find the actual closing tag, not one in the content.
 }
 </attempt_completion>`;
 
-    const result = parseXmlToolCallWithThinking(xmlString);
+    const result = parseXmlToolCallWithRecovery(xmlString);
 
     expect(result).toBeDefined();
     expect(result.toolName).toBe('attempt_completion');

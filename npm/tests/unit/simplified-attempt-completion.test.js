@@ -3,7 +3,7 @@
  */
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import { attemptCompletionSchema } from '../../src/tools/common.js';
-import { parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
+import { parseXmlToolCallWithRecovery } from '../../src/agent/tools.js';
 
 describe('Simplified attempt_completion Schema', () => {
   test('should accept valid plain text result', () => {
@@ -82,7 +82,7 @@ describe('Simplified attempt_completion XML Parsing', () => {
 The authentication system has been analyzed successfully. It uses secure JWT tokens.
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -104,7 +104,7 @@ Analysis Complete:
 3. Add audit logging
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -126,7 +126,7 @@ function authenticate(token) {
 This function validates JWT tokens using the secret key.
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -139,7 +139,7 @@ This function validates JWT tokens using the secret key.
 The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;/database&gt;
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     // XML entities should remain as-is in the result (not decoded)
@@ -153,7 +153,7 @@ The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;
 <command>echo "test"</command>
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -167,7 +167,7 @@ The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;
     const xml = `<attempt_completion>
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toBe('');
@@ -178,7 +178,7 @@ The config file contains: &lt;database&gt;&lt;host&gt;localhost&lt;/host&gt;&lt;
 Found 5 files with "special" characters: @#$%^&*()[]{}|\\:";'<>?,./
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xml);
+    const parsed = parseXmlToolCallWithRecovery(xml);
 
     expect(parsed).toBeDefined();
     expect(parsed.params.result).toContain('special');
@@ -246,7 +246,7 @@ describe('Legacy Compatibility', () => {
 Task completed successfully.
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(directXml);
+    const parsed = parseXmlToolCallWithRecovery(directXml);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');
@@ -260,7 +260,7 @@ Task completed.
 <command>npm test</command>
 </attempt_completion>`;
 
-    const parsed = parseXmlToolCallWithThinking(xmlWithOldTags);
+    const parsed = parseXmlToolCallWithRecovery(xmlWithOldTags);
 
     expect(parsed).toBeDefined();
     expect(parsed.toolName).toBe('attempt_completion');

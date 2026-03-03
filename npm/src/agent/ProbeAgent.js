@@ -63,7 +63,7 @@ import {
   googleSearchToolDefinition,
   urlContextToolDefinition,
   attemptCompletionSchema,
-  parseXmlToolCallWithThinking
+  parseXmlToolCallWithRecovery
 } from './tools.js';
 import { createMessagePreview, detectUnrecognizedToolCall, detectStuckResponse, areBothStuckResponses } from '../tools/common.js';
 import { FileTracker } from '../tools/fileTracker.js';
@@ -87,7 +87,6 @@ import {
   tryAutoWrapForSimpleSchema,
   tryExtractValidJsonPrefix
 } from './schemaUtils.js';
-import { removeThinkingTags, extractThinkingContent } from './xmlParsingUtils.js';
 import { predefinedPrompts } from './shared/prompts.js';
 import {
   MCPXmlBridge,
@@ -223,6 +222,7 @@ export class ProbeAgent {
    * @param {number} [options.maxOutputTokens] - Maximum tokens for tool output before truncation (default: 20000, can also be set via PROBE_MAX_OUTPUT_TOKENS env var)
    * @param {number} [options.requestTimeout] - Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests.
    * @param {number} [options.maxOperationTimeout] - Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback.
+   * @param {string|number} [options.thinkingEffort] - Native thinking/reasoning effort level: 'low', 'medium', 'high', or a number (budget tokens). When set, passes provider-specific thinking options to the LLM via providerOptions.
    */
   constructor(options = {}) {
     // Basic configuration
@@ -263,6 +263,10 @@ export class ProbeAgent {
 
     // Completion prompt for post-completion validation/review
     this.completionPrompt = options.completionPrompt || null;
+
+    // Native thinking/reasoning effort for LLM providers
+    // Accepted values: 'off' (default), 'low', 'medium', 'high', or a number (budget tokens)
+    this.thinkingEffort = options.thinkingEffort || null;
 
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
@@ -538,30 +542,6 @@ export class ProbeAgent {
         'error.message': message,
         'error.recoverable': errorType !== 'circuit_breaker',
         'error.context': JSON.stringify(context).substring(0, 1000),
-        'iteration': iteration
-      });
-    }
-  }
-
-  /**
-   * Record AI thinking content for telemetry
-   * @param {string} thinkingContent - The thinking content
-   * @param {number} iteration - Current iteration number
-   * @private
-   */
-  _recordThinkingTelemetry(thinkingContent, iteration) {
-    if (!this.tracer || !thinkingContent) return;
-
-    if (this._isAppTracerStyle() && typeof this.tracer.recordThinkingContent === 'function') {
-      // AppTracer style: (sessionId, iteration, content)
-      this.tracer.recordThinkingContent(this.sessionId, iteration, thinkingContent);
-    } else if (typeof this.tracer.recordThinkingContent === 'function') {
-      // SimpleAppTracer style: (content, metadata)
-      this.tracer.recordThinkingContent(thinkingContent, { iteration });
-    } else {
-      this.tracer.addEvent('ai.thinking', {
-        'ai.thinking.content': thinkingContent.substring(0, 50000),
-        'ai.thinking.length': thinkingContent.length,
         'iteration': iteration
       });
     }
@@ -1619,6 +1599,65 @@ export class ProbeAgent {
     }
 
     return Object.keys(tools).length > 0 ? tools : undefined;
+  }
+
+  /**
+   * Build providerOptions for native thinking/reasoning based on thinkingEffort setting.
+   * Maps effort levels to provider-specific parameters.
+   * @param {number} maxResponseTokens - Current max response tokens for budget calculation
+   * @returns {Object|undefined} providerOptions object or undefined if thinking is off
+   * @private
+   */
+  _buildThinkingProviderOptions(maxResponseTokens) {
+    if (!this.thinkingEffort) return undefined;
+
+    const effort = this.thinkingEffort;
+
+    // Map string effort levels to budget tokens
+    const effortToBudget = {
+      low: 4000,
+      medium: 10000,
+      high: 32000,
+    };
+
+    if (this.apiType === 'anthropic') {
+      const budgetTokens = typeof effort === 'number'
+        ? effort
+        : effortToBudget[effort];
+      if (!budgetTokens) return undefined;
+      return {
+        anthropic: {
+          thinking: { type: 'enabled', budgetTokens },
+        },
+      };
+    }
+
+    if (this.apiType === 'openai') {
+      // OpenAI reasoning models use reasoningEffort: 'low' | 'medium' | 'high'
+      const reasoningEffort = typeof effort === 'number'
+        ? (effort <= 4000 ? 'low' : effort <= 10000 ? 'medium' : 'high')
+        : effort;
+      if (!['low', 'medium', 'high'].includes(reasoningEffort)) return undefined;
+      return {
+        openai: {
+          reasoningEffort,
+        },
+      };
+    }
+
+    if (this.apiType === 'google') {
+      const thinkingBudget = typeof effort === 'number'
+        ? effort
+        : effortToBudget[effort];
+      if (!thinkingBudget) return undefined;
+      return {
+        google: {
+          thinkingConfig: { thinkingBudget },
+        },
+      };
+    }
+
+    return undefined;
   }
 
   /**
@@ -2728,27 +2767,17 @@ If your previous response was already correct and complete, you may respond with
 <attempt_complete>
 This signals to use your previous response as the final answer without repeating content.
 
-# Thinking Process
-
-Before using a tool, analyze the situation within <thinking></thinking> tags. This helps you organize your thoughts and make better decisions.
-
-Example:
-<thinking>
-I need to find code related to error handling in the search module. The most appropriate tool for this is the search tool, which requires a query parameter and a path parameter. I have both the query ("error handling") and the path ("src/search"), so I can proceed with the search.
-</thinking>
-
 # Tool Use Guidelines
 
-1. Think step-by-step about how to achieve the user's goal.
-2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool.
-3. Choose **one** tool that helps achieve the current step.
-4. Format the tool call using the specified XML format with BOTH opening and closing tags. Ensure all required parameters are included.
-5. **You MUST respond with exactly one tool call in the specified XML format in each turn.**
-6. Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
-7. Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-6.
-8. If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
-9. If you cannot proceed (e.g., missing information, invalid request), use \`<attempt_completion>\` to explain the issue clearly with an appropriate message directly inside the tags.
-10. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
+1. Plan your approach to achieve the user's goal.
+2. Choose **one** tool that helps achieve the current step.
+3. Format the tool call using the specified XML format with BOTH opening and closing tags. Ensure all required parameters are included.
+4. **You MUST respond with exactly one tool call in the specified XML format in each turn.**
+5. Wait for the tool execution result, which will be provided in the next message (within a <tool_result> block).
+6. Analyze the tool result and decide the next step. If more tool calls are needed, repeat steps 2-5.
+7. If the task is fully complete and all previous steps were successful, use the \`<attempt_completion>\` tool to provide the final answer. This is the ONLY way to finish the task.
+8. If you cannot proceed (e.g., missing information, invalid request), use \`<attempt_completion>\` to explain the issue clearly with an appropriate message directly inside the tags.
+9. If your previous response was already correct and complete, you may use \`<attempt_complete>\` as a shorthand.
 
 Available Tools:
 ${availableToolsList}`;
@@ -2757,15 +2786,14 @@ ${availableToolsList}`;
     const commonInstructions = `<instructions>
 Follow these instructions carefully:
 1. Analyze the user's request.
-2. Use <thinking></thinking> tags to analyze the situation and determine the appropriate tool for each step.
-3. Use the available tools step-by-step to fulfill the request.
-4. You should always prefer the \`search\` tool for code-related questions.${this.searchDelegate ? ' It already returns extracted code blocks; use \`extract\` only to expand context or read full files.' : ' Read full files only if really necessary.'}
-5. Ensure to get really deep and understand the full picture before answering.
-6. You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
-7. Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
-8. Once the task is fully completed, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
-9. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
-10. When modifying files, choose the appropriate tool:
+2. Use the available tools step-by-step to fulfill the request.
+3. You should always prefer the \`search\` tool for code-related questions.${this.searchDelegate ? ' It already returns extracted code blocks; use \`extract\` only to expand context or read full files.' : ' Read full files only if really necessary.'}
+4. Ensure to get really deep and understand the full picture before answering.
+5. You MUST respond with exactly ONE tool call per message, using the specified XML format, until the task is complete.
+6. Wait for the tool execution result (provided in the next user message in a <tool_result> block) before proceeding to the next step.
+7. Once the task is fully completed, use the '<attempt_completion>' tool to provide the final result. This is the ONLY way to signal completion.
+8. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
+9. When modifying files, choose the appropriate tool:
     - Use 'edit' for all code modifications:
       * For small changes (a line or a few lines), use old_string + new_string — copy old_string verbatim from the file.
       * For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
@@ -3288,6 +3316,12 @@ Follow these instructions carefully:
                 temperature: 0.3,
               };
 
+              // Add native thinking/reasoning providerOptions when thinkingEffort is set
+              const providerOpts = this._buildThinkingProviderOptions(maxResponseTokens);
+              if (providerOpts) {
+                streamOptions.providerOptions = providerOpts;
+              }
+
               // Inject Gemini built-in tools (gemini_google_search, gemini_url_context) when using Google provider
               const geminiProviderTools = this._buildGeminiProviderTools();
               if (geminiProviderTools) {
@@ -3473,13 +3507,9 @@ Follow these instructions carefully:
         const nativeTools = validTools;
         const parsedTool = (this.mcpBridge && !options._disableTools)
           ? parseHybridXmlToolCall(assistantResponseContent, nativeTools, this.mcpBridge)
-          : parseXmlToolCallWithThinking(assistantResponseContent, validTools);
+          : parseXmlToolCallWithRecovery(assistantResponseContent, validTools);
 
         // Capture AI thinking content if present (for debugging and telemetry)
-        if (parsedTool?.thinkingContent) {
-          this._recordThinkingTelemetry(parsedTool.thinkingContent, currentIteration);
-        }
-
         if (parsedTool) {
           const { toolName, params } = parsedTool;
 
@@ -3558,7 +3588,7 @@ Follow these instructions carefully:
                 msg.content &&
                 !(this.mcpBridge
                   ? parseHybridXmlToolCall(msg.content, validTools, this.mcpBridge)
-                  : parseXmlToolCallWithThinking(msg.content, validTools))
+                  : parseXmlToolCallWithRecovery(msg.content, validTools))
               );
 
               if (lastAssistantMessage) {
@@ -3583,30 +3613,8 @@ Follow these instructions carefully:
                   continue; // Don't use broken response, continue the loop
                 }
 
-                // Pre-strip thinking tags to avoid losing content at final cleanup stage
-                const strippedContent = removeThinkingTags(prevContent);
-                if (strippedContent.length > 50) {
-                  // Enough content outside thinking tags — use stripped version directly
-                  finalResult = strippedContent;
-                  if (this.debug) console.log(`[DEBUG] Using previous response (thinking-stripped) as completion: ${finalResult.substring(0, 100)}...`);
-                } else {
-                  // Content was mostly/entirely inside thinking tags.
-                  // Extract thinking content and use it as the actual answer.
-                  // extractThinkingContent now handles nested thinking tags (issue #439)
-                  let thinkingContent = extractThinkingContent(prevContent);
-                  // Also apply removeThinkingTags as extra safety to catch any edge cases
-                  if (thinkingContent) {
-                    thinkingContent = removeThinkingTags(thinkingContent) || thinkingContent.replace(/<\/?thinking>/g, '');
-                  }
-                  if (thinkingContent && thinkingContent.length > 50) {
-                    finalResult = thinkingContent;
-                    if (this.debug) console.log(`[DEBUG] Previous response was mostly in thinking tags — using thinking content as completion: ${finalResult.substring(0, 100)}...`);
-                  } else {
-                    // Neither stripped nor thinking content is substantive — use raw as fallback
-                    finalResult = prevContent;
-                    if (this.debug) console.log(`[DEBUG] Using previous response as completion (raw): ${finalResult.substring(0, 100)}...`);
-                  }
-                }
+                finalResult = prevContent;
+                if (this.debug) console.log(`[DEBUG] Using previous response as completion: ${finalResult.substring(0, 100)}...`);
               } else {
                 finalResult = 'Error: No previous response found to use as completion.';
                 if (this.debug) console.log(`[DEBUG] No suitable previous response found for attempt_complete shorthand`);
@@ -4854,28 +4862,7 @@ Convert your previous response content into actual JSON data that follows this s
         console.log(`[DEBUG] Mermaid validation: Skipped final validation due to disableMermaidValidation option`);
       }
 
-      // Remove thinking tags from final result before returning to user
-      // Skip for valid JSON to avoid destroying JSON structure when <thinking> appears
-      // inside string values (e.g., after tryAutoWrapForSimpleSchema embeds content with
-      // residual thinking tag fragments — issue #439)
-      if (!options._schemaFormatted) {
-        let isValidJson = false;
-        try {
-          JSON.parse(finalResult);
-          isValidJson = true;
-        } catch {
-          // Not valid JSON, proceed with thinking tag removal
-        }
 
-        if (!isValidJson) {
-          finalResult = removeThinkingTags(finalResult);
-          if (this.debug) {
-            console.log(`[DEBUG] Removed thinking tags from final result`);
-          }
-        } else if (this.debug) {
-          console.log(`[DEBUG] Skipped thinking tag removal for valid JSON result (issue #439)`);
-        }
-      }
 
       // Append DSL output buffer directly to response (bypasses LLM rewriting)
       // Skip during _completionPromptProcessed — only the parent answer() should append the buffer.

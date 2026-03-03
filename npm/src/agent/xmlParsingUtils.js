@@ -1,87 +1,13 @@
 /**
  * Shared XML parsing utilities used by both CLI/SDK and MCP modes
- * This module contains the core logic for thinking tag removal and attempt_complete recovery
+ * This module contains the core logic for attempt_complete recovery
  */
 
-import { DEFAULT_VALID_TOOLS, buildToolTagPattern } from '../tools/common.js';
-
-/**
- * Remove thinking tags and their content from XML string
- * Handles both closed and unclosed thinking tags
- * @param {string} xmlString - The XML string to clean
- * @returns {string} - Cleaned XML string without thinking tags
- */
-export function removeThinkingTags(xmlString, validTools = DEFAULT_VALID_TOOLS) {
-  let result = xmlString;
-
-  // Remove all properly closed thinking tags first
-  result = result.replace(/<thinking>[\s\S]*?<\/thinking>/g, '');
-
-  // Handle unclosed thinking tags
-  // Find any remaining <thinking> tag (which means it's unclosed)
-  const thinkingIndex = result.indexOf('<thinking>');
-  if (thinkingIndex !== -1) {
-    // Check if there's a tool tag after the thinking tag
-    // We want to preserve tool tags even if they're after unclosed thinking
-    const afterThinking = result.substring(thinkingIndex + '<thinking>'.length);
-
-    // Look for any tool tags in the remaining content
-    // Use the provided valid tools list to build the pattern dynamically
-    const toolPattern = buildToolTagPattern(validTools);
-    const toolMatch = afterThinking.match(toolPattern);
-
-    if (toolMatch) {
-      // Found a tool tag - remove thinking tag and its content up to the tool tag
-      const toolStart = thinkingIndex + '<thinking>'.length + toolMatch.index;
-      result = result.substring(0, thinkingIndex) + result.substring(toolStart);
-    } else {
-      // No tool tag found - remove everything from <thinking> onwards
-      result = result.substring(0, thinkingIndex);
-    }
-  }
-
-  return result.trim();
-}
-
-/**
- * Extract thinking content for potential logging
- * Handles nested thinking tags by recursively stripping inner tags.
- * @param {string} xmlString - The XML string to extract from
- * @returns {string|null} - Thinking content (cleaned of nested tags) or null if not found
- */
-export function extractThinkingContent(xmlString) {
-  const thinkingMatch = xmlString.match(/<thinking>([\s\S]*?)<\/thinking>/);
-  if (!thinkingMatch) {
-    return null;
-  }
-
-  let content = thinkingMatch[1].trim();
-
-  // Handle nested thinking tags: if the extracted content itself starts with <thinking>,
-  // recursively extract from it until we get clean content.
-  // This handles: <thinking><thinking>content</thinking></thinking>
-  // where non-greedy match captures "<thinking>content" (issue #439)
-  while (content.startsWith('<thinking>')) {
-    const innerMatch = content.match(/<thinking>([\s\S]*?)<\/thinking>/);
-    if (innerMatch) {
-      content = innerMatch[1].trim();
-    } else {
-      // Unclosed inner <thinking> tag - strip the opening tag and use remaining content
-      // e.g., "<thinking>content" becomes "content"
-      content = content.substring('<thinking>'.length).trim();
-      break;
-    }
-  }
-
-  // Also strip any remaining thinking tags that might be embedded in the content
-  content = content.replace(/<\/?thinking>/g, '').trim();
-
-  return content || null;
-}
+import { DEFAULT_VALID_TOOLS } from '../tools/common.js';
 
 /**
  * Check for attempt_complete recovery patterns and return standardized result
- * @param {string} cleanedXmlString - XML string with thinking tags already removed
+ * @param {string} cleanedXmlString - XML string to check for attempt_complete patterns
  * @param {Array<string>} validTools - List of valid tool names
  * @returns {Object|null} - Standardized attempt_completion result or null
  */
@@ -189,33 +115,3 @@ function hasOtherToolTags(xmlString, validTools = []) {
   return false;
 }
 
-/**
- * Apply the full thinking tag removal and attempt_complete recovery logic
- * This replicates the core logic from parseXmlToolCallWithThinking
- * @param {string} xmlString - The XML string to process
- * @param {Array<string>} validTools - List of valid tool names
- * @returns {Object} - Processing result with cleanedXml and potentialRecovery
- */
-export function processXmlWithThinkingAndRecovery(xmlString, validTools = []) {
-  // Extract thinking content if present (for potential logging or analysis)
-  const thinkingContent = extractThinkingContent(xmlString);
-
-  // Remove thinking tags and their content from the XML string
-  // Forward validTools so that tool tags (e.g. edit, create) inside unclosed
-  // thinking blocks are preserved when they are in the valid tools list
-  const cleanedXmlString = removeThinkingTags(xmlString, validTools.length > 0 ? validTools : undefined);
-
-  // Check for attempt_complete recovery patterns
-  const recoveryResult = checkAttemptCompleteRecovery(cleanedXmlString, validTools);
-
-  // If debugging is enabled, log the thinking content
-  if (process.env.DEBUG === '1' && thinkingContent) {
-    console.log(`[DEBUG] AI Thinking Process:\n${thinkingContent}`);
-  }
-
-  return {
-    cleanedXmlString,
-    thinkingContent,
-    recoveryResult
-  };
-}

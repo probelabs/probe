@@ -5,7 +5,7 @@
 
 import { MCPClientManager } from './client.js';
 import { loadMCPConfiguration } from './config.js';
-import { processXmlWithThinkingAndRecovery } from '../xmlParsingUtils.js';
+import { checkAttemptCompleteRecovery } from '../xmlParsingUtils.js';
 import { unescapeXmlEntities } from '../../tools/common.js';
 
 /**
@@ -318,21 +318,17 @@ export class MCPXmlBridge {
  * @returns {Object|null} Parsed tool call
  */
 export function parseHybridXmlToolCall(xmlString, nativeTools = [], mcpBridge = null) {
-  // First try native tools with the same logic as CLI/SDK mode
-  // This includes thinking tag removal and attempt_complete recovery logic
-  const nativeResult = parseNativeXmlToolWithThinking(xmlString, nativeTools);
+  // First try native tools with attempt_complete recovery logic
+  const nativeResult = parseNativeXmlToolWithRecovery(xmlString, nativeTools);
   if (nativeResult) {
-    const { thinkingContent, ...rest } = nativeResult;
-    return { ...rest, type: 'native', thinkingContent };
+    return { ...nativeResult, type: 'native' };
   }
 
   // Then try MCP tools if bridge is available
   if (mcpBridge) {
     const mcpResult = parseXmlMcpToolCall(xmlString, mcpBridge.getToolNames());
     if (mcpResult) {
-      // Extract thinking content for MCP tools as well
-      const { thinkingContent } = processXmlWithThinkingAndRecovery(xmlString, []);
-      return { ...mcpResult, type: 'mcp', thinkingContent };
+      return { ...mcpResult, type: 'mcp' };
     }
   }
 
@@ -340,26 +336,23 @@ export function parseHybridXmlToolCall(xmlString, nativeTools = [], mcpBridge = 
 }
 
 /**
- * Parse native XML tools using the same logic as CLI/SDK mode
- * Now uses shared utilities instead of duplicating code
+ * Parse native XML tools with attempt_complete recovery
  * @param {string} xmlString - XML string to parse
  * @param {Array<string>} validTools - List of valid tool names
  * @returns {Object|null} Parsed tool call
  */
-function parseNativeXmlToolWithThinking(xmlString, validTools) {
-  // Use the shared processing logic
-  const { cleanedXmlString, recoveryResult, thinkingContent } = processXmlWithThinkingAndRecovery(xmlString, validTools);
-
-  // If recovery found an attempt_complete pattern, return it with thinking content
+function parseNativeXmlToolWithRecovery(xmlString, validTools) {
+  // Check for attempt_complete recovery patterns first
+  const recoveryResult = checkAttemptCompleteRecovery(xmlString, validTools);
   if (recoveryResult) {
-    return { ...recoveryResult, thinkingContent };
+    return recoveryResult;
   }
 
-  // Use the original parseNativeXmlTool function to parse the cleaned XML string
+  // Try each valid tool
   for (const toolName of validTools) {
-    const result = parseNativeXmlTool(cleanedXmlString, toolName);
+    const result = parseNativeXmlTool(xmlString, toolName);
     if (result) {
-      return { ...result, thinkingContent };
+      return result;
     }
   }
 

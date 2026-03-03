@@ -323,7 +323,7 @@ describe('ProbeAgent allowedTools option', () => {
 
       // But attempt_completion should still be parsed and recognized
       // We test this by verifying the parsing logic works
-      const { parseXmlToolCallWithThinking } = await import('../../src/agent/tools.js');
+      const { parseXmlToolCallWithRecovery } = await import('../../src/agent/tools.js');
 
       // Build validTools the same way the agentic loop does - always include attempt_completion
       const validTools = ['attempt_completion'];
@@ -332,7 +332,7 @@ describe('ProbeAgent allowedTools option', () => {
 <result>{"answer": "test"}</result>
 </attempt_completion>`;
 
-      const parsed = parseXmlToolCallWithThinking(response, validTools);
+      const parsed = parseXmlToolCallWithRecovery(response, validTools);
       expect(parsed).not.toBeNull();
       expect(parsed.toolName).toBe('attempt_completion');
       // The result contains the JSON content (may include wrapper tags depending on parser)

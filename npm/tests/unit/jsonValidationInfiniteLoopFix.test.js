@@ -133,11 +133,7 @@ describe('JSON Validation Infinite Loop Fix', () => {
       // 2. Final mermaid validation should check !options._schemaFormatted
       expect(sourceCode).toContain('!this.disableMermaidValidation && !options._schemaFormatted');
 
-      // 3. Thinking tag removal should check !options._schemaFormatted
-      // The pattern was updated to allow for the JSON-safe check added in issue #439
-      // which wraps removeThinkingTags in a try-catch to skip for valid JSON
-      const thinkingTagRemovalPattern = /if \(!options\._schemaFormatted\) \{[\s\S]*?removeThinkingTags/;
-      expect(sourceCode).toMatch(thinkingTagRemovalPattern);
+      // 3. Thinking tag removal was removed (native LLM thinking support via providerOptions)
     });
   });
 

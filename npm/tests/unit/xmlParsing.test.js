@@ -1,6 +1,5 @@
-import { parseXmlToolCall, parseXmlToolCallWithThinking } from '../../src/agent/tools.js';
+import { parseXmlToolCall, parseXmlToolCallWithRecovery } from '../../src/agent/tools.js';
 import { DEFAULT_VALID_TOOLS, buildToolTagPattern, detectUnrecognizedToolCall, unescapeXmlEntities } from '../../src/tools/common.js';
-import { removeThinkingTags, extractThinkingContent } from '../../src/agent/xmlParsingUtils.js';
 
 describe('Shared Tool List', () => {
   test('DEFAULT_VALID_TOOLS should include bash', () => {
@@ -260,153 +259,53 @@ describe('XML Tool Call Parsing', () => {
     });
   });
 
-  describe('parseXmlToolCallWithThinking', () => {
-    test('should parse tool call and ignore thinking tags', () => {
+  describe('parseXmlToolCallWithRecovery', () => {
+    test('should parse standard tool calls', () => {
       const xmlString = `
-        <thinking>
-        I need to search for the user's query about testing.
-        </thinking>
         <search>
           <query>testing framework</query>
         </search>
       `;
-      
-      const result = parseXmlToolCallWithThinking(xmlString);
-      
+
+      const result = parseXmlToolCallWithRecovery(xmlString);
+
       expect(result).toMatchObject({
         toolName: 'search',
         params: { query: 'testing framework' }
       });
     });
 
-    test('should handle multiple thinking blocks', () => {
-      const xmlString = `
-        <thinking>First thought</thinking>
-        <thinking>Second thought</thinking>
-        <extract>
-          <targets>test.js</targets>
-        </extract>
-      `;
+    test('should recover attempt_complete shorthand', () => {
+      const xmlString = `<attempt_complete>`;
 
-      const result = parseXmlToolCallWithThinking(xmlString);
+      const result = parseXmlToolCallWithRecovery(xmlString);
 
       expect(result).toMatchObject({
-        toolName: 'extract',
-        params: { targets: 'test.js' }
+        toolName: 'attempt_completion',
+        params: { result: '__PREVIOUS_RESPONSE__' }
       });
-    });
-
-    test('should ignore non-tool tags even with thinking', () => {
-      const xmlString = `
-        <thinking>I should format this text</thinking>
-        <ins>This is inserted text</ins>
-        <thinking>But I need to use a tool instead</thinking>
-      `;
-      
-      const result = parseXmlToolCallWithThinking(xmlString);
-      
-      expect(result).toBeNull();
     });
 
     test('should pass custom valid tools to underlying parser', () => {
       const customValidTools = ['search'];
       const xmlString = `
-        <thinking>I'll use query tool</thinking>
         <query>
           <pattern>test pattern</pattern>
         </query>
       `;
-      
+
       // Should be null because query is not in custom valid tools
-      const result = parseXmlToolCallWithThinking(xmlString, customValidTools);
-      
-      expect(result).toBeNull();
-    });
-
-    test('should handle thinking without tool calls', () => {
-      const xmlString = `
-        <thinking>
-        Just thinking about the problem, no tool call needed yet.
-        </thinking>
-      `;
-
-      const result = parseXmlToolCallWithThinking(xmlString);
+      const result = parseXmlToolCallWithRecovery(xmlString, customValidTools);
 
       expect(result).toBeNull();
     });
 
-    test('should return thinkingContent when present', () => {
-      const xmlString = `
-        <thinking>
-        I need to analyze this code carefully.
-        Let me think about the best approach.
-        </thinking>
-        <search>
-          <query>authentication</query>
-        </search>
-      `;
+    test('should return null when no valid tool call found', () => {
+      const xmlString = `Just some text with no tool calls.`;
 
-      const result = parseXmlToolCallWithThinking(xmlString);
+      const result = parseXmlToolCallWithRecovery(xmlString);
 
-      expect(result).toMatchObject({
-        toolName: 'search',
-        params: { query: 'authentication' }
-      });
-      expect(result.thinkingContent).toBeDefined();
-      expect(result.thinkingContent).toContain('I need to analyze this code carefully');
-      expect(result.thinkingContent).toContain('best approach');
-    });
-
-    test('should return null thinkingContent when no thinking tags', () => {
-      const xmlString = `
-        <search>
-          <query>test query</query>
-        </search>
-      `;
-
-      const result = parseXmlToolCallWithThinking(xmlString);
-
-      expect(result).toMatchObject({
-        toolName: 'search',
-        params: { query: 'test query' }
-      });
-      expect(result.thinkingContent).toBeNull();
-    });
-
-    test('should extract thinkingContent from multiple thinking blocks (first only)', () => {
-      const xmlString = `
-        <thinking>First thought block</thinking>
-        <thinking>Second thought block</thinking>
-        <extract>
-          <targets>file.js</targets>
-        </extract>
-      `;
-
-      const result = parseXmlToolCallWithThinking(xmlString);
-
-      expect(result).toMatchObject({
-        toolName: 'extract',
-        params: { targets: 'file.js' }
-      });
-      // extractThinkingContent only captures first thinking block
-      expect(result.thinkingContent).toBe('First thought block');
-    });
-
-    test('should include thinkingContent with attempt_completion', () => {
-      const xmlString = `
-        <thinking>
-        The task is complete. I've analyzed all the files.
-        </thinking>
-        <attempt_completion>Task completed successfully</attempt_completion>
-      `;
-
-      const result = parseXmlToolCallWithThinking(xmlString);
-
-      expect(result).toMatchObject({
-        toolName: 'attempt_completion',
-        params: { result: 'Task completed successfully' }
-      });
-      expect(result.thinkingContent).toContain('The task is complete');
+      expect(result).toBeNull();
     });
   });
 
@@ -424,7 +323,7 @@ describe('XML Tool Call Parsing', () => {
         <em>This search should help us find the authentication logic.</em>
       `;
       
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
       
       expect(result).toMatchObject({
         toolName: 'search',
@@ -444,7 +343,7 @@ describe('XML Tool Call Parsing', () => {
         <code>function example() { return true; }</code>
       `;
       
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
       
       expect(result).toBeNull();
     });
@@ -465,7 +364,7 @@ describe('XML Tool Call Parsing', () => {
         <em>This will show you the first 50 lines of the Header component.</em>
       `;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'extract',
@@ -489,7 +388,7 @@ describe('XML Tool Call Parsing', () => {
       `;
 
       const validToolsWithEdit = ['search', 'query', 'extract', 'edit', 'attempt_completion'];
-      const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithEdit);
+      const result = parseXmlToolCallWithRecovery(aiResponse, validToolsWithEdit);
 
       expect(result).toMatchObject({
         toolName: 'edit',
@@ -507,7 +406,7 @@ describe('XML Tool Call Parsing', () => {
       `;
 
       const validToolsWithoutEdit = ['search', 'query', 'extract', 'attempt_completion'];
-      const result = parseXmlToolCallWithThinking(aiResponse, validToolsWithoutEdit);
+      const result = parseXmlToolCallWithRecovery(aiResponse, validToolsWithoutEdit);
 
       expect(result).toBeNull();
     });
@@ -528,7 +427,7 @@ describe('XML Tool Call Parsing', () => {
 }
 \`\`\``;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'attempt_completion',
@@ -555,7 +454,7 @@ describe('XML Tool Call Parsing', () => {
 The task has been completed successfully.
 All tests are passing.`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'attempt_completion',
@@ -571,7 +470,7 @@ All tests are passing.`
 Task completed with all requirements met.
 </attempt_completion>`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'attempt_completion',
@@ -584,7 +483,7 @@ Task completed with all requirements met.
     test('should handle empty attempt_completion tag without closing', () => {
       const aiResponse = `<attempt_completion>`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'attempt_completion',
@@ -604,7 +503,7 @@ Task completed with all requirements met.
 {"status": "complete"}
 \`\`\``;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'attempt_completion',
@@ -613,58 +512,6 @@ Task completed with all requirements met.
 {"status": "complete"}
 \`\`\``
         }
-      });
-    });
-  });
-
-  describe('Unclosed thinking tag handling', () => {
-    test('should remove unclosed thinking tag and its content', () => {
-      const aiResponse = `<thinking>
-I need to search for the authentication code.
-This is my reasoning...
-
-<search>
-<query>authentication</query>
-</search>`;
-
-      const result = parseXmlToolCallWithThinking(aiResponse);
-
-      expect(result).toMatchObject({
-        toolName: 'search',
-        params: { query: 'authentication' }
-      });
-    });
-
-    test('should handle properly closed thinking tag', () => {
-      const aiResponse = `<thinking>
-Let me analyze this.
-</thinking>
-
-<extract>
-<targets>src/auth.js</targets>
-</extract>`;
-
-      const result = parseXmlToolCallWithThinking(aiResponse);
-
-      expect(result).toMatchObject({
-        toolName: 'extract',
-        params: { targets: 'src/auth.js' }
-      });
-    });
-
-    test('should handle multiple thinking tags with one unclosed', () => {
-      const aiResponse = `<thinking>First thought</thinking>
-<thinking>Second thought that never ends...
-
-<query>
-<pattern>test</pattern>
-</query>`;
-
-      const result = parseXmlToolCallWithThinking(aiResponse);
-
-      expect(result).toMatchObject({
-        toolName: 'query',
-        params: { pattern: 'test' }
       });
     });
   });
@@ -826,7 +673,7 @@ The working directory should be the tyk project path.<bash>
 <workingDirectory>/tmp/workspaces/tyk</workingDirectory>
 </bash>`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'bash',
@@ -843,7 +690,7 @@ The working directory should be the tyk project path.<bash>
 <command>git status</command>
 </bash>`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'bash',
@@ -874,7 +721,7 @@ I should search for this...
 <search>
 <query>authentication middleware`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse);
+      const result = parseXmlToolCallWithRecovery(aiResponse);
 
       expect(result).toMatchObject({
         toolName: 'search',
@@ -912,7 +759,7 @@ I should search for this...
 }</new_string>
 </edit>`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse, validTools);
+      const result = parseXmlToolCallWithRecovery(aiResponse, validTools);
 
       expect(result).toMatchObject({
         toolName: 'edit',
@@ -1044,7 +891,7 @@ I need to rename this function to follow the naming convention.
 <new_string>const getUsername = () => {}</new_string>
 </edit>`;
 
-      const result = parseXmlToolCallWithThinking(aiResponse, validTools);
+      const result = parseXmlToolCallWithRecovery(aiResponse, validTools);
 
       expect(result).toMatchObject({
         toolName: 'edit',
@@ -1350,314 +1197,6 @@ The user is asking to investigate the GraphQL layer in tyk-analytics.
   });
 });
 
-describe('removeThinkingTags and extractThinkingContent', () => {
-  test('removeThinkingTags strips closed thinking tags', () => {
-    const input = '<thinking>some reasoning</thinking>The actual answer here.';
-    expect(removeThinkingTags(input)).toBe('The actual answer here.');
-  });
-
-  test('removeThinkingTags strips unclosed thinking tags', () => {
-    const input = '<thinking>some reasoning that never closes';
-    expect(removeThinkingTags(input)).toBe('');
-  });
-
-  test('removeThinkingTags returns empty when content is entirely in thinking tags', () => {
-    const input = '<thinking>This is a long detailed analysis that the model put entirely in thinking tags. It contains all the useful content but will be stripped away.</thinking>';
-    expect(removeThinkingTags(input)).toBe('');
-  });
-
-  test('removeThinkingTags preserves content outside thinking tags', () => {
-    const input = '<thinking>reasoning</thinking>\n\nHere is the detailed answer with more than 50 characters of substantive content.';
-    const result = removeThinkingTags(input);
-    expect(result).toContain('Here is the detailed answer');
-    expect(result.length).toBeGreaterThan(50);
-  });
-
-  test('extractThinkingContent extracts content from thinking tags', () => {
-    const input = '<thinking>This is the actual analysis with useful content</thinking>';
-    expect(extractThinkingContent(input)).toBe('This is the actual analysis with useful content');
-  });
-
-  test('extractThinkingContent returns null when no thinking tags', () => {
-    expect(extractThinkingContent('No thinking tags here')).toBeNull();
-  });
-
-  describe('__PREVIOUS_RESPONSE__ thinking tag regression', () => {
-    test('should detect when previous response content is mostly inside thinking tags', () => {
-      // This simulates the bug: model puts answer in thinking tags,
-      // attempt_complete reuses it, then removeThinkingTags destroys the answer
-      const prevResponse = '<thinking>\nI have analyzed the two traces. The failures are caused by excessive data size from raw CI logs being fed into Gemini 2.5 Pro.\n\n1. Limit output size in execute_plan DSL\n2. Summarize before returning\n3. Warn/abort on large tool results\n</thinking>';
-
-      const stripped = removeThinkingTags(prevResponse);
-      const thinkingContent = extractThinkingContent(prevResponse);
-
-      // The stripped version would be nearly empty (the bug)
-      expect(stripped.length).toBeLessThan(50);
-
-      // But extractThinkingContent recovers the actual answer
-      expect(thinkingContent).toContain('excessive data size');
-      expect(thinkingContent.length).toBeGreaterThan(50);
-    });
-
-    test('should preserve content when it exists outside thinking tags', () => {
-      const prevResponse = '<thinking>Let me think about this</thinking>\n\nThe analysis shows that both failures are caused by excessive data size from raw CI logs. Here are the recommendations:\n1. Limit output size\n2. Summarize before returning';
-
-      const stripped = removeThinkingTags(prevResponse);
-
-      // Enough content outside thinking tags — no need for fallback
-      expect(stripped.length).toBeGreaterThan(50);
-      expect(stripped).toContain('excessive data size');
-    });
-  });
-});
-
-describe('Issue #439: removeThinkingTags destroys JSON output', () => {
-  describe('extractThinkingContent should handle nested thinking tags', () => {
-    test('should not return content starting with <thinking>', () => {
-      const input = '<thinking><thinking>content</thinking></thinking>';
-      const result = extractThinkingContent(input);
-      expect(result).not.toMatch(/^<thinking>/);
-      expect(result).toBe('content');
-    });
-
-    test('should strip inner thinking tags from extracted content', () => {
-      const input = '<thinking>\n<thinking>\nReal content here\n</thinking>\n</thinking>';
-      const result = extractThinkingContent(input);
-      expect(result).not.toContain('<thinking>');
-      expect(result).not.toContain('</thinking>');
-      expect(result).toContain('Real content here');
-    });
-
-    test('should handle deeply nested thinking tags', () => {
-      const input = '<thinking><thinking><thinking>deep content</thinking></thinking></thinking>';
-      const result = extractThinkingContent(input);
-      expect(result).not.toContain('<thinking>');
-      expect(result).toBe('deep content');
-    });
-
-    test('should handle nested tags with actual content mixed in', () => {
-      const input = '<thinking>outer start\n<thinking>inner content</thinking>\nouter end</thinking>';
-      const result = extractThinkingContent(input);
-      // Non-greedy match captures from outer <thinking> to first </thinking>
-      // which is "outer start\n<thinking>inner content"
-      // Then we recursively extract from the inner <thinking>, getting "inner content"
-      expect(result).not.toContain('<thinking>');
-    });
-
-    test('should return null for empty nested thinking tags', () => {
-      const input = '<thinking><thinking></thinking></thinking>';
-      const result = extractThinkingContent(input);
-      // After extracting and cleaning, content is empty
-      expect(result).toBeNull();
-    });
-
-    test('production scenario: Gemini 2.5 Pro nested thinking (issue #439 trace)', () => {
-      const input = `<thinking>
-<thinking>
-I have already explained to the user why the full debugging process
-was not followed. I have analyzed the trace and confirmed that the
-assistant only performed the initial steps...
-</thinking>
-</thinking>`;
-      const result = extractThinkingContent(input);
-      expect(result).not.toMatch(/^<thinking>/);
-      expect(result).not.toContain('<thinking>');
-      expect(result).not.toContain('</thinking>');
-      expect(result).toContain('I have already explained');
-    });
-  });
-
-  describe('removeThinkingTags behavior with JSON (documenting the bug)', () => {
-    test('BUG: removeThinkingTags DESTROYS JSON with closed <thinking> in string values', () => {
-      // This documents the BUG behavior - removeThinkingTags strips the tags
-      // including from inside JSON strings, corrupting the structure
-      const json = '{"text":"<thinking>some analysis</thinking>rest of content"}';
-      const result = removeThinkingTags(json);
-      // The <thinking>...</thinking> is removed even from inside the JSON string
-      expect(result).toBe('{"text":"rest of content"}');
-      // This is technically valid JSON but loses content
-    });
-
-    test('BUG: removeThinkingTags TRUNCATES JSON with unclosed <thinking> in string values', () => {
-      // This documents the CRITICAL BUG - unclosed <thinking> truncates everything
-      const json = '{"text":"<thinking>content without closing tag"}';
-      const result = removeThinkingTags(json);
-      // TRUNCATED! Everything from <thinking> onwards is gone
-      expect(result).toBe('{"text":"');
-      // This is INVALID JSON - the exact bug from issue #439
-      expect(() => JSON.parse(result)).toThrow();
-    });
-
-    test('removeThinkingTags works correctly when thinking tags are OUTSIDE JSON', () => {
-      const input = '<thinking>reasoning</thinking>{"text":"actual content"}';
-      const result = removeThinkingTags(input);
-      expect(result).toBe('{"text":"actual content"}');
-      expect(() => JSON.parse(result)).not.toThrow();
-    });
-  });
-
-  describe('FIX: skip removeThinkingTags for valid JSON', () => {
-    test('valid JSON should be detected and preserved (not passed to removeThinkingTags)', () => {
-      // This is the fix logic from ProbeAgent.js:4802-4818
-      const jsonWithEmbeddedThinking = '{"text":"<thinking>content"}';
-
-      // Step 1: Check if it's valid JSON
-      let isValidJson = false;
-      try {
-        JSON.parse(jsonWithEmbeddedThinking);
-        isValidJson = true;
-      } catch {
-        // Not valid JSON
-      }
-
-      // Step 2: If valid JSON, we skip removeThinkingTags
-      expect(isValidJson).toBe(true);
-
-      // Step 3: Since we skip removeThinkingTags, content is preserved
-      const finalResult = jsonWithEmbeddedThinking; // NOT calling removeThinkingTags
-      expect(() => JSON.parse(finalResult)).not.toThrow();
-      const parsed = JSON.parse(finalResult);
-      expect(parsed.text).toBe('<thinking>content');
-    });
-
-    test('non-JSON content should still have removeThinkingTags applied', () => {
-      const plainTextWithThinking = '<thinking>reasoning</thinking>The actual answer';
-
-      // Step 1: Check if it's valid JSON
-      let isValidJson = false;
-      try {
-        JSON.parse(plainTextWithThinking);
-        isValidJson = true;
-      } catch {
-        // Not valid JSON
-      }
-
-      expect(isValidJson).toBe(false);
-
-      // Step 2: Since not JSON, apply removeThinkingTags
-      const finalResult = removeThinkingTags(plainTextWithThinking);
-      expect(finalResult).toBe('The actual answer');
-    });
-
-    test('production scenario: JSON with residual thinking from nested extraction', () => {
-      // Simulate: nested thinking → extractThinkingContent fails to clean →
-      // tryAutoWrapForSimpleSchema embeds in JSON → final cleanup
-      const residualThinking = '<thinking>some residual content from nested extraction';
-      const wrappedJson = JSON.stringify({ text: residualThinking });
-
-      // Without the fix: removeThinkingTags would truncate
-      const withoutFix = removeThinkingTags(wrappedJson);
-      expect(withoutFix).toBe('{"text":"');
-      expect(() => JSON.parse(withoutFix)).toThrow();
-
-      // With the fix: we detect valid JSON and skip removeThinkingTags
-      let isValidJson = false;
-      try {
-        JSON.parse(wrappedJson);
-        isValidJson = true;
-      } catch {
-        // Not valid JSON
-      }
-      expect(isValidJson).toBe(true);
-
-      // Content is preserved
-      const withFix = wrappedJson; // Skip removeThinkingTags for valid JSON
-      expect(() => JSON.parse(withFix)).not.toThrow();
-      const parsed = JSON.parse(withFix);
-      expect(parsed.text).toContain('some residual content');
-    });
-  });
-
-  describe('Real scenario: auto-wrapped content with nested thinking extraction', () => {
-    test('complete flow: nested thinking → extract → auto-wrap → should preserve content', () => {
-      // Simulate Gemini 2.5 Pro producing nested thinking
-      const aiResponse = '<thinking>\n<thinking>\nActual analysis content here.\n</thinking>\n</thinking>';
-
-      // Step 1: extractThinkingContent (now fixed for nested tags)
-      const extracted = extractThinkingContent(aiResponse);
-
-      // The extracted content should NOT start with <thinking>
-      expect(extracted).not.toMatch(/^<thinking>/);
-      expect(extracted).toContain('Actual analysis content here');
-
-      // Step 2: Simulate auto-wrap (JSON.stringify)
-      const wrapped = JSON.stringify({ text: extracted });
-
-      // Step 3: The wrapped JSON should be valid
-      expect(() => JSON.parse(wrapped)).not.toThrow();
-
-      // Step 4: Parse and verify content is preserved
-      const parsed = JSON.parse(wrapped);
-      expect(parsed.text).toContain('Actual analysis content here');
-      expect(parsed.text.length).toBeGreaterThan(10);
-    });
-
-    test('complete flow: when skip removeThinkingTags for valid JSON is applied', () => {
-      // Simulate the scenario where content with residual <thinking> gets auto-wrapped
-      const contentWithResidualTag = '<thinking>some residual thinking text';
-      const wrapped = JSON.stringify({ text: contentWithResidualTag });
-
-      // If we detect valid JSON, we should NOT call removeThinkingTags
-      let finalResult = wrapped;
-      let isValidJson = false;
-      try {
-        JSON.parse(finalResult);
-        isValidJson = true;
-      } catch {
-        // Not valid JSON
-      }
-
-      // The JSON is valid, so we should skip removeThinkingTags
-      expect(isValidJson).toBe(true);
-
-      // The final result should still be valid JSON
-      expect(() => JSON.parse(finalResult)).not.toThrow();
-
-      // Content should be preserved (not truncated)
-      const parsed = JSON.parse(finalResult);
-      expect(parsed.text).toContain('some residual thinking text');
-    });
-  });
-
-  describe('__PREVIOUS_RESPONSE__ length-based heuristic edge cases', () => {
-    test('length > 50 check behavior with extracted thinking content', () => {
-      // A valid answer inside thinking tags
-      const prevResponse = '<thinking>The build failed because of a missing dependency in package.json.</thinking>';
-
-      // Extract thinking content (simulating __PREVIOUS_RESPONSE__ handler)
-      const thinkingContent = extractThinkingContent(prevResponse);
-
-      // The content should be extracted and cleaned
-      expect(thinkingContent).toBe('The build failed because of a missing dependency in package.json.');
-
-      // This content is > 50 chars so it would pass the length check
-      expect(thinkingContent.length).toBeGreaterThan(50);
-    });
-
-    test('short valid answer inside thinking tags', () => {
-      // A perfectly valid short answer that would fail the > 50 check
-      const prevResponse = '<thinking>Build failed: missing dep.</thinking>';
-
-      const thinkingContent = extractThinkingContent(prevResponse);
-
-      expect(thinkingContent).toBe('Build failed: missing dep.');
-      // This is < 50 chars and would fail the length check
-      expect(thinkingContent.length).toBeLessThan(50);
-    });
-
-    test('nested thinking with garbage would now be cleaned', () => {
-      // Previously, this would return "<thinking>" repeated content
-      // which would pass the length > 50 check despite being garbage
-      const garbage = '<thinking><thinking><thinking>actual content</thinking></thinking></thinking>';
-
-      const result = extractThinkingContent(garbage);
-
-      // With the fix, we get clean content without any thinking tags
-      expect(result).not.toContain('<thinking>');
-      expect(result).toBe('actual content');
-    });
-  });
-});
 
 describe('XML entity unescaping', () => {
   describe('unescapeXmlEntities', () => {
@@ -1945,76 +1484,31 @@ last line
   });
 });
 
-describe('Issue #459: removeThinkingTags drops edit/create tool calls in unclosed thinking tags', () => {
+describe('Tool parsing with non-tool XML tags in surrounding text', () => {
   const VALID_TOOLS_WITH_EDIT = [...DEFAULT_VALID_TOOLS, 'edit', 'create'];
 
-  const EDIT_IN_UNCLOSED_THINKING = `<thinking>
-I will use the edit tool to insert new content.<edit>
+  test('parses <edit> tool surrounded by non-tool XML', () => {
+    const input = `Some text with <thinking> tags before.
+<edit>
 <file_path>docs/configuration.mdx</file_path>
 <old_string>## Sample config file</old_string>
 <new_string>## New section\n\n## Sample config file</new_string>
 </edit>`;
+    const result = parseXmlToolCallWithRecovery(input, VALID_TOOLS_WITH_EDIT);
+    expect(result).not.toBeNull();
+    expect(result.toolName).toBe('edit');
+    expect(result.params.file_path).toBe('docs/configuration.mdx');
+    expect(result.params.old_string).toBe('## Sample config file');
+  });
 
-  const CREATE_IN_UNCLOSED_THINKING = `<thinking>
-I will use the create tool to overwrite the file.<create>
+  test('parses <create> tool surrounded by non-tool XML', () => {
+    const input = `Some text before.<create>
 <file_path>docs/configuration.mdx</file_path>
 <content>New file content here.</content>
 </create>`;
-
-  describe('removeThinkingTags bug with DEFAULT_VALID_TOOLS', () => {
-    test('BUG: removeThinkingTags drops <edit> because edit is not in DEFAULT_VALID_TOOLS', () => {
-      // With default tools only, <edit> is not recognized and everything is stripped
-      const result = removeThinkingTags(EDIT_IN_UNCLOSED_THINKING);
-      expect(result).toBe(''); // BUG: everything stripped
-    });
-
-    test('BUG: removeThinkingTags drops <create> because create is not in DEFAULT_VALID_TOOLS', () => {
-      const result = removeThinkingTags(CREATE_IN_UNCLOSED_THINKING);
-      expect(result).toBe(''); // BUG: everything stripped
-    });
-
-    test('removeThinkingTags preserves <bash> because bash IS in DEFAULT_VALID_TOOLS', () => {
-      const input = '<thinking>Let me check.<bash><command>ls</command></bash>';
-      const result = removeThinkingTags(input);
-      expect(result).toContain('<bash>');
-    });
-  });
-
-  describe('removeThinkingTags fix with validTools parameter', () => {
-    test('removeThinkingTags preserves <edit> when edit is in validTools', () => {
-      const result = removeThinkingTags(EDIT_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
-      expect(result).toContain('<edit>');
-      expect(result).toContain('<file_path>');
-    });
-
-    test('removeThinkingTags preserves <create> when create is in validTools', () => {
-      const result = removeThinkingTags(CREATE_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
-      expect(result).toContain('<create>');
-      expect(result).toContain('<file_path>');
-    });
-  });
-
-  describe('parseXmlToolCallWithThinking end-to-end with edit/create', () => {
-    test('parses <edit> inside unclosed thinking when validTools includes edit', () => {
-      const result = parseXmlToolCallWithThinking(EDIT_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
-      expect(result).not.toBeNull();
-      expect(result.toolName).toBe('edit');
-      expect(result.params.file_path).toBe('docs/configuration.mdx');
-      expect(result.params.old_string).toBe('## Sample config file');
-    });
-
-    test('parses <create> inside unclosed thinking when validTools includes create', () => {
-      const result = parseXmlToolCallWithThinking(CREATE_IN_UNCLOSED_THINKING, VALID_TOOLS_WITH_EDIT);
-      expect(result).not.toBeNull();
-      expect(result.toolName).toBe('create');
-      expect(result.params.file_path).toBe('docs/configuration.mdx');
-    });
-
-    test('<edit> after closed </thinking> already works', () => {
-      const input = '<thinking>reasoning</thinking><edit><file_path>f.txt</file_path><old_string>a</old_string><new_string>b</new_string></edit>';
-      const result = parseXmlToolCallWithThinking(input, VALID_TOOLS_WITH_EDIT);
-      expect(result).not.toBeNull();
-      expect(result.toolName).toBe('edit');
-    });
+    const result = parseXmlToolCallWithRecovery(input, VALID_TOOLS_WITH_EDIT);
+    expect(result).not.toBeNull();
+    expect(result.toolName).toBe('create');
+    expect(result.params.file_path).toBe('docs/configuration.mdx');
   });
 });
