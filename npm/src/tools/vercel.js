@@ -10,6 +10,7 @@ import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
 import { analyzeAll } from './analyzeAll.js';
 import { searchSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
+import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
 
@@ -116,6 +117,18 @@ function parseDelegatedTargets(rawResponse) {
 	}
 
 	return normalizeTargets(fallbackTargetsFromText(trimmed));
+}
+
+function splitTargetSuffix(target) {
+	const searchStart = (target.length > 2 && target[1] === ':' && /[a-zA-Z]/.test(target[0])) ? 2 : 0;
+	const colonIdx = target.indexOf(':', searchStart);
+	const hashIdx = target.indexOf('#');
+	if (colonIdx !== -1 && (hashIdx === -1 || colonIdx < hashIdx)) {
+		return { filePart: target.substring(0, colonIdx), suffix: target.substring(colonIdx) };
+	} else if (hashIdx !== -1) {
+		return { filePart: target.substring(0, hashIdx), suffix: target.substring(hashIdx) };
+	}
+	return { filePart: target, suffix: '' };
 }
 
 function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, allowTests }) {
@@ -286,13 +299,61 @@ export const searchTool = (options = {}) => {
 					return fallbackResult;
 				}
 
-				// Resolve relative paths against the actual search directory, not the general cwd.
-				// The delegate returns paths relative to where the search was performed (searchPaths[0]),
-				// which may differ from options.cwd when the user specifies a path parameter.
+				// The delegate runs from workspace root (allowedFolders[0] or cwd), NOT from searchPaths[0].
+				// It returns paths relative to that workspace root. Resolve against the same base.
+				const delegateBase = options.allowedFolders?.[0] || options.cwd || '.';
 				const resolutionBase = searchPaths[0] || options.cwd || '.';
-				const resolvedTargets = targets.map(target => resolveTargetPath(target, resolutionBase));
+				const resolvedTargets = targets.map(target => resolveTargetPath(target, delegateBase));
+
+				// Auto-fix: detect and repair invalid paths (doubled segments, AI hallucinations)
+				const validatedTargets = [];
+				for (const target of resolvedTargets) {
+					const { filePart, suffix } = splitTargetSuffix(target);
+
+					// 1. Path exists as-is
+					if (existsSync(filePart)) {
+						validatedTargets.push(target);
+						continue;
+					}
+
+					// 2. Detect doubled directory segments: /ws/proj/proj/src → /ws/proj/src
+					let fixed = false;
+					const parts = filePart.split('/').filter(Boolean);
+					for (let i = 0; i < parts.length - 1; i++) {
+						if (parts[i] === parts[i + 1]) {
+							const candidate = '/' + [...parts.slice(0, i), ...parts.slice(i + 1)].join('/');
+							if (existsSync(candidate)) {
+								validatedTargets.push(candidate + suffix);
+								if (debug) console.error(`[search-delegate] Fixed doubled path segment: ${filePart} → ${candidate}`);
+								fixed = true;
+								break;
+							}
+						}
+					}
+					if (fixed) continue;
+
+					// 3. Try resolving against alternative bases (searchPaths[0], cwd)
+					for (const altBase of [resolutionBase, options.cwd].filter(Boolean)) {
+						if (altBase === delegateBase) continue;
+						const altResolved = resolveTargetPath(target, altBase);
+						const { filePart: altFile } = splitTargetSuffix(altResolved);
+						if (existsSync(altFile)) {
+							validatedTargets.push(altResolved);
+							if (debug) console.error(`[search-delegate] Resolved with alt base: ${filePart} → ${altFile}`);
+							fixed = true;
+							break;
+						}
+					}
+					if (fixed) continue;
+
+					// 4. Keep target anyway (probe binary will report the error)
+					//    but log a warning
+					if (debug) console.error(`[search-delegate] Warning: target may not exist: ${filePart}`);
+					validatedTargets.push(target);
+				}
+
 				const extractOptions = {
-					files: resolvedTargets,
+					files: validatedTargets,
 					cwd: resolutionBase,
 					allowTests: allow_tests ?? true
 				};

@@ -92,22 +92,23 @@ describe('searchDelegate behavior', () => {
     );
     const extractArgs = mockExtract.mock.calls[0][0];
     expect(extractArgs).toEqual(expect.objectContaining({ files: expect.any(Array) }));
-    // Paths should be resolved against the search path (/workspace/src), not cwd (/workspace)
+    // Paths should be resolved against delegateBase (allowedFolders[0] = /workspace),
+    // not searchPaths[0] (/workspace/src)
     const normalizedFiles = extractArgs.files.map((file) =>
       file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
     );
     expect(normalizedFiles).toEqual(expect.arrayContaining([
-      '/workspace/src/a.js#foo',
-      '/workspace/src/b.js:10-12'
+      '/workspace/a.js#foo',
+      '/workspace/b.js:10-12'
     ]));
     expect(mockSearch).not.toHaveBeenCalled();
   });
 
-  test('resolves delegate paths against search path, not cwd, when they differ', async () => {
-    // Simulate the bug case: cwd differs from search path
-    // Delegate returns paths relative to the search directory
+  test('resolves delegate paths against workspace root when subagent returns workspace-relative paths', async () => {
+    // Real scenario: subagent runs from /tmp/workspace (workspace root)
+    // and returns paths relative to that root, including the project dir name
     mockDelegate.mockResolvedValue(JSON.stringify({
-      targets: ['dashboard/api.go#Handler', 'dashboard/model.go:10-20']
+      targets: ['tyk-analytics/dashboard/api.go#Handler', 'tyk-analytics/dashboard/model.go:10-20']
     }));
     mockExtract.mockResolvedValue('EXTRACTED');
 
@@ -127,13 +128,15 @@ describe('searchDelegate behavior', () => {
     const normalizedFiles = extractArgs.files.map((file) =>
       file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
     );
-    // Paths must resolve against the search path (/tmp/workspace/tyk-analytics),
-    // NOT against cwd (/tmp/workspace)
+    // Paths should resolve against delegateBase (/tmp/workspace), NOT searchPaths[0] (/tmp/workspace/tyk-analytics)
+    // This prevents doubled path: /tmp/workspace/tyk-analytics/tyk-analytics/dashboard/api.go
     expect(normalizedFiles).toEqual(expect.arrayContaining([
       '/tmp/workspace/tyk-analytics/dashboard/api.go#Handler',
       '/tmp/workspace/tyk-analytics/dashboard/model.go:10-20'
     ]));
-    // Extract cwd should also be the search path
+    // Should NOT have doubled paths
+    expect(normalizedFiles.some(f => f.includes('tyk-analytics/tyk-analytics'))).toBe(false);
+    // Extract cwd should be the search path (resolutionBase)
     expect(extractArgs.cwd).toBe('/tmp/workspace/tyk-analytics');
   });
 
