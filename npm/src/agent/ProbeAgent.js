@@ -2948,11 +2948,11 @@ Follow these instructions carefully:
 6. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
 7. When modifying files, choose the appropriate tool:
     - Use 'edit' for all code modifications:
-      * For small changes (a line or a few lines), use old_string + new_string — copy old_string verbatim from the file.
-      * For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
-      * For editing specific lines from search/extract output, use start_line (and optionally end_line) with the line numbers shown in the output.${this.hashLines ? ' Line references include content hashes (e.g. "42:ab") for integrity verification.' : ''}
+      * PREFERRED: Use start_line (and optionally end_line) for line-targeted editing — this is the safest and most precise approach.${this.hashLines ? ' Use the line:hash references from extract/search output (e.g. "42:ab") for integrity verification.' : ''} Always use extract first to see line numbers${this.hashLines ? ' and hashes' : ''}, then edit by line reference.
       * For editing inside large functions: first use extract with the symbol target (e.g. "file.js#myFunction") to see the function with line numbers${this.hashLines ? ' and hashes' : ''}, then use start_line/end_line to surgically edit specific lines within it.
-      * IMPORTANT: Keep old_string as small as possible — include only the lines you need to change plus minimal context for uniqueness. For replacing large blocks (10+ lines), prefer line-targeted editing with start_line/end_line to constrain scope.
+      * For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
+      * FALLBACK ONLY: Use old_string + new_string for simple single-line changes where the text is unique. Copy old_string verbatim from the file. Keep old_string as small as possible.
+      * IMPORTANT: After multiple edits to the same file, always re-read it with extract before continuing — your mental model of the file may have drifted from reality.
     - Use 'create' for new files or complete file rewrites.
     - If an edit fails, read the error message — it tells you exactly how to fix the call and retry.
     - The system tracks which files you've seen via search/extract. If you try to edit a file you haven't read, or one that changed since you last read it, the edit will fail with instructions to re-read first. Always use extract before editing to ensure you have current file content.` : ''}
