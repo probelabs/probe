@@ -3582,23 +3582,24 @@ Follow these instructions carefully:
         // Continue even if storage fails
       }
 
-      // Completion prompt handling - run a follow-up prompt after attempt_completion for validation/review
-      // This runs BEFORE mermaid validation and JSON schema validation
-      // Skip if we're already in a completion prompt follow-up call or if no completion prompt is configured
+      // Completion prompt handling - inject one more user message into the existing conversation
+      // This continues the SAME agentic session (same tools, same TaskManager, same history)
+      // rather than spawning a recursive this.answer() call which would reset state
       if (completionAttempted && this.completionPrompt && !options._completionPromptProcessed) {
         if (this.debug) {
-          console.log('[DEBUG] Running completion prompt for post-completion validation/review...');
+          console.log('[DEBUG] Running completion prompt as continuation of current session...');
         }
 
         try {
-          // Record completion prompt start in telemetry
+          const originalResult = finalResult;
+
           if (this.tracer) {
             this.tracer.recordEvent('completion_prompt.started', {
               'completion_prompt.original_result_length': finalResult?.length || 0
             });
           }
 
-          // Create the completion prompt with the current result as context
+          // Append completion prompt as a user message to the existing conversation
           const completionPromptMessage = `${this.completionPrompt}
 
 Here is the result to review:
@@ -3606,34 +3607,82 @@ Here is the result to review:
 ${finalResult}
 </result>
 
-After reviewing, provide your final answer using attempt_completion.`;
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is using attempt_completion. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix) using attempt_completion.`;
 
-          // Make a follow-up call with the completion prompt
-          // Pass _completionPromptProcessed to prevent infinite loops
-          // Save output buffers — the recursive answer() must not destroy DSL output() content
-          const savedOutputItems = this._outputBuffer ? [...this._outputBuffer.items] : [];
-          const savedExtractedBlocks = this._extractedRawBlocks ? [...this._extractedRawBlocks] : [];
-          const completionResult = await this.answer(completionPromptMessage, [], {
-            ...options,
-            _completionPromptProcessed: true
-          });
-          // Restore output buffers so the parent call can append them to the final result
-          if (this._outputBuffer) {
-            this._outputBuffer.items = savedOutputItems;
+          currentMessages.push({ role: 'user', content: completionPromptMessage });
+
+          // Reset completion tracking for the follow-up turn
+          completionResult = null;
+          completionAttempted = false;
+
+          // Run one more streamText pass with the same tools and conversation context
+          // Give a small number of extra iterations for the follow-up
+          const completionMaxIterations = 5;
+          const completionStreamOptions = {
+            model: this.provider ? this.provider(this.model) : this.model,
+            messages: this.prepareMessagesWithImages(currentMessages),
+            tools,
+            stopWhen: stepCountIs(completionMaxIterations),
+            maxTokens: maxResponseTokens,
+            temperature: 0.3,
+            onStepFinish: ({ toolResults, text, finishReason, usage }) => {
+              if (usage) {
+                this.tokenCounter.recordUsage(usage);
+              }
+              if (options.onStream && text) {
+                options.onStream(text);
+              }
+              if (this.debug) {
+                console.log(`[DEBUG] Completion prompt step finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+              }
+            }
+          };
+
+          const providerOpts = this._buildThinkingProviderOptions(maxResponseTokens);
+          if (providerOpts) {
+            completionStreamOptions.providerOptions = providerOpts;
           }
-          this._extractedRawBlocks = savedExtractedBlocks;
 
-          // Update finalResult with the result from the completion prompt
-          finalResult = completionResult;
+          const cpResult = await this.streamTextWithRetryAndFallback(completionStreamOptions);
+          const cpFinalText = await cpResult.text;
+          const cpUsage = await cpResult.usage;
+          if (cpUsage) {
+            this.tokenCounter.recordUsage(cpUsage, cpResult.experimental_providerMetadata);
+          }
+
+          // Append follow-up messages to conversation history
+          const cpMessages = await cpResult.response?.messages;
+          if (cpMessages) {
+            for (const msg of cpMessages) {
+              currentMessages.push(msg);
+            }
+          }
+
+          // Use new completion result if the agent called attempt_completion again,
+          // otherwise keep the original result (the follow-up may have just done side-effects)
+          if (completionResult) {
+            finalResult = completionResult;
+            completionAttempted = true;
+          } else if (cpFinalText && cpFinalText.trim().length > 0) {
+            finalResult = cpFinalText;
+            completionAttempted = true;
+          } else {
+            // Follow-up produced nothing useful — keep the original
+            finalResult = originalResult;
+            completionAttempted = true;
+            if (this.debug) {
+              console.log('[DEBUG] Completion prompt returned empty result, keeping original.');
+            }
+          }
 
           if (this.debug) {
-            console.log(`[DEBUG] Completion prompt finished. New result length: ${finalResult?.length || 0}`);
+            console.log(`[DEBUG] Completion prompt finished. Final result length: ${finalResult?.length || 0}`);
           }
 
-          // Record completion prompt completion in telemetry
           if (this.tracer) {
             this.tracer.recordEvent('completion_prompt.completed', {
-              'completion_prompt.final_result_length': finalResult?.length || 0
+              'completion_prompt.final_result_length': finalResult?.length || 0,
+              'completion_prompt.used_original': finalResult === originalResult
             });
           }
         } catch (error) {
