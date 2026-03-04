@@ -256,4 +256,260 @@ describe('MCP Tool Native Integration', () => {
       expect(tools).toHaveProperty('attempt_completion');
     });
   });
+
+  describe('MCP tools with raw JSON Schema (issue #472)', () => {
+    test('should wrap raw JSON Schema inputSchema with jsonSchema() without crashing', () => {
+      // Real MCP tools return raw JSON Schema objects, not Zod schemas.
+      // Without wrapping, Vercel AI SDK's asSchema() misidentifies them as Zod
+      // and crashes with: TypeError: Cannot read properties of undefined (reading 'typeName')
+      mockMcpBridge.getToolNames = jest.fn(() => ['slack_send_dm']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        slack_send_dm: {
+          description: 'Send a direct message via Slack',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              channel: { type: 'string', description: 'Channel ID' },
+              message: { type: 'string', description: 'Message text' }
+            },
+            required: ['channel', 'message']
+          },
+          execute: jest.fn(async (params) => `Sent to ${params.channel}`)
+        }
+      }));
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      expect(tools).toHaveProperty('slack_send_dm');
+      expect(tools).toHaveProperty('attempt_completion');
+    });
+
+    test('should handle MCP tools with empty inputSchema', () => {
+      mockMcpBridge.getToolNames = jest.fn(() => ['simple_tool']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        simple_tool: {
+          description: 'A tool with no parameters',
+          inputSchema: { type: 'object', properties: {} },
+          execute: jest.fn(async () => 'done')
+        }
+      }));
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      expect(tools).toHaveProperty('simple_tool');
+    });
+
+    test('should handle MCP tools with no inputSchema at all', () => {
+      mockMcpBridge.getToolNames = jest.fn(() => ['no_schema_tool']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        no_schema_tool: {
+          description: 'A tool with no schema',
+          execute: jest.fn(async () => 'result')
+        }
+      }));
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      expect(tools).toHaveProperty('no_schema_tool');
+    });
+
+    test('should handle MCP tools with no description', () => {
+      mockMcpBridge.getToolNames = jest.fn(() => ['no_desc_tool']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        no_desc_tool: {
+          inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+          execute: jest.fn(async () => 'result')
+        }
+      }));
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      expect(tools).toHaveProperty('no_desc_tool');
+    });
+
+    test('should handle multiple MCP tools with raw JSON Schema', () => {
+      // Simulate a real MCP server with multiple tools using raw JSON Schema
+      mockMcpBridge.getToolNames = jest.fn(() => [
+        '__tools___slack-send-dm',
+        '__tools___slack-search',
+        '__tools___slack-read-thread',
+        '__tools___slack-download-file'
+      ]);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        '__tools___slack-send-dm': {
+          description: 'Send a DM',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              user_id: { type: 'string' },
+              text: { type: 'string' }
+            },
+            required: ['user_id', 'text']
+          },
+          execute: jest.fn(async () => 'sent')
+        },
+        '__tools___slack-search': {
+          description: 'Search messages',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+              limit: { type: 'number' }
+            },
+            required: ['query']
+          },
+          execute: jest.fn(async () => 'results')
+        },
+        '__tools___slack-read-thread': {
+          description: 'Read a thread',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              thread_ts: { type: 'string' },
+              channel: { type: 'string' }
+            },
+            required: ['thread_ts', 'channel']
+          },
+          execute: jest.fn(async () => 'thread')
+        },
+        '__tools___slack-download-file': {
+          description: 'Download a file',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              file_id: { type: 'string' }
+            },
+            required: ['file_id']
+          },
+          execute: jest.fn(async () => 'file')
+        }
+      }));
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      expect(tools).toHaveProperty('__tools___slack-send-dm');
+      expect(tools).toHaveProperty('__tools___slack-search');
+      expect(tools).toHaveProperty('__tools___slack-read-thread');
+      expect(tools).toHaveProperty('__tools___slack-download-file');
+      expect(tools).toHaveProperty('attempt_completion');
+    });
+
+    test('should preserve MCP tool execute functions after wrapping', async () => {
+      const mockExecute = jest.fn(async (params) => `Result: ${params.query}`);
+      mockMcpBridge.getToolNames = jest.fn(() => ['search_tool']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        search_tool: {
+          description: 'Search',
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query']
+          },
+          execute: mockExecute
+        }
+      }));
+
+      const onComplete = () => {};
+      const tools = agent._buildNativeTools({}, onComplete);
+
+      // The wrapped tool should still call the original execute function
+      expect(tools).toHaveProperty('search_tool');
+      const result = await tools.search_tool.execute({ query: 'hello' });
+      expect(mockExecute).toHaveBeenCalledWith({ query: 'hello' });
+      expect(result).toBe('Result: hello');
+    });
+
+    test('should handle mix of Zod and raw JSON Schema MCP tools', () => {
+      // Some MCP implementations might return Zod schemas, others raw JSON Schema
+      mockMcpBridge.getToolNames = jest.fn(() => ['zod_tool', 'json_tool']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        zod_tool: {
+          description: 'Tool with Zod schema',
+          parameters: z.object({ name: z.string() }),
+          execute: jest.fn(async () => 'zod result')
+        },
+        json_tool: {
+          description: 'Tool with raw JSON Schema',
+          inputSchema: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name']
+          },
+          execute: jest.fn(async () => 'json result')
+        }
+      }));
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      expect(tools).toHaveProperty('zod_tool');
+      expect(tools).toHaveProperty('json_tool');
+    });
+
+    test('should handle MCP tool with complex nested JSON Schema', () => {
+      mockMcpBridge.getToolNames = jest.fn(() => ['complex_tool']);
+      mockMcpBridge.getVercelTools = jest.fn(() => ({
+        complex_tool: {
+          description: 'Tool with nested schema',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              config: {
+                type: 'object',
+                properties: {
+                  enabled: { type: 'boolean' },
+                  options: {
+                    type: 'array',
+                    items: { type: 'string' }
+                  }
+                }
+              },
+              tags: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    key: { type: 'string' },
+                    value: { type: 'string' }
+                  }
+                }
+              }
+            }
+          },
+          execute: jest.fn(async () => 'complex result')
+        }
+      }));
+
+      const onComplete = () => {};
+      expect(() => {
+        agent._buildNativeTools({}, onComplete);
+      }).not.toThrow();
+
+      const tools = agent._buildNativeTools({}, onComplete);
+      expect(tools).toHaveProperty('complex_tool');
+    });
+  });
 });

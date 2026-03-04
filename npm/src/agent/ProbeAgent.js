@@ -1879,7 +1879,15 @@ export class ProbeAgent {
     if (this.mcpBridge && !options._disableTools) {
       const mcpTools = this.mcpBridge.getVercelTools(this._filterMcpTools(this.mcpBridge.getToolNames()));
       for (const [name, mcpTool] of Object.entries(mcpTools)) {
-        nativeTools[name] = mcpTool;
+        // MCP tools have raw JSON Schema inputSchema that must be wrapped with jsonSchema()
+        // for the Vercel AI SDK. Without wrapping, asSchema() misidentifies them as Zod schemas.
+        const mcpSchema = mcpTool.inputSchema || mcpTool.parameters;
+        const wrappedSchema = mcpSchema && mcpSchema._def ? mcpSchema : jsonSchema(mcpSchema || { type: 'object', properties: {} });
+        nativeTools[name] = tool({
+          description: mcpTool.description || `MCP tool: ${name}`,
+          inputSchema: wrappedSchema,
+          execute: mcpTool.execute,
+        });
       }
     }
 
