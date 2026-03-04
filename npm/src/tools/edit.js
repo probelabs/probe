@@ -420,6 +420,15 @@ Parameters:
 
         // ─── Text-based edit mode ───
 
+        // Check if file has had too many consecutive text edits without a re-read
+        if (options.fileTracker) {
+          const staleCheck = options.fileTracker.checkTextEditStaleness(resolvedPath);
+          if (!staleCheck.ok) {
+            const displayPath = toRelativePath(resolvedPath, workspaceRoot);
+            return `Error editing ${displayPath}: ${staleCheck.message}\n\nExample: <extract><targets>${displayPath}</targets></extract>`;
+          }
+        }
+
         // Read the file
         const content = await fs.readFile(resolvedPath, 'utf-8');
 
@@ -470,7 +479,10 @@ Parameters:
 
         // Write the file back
         await fs.writeFile(resolvedPath, newContent, 'utf-8');
-        if (options.fileTracker) await options.fileTracker.trackFileAfterWrite(resolvedPath);
+        if (options.fileTracker) {
+          await options.fileTracker.trackFileAfterWrite(resolvedPath);
+          options.fileTracker.recordTextEdit(resolvedPath);
+        }
 
         const replacedCount = replace_all ? occurrences : 1;
 

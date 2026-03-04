@@ -1031,6 +1031,60 @@ if (!user.email) {
       expect(content).toBe('still works');
     });
 
+    test('should block text edit after too many consecutive edits without re-read', async () => {
+      await fs.writeFile(testFile, 'a\nb\nc\nd\ne\nf');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(testFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      // First 3 edits should succeed (default maxConsecutiveTextEdits = 3)
+      const r1 = await edit.execute({ file_path: testFile, old_string: 'a', new_string: 'A' });
+      expect(r1).toContain('Successfully edited');
+
+      const r2 = await edit.execute({ file_path: testFile, old_string: 'b', new_string: 'B' });
+      expect(r2).toContain('Successfully edited');
+
+      const r3 = await edit.execute({ file_path: testFile, old_string: 'c', new_string: 'C' });
+      expect(r3).toContain('Successfully edited');
+
+      // 4th edit should be blocked — requires re-read
+      const r4 = await edit.execute({ file_path: testFile, old_string: 'd', new_string: 'D' });
+      expect(r4).toContain('edited 3 times without being re-read');
+      expect(r4).toContain('extract');
+
+      // After re-reading (markFileSeen), edits should work again
+      tracker.markFileSeen(testFile);
+      const r5 = await edit.execute({ file_path: testFile, old_string: 'd', new_string: 'D' });
+      expect(r5).toContain('Successfully edited');
+    });
+
+    test('symbol and line edits do not trigger text edit staleness', async () => {
+      const jsFile = join(testDir, 'sym.js');
+      await fs.writeFile(jsFile, 'function foo() {\n  return 1;\n}\n\nfunction bar() {\n  return 2;\n}');
+
+      const tracker = new FileTracker();
+      tracker.markFileSeen(jsFile);
+
+      const edit = editTool({
+        allowedFolders: [testDir],
+        fileTracker: tracker
+      });
+
+      // Do 3 text edits
+      await edit.execute({ file_path: jsFile, old_string: 'return 1', new_string: 'return 10' });
+      await edit.execute({ file_path: jsFile, old_string: 'return 10', new_string: 'return 100' });
+      await edit.execute({ file_path: jsFile, old_string: 'return 100', new_string: 'return 1000' });
+
+      // 4th text edit should be blocked
+      const r = await edit.execute({ file_path: jsFile, old_string: 'return 1000', new_string: 'return 1' });
+      expect(r).toContain('edited 3 times without being re-read');
+    });
+
     test('createTool updates tracker after write', async () => {
       const newFile = join(testDir, 'created.js');
       const tracker = new FileTracker();

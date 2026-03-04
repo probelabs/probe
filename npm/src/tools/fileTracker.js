@@ -95,6 +95,10 @@ export class FileTracker {
     this._seenFiles = new Set();
     /** @type {Map<string, {contentHash: string, startLine: number, endLine: number, symbolName: string|null, source: string, timestamp: number}>} */
     this._contentRecords = new Map();
+    /** @type {Map<string, number>} Consecutive text edits since last read, per file */
+    this._textEditCounts = new Map();
+    /** @type {number} Max consecutive text edits before requiring a re-read */
+    this.maxConsecutiveTextEdits = 3;
   }
 
   /**
@@ -103,6 +107,7 @@ export class FileTracker {
    */
   markFileSeen(resolvedPath) {
     this._seenFiles.add(resolvedPath);
+    this._textEditCounts.set(resolvedPath, 0);
     if (this.debug) {
       console.error(`[FileTracker] Marked as seen: ${resolvedPath}`);
     }
@@ -264,8 +269,38 @@ export class FileTracker {
    * @param {string} resolvedPath - Absolute path to the file
    */
   async trackFileAfterWrite(resolvedPath) {
-    this.markFileSeen(resolvedPath);
+    this._seenFiles.add(resolvedPath);
     this.invalidateFileRecords(resolvedPath);
+  }
+
+  /**
+   * Record a text-mode edit (old_string/new_string) to a file.
+   * Increments the consecutive edit counter.
+   * @param {string} resolvedPath - Absolute path to the file
+   */
+  recordTextEdit(resolvedPath) {
+    const count = (this._textEditCounts.get(resolvedPath) || 0) + 1;
+    this._textEditCounts.set(resolvedPath, count);
+    if (this.debug) {
+      console.error(`[FileTracker] Text edit #${count} for ${resolvedPath}`);
+    }
+  }
+
+  /**
+   * Check if a file has had too many consecutive text edits without a re-read.
+   * @param {string} resolvedPath - Absolute path to the file
+   * @returns {{ok: boolean, editCount?: number, message?: string}}
+   */
+  checkTextEditStaleness(resolvedPath) {
+    const count = this._textEditCounts.get(resolvedPath) || 0;
+    if (count >= this.maxConsecutiveTextEdits) {
+      return {
+        ok: false,
+        editCount: count,
+        message: `This file has been edited ${count} times without being re-read. Use 'extract' to re-read the current file content before making more edits, to ensure you are working with the actual state of the file.`
+      };
+    }
+    return { ok: true, editCount: count };
   }
 
   /**
@@ -314,5 +349,6 @@ export class FileTracker {
   clear() {
     this._seenFiles.clear();
     this._contentRecords.clear();
+    this._textEditCounts.clear();
   }
 }
