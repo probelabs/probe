@@ -3607,7 +3607,7 @@ Here is the result to review:
 ${finalResult}
 </result>
 
-After reviewing, provide your final answer using attempt_completion.`;
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is using attempt_completion. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix) using attempt_completion.`;
 
           currentMessages.push({ role: 'user', content: completionPromptMessage });
 
