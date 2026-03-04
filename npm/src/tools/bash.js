@@ -45,8 +45,8 @@ export const bashTool = (options = {}) => {
   const permissionChecker = new BashPermissionChecker({
     allow: bashConfig.allow,
     deny: bashConfig.deny,
-    disableDefaultAllow: bashConfig.disableDefaultAllow,
-    disableDefaultDeny: bashConfig.disableDefaultDeny,
+    disableDefaultAllow: bashConfig.disableDefaultAllow || bashConfig.noDefaultAllow,
+    disableDefaultDeny: bashConfig.disableDefaultDeny || bashConfig.noDefaultDeny,
     debug,
     tracer
   });
