@@ -132,14 +132,53 @@ export class TaskManager {
   }
 
   /**
-   * Create multiple tasks in batch
+   * Create multiple tasks in batch, resolving user-provided IDs to auto-generated IDs.
+   * If any task fails validation, no tasks are created (atomic operation).
    * @param {Object[]} tasksData - Array of task data objects
    * @returns {Task[]} Created tasks
    */
   createTasks(tasksData) {
-    const createdTasks = [];
-
+    // Build a mapping of user-provided IDs to future auto-generated IDs
+    const idMap = new Map();
+    const batchAutoIds = new Set();
+    let nextCounter = this.taskCounter;
     for (const taskData of tasksData) {
+      nextCounter++;
+      const autoId = `task-${nextCounter}`;
+      batchAutoIds.add(autoId);
+      if (taskData.id) {
+        idMap.set(taskData.id, autoId);
+      }
+    }
+
+    // Resolve dependencies and "after" references, then validate before creating anything
+    const resolvedTasksData = tasksData.map(taskData => {
+      const resolved = { ...taskData };
+      delete resolved.id; // Don't pass user ID to createTask
+
+      if (resolved.dependencies) {
+        resolved.dependencies = resolved.dependencies.map(depId => {
+          if (idMap.has(depId)) return idMap.get(depId);
+          // Check if it's already an existing task ID or a batch auto-generated ID
+          if (this.tasks.has(depId) || batchAutoIds.has(depId)) return depId;
+          throw new Error(`Dependency "${depId}" does not exist. Available tasks: ${this._getAvailableTaskIds()}${idMap.size > 0 ? `, batch IDs: ${Array.from(idMap.keys()).join(', ')}` : ''}`);
+        });
+      }
+
+      if (resolved.after) {
+        if (idMap.has(resolved.after)) {
+          resolved.after = idMap.get(resolved.after);
+        } else if (!this.tasks.has(resolved.after) && !batchAutoIds.has(resolved.after)) {
+          throw new Error(`Task "${resolved.after}" does not exist. Cannot insert after non-existent task. Available tasks: ${this._getAvailableTaskIds()}${idMap.size > 0 ? `, batch IDs: ${Array.from(idMap.keys()).join(', ')}` : ''}`);
+        }
+      }
+
+      return resolved;
+    });
+
+    // All validation passed — create tasks
+    const createdTasks = [];
+    for (const taskData of resolvedTasksData) {
       const task = this.createTask(taskData);
       createdTasks.push(task);
     }
