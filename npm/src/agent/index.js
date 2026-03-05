@@ -194,6 +194,10 @@ function parseArgs() {
       config.provider = args[++i];
     } else if (arg === '--model' && i + 1 < args.length) {
       config.model = args[++i];
+    } else if (arg === '--search-delegate-provider' && i + 1 < args.length) {
+      config.searchDelegateProvider = args[++i];
+    } else if (arg === '--search-delegate-model' && i + 1 < args.length) {
+      config.searchDelegateModel = args[++i];
     } else if (arg === '--max-iterations' && i + 1 < args.length) {
       config.maxIterations = parseInt(args[++i], 10);
     } else if (arg === '--max-response-tokens' && i + 1 < args.length) {
@@ -872,7 +876,9 @@ async function main() {
       enableBash: config.enableBash,
       bashConfig: bashConfig,
       enableTasks: config.enableTasks,
-      thinkingEffort: config.thinkingEffort
+      thinkingEffort: config.thinkingEffort,
+      searchDelegateProvider: config.searchDelegateProvider,
+      searchDelegateModel: config.searchDelegateModel
     };
 
     const agent = new ProbeAgent(agentConfig);
