@@ -91,6 +91,79 @@ describe('TaskManager', () => {
       expect(tasks[1].dependencies).toEqual(['task-1']);
       expect(tasks[2].dependencies).toEqual(['task-1', 'task-2']);
     });
+
+    test('should resolve user-provided IDs to auto-generated IDs in batch dependencies', () => {
+      const tasks = manager.createTasks([
+        { id: 'auth', title: 'Authenticate with API' },
+        { id: 'list-projects', title: 'List Projects', dependencies: ['auth'] },
+        { id: 'list-clusters', title: 'List Clusters', dependencies: ['list-projects'] }
+      ]);
+
+      expect(tasks).toHaveLength(3);
+      // Dependencies should be remapped to auto-generated IDs
+      expect(tasks[0].id).toBe('task-1');
+      expect(tasks[1].id).toBe('task-2');
+      expect(tasks[1].dependencies).toEqual(['task-1']);
+      expect(tasks[2].id).toBe('task-3');
+      expect(tasks[2].dependencies).toEqual(['task-2']);
+    });
+
+    test('should resolve user-provided IDs with multiple dependencies', () => {
+      const tasks = manager.createTasks([
+        { id: 'setup', title: 'Setup' },
+        { id: 'build', title: 'Build', dependencies: ['setup'] },
+        { id: 'test', title: 'Test', dependencies: ['setup'] },
+        { id: 'deploy', title: 'Deploy', dependencies: ['build', 'test'] }
+      ]);
+
+      expect(tasks).toHaveLength(4);
+      expect(tasks[3].dependencies).toEqual(['task-2', 'task-3']);
+    });
+
+    test('should resolve user-provided IDs in "after" parameter', () => {
+      const tasks = manager.createTasks([
+        { id: 'first', title: 'First task' },
+        { id: 'third', title: 'Third task' },
+        { id: 'second', title: 'Second task', after: 'first' }
+      ]);
+
+      expect(tasks).toHaveLength(3);
+      const allTasks = manager.listTasks();
+      const taskIds = allTasks.map(t => t.id);
+      expect(taskIds).toEqual(['task-1', 'task-3', 'task-2']);
+    });
+
+    test('should not create any tasks if batch validation fails', () => {
+      expect(() => {
+        manager.createTasks([
+          { id: 'a', title: 'Task A' },
+          { id: 'b', title: 'Task B', dependencies: ['nonexistent'] }
+        ]);
+      }).toThrow();
+
+      // No tasks should have been created (atomic batch)
+      expect(manager.listTasks()).toHaveLength(0);
+    });
+
+    test('should handle mix of user-provided and missing IDs in batch', () => {
+      const tasks = manager.createTasks([
+        { id: 'setup', title: 'Setup' },
+        { title: 'Build (no custom id)' },
+        { id: 'deploy', title: 'Deploy', dependencies: ['setup'] }
+      ]);
+
+      expect(tasks).toHaveLength(3);
+      expect(tasks[2].dependencies).toEqual(['task-1']);
+    });
+
+    test('should error when batch dependency references unknown user ID', () => {
+      expect(() => {
+        manager.createTasks([
+          { id: 'a', title: 'Task A' },
+          { id: 'b', title: 'Task B', dependencies: ['unknown'] }
+        ]);
+      }).toThrow(/does not exist/);
+    });
   });
 
   describe('getTask', () => {
