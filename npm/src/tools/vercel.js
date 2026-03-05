@@ -145,7 +145,7 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'',
 		'Strategy for complex queries:',
 		'1. Analyze the query - identify key concepts, entities, and relationships',
-		'2. Run focused searches for each concept (e.g., "error handling" + "authentication" separately)',
+		'2. Run focused searches for each independent concept (e.g., for "how do payments work and how are emails sent", search "payments" and "emails" separately since they are unrelated)',
 		'3. Use extract to verify relevance of promising results',
 		'4. Combine all relevant targets in your final response',
 		'',
