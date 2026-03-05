@@ -1,5 +1,5 @@
 /**
- * Task Tool - XML tool definition and executor for task management
+ * Task Tool - definition and executor for task management
  * @module agent/tasks/taskTool
  */
 
@@ -35,241 +35,57 @@ export const taskSchema = z.object({
 });
 
 /**
- * Task tool XML definition for system prompt
+ * Task tool definition (legacy export, no longer used — tool is registered natively via taskSchema)
  */
-export const taskToolDefinition = `## task
-Manage tasks for tracking progress during code exploration and problem-solving. Create tasks to break down complex problems, track dependencies, and ensure all work is completed.
-
-Parameters:
-- action: (required) The action to perform: create, update, complete, delete, list
-- tasks: (optional) Array of task objects for batch operations. Place raw JSON array directly between tags.
-- id: (optional) Task ID for single operations (e.g., "task-1")
-- title: (optional) Task title for create/update
-- description: (optional) Task description for create/update
-- status: (optional) Task status for update: pending, in_progress, completed, cancelled
-- priority: (optional) Task priority: low, medium, high, critical
-- dependencies: (optional) JSON array of task IDs that must be completed first
-- after: (optional) Task ID to insert the new task after (for ordering). By default, new tasks are appended to the end
-
-IMPORTANT - JSON Format:
-Place raw JSON arrays directly between tags without quotes or escaping:
-  CORRECT:   <tasks>[{"title": "Do X"}]</tasks>
-  INCORRECT: <tasks>"[{\"title\": \"Do X\"}]"</tasks>
-
-Usage Examples:
-
-Creating a single task:
-<task>
-<action>create</action>
-<title>Analyze authentication module</title>
-<description>Search and understand how authentication works</description>
-<priority>high</priority>
-</task>
-
-Creating multiple tasks with dependencies:
-<task>
-<action>create</action>
-<tasks>[
-  {"title": "Search for user model", "priority": "high"},
-  {"title": "Analyze authentication flow", "dependencies": ["task-1"]},
-  {"title": "Review session management", "dependencies": ["task-2"]}
-]</tasks>
-</task>
-
-Inserting a task after a specific task (instead of appending to end):
-<task>
-<action>create</action>
-<title>Investigate error handling</title>
-<after>task-2</after>
-</task>
-
-Updating a task status:
-<task>
-<action>update</action>
-<id>task-1</id>
-<status>in_progress</status>
-</task>
-
-Batch updating multiple tasks:
-<task>
-<action>update</action>
-<tasks>[
-  {"id": "task-1", "status": "completed"},
-  {"id": "task-2", "status": "in_progress"}
-]</tasks>
-</task>
-
-Completing a task:
-<task>
-<action>complete</action>
-<id>task-1</id>
-</task>
-
-Cancelling a task:
-<task>
-<action>update</action>
-<id>task-1</id>
-<status>cancelled</status>
-</task>
-
-Deleting a task:
-<task>
-<action>delete</action>
-<id>task-1</id>
-</task>
-
-Listing all tasks:
-<task>
-<action>list</action>
-</task>
-`;
+export const taskToolDefinition = '';
 
 /**
- * Task system prompt addition - comprehensive guidance for AI
+ * Task system prompt addition - guidance for AI on when and how to use tasks
  */
-export const taskSystemPrompt = `[Task Management System]
+export const taskSystemPrompt = `[Task Management]
 
-You have access to a task tracking tool to organize your work on complex requests.
+Use the task tool to track progress on complex requests with multiple distinct goals.
 
-## When to Create Tasks
+## When to Use Tasks
 
-CREATE TASKS when the request has **multiple distinct deliverables or goals**:
-- "Fix bug A AND add feature B" → Two separate tasks
-- "Investigate auth, payments, AND notifications" → Three independent areas
-- "Implement X, then add tests, then update docs" → Sequential phases with different outputs
-- User explicitly asks for a plan or task breakdown
+CREATE tasks when the request has **multiple separate deliverables**:
+- "Fix bug A AND add feature B" → two tasks
+- "Investigate auth, payments, AND notifications" → three tasks
+- "Implement X, then add tests, then update docs" → three sequential tasks
 
-SKIP TASKS for single-goal requests, even if they require multiple searches:
-- "How does ranking work?" → Just investigate and answer (one goal)
-- "What does function X do?" → Just look it up (one goal)
-- "Explain the authentication flow" → Just trace and explain (one goal)
-- "Find where errors are logged" → Just search and report (one goal)
+SKIP tasks for single-goal requests, even complex ones:
+- "How does ranking work?" — just investigate and answer
+- "Explain the authentication flow" — just trace and explain
+Multiple internal steps (search, read, analyze) for one goal ≠ multiple tasks.
 
-**Key insight**: Multiple *internal steps* (search, read, analyze) are NOT the same as multiple *goals*.
-A single investigation with many steps is still ONE task, not many.
+## Granularity
 
-## Task Granularity
+Tasks = logical units of work, not files or steps.
+- "Fix 8 similar test files" → ONE task (same fix repeated)
+- "Update API + tests + docs" → THREE tasks (different work types)
+- Max 3–4 tasks. More means you're too granular.
 
-Tasks represent LOGICAL UNITS OF WORK, not individual files or steps:
-- "Fix 8 similar test files" → ONE task (same type of fix across files)
-- "Update API + tests + docs" → THREE tasks (different types of work)
-- "Implement feature in 5 files" → ONE task (single feature)
+## Workflow
 
-**Rule of thumb**: If you're creating more than 3-4 tasks, you're probably too granular.
+1. **Plan**: Call task tool with action="create" and a tasks array up front
+2. **Execute**: Update status to "in_progress" / "completed" as you work. Add, split, or cancel tasks as you learn more.
+3. **Finish**: All tasks must be "completed" or "cancelled" before calling attempt_completion.
 
-**Anti-patterns to avoid**:
-- One task per file ❌
-- One task per function ❌
-- One task per repository (when same type of work) ❌
+## Rules
 
-**Good patterns**:
-- One task per distinct deliverable ✓
-- One task per phase (implement, test, document) ✓
-- One task per different type of work ✓
-
-MODIFY TASKS when (during execution):
-- You discover the problem is more complex than expected → Add new tasks
-- A single task covers too much scope → Split into smaller tasks
-- You find related work that needs attention → Add dependent tasks
-- A task becomes irrelevant based on findings → Cancel it
-- Task priorities change based on discoveries → Update priority
-- You learn new context → Update task description
-
-## Task Workflow
-
-**STEP 1 - Plan (at start):**
-Analyze the request and create tasks for each logical step:
-
-<task>
-<action>create</action>
-<tasks>[
-  {"title": "Search for authentication module", "priority": "high"},
-  {"title": "Analyze login flow implementation", "dependencies": ["task-1"]},
-  {"title": "Find session management code", "dependencies": ["task-1"]},
-  {"title": "Summarize authentication architecture", "dependencies": ["task-2", "task-3"]}
-]</tasks>
-</task>
-
-**STEP 2 - Execute (during work):**
-Update task status as you work:
-
-<task>
-<action>update</action>
-<id>task-1</id>
-<status>in_progress</status>
-</task>
-
-... do the work (search, extract, etc.) ...
-
-<task>
-<action>complete</action>
-<id>task-1</id>
-</task>
-
-**STEP 2b - Adapt (when you discover new work):**
-As you work, you may discover that:
-- A task is more complex than expected → Split it into subtasks
-- New areas need investigation → Add new tasks
-- Some tasks are no longer needed → Cancel them
-- Task order should change → Update dependencies
-
-*Adding a new task when you discover more work:*
-<task>
-<action>create</action>
-<title>Investigate caching layer</title>
-<description>Found references to Redis caching in auth module</description>
-</task>
-
-*Inserting a task after a specific task (to maintain logical order):*
-<task>
-<action>create</action>
-<title>Check rate limiting</title>
-<after>task-2</after>
-</task>
-
-*Cancelling and splitting a complex task:*
-<task>
-<action>update</action>
-<id>task-3</id>
-<status>cancelled</status>
-</task>
-<task>
-<action>create</action>
-<tasks>[
-  {"title": "Review JWT token generation", "priority": "high"},
-  {"title": "Review token refresh logic"}
-]</tasks>
-</task>
-
-**STEP 3 - Finish (before completion):**
-Before calling attempt_completion, ensure ALL tasks are either:
-- \`completed\` - you finished the work
-- \`cancelled\` - no longer needed
-
-If you created tasks, you MUST resolve them all before completing.
-
-## Key Rules
-
-1. **Dependencies are enforced**: A task cannot start until its dependencies are completed
-2. **Circular dependencies are rejected**: task-1 → task-2 → task-1 is invalid
-3. **Completion is blocked**: attempt_completion will fail if tasks remain unresolved
-4. **List to review**: Use <task><action>list</action></task> to see current task status
-5. **Tasks are living documents**: Add, split, or cancel tasks as you learn more about the problem
+- Dependencies are enforced: a task cannot start until its dependencies are completed
+- Circular dependencies are rejected
+- attempt_completion is blocked while tasks remain unresolved
 `;
 
 /**
  * Task guidance to inject at start of request
  */
-export const taskGuidancePrompt = `<task_guidance>
-Does this request have MULTIPLE DISTINCT GOALS?
+export const taskGuidancePrompt = `Does this request have MULTIPLE DISTINCT GOALS?
 - "Do A AND B AND C" (multiple goals) → Create tasks for each goal
 - "Investigate/explain/find X" (single goal) → Skip tasks, just answer directly
-
-Multiple internal steps (search, read, analyze) for ONE goal = NO tasks needed.
-Only create tasks when there are separate deliverables the user is asking for.
-
-If creating tasks, use the task tool with action="create" first.
-</task_guidance>`;
+Multiple internal steps for ONE goal = NO tasks needed.
+If creating tasks, use the task tool with action="create" first.`;
 
 /**
  * Create task completion blocked message
@@ -277,20 +93,15 @@ If creating tasks, use the task tool with action="create" first.
  * @returns {string} Formatted message
  */
 export function createTaskCompletionBlockedMessage(taskSummary) {
-  return `<task_completion_blocked>
-You cannot complete yet. The following tasks are still unresolved:
+  return `You cannot complete yet. The following tasks are still unresolved:
 
 ${taskSummary}
 
-Required action:
-1. For each "pending" or "in_progress" task, either:
-   - Complete the work and mark it: <task><action>complete</action><id>task-X</id></task>
-   - Or cancel if no longer needed: <task><action>update</action><id>task-X</id><status>cancelled</status></task>
+For each pending/in_progress task, either:
+- Complete it: call task tool with action="complete", id="task-X"
+- Cancel it: call task tool with action="update", id="task-X", status="cancelled"
 
-2. After ALL tasks are resolved (completed or cancelled), call attempt_completion again.
-
-Use <task><action>list</action></task> to review current status.
-</task_completion_blocked>`;
+After all tasks are resolved, call attempt_completion again.`;
 }
 
 /**

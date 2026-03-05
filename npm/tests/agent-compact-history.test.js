@@ -25,43 +25,43 @@ describe('ProbeAgent.compactHistory()', () => {
   });
 
   it('should compact history and return statistics', async () => {
-    // Populate history with multiple segments
+    // Populate history with multiple segments (native tool calling format)
     agent.history = [
       { role: 'system', content: 'You are a helpful assistant' },
       // Segment 1
       { role: 'user', content: 'Search for functions' },
-      { role: 'assistant', content: '<thinking>I need to search</thinking>' },
-      { role: 'assistant', content: '<search>function</search>' },
-      { role: 'user', content: '<tool_result>Found 10 functions</tool_result>' },
+      { role: 'assistant', content: 'I need to search' },
+      { role: 'assistant', content: 'Searching...' },
+      { role: 'tool', content: 'Found 10 functions', toolName: 'search' },
+      { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Found functions' } }] },
       // Segment 2
       { role: 'user', content: 'Extract the first one' },
-      { role: 'assistant', content: '<thinking>Let me extract</thinking>' },
-      { role: 'assistant', content: '<extract>file.js:10</extract>' },
-      { role: 'user', content: '<tool_result>function code here</tool_result>' },
+      { role: 'assistant', content: 'Let me extract' },
+      { role: 'assistant', content: 'Extracting...' },
+      { role: 'tool', content: 'function code here', toolName: 'extract' },
+      { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Here is the code' } }] },
       // Segment 3 (active)
       { role: 'user', content: 'Modify it' },
-      { role: 'assistant', content: '<thinking>I will modify</thinking>' }
+      { role: 'assistant', content: 'I will modify' }
     ];
 
     const stats = await agent.compactHistory();
 
     // Check stats
-    expect(stats.originalCount).toBe(11);
-    expect(stats.compactedCount).toBeLessThan(11);
+    expect(stats.originalCount).toBe(13);
+    expect(stats.compactedCount).toBeLessThan(13);
     expect(stats.removed).toBeGreaterThan(0);
     expect(stats.reductionPercent).toBeGreaterThan(0);
     expect(stats.tokensSaved).toBeGreaterThan(0);
 
     // Check history was actually compacted
-    expect(agent.history.length).toBeLessThan(11);
+    expect(agent.history.length).toBeLessThan(13);
 
     // System message should be preserved
     expect(agent.history[0].role).toBe('system');
 
     // All user messages should be preserved
-    const userMessages = agent.history.filter(
-      m => m.role === 'user' && !m.content.includes('tool_result')
-    );
+    const userMessages = agent.history.filter(m => m.role === 'user');
     expect(userMessages.length).toBe(3);
 
     // Old segment thinking should be removed
@@ -92,13 +92,15 @@ describe('ProbeAgent.compactHistory()', () => {
   it('should respect custom options', async () => {
     agent.history = [
       { role: 'user', content: 'Query 1' },
-      { role: 'assistant', content: '<thinking>Thought 1</thinking>' },
-      { role: 'user', content: '<tool_result>Result 1</tool_result>' },
+      { role: 'assistant', content: 'Thought 1' },
+      { role: 'tool', content: 'Result 1', toolName: 'search' },
+      { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer 1' } }] },
       { role: 'user', content: 'Query 2' },
-      { role: 'assistant', content: '<thinking>Thought 2</thinking>' },
-      { role: 'user', content: '<tool_result>Result 2</tool_result>' },
+      { role: 'assistant', content: 'Thought 2' },
+      { role: 'tool', content: 'Result 2', toolName: 'search' },
+      { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer 2' } }] },
       { role: 'user', content: 'Query 3' },
-      { role: 'assistant', content: '<thinking>Thought 3</thinking>' }
+      { role: 'assistant', content: 'Thought 3' }
     ];
 
     // Keep last 2 segments fully
@@ -141,7 +143,7 @@ describe('ProbeAgent.compactHistory()', () => {
   it('should handle history with incomplete segments', async () => {
     agent.history = [
       { role: 'user', content: 'Query' },
-      { role: 'assistant', content: '<thinking>Processing...</thinking>' }
+      { role: 'assistant', content: 'Processing...' }
     ];
 
     const stats = await agent.compactHistory();
@@ -155,10 +157,11 @@ describe('ProbeAgent.compactHistory()', () => {
     agent.history = [
       { role: 'system', content: 'System' },
       { role: 'user', content: 'Query 1' },
-      { role: 'assistant', content: '<search>test</search>' },
-      { role: 'user', content: '<tool_result>Result 1</tool_result>' },
+      { role: 'assistant', content: 'Searching...' },
+      { role: 'tool', content: 'Result 1', toolName: 'search' },
+      { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Done' } }] },
       { role: 'user', content: 'Query 2' },
-      { role: 'assistant', content: '<thinking>Active</thinking>' }
+      { role: 'assistant', content: 'Active thought' }
     ];
 
     await agent.compactHistory();
@@ -169,6 +172,6 @@ describe('ProbeAgent.compactHistory()', () => {
     // User messages should maintain their relative order
     const userMessages = agent.history.filter(m => m.role === 'user');
     expect(userMessages[0].content).toBe('Query 1');
-    expect(userMessages[2].content).toBe('Query 2');
+    expect(userMessages[1].content).toBe('Query 2');
   });
 });
