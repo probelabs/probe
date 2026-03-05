@@ -83,9 +83,9 @@ describe('TaskManager', () => {
 
     test('should create tasks with dependencies to earlier tasks in batch', () => {
       const tasks = manager.createTasks([
-        { title: 'Task 1' },
-        { title: 'Task 2', dependencies: ['task-1'] },
-        { title: 'Task 3', dependencies: ['task-1', 'task-2'] }
+        { id: 'first', title: 'Task 1' },
+        { id: 'second', title: 'Task 2', dependencies: ['first'] },
+        { id: 'third', title: 'Task 3', dependencies: ['first', 'second'] }
       ]);
 
       expect(tasks[1].dependencies).toEqual(['task-1']);
@@ -145,15 +145,26 @@ describe('TaskManager', () => {
       expect(manager.listTasks()).toHaveLength(0);
     });
 
-    test('should handle mix of user-provided and missing IDs in batch', () => {
+    test('should require id on all items when batch has dependencies', () => {
+      expect(() => {
+        manager.createTasks([
+          { id: 'setup', title: 'Setup' },
+          { title: 'Build (no custom id)' },
+          { id: 'deploy', title: 'Deploy', dependencies: ['setup'] }
+        ]);
+      }).toThrow(/missing required "id" field/);
+
+      expect(manager.listTasks()).toHaveLength(0);
+    });
+
+    test('should allow missing IDs in batch without dependencies', () => {
       const tasks = manager.createTasks([
-        { id: 'setup', title: 'Setup' },
-        { title: 'Build (no custom id)' },
-        { id: 'deploy', title: 'Deploy', dependencies: ['setup'] }
+        { title: 'Task A' },
+        { title: 'Task B' },
+        { title: 'Task C' }
       ]);
 
       expect(tasks).toHaveLength(3);
-      expect(tasks[2].dependencies).toEqual(['task-1']);
     });
 
     test('should error when batch dependency references unknown user ID', () => {
@@ -163,6 +174,30 @@ describe('TaskManager', () => {
           { id: 'b', title: 'Task B', dependencies: ['unknown'] }
         ]);
       }).toThrow(/does not exist/);
+    });
+
+    test('should error with clear message when dependencies use auto-generated IDs without providing batch IDs', () => {
+      expect(() => {
+        manager.createTasks([
+          { id: 'first', title: 'First task' },
+          { id: 'second', title: 'Second task', dependencies: ['task-0'] }
+        ]);
+      }).toThrow(/does not exist/);
+
+      expect(manager.listTasks()).toHaveLength(0);
+    });
+
+    test('should include batch IDs in error message for failed dependency resolution', () => {
+      try {
+        manager.createTasks([
+          { id: 'auth', title: 'Auth' },
+          { id: 'fetch', title: 'Fetch', dependencies: ['wrong-id'] }
+        ]);
+        expect(true).toBe(false); // should not reach here
+      } catch (e) {
+        expect(e.message).toContain('batch IDs: auth, fetch');
+        expect(e.message).toContain('wrong-id');
+      }
     });
   });
 

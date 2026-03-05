@@ -138,6 +138,16 @@ export class TaskManager {
    * @returns {Task[]} Created tasks
    */
   createTasks(tasksData) {
+    // Validate that all batch items have an id when dependencies are used
+    const hasDependencies = tasksData.some(t => t.dependencies && t.dependencies.length > 0);
+    if (hasDependencies) {
+      for (let i = 0; i < tasksData.length; i++) {
+        if (!tasksData[i].id) {
+          throw new Error(`Task at index ${i} is missing required "id" field. When using dependencies, every task in the batch must have an "id" so other tasks can reference it.`);
+        }
+      }
+    }
+
     // Build a mapping of user-provided IDs to future auto-generated IDs
     const idMap = new Map();
     const batchAutoIds = new Set();
@@ -161,7 +171,8 @@ export class TaskManager {
           if (idMap.has(depId)) return idMap.get(depId);
           // Check if it's already an existing task ID or a batch auto-generated ID
           if (this.tasks.has(depId) || batchAutoIds.has(depId)) return depId;
-          throw new Error(`Dependency "${depId}" does not exist. Available tasks: ${this._getAvailableTaskIds()}${idMap.size > 0 ? `, batch IDs: ${Array.from(idMap.keys()).join(', ')}` : ''}`);
+          const batchIds = idMap.size > 0 ? Array.from(idMap.keys()).join(', ') : '(none provided)';
+          throw new Error(`Dependency "${depId}" does not exist. Each task in the batch must have an "id" field, and dependencies must reference those IDs. Current batch IDs: ${batchIds}. Existing tasks: ${this._getAvailableTaskIds()}`);
         });
       }
 

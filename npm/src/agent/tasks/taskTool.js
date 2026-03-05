@@ -9,12 +9,12 @@ import { z } from 'zod';
  * Schema for a single task item in batch operations
  */
 export const taskItemSchema = z.object({
-  id: z.string().optional(),
+  id: z.string().describe('Unique task identifier. Use short descriptive slugs (e.g. "auth", "setup-db"). Dependencies reference these IDs.'),
   title: z.string().optional(),
   description: z.string().optional(),
   status: z.enum(['pending', 'in_progress', 'completed', 'cancelled']).optional(),
   priority: z.enum(['low', 'medium', 'high', 'critical']).optional(),
-  dependencies: z.array(z.string()).optional(),
+  dependencies: z.array(z.string()).optional().describe('Array of task IDs (from this batch or previously created) that must complete before this task can start.'),
   after: z.string().optional()
 });
 
