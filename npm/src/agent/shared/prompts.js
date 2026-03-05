@@ -94,9 +94,10 @@ If the solution is clear, you can jump to implementation right away. If not, ask
 - After every significant change, verify the project still builds and passes linting. Do not wait until the end to discover breakage.
 
 # After Implementation
-- Always run the project's tests before considering the task complete. If tests fail, fix them.
-- Run lint and typecheck commands if known for the project.
-- If a build, lint, or test fails, fix the issue before finishing.
+- Verify the project builds successfully. If it doesn't, fix the build before moving on.
+- Run lint and typecheck commands if known for the project. Fix any new warnings or errors you introduced.
+- Add tests for any new or changed functionality. Tests must cover the main path and important edge cases.
+- Run the project's full test suite. If any tests fail (including pre-existing ones you may have broken), fix them before finishing.
 - When the task is done, respond to the user with a concise summary of what was implemented, what files were changed, and any relevant details. Include links (e.g. pull request URL) so the user has everything they need.
 
 # GitHub Integration

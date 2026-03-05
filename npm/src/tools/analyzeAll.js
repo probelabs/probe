@@ -176,8 +176,7 @@ Instructions:
 - Format as a structured list if multiple items found
 - If nothing relevant is found in this chunk, respond with "No relevant items found in this chunk."
 - Do NOT summarize the code - extract the specific information requested
-- IMPORTANT: When completing, always use the FULL format: <attempt_completion><result>YOUR ANSWER HERE</result></attempt_completion>
-- Do NOT use the shorthand <attempt_complete></attempt_complete> format`;
+- When done, use the attempt_completion tool with your answer as the result.`;
 
 	try {
 		const result = await delegate({
@@ -273,7 +272,7 @@ async function aggregateResults(chunkResults, aggregation, extractionPrompt, opt
 		.map(r => `--- Chunk ${r.chunk.id} ---\n${stripResultTags(r.result)}`)
 		.join('\n\n');
 
-	const completionNote = `\n\nIMPORTANT: When completing, always use the FULL format: <attempt_completion><result>YOUR ANSWER HERE</result></attempt_completion>`;
+	const completionNote = `\n\nWhen done, use the attempt_completion tool with your answer as the result.`;
 
 	const aggregationPrompts = {
 		summarize: `Synthesize these analyses into a comprehensive summary. Combine related findings, remove redundancy, and present a coherent overview.
@@ -460,7 +459,7 @@ Your answer should:
 
 Format your response as a well-structured document that fully answers: "${question}"
 
-IMPORTANT: When completing, use the FULL format: <attempt_completion><result>YOUR ANSWER HERE</result></attempt_completion>`;
+When done, use the attempt_completion tool with your answer as the result.`;
 
 	try {
 		const result = await delegate({

@@ -59,13 +59,35 @@ export function isContextLimitError(error) {
 }
 
 /**
+ * Check if an assistant message contains an attempt_completion tool call.
+ * Supports both native tool calling (toolInvocations/tool_calls) and text content.
+ */
+function messageContainsCompletion(msg) {
+  // Native tool calling: Vercel AI SDK uses toolInvocations
+  if (Array.isArray(msg.toolInvocations)) {
+    if (msg.toolInvocations.some(t => t.toolName === 'attempt_completion')) return true;
+  }
+  // Native tool calling: OpenAI format uses tool_calls
+  if (Array.isArray(msg.tool_calls)) {
+    if (msg.tool_calls.some(t => t.function?.name === 'attempt_completion')) return true;
+  }
+  // Multipart content (Vercel AI SDK v4+)
+  if (Array.isArray(msg.content)) {
+    if (msg.content.some(p => p.type === 'tool-call' && p.toolName === 'attempt_completion')) return true;
+  }
+  // Text content fallback
+  const text = typeof msg.content === 'string' ? msg.content : '';
+  return text.includes('attempt_completion');
+}
+
+/**
  * Identify message boundaries in conversation history
  * Structure: <user> -> <internal agentic monologue> -> <final-agent-answer>
  *
  * A "segment" is:
  * - user message (role: 'user')
  * - followed by 0+ assistant messages (internal monologue)
- * - ending with tool_result or attempt_completion (final answer)
+ * - ending with attempt_completion tool call (final answer)
  *
  * @param {Array} messages - Array of message objects with {role, content}
  * @returns {Array} - Array of segments, each containing {userIndex, monologueIndices, finalIndex}
@@ -82,38 +104,33 @@ export function identifyMessageSegments(messages) {
       continue;
     }
 
+    // Tool result message (native tool calling format)
+    if (msg.role === 'tool' && currentSegment) {
+      currentSegment.monologueIndices.push(i);
+      continue;
+    }
+
     // User message starts a new segment
     if (msg.role === 'user') {
-      // Check if this is a tool_result (final answer from previous segment)
-      const content = typeof msg.content === 'string' ? msg.content : '';
-      const isToolResult = content.includes('<tool_result>');
-
-      if (isToolResult && currentSegment) {
-        // This is the final answer for the current segment
-        currentSegment.finalIndex = i;
+      // Save previous segment if it exists
+      if (currentSegment) {
         segments.push(currentSegment);
-        currentSegment = null;
-      } else {
-        // Save previous segment if it exists
-        if (currentSegment) {
-          segments.push(currentSegment);
-        }
-
-        // Start new segment
-        currentSegment = {
-          userIndex: i,
-          monologueIndices: [],
-          finalIndex: null
-        };
       }
+
+      // Start new segment
+      currentSegment = {
+        userIndex: i,
+        monologueIndices: [],
+        finalIndex: null
+      };
     }
 
     // Assistant message is part of monologue
     if (msg.role === 'assistant' && currentSegment) {
-      const content = typeof msg.content === 'string' ? msg.content : '';
+      // Check if this contains an attempt_completion tool call (native or XML format)
+      const hasCompletion = messageContainsCompletion(msg);
 
-      // Check if this contains attempt_completion (marks end of segment)
-      if (content.includes('<attempt_completion>') || content.includes('attempt_completion')) {
+      if (hasCompletion) {
         currentSegment.monologueIndices.push(i);
         currentSegment.finalIndex = i;
         segments.push(currentSegment);
@@ -138,7 +155,7 @@ export function identifyMessageSegments(messages) {
  *
  * Strategy:
  * 1. Keep all user messages
- * 2. Keep all final answers (tool_results, attempt_completion)
+ * 2. Keep all final answers (attempt_completion)
  * 3. Remove intermediate monologue messages from completed segments
  * 4. Keep the most recent (active) segment intact
  *

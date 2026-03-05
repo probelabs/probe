@@ -88,7 +88,7 @@ async function handleSymbolEdit({ resolvedPath, file_path, symbol, new_string, p
   if (fileTracker) {
     const check = fileTracker.checkSymbolContent(resolvedPath, symbol, symbolInfo.code);
     if (!check.ok && check.reason === 'stale') {
-      return `Error editing ${file_path}: Symbol "${symbol}" has changed since you last read it. Use extract to re-read the current content, then retry.\n\nExample: <extract><targets>${file_path}#${symbol}</targets></extract>`;
+      return `Error editing ${file_path}: Symbol "${symbol}" has changed since you last read it. Use the extract tool with targets="${file_path}#${symbol}" to re-read the current content, then retry.`;
     }
   }
 
@@ -395,7 +395,7 @@ Parameters:
         // Check if file has been seen in this session (read-before-write guard)
         if (options.fileTracker && !options.fileTracker.isFileSeen(resolvedPath)) {
           const displayPath = toRelativePath(resolvedPath, workspaceRoot);
-          return `Error editing ${displayPath}: This file has not been read yet in this session. Use 'extract' to read the file first, then retry your edit. This ensures you are working with the current file content.\n\nExample: <extract><targets>${displayPath}</targets></extract>`;
+          return `Error editing ${displayPath}: This file has not been read yet in this session. Use the extract tool with targets="${displayPath}" to read the file first, then retry your edit.`;
         }
 
         // Route to appropriate mode (priority: symbol > start_line > old_string)
@@ -425,7 +425,7 @@ Parameters:
           const staleCheck = options.fileTracker.checkTextEditStaleness(resolvedPath);
           if (!staleCheck.ok) {
             const displayPath = toRelativePath(resolvedPath, workspaceRoot);
-            return `Error editing ${displayPath}: ${staleCheck.message}\n\nExample: <extract><targets>${displayPath}</targets></extract>`;
+            return `Error editing ${displayPath}: ${staleCheck.message}\n\nUse the extract tool with targets="${displayPath}" to re-read the file, then retry.`;
           }
         }
 
