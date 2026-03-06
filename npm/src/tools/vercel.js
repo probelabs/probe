@@ -14,6 +14,75 @@ import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
 
+/**
+ * Auto-quote search query terms that contain mixed case or underscores.
+ * Unquoted camelCase like "limitDRL" gets split by stemming into "limit" + "DRL".
+ * This wraps such terms in quotes so they match as literal strings.
+ *
+ * Examples:
+ *   "limitDRL limitRedis"    → '"limitDRL" "limitRedis"'
+ *   "ThrottleRetryLimit"     → '"ThrottleRetryLimit"'
+ *   "allowed_ips"            → '"allowed_ips"'
+ *   "rate limit"             → 'rate limit'  (no change, all lowercase)
+ *   '"already quoted"'       → '"already quoted"'  (no change)
+ *   'foo AND bar'            → 'foo AND bar'  (operators preserved)
+ */
+function autoQuoteSearchTerms(query) {
+	if (!query || typeof query !== 'string') return query;
+
+	// Split on whitespace, preserving quoted strings and operators
+	const tokens = [];
+	let i = 0;
+	while (i < query.length) {
+		// Skip whitespace
+		if (/\s/.test(query[i])) {
+			i++;
+			continue;
+		}
+		// Quoted string — keep as-is
+		if (query[i] === '"') {
+			const end = query.indexOf('"', i + 1);
+			if (end !== -1) {
+				tokens.push(query.substring(i, end + 1));
+				i = end + 1;
+			} else {
+				// Unclosed quote — take rest
+				tokens.push(query.substring(i));
+				break;
+			}
+			continue;
+		}
+		// Unquoted token
+		let j = i;
+		while (j < query.length && !/\s/.test(query[j]) && query[j] !== '"') {
+			j++;
+		}
+		tokens.push(query.substring(i, j));
+		i = j;
+	}
+
+	// Boolean operators that should not be quoted
+	const operators = new Set(['AND', 'OR', 'NOT']);
+
+	const result = tokens.map(token => {
+		// Already quoted
+		if (token.startsWith('"')) return token;
+		// Boolean operator
+		if (operators.has(token)) return token;
+		// Check if token needs quoting: has mixed case (upper+lower) or underscores
+		const hasUpper = /[A-Z]/.test(token);
+		const hasLower = /[a-z]/.test(token);
+		const hasUnderscore = token.includes('_');
+		const hasMixedCase = hasUpper && hasLower;
+		if (hasMixedCase || hasUnderscore) {
+			return `"${token}"`;
+		}
+		return token;
+	});
+
+	return result.join(' ');
+}
+
 const CODE_SEARCH_SCHEMA = {
 	type: 'object',
 	properties: {
@@ -158,41 +227,61 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- This is ideal for precise lookups: exact=true "ForwardMessage", exact=true "SessionLimiter", exact=true "ThrottleRetryLimit".',
 		'- Do NOT use exact=true for exploratory/conceptual queries — use the default for those.',
 		'',
+		'Combining searches with OR:',
+		'- Multiple unquoted words use OR logic: rate limit matches files containing EITHER "rate" OR "limit".',
+		'- For known symbol names, quote each term to prevent splitting: \'"limitDRL" "limitRedis"\' matches either exact symbol.',
+		'- Without quotes, camelCase like limitDRL gets split into "limit" + "DRL" — not what you want for symbol lookup.',
+		'- Use OR to search for multiple related symbols in ONE search instead of separate searches.',
+		'- This is much faster than running separate searches sequentially.',
+		'- Example: search \'"ForwardMessage" "SessionLimiter"\' finds files with either exact symbol in one call.',
+		'- Example: search \'"limitDRL" "doRollingWindowWrite"\' finds both rate limiting functions at once.',
+		'- Use AND only when you need both terms to appear in the same file: "rate AND limit".',
+		'',
+		'Parallel tool calls:',
+		'- When you need to search for INDEPENDENT concepts, call multiple search tools IN PARALLEL (same response).',
+		'- Do NOT wait for one search to finish before starting the next if they are independent.',
+		'- Example: for "rate limiting and session management", call search "rate limiting" AND search "session management" in parallel.',
+		'- Similarly, call multiple extract tools in parallel when verifying different files.',
+		'',
 		'GOOD search strategy (do this):',
 		'  Query: "How does authentication work and how are sessions managed?"',
-		'  → search "authentication" → search "session management" (two different concepts)',
+		'  → search "authentication" + search "session management" IN PARALLEL (two independent concepts)',
 		'  Query: "Find the IP allowlist middleware"',
 		'  → search "allowlist middleware" (one search, probe handles IP/ip/Ip variations)',
-		'  Query: "How does BM25 scoring work with SIMD optimization?"',
-		'  → search "BM25 scoring" → search "SIMD optimization" (two different concepts)',
-		'  Query: "Find ForwardMessage and SessionLimiter functions"',
-		'  → search exact=true "ForwardMessage" → search exact=true "SessionLimiter" (known symbols, use exact)',
+		'  Query: "Find ForwardMessage and SessionLimiter"',
+		'  → search \'"ForwardMessage" "SessionLimiter"\' (one OR search finds both exact symbols)',
+		'  OR: search exact=true "ForwardMessage" + search exact=true "SessionLimiter" IN PARALLEL',
+		'  Query: "Find limitDRL and limitRedis functions"',
+		'  → search \'"limitDRL" "limitRedis"\' (one OR search, quoted to prevent camelCase splitting)',
 		'  Query: "Find ThrottleRetryLimit usage"',
 		'  → search exact=true "ThrottleRetryLimit" (one search, if no results the symbol does not exist — stop)',
+		'  Query: "How does BM25 scoring work with SIMD optimization?"',
+		'  → search "BM25 scoring" + search "SIMD optimization" IN PARALLEL (two different concepts)',
 		'',
 		'BAD search strategy (never do this):',
 		'  → search "AllowedIPs" → search "allowedIps" → search "allowed_ips" (WRONG: case/style variations, probe handles them)',
-		'  → search "limitDRL" → search "LimitDRL" (WRONG: case variation of same term)',
+		'  → search "limitDRL" → search "LimitDRL" (WRONG: case variation — combine with OR: \'"limitDRL" "limitRedis"\')',
 		'  → search "throttle_retry_limit" after searching "ThrottleRetryLimit" (WRONG: snake_case variation, probe handles it)',
-		'  → search "ThrottleRetryLimit" path=tyk → search "ThrottleRetryLimit" path=gateway → search "ThrottleRetryLimit" path=apidef (WRONG: same query on different paths hoping for different results)',
+		'  → search "ThrottleRetryLimit" path=tyk → search "ThrottleRetryLimit" path=gateway → search "ThrottleRetryLimit" path=apidef (WRONG: same query on different paths — probe searches recursively)',
 		'  → search "func (k *RateLimitAndQuotaCheck) handleRateLimitFailure" (WRONG: do not search full function signatures, just use exact=true "handleRateLimitFailure")',
 		'  → search "ForwardMessage" → search "ForwardMessage" → search "ForwardMessage" (WRONG: repeating the exact same query)',
-		'  → search "error handling" → search "error handling" → search "error handling" (WRONG: repeating exact same query)',
+		'  → search "authentication" → wait → search "session management" → wait (WRONG: these are independent, run them in parallel)',
 		'',
 		'Keyword tips:',
 		'- Common programming keywords are filtered as stopwords when unquoted: function, class, return, new, struct, impl, var, let, const, etc.',
 		'- Avoid searching for these alone — combine with a specific term (e.g., "middleware function" is fine, "function" alone is too generic).',
 		'- To bypass stopword filtering: wrap terms in quotes ("return", "struct") or set exact=true. Both disable stemming and splitting too.',
-		'- Multiple words without operators use OR logic: foo bar = foo OR bar. Use AND explicitly if you need both: foo AND bar.',
 		'- camelCase terms are split: getUserData becomes "get", "user", "data" — so one search covers all naming styles.',
 		'- Do NOT search for full function signatures like "func (r *Type) Method(args)". Just search for the method name with exact=true.',
 		'',
 		'Strategy:',
-		'1. Analyze the query - identify key concepts, entities, and relationships',
-		'2. Run ONE focused search per concept. For known symbol names use exact=true. For concepts use default (exact=false).',
-		'3. If a search returns results, use extract to verify relevance',
-		'4. If a search returns NO results, the term does not exist in the codebase. Do NOT retry with variations, different paths, or longer strings. Move on.',
-		'5. Combine all relevant targets in your final response',
+		'1. Analyze the query - identify key concepts and group related symbols',
+		'2. Combine related symbols into OR searches: \'"symbolA" "symbolB"\' finds files with either (quote to prevent splitting)',
+		'3. Run INDEPENDENT searches in PARALLEL — do not wait for one to finish before starting another',
+		'4. For known symbol names use exact=true. For concepts use default (exact=false).',
+		'5. If a search returns results, use extract to verify relevance. Run multiple extracts in parallel too.',
+		'6. If a search returns NO results, the term does not exist. Do NOT retry with variations, different paths, or longer strings. Move on.',
+		'7. Combine all relevant targets in your final response',
 		'',
 		`Query: ${searchQuery}`,
 		`Search path(s): ${searchPath}`,
@@ -244,6 +333,16 @@ export const searchTool = (options = {}) => {
 			: searchDescription,
 		inputSchema: searchSchema,
 		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage }) => {
+			// Auto-quote mixed-case and underscore terms to prevent unwanted stemming/splitting
+			// Skip when exact=true since that already preserves the literal string
+			if (!exact && searchQuery) {
+				const originalQuery = searchQuery;
+				searchQuery = autoQuoteSearchTerms(searchQuery);
+				if (debug && searchQuery !== originalQuery) {
+					console.error(`[search] Auto-quoted query: "${originalQuery}" → "${searchQuery}"`);
+				}
+			}
+
 			// Use parameter maxTokens if provided, otherwise use the default
 			const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
@@ -289,13 +388,15 @@ export const searchTool = (options = {}) => {
 			if (!searchDelegate) {
 				// Block duplicate non-paginated searches (models sometimes repeat the exact same call)
 				// Allow pagination: only nextPage=true is a legitimate repeat of the same query
-				const searchKey = `${searchQuery}::${searchPath}::${exact || false}`;
+				// Use query+exact as the key (ignore path) to prevent path-hopping evasion
+				// where model searches same term on different subpaths hoping for different results
+				const searchKey = `${searchQuery}::${exact || false}`;
 				if (!nextPage) {
 					if (previousSearches.has(searchKey)) {
 						if (debug) {
-							console.error(`[DEDUP] Blocked duplicate search: "${searchQuery}" in "${searchPath}"`);
+							console.error(`[DEDUP] Blocked duplicate search: "${searchQuery}" (path: "${searchPath}")`);
 						}
-						return 'DUPLICATE SEARCH BLOCKED: You already searched for this exact query in this path. Do NOT repeat the same search. If you need more results, set nextPage=true with the session ID from the previous search. Otherwise, try a genuinely different keyword, use extract to examine results you already found, or use attempt_completion if you have enough information.';
+						return 'DUPLICATE SEARCH BLOCKED: You already searched for this exact query. Changing the path does NOT give different results — probe searches recursively. Do NOT repeat the same search. Try a genuinely different keyword, use extract to examine results you already found, or use attempt_completion if you have enough information.';
 					}
 					previousSearches.add(searchKey);
 					paginationCounts.set(searchKey, 0);
