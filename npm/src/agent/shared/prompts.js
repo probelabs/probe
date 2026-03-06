@@ -111,7 +111,7 @@ Every change must include tests. Before writing them:
 - Read those tests to understand the project's testing patterns: framework, assertion style, mocking approach, file naming, test organization.
 - Prefer extending an existing test file over creating a new one when your change is in the same module.
 - Write tests that cover the main path and important edge cases. Include a failing-input test when relevant.
-- If writing tests first (TDD) would help clarify the expected behavior, do so.
+- When fixing a bug, write a failing test first that reproduces the bug, then fix the code to make it pass.
 
 # Verify Changes
 Before committing or creating a PR, run through this checklist:
