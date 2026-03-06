@@ -254,6 +254,7 @@ export class ProbeAgent {
     // Supports exclusion with '!' prefix: ['*', '!bash'] = all tools except bash
     // disableTools is a convenience flag that overrides allowedTools to []
     const effectiveAllowedTools = options.disableTools ? [] : options.allowedTools;
+    this._rawAllowedTools = options.allowedTools; // Keep raw value for explicit tool checks
     this.allowedTools = this._parseAllowedTools(effectiveAllowedTools);
 
     // Storage adapter (defaults to in-memory)
@@ -479,6 +480,17 @@ export class ProbeAgent {
    */
   _filterMcpTools(mcpToolNames) {
     return mcpToolNames.filter(toolName => this._isMcpToolAllowed(toolName));
+  }
+
+  /**
+   * Check if query tool was explicitly listed in allowedTools (not via wildcard).
+   * Query (ast-grep) is excluded by default because models struggle with AST pattern syntax.
+   * @returns {boolean}
+   * @private
+   */
+  _isQueryExplicitlyAllowed() {
+    if (!this._rawAllowedTools) return false;
+    return Array.isArray(this._rawAllowedTools) && this._rawAllowedTools.includes('query');
   }
 
   /**
@@ -837,7 +849,9 @@ export class ProbeAgent {
     if (wrappedTools.searchToolInstance && isToolAllowed('search')) {
       this.toolImplementations.search = wrappedTools.searchToolInstance;
     }
-    if (wrappedTools.queryToolInstance && isToolAllowed('query')) {
+    // query tool (ast-grep) is not exposed to AI by default — models struggle with AST pattern syntax.
+    // Only register it when explicitly listed in allowedTools (not via wildcard '*').
+    if (wrappedTools.queryToolInstance && isToolAllowed('query') && this._isQueryExplicitlyAllowed()) {
       this.toolImplementations.query = wrappedTools.queryToolInstance;
     }
     if (wrappedTools.extractToolInstance && isToolAllowed('extract')) {
@@ -2008,12 +2022,15 @@ export class ProbeAgent {
     const toolMap = {
       search: {
         schema: searchSchema,
-        description: 'Search code in the repository using keyword queries with Elasticsearch syntax.'
+        description: this.searchDelegate
+          ? 'Search code in the repository by asking a question. Accepts natural language questions — a subagent breaks them into targeted keyword searches and returns extracted code blocks. Do NOT formulate keyword queries yourself.'
+          : 'Search code in the repository using keyword queries with Elasticsearch syntax. Handles stemming, case-insensitive matching, and camelCase/snake_case splitting automatically — do NOT try keyword variations manually.'
       },
-      query: {
-        schema: querySchema,
-        description: 'Search code using ast-grep structural pattern matching.'
-      },
+      // query tool (ast-grep) removed from AI-facing tools — models struggle with pattern syntax
+      // query: {
+      //   schema: querySchema,
+      //   description: 'Search code using ast-grep structural pattern matching.'
+      // },
       extract: {
         schema: extractSchema,
         description: 'Extract code blocks from files based on file paths and optional line numbers.'
@@ -2849,10 +2866,12 @@ export class ProbeAgent {
     }
 
     // Add high-level instructions about when to use tools
+    const searchToolDesc1 = this.searchDelegate
+      ? '- search: Ask natural language questions to find code (e.g., "How does authentication work?"). A subagent handles keyword searches and returns extracted code blocks. Do NOT formulate keyword queries — just ask questions.'
+      : '- search: Find code patterns using keyword queries with Elasticsearch syntax. Handles stemming and case variations automatically — do NOT try manual keyword variations.';
     systemPrompt += `You have access to powerful code search and analysis tools through MCP:
-- search: Find code patterns using semantic search
+${searchToolDesc1}
 - extract: Extract specific code sections with context
-- query: Use AST patterns for structural code matching
 - listFiles: Browse directory contents
 - searchFiles: Find files by name patterns`;
 
@@ -2860,19 +2879,21 @@ export class ProbeAgent {
       systemPrompt += `\n- bash: Execute bash commands for system operations`;
     }
 
-    const searchGuidance = this.searchDelegate
-      ? '1. Start with search to retrieve extracted code blocks'
-      : '1. Start with search to find relevant code patterns';
-    const extractGuidance = this.searchDelegate
+    const searchGuidance1 = this.searchDelegate
+      ? '1. Start with search — ask a question about what you want to understand. It returns extracted code blocks directly.'
+      : '1. Start with search to find relevant code patterns. One search per concept is usually enough — probe handles stemming and case variations.';
+    const extractGuidance1 = this.searchDelegate
       ? '2. Use extract only if you need more context or a full file'
       : '2. Use extract to get detailed context when needed';
 
     systemPrompt += `\n
 When exploring code:
-${searchGuidance}
-${extractGuidance}
+${searchGuidance1}
+${extractGuidance1}
 3. Prefer focused, specific searches over broad queries
-4. Combine multiple tools to build complete understanding`;
+4. Do NOT repeat the same search or try trivial keyword variations — probe handles stemming and case variations automatically
+5. If 2-3 consecutive searches return no results for a concept, stop searching for it — the term likely does not exist in that codebase
+6. Combine multiple tools to build complete understanding`;
 
     // Add workspace context
     if (this.allowedFolders && this.allowedFolders.length > 0) {
@@ -2911,10 +2932,12 @@ ${extractGuidance}
     }
 
     // Add high-level instructions about when to use tools
+    const searchToolDesc2 = this.searchDelegate
+      ? '- search: Ask natural language questions to find code (e.g., "How does authentication work?"). A subagent handles keyword searches and returns extracted code blocks. Do NOT formulate keyword queries — just ask questions.'
+      : '- search: Find code patterns using keyword queries with Elasticsearch syntax. Handles stemming and case variations automatically — do NOT try manual keyword variations.';
     systemPrompt += `You have access to powerful code search and analysis tools through MCP:
-- search: Find code patterns using semantic search
+${searchToolDesc2}
 - extract: Extract specific code sections with context
-- query: Use AST patterns for structural code matching
 - listFiles: Browse directory contents
 - searchFiles: Find files by name patterns`;
 
@@ -2922,19 +2945,21 @@ ${extractGuidance}
       systemPrompt += `\n- bash: Execute bash commands for system operations`;
     }
 
-    const searchGuidance = this.searchDelegate
-      ? '1. Start with search to retrieve extracted code blocks'
-      : '1. Start with search to find relevant code patterns';
-    const extractGuidance = this.searchDelegate
+    const searchGuidance2 = this.searchDelegate
+      ? '1. Start with search — ask a question about what you want to understand. It returns extracted code blocks directly.'
+      : '1. Start with search to find relevant code patterns. One search per concept is usually enough — probe handles stemming and case variations.';
+    const extractGuidance2 = this.searchDelegate
       ? '2. Use extract only if you need more context or a full file'
       : '2. Use extract to get detailed context when needed';
 
     systemPrompt += `\n
 When exploring code:
-${searchGuidance}
-${extractGuidance}
+${searchGuidance2}
+${extractGuidance2}
 3. Prefer focused, specific searches over broad queries
-4. Combine multiple tools to build complete understanding`;
+4. Do NOT repeat the same search or try trivial keyword variations — probe handles stemming and case variations automatically
+5. If 2-3 consecutive searches return no results for a concept, stop searching for it — the term likely does not exist in that codebase
+6. Combine multiple tools to build complete understanding`;
 
     // Add workspace context
     if (this.allowedFolders && this.allowedFolders.length > 0) {
@@ -2990,10 +3015,10 @@ ${extractGuidance}
 Follow these instructions carefully:
 1. Analyze the user's request.
 2. Use the available tools step-by-step to fulfill the request.
-3. You should always prefer the search tool for code-related questions.${this.searchDelegate ? ' It already returns extracted code blocks; use extract only to expand context or read full files.' : ' Read full files only if really necessary.'}
+3. You should always prefer the search tool for code-related questions.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
 4. Ensure to get really deep and understand the full picture before answering.
 5. Once the task is fully completed, use the attempt_completion tool to provide the final result.
-6. Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.${this.allowEdit ? `
+6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}${this.allowEdit ? `
 7. When modifying files, choose the appropriate tool:
     - Use 'edit' for all code modifications:
       * PREFERRED: Use start_line (and optionally end_line) for line-targeted editing — this is the safest and most precise approach.${this.hashLines ? ' Use the line:hash references from extract/search output (e.g. "42:ab") for integrity verification.' : ''} Always use extract first to see line numbers${this.hashLines ? ' and hashes' : ''}, then edit by line reference.

@@ -93,10 +93,9 @@ describe('Bash Tool ProbeAgent Integration', () => {
       });
 
       expect(agent.toolImplementations.bash).toBeUndefined();
-      
+
       // Should have other tools
       expect(agent.toolImplementations.search).toBeDefined();
-      expect(agent.toolImplementations.query).toBeDefined();
       expect(agent.toolImplementations.extract).toBeDefined();
     });
 
@@ -110,7 +109,6 @@ describe('Bash Tool ProbeAgent Integration', () => {
       
       // Should also have other tools
       expect(agent.toolImplementations.search).toBeDefined();
-      expect(agent.toolImplementations.query).toBeDefined();
       expect(agent.toolImplementations.extract).toBeDefined();
     });
 
