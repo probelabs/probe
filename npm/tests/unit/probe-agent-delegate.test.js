@@ -205,6 +205,57 @@ describe('ProbeAgent enableDelegate option', () => {
     });
   });
 
+  describe('Search delegate model override isolation', () => {
+    test('searchDelegateProvider/Model do not affect the parent agent model', () => {
+      const agent = new ProbeAgent({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        searchDelegateProvider: 'google',
+        searchDelegateModel: 'gemini-2.0-flash'
+      });
+
+      // Parent agent's resolved model is NOT overridden
+      expect(agent.clientApiProvider).toBe('anthropic');
+      expect(agent.clientApiModel).toBe('claude-sonnet-4-6');
+
+      // Search delegate overrides are stored separately
+      expect(agent.searchDelegateProvider).toBe('google');
+      expect(agent.searchDelegateModel).toBe('gemini-2.0-flash');
+
+      // apiType (used for explicit delegate tool at ProbeAgent.js:1717)
+      // reflects the parent provider, not the search delegate override
+      expect(agent.apiType).not.toBe('google');
+      expect(agent.model).not.toBe('gemini-2.0-flash');
+    });
+
+    test('explicit delegate tool uses parent model, not search delegate override', () => {
+      const agent = new ProbeAgent({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        searchDelegateProvider: 'google',
+        searchDelegateModel: 'gemini-2.0-flash',
+        enableDelegate: true
+      });
+
+      // The explicit delegate tool is registered with the parent's model
+      expect(agent.toolImplementations).toHaveProperty('delegate');
+      // apiType and model (used at ProbeAgent.js:1717-1718 for delegate calls)
+      // must NOT be the search delegate values
+      expect(agent.apiType).not.toBe('google');
+      expect(agent.model).not.toBe('gemini-2.0-flash');
+    });
+
+    test('defaults to null when searchDelegateProvider/Model not set', () => {
+      const agent = new ProbeAgent({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6'
+      });
+
+      expect(agent.searchDelegateProvider).toBeNull();
+      expect(agent.searchDelegateModel).toBeNull();
+    });
+  });
+
   describe('Provider inheritance for delegation', () => {
     test('should have apiType as string for all provider types', () => {
       // Test that apiType is always a string identifier

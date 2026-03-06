@@ -212,6 +212,138 @@ describe('searchDelegate behavior', () => {
     expect(result).not.toContain('/tmp/workspace/tyk/');
   });
 
+  test('uses searchDelegateProvider/searchDelegateModel config options to override delegate model', async () => {
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      targets: ['a.js#foo']
+    }));
+    mockExtract.mockResolvedValue('EXTRACTED');
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      searchDelegateProvider: 'google',
+      searchDelegateModel: 'gemini-2.0-flash'
+    });
+
+    await tool.execute({ query: 'test', path: 'src' });
+
+    expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'google',
+      model: 'gemini-2.0-flash'
+    }));
+  });
+
+  test('uses PROBE_SEARCH_DELEGATE_PROVIDER/MODEL env vars to override delegate model', async () => {
+    const originalProvider = process.env.PROBE_SEARCH_DELEGATE_PROVIDER;
+    const originalModel = process.env.PROBE_SEARCH_DELEGATE_MODEL;
+
+    try {
+      process.env.PROBE_SEARCH_DELEGATE_PROVIDER = 'google';
+      process.env.PROBE_SEARCH_DELEGATE_MODEL = 'gemini-2.0-flash';
+
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        targets: ['a.js#foo']
+      }));
+      mockExtract.mockResolvedValue('EXTRACTED');
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6'
+      });
+
+      await tool.execute({ query: 'test', path: 'src' });
+
+      expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'google',
+        model: 'gemini-2.0-flash'
+      }));
+    } finally {
+      if (originalProvider === undefined) delete process.env.PROBE_SEARCH_DELEGATE_PROVIDER;
+      else process.env.PROBE_SEARCH_DELEGATE_PROVIDER = originalProvider;
+      if (originalModel === undefined) delete process.env.PROBE_SEARCH_DELEGATE_MODEL;
+      else process.env.PROBE_SEARCH_DELEGATE_MODEL = originalModel;
+    }
+  });
+
+  test('config options take priority over env vars for search delegate', async () => {
+    const originalProvider = process.env.PROBE_SEARCH_DELEGATE_PROVIDER;
+    const originalModel = process.env.PROBE_SEARCH_DELEGATE_MODEL;
+
+    try {
+      process.env.PROBE_SEARCH_DELEGATE_PROVIDER = 'openai';
+      process.env.PROBE_SEARCH_DELEGATE_MODEL = 'gpt-4o-mini';
+
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        targets: ['a.js#foo']
+      }));
+      mockExtract.mockResolvedValue('EXTRACTED');
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+        searchDelegateProvider: 'google',
+        searchDelegateModel: 'gemini-2.0-flash'
+      });
+
+      await tool.execute({ query: 'test', path: 'src' });
+
+      // Config options should win over env vars
+      expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'google',
+        model: 'gemini-2.0-flash'
+      }));
+    } finally {
+      if (originalProvider === undefined) delete process.env.PROBE_SEARCH_DELEGATE_PROVIDER;
+      else process.env.PROBE_SEARCH_DELEGATE_PROVIDER = originalProvider;
+      if (originalModel === undefined) delete process.env.PROBE_SEARCH_DELEGATE_MODEL;
+      else process.env.PROBE_SEARCH_DELEGATE_MODEL = originalModel;
+    }
+  });
+
+  test('falls back to parent provider/model when no search delegate override is set', async () => {
+    const originalProvider = process.env.PROBE_SEARCH_DELEGATE_PROVIDER;
+    const originalModel = process.env.PROBE_SEARCH_DELEGATE_MODEL;
+
+    try {
+      delete process.env.PROBE_SEARCH_DELEGATE_PROVIDER;
+      delete process.env.PROBE_SEARCH_DELEGATE_MODEL;
+
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        targets: ['a.js#foo']
+      }));
+      mockExtract.mockResolvedValue('EXTRACTED');
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6'
+      });
+
+      await tool.execute({ query: 'test', path: 'src' });
+
+      expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6'
+      }));
+    } finally {
+      if (originalProvider === undefined) delete process.env.PROBE_SEARCH_DELEGATE_PROVIDER;
+      else process.env.PROBE_SEARCH_DELEGATE_PROVIDER = originalProvider;
+      if (originalModel === undefined) delete process.env.PROBE_SEARCH_DELEGATE_MODEL;
+      else process.env.PROBE_SEARCH_DELEGATE_MODEL = originalModel;
+    }
+  });
+
   test('uses raw search when searchDelegate=false', async () => {
     mockSearch.mockResolvedValue('RAW-SEARCH');
 

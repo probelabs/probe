@@ -197,6 +197,8 @@ export class ProbeAgent {
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
     this.searchDelegate = options.searchDelegate !== undefined ? !!options.searchDelegate : true;
+    this.searchDelegateProvider = options.searchDelegateProvider || null;
+    this.searchDelegateModel = options.searchDelegateModel || null;
     this.maxResponseTokens = options.maxResponseTokens || (() => {
       const val = parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10);
       if (isNaN(val) || val < 0 || val > 200000) {
@@ -788,6 +790,8 @@ export class ProbeAgent {
       architectureFileName: this.architectureFileName,
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      searchDelegateProvider: this.searchDelegateProvider,
+      searchDelegateModel: this.searchDelegateModel,
       delegationManager: this.delegationManager,  // Per-instance delegation limits
       outputBuffer: this._outputBuffer,
       concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
