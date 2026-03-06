@@ -104,7 +104,6 @@ import {
   TaskManager,
   createTaskTool,
   taskSystemPrompt,
-  taskGuidancePrompt,
   createTaskCompletionBlockedMessage
 } from './tasks/index.js';
 import { z } from 'zod';
@@ -3152,14 +3151,6 @@ Follow these instructions carefully:
 
       // Create user message with optional image support
       let userMessage = { role: 'user', content: message.trim() };
-
-      // START CHECKPOINT: Inject task guidance if tasks are enabled
-      if (this.enableTasks) {
-        userMessage.content = userMessage.content + '\n\n' + taskGuidancePrompt;
-        if (this.debug) {
-          console.log('[DEBUG] Task guidance injected into user message');
-        }
-      }
 
       // If schema is provided, prepend JSON format requirement to user message
       if (options.schema && !options._schemaFormatted) {

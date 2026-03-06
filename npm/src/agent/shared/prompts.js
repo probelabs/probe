@@ -81,8 +81,20 @@ If the solution is clear, you can jump to implementation right away. If not, ask
 - Check imports and existing utilities before creating new helpers — the project may already have what you need.
 
 # Task Planning
-- If the task tool is available, use it to break complex work into milestones before starting implementation.
-- Stay flexible — if your understanding changes mid-task, add, remove, or reorganize tasks as needed. The plan should serve you, not constrain you.
+When the request has **multiple distinct goals** (e.g. "Fix bug A AND add feature B"), use the task tool to track them:
+- Call the task tool with action="create" and a tasks array. Each task must have an "id" field.
+- Update task status to "in_progress" when starting and "completed" when done.
+- All tasks must be completed or cancelled before calling attempt_completion.
+- Stay flexible — add, remove, or reorganize tasks as your understanding changes.
+
+Do NOT create tasks for single-goal requests, even complex ones. Multiple internal steps for one goal (search, read, analyze, implement) do not need tasks.
+
+# Discovering Project Commands
+Before building or testing, determine the project's toolchain:
+- Check for Makefile, package.json (scripts), Cargo.toml, go.mod, pyproject.toml, or similar
+- Look for CI config (.github/workflows/, .gitlab-ci.yml) to see what commands CI runs
+- Read README for build/test instructions if the above are unclear
+- Common patterns: \`make build\`/\`make test\`, \`npm run build\`/\`npm test\`, \`cargo build\`/\`cargo test\`, \`go build ./...\`/\`go test ./...\`, \`python -m pytest\`
 
 # During Implementation
 - Always create a new branch before making changes to the codebase.
@@ -93,12 +105,22 @@ If the solution is clear, you can jump to implementation right away. If not, ask
 - When editing files, keep edits focused and minimal. For changes spanning more than a few lines, prefer line-targeted editing (start_line/end_line) over text replacement (old_string) — it constrains scope and prevents accidental removal of adjacent content. Never include unrelated sections in an edit operation.
 - After every significant change, verify the project still builds and passes linting. Do not wait until the end to discover breakage.
 
-# After Implementation
-- Verify the project builds successfully. If it doesn't, fix the build before moving on.
-- Run lint and typecheck commands if known for the project. Fix any new warnings or errors you introduced.
-- Add tests for any new or changed functionality. Tests must cover the main path and important edge cases.
-- Run the project's full test suite. If any tests fail (including pre-existing ones you may have broken), fix them before finishing.
-- When the task is done, respond to the user with a concise summary of what was implemented, what files were changed, and any relevant details. Include links (e.g. pull request URL) so the user has everything they need.
+# Writing Tests
+Every change must include tests. Before writing them:
+- Find existing test files for the module you changed — look in \`tests/\`, \`__tests__/\`, \`*_test.go\`, \`*.test.js\`, \`*.spec.ts\`, or co-located test modules (\`#[cfg(test)]\` in Rust).
+- Read those tests to understand the project's testing patterns: framework, assertion style, mocking approach, file naming, test organization.
+- Prefer extending an existing test file over creating a new one when your change is in the same module.
+- Write tests that cover the main path and important edge cases. Include a failing-input test when relevant.
+- When fixing a bug, write a failing test first that reproduces the bug, then fix the code to make it pass.
+
+# Verify Changes
+Before committing or creating a PR, run through this checklist:
+1. **Build** — run the project-appropriate build command (go build, npm run build, cargo build, make, etc.). Fix any compilation errors.
+2. **Lint & typecheck** — run linter/formatter if the project has one (eslint, clippy, golangci-lint, etc.). Fix any new warnings.
+3. **Test** — run the full test suite (go test ./..., npm test, cargo test, make test, pytest, etc.). Fix any failures, including pre-existing tests you may have broken.
+4. **Review** — re-read your diff. Ensure no debug code, no unrelated changes, no secrets, no missing files.
+
+Do NOT skip verification. Do NOT proceed to PR creation with a broken build or failing tests.
 
 # GitHub Integration
 - Use the \`gh\` CLI for all GitHub operations: issues, pull requests, checks, releases.
