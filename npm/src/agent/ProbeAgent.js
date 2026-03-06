@@ -2876,7 +2876,7 @@ ${searchToolDesc1}
 - searchFiles: Find files by name patterns`;
 
     if (this.enableBash) {
-      systemPrompt += `\n- bash: Execute bash commands for system operations`;
+      systemPrompt += `\n- bash: Execute bash commands for system operations (building, running tests, git, etc.). NEVER use bash for code exploration (no grep, cat, find, head, tail) — always use search and extract tools instead, they are faster and more accurate.`;
     }
 
     const searchGuidance1 = this.searchDelegate
@@ -2942,7 +2942,7 @@ ${searchToolDesc2}
 - searchFiles: Find files by name patterns`;
 
     if (this.enableBash) {
-      systemPrompt += `\n- bash: Execute bash commands for system operations`;
+      systemPrompt += `\n- bash: Execute bash commands for system operations (building, running tests, git, etc.). NEVER use bash for code exploration (no grep, cat, find, head, tail) — always use search and extract tools instead, they are faster and more accurate.`;
     }
 
     const searchGuidance2 = this.searchDelegate
@@ -3018,7 +3018,8 @@ Follow these instructions carefully:
 3. You should always prefer the search tool for code-related questions.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
 4. Ensure to get really deep and understand the full picture before answering.
 5. Once the task is fully completed, use the attempt_completion tool to provide the final result.
-6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}${this.allowEdit ? `
+6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
+7. NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed) — always use search and extract tools instead. Bash is only for system operations like building, running tests, or git commands.${this.allowEdit ? `
 7. When modifying files, choose the appropriate tool:
     - Use 'edit' for all code modifications:
       * PREFERRED: Use start_line (and optionally end_line) for line-targeted editing — this is the safest and most precise approach.${this.hashLines ? ' Use the line:hash references from extract/search output (e.g. "42:ab") for integrity verification.' : ''} Always use extract first to see line numbers${this.hashLines ? ' and hashes' : ''}, then edit by line reference.
@@ -3035,22 +3036,30 @@ Follow these instructions carefully:
     // Use predefined prompts from shared module (imported at top of file)
     let systemMessage = '';
 
-    // Use custom prompt if provided
-    if (this.customPrompt) {
+    // Build system message from predefined prompt + optional custom prompt
+    if (this.customPrompt && this.promptType && predefinedPrompts[this.promptType]) {
+      // Both: use predefined as base, append custom wrapped in tag
+      systemMessage = "<role>" + predefinedPrompts[this.promptType] + "</role>";
+      systemMessage += commonInstructions;
+      systemMessage += "\n<custom-instructions>\n" + this.customPrompt + "\n</custom-instructions>";
+      if (this.debug) {
+        console.log(`[DEBUG] Using predefined prompt: ${this.promptType} + custom prompt`);
+      }
+    } else if (this.customPrompt) {
+      // Only custom prompt
       systemMessage = "<role>" + this.customPrompt + "</role>";
       if (this.debug) {
         console.log(`[DEBUG] Using custom prompt`);
       }
-    }
-    // Use predefined prompt if specified
-    else if (this.promptType && predefinedPrompts[this.promptType]) {
+    } else if (this.promptType && predefinedPrompts[this.promptType]) {
+      // Only predefined prompt
       systemMessage = "<role>" + predefinedPrompts[this.promptType] + "</role>";
       if (this.debug) {
         console.log(`[DEBUG] Using predefined prompt: ${this.promptType}`);
       }
       systemMessage += commonInstructions;
     } else {
-      // Use the default prompt (code explorer) if no prompt type is specified
+      // Default: code explorer
       systemMessage = "<role>" + predefinedPrompts['code-explorer'] + "</role>";
       if (this.debug) {
         console.log(`[DEBUG] Using default prompt: code explorer`);
