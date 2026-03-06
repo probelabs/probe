@@ -75,7 +75,7 @@
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^1.0.8",
     "@ai-sdk/anthropic": "^2.0.8",
-    "@ai-sdk/google": "^2.0.14",
+    "@ai-sdk/google": "^3.0.37",
     "@ai-sdk/openai": "^2.0.10",
     "@anthropic-ai/claude-agent-sdk": "^0.1.46",
     "@modelcontextprotocol/sdk": "^1.0.0",
