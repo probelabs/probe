@@ -8,7 +8,7 @@ import { resolve, isAbsolute } from 'path';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
 export const searchSchema = z.object({
-	query: z.string().describe('Search query with Elasticsearch syntax. Use quotes for exact matches, AND/OR for boolean logic, - for negation.'),
+	query: z.string().describe('Search query — natural language questions or Elasticsearch-style keywords both work. For keywords: use quotes for exact phrases, AND/OR for boolean logic, - for negation. Probe handles stemming and camelCase/snake_case splitting automatically, so do NOT try case or style variations of the same keyword.'),
 	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.'),
 	exact: z.boolean().optional().default(false).describe('Default (false) enables stemming and keyword splitting for exploratory search - "getUserData" matches "get", "user", "data", etc. Set true for precise symbol lookup where "getUserData" matches only "getUserData". Use true when you know the exact symbol name.'),
 	maxTokens: z.number().nullable().optional().describe('Maximum tokens to return. Default is 20000. Set to null for unlimited results.'),
@@ -17,7 +17,7 @@ export const searchSchema = z.object({
 });
 
 export const searchAllSchema = z.object({
-	query: z.string().describe('Search query with Elasticsearch syntax. Use quotes for exact matches, AND/OR for boolean logic, - for negation.'),
+	query: z.string().describe('Search query — natural language questions or Elasticsearch-style keywords both work. For keywords: use quotes for exact phrases, AND/OR for boolean logic, - for negation. Probe handles stemming and camelCase/snake_case splitting automatically, so do NOT try case or style variations of the same keyword.'),
 	path: z.string().optional().default('.').describe('Path to search in.'),
 	exact: z.boolean().optional().default(false).describe('Use exact matching instead of stemming.'),
 	maxTokensPerPage: z.number().optional().default(20000).describe('Tokens per page when paginating. Default 20000.'),
@@ -149,7 +149,8 @@ export const attemptCompletionSchema = {
 
 // Tool descriptions (used by Vercel tool() definitions)
 
-export const searchDescription = 'Search code in the repository. Free-form questions are accepted, but Elasticsearch-style keyword queries work best. Use this tool first for any code-related questions.';
+export const searchDescription = 'Search code in the repository. Free-form questions are accepted, but Elasticsearch-style keyword queries work best. Use this tool first for any code-related questions. NOTE: By default, search handles stemming, case-insensitive matching, and camelCase/snake_case splitting automatically — do NOT manually try keyword variations like "getAllUsers" then "get_all_users" then "GetAllUsers". One search covers all variations.';
+export const searchDelegateDescription = 'Search code in the repository by asking a question. Accepts natural language questions (e.g., "How does authentication work?", "Where is the user validation logic?"). A specialized subagent breaks down your question into targeted keyword searches and returns extracted code blocks. Do NOT formulate keyword queries yourself — just ask the question naturally.';
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. Line numbers from output can be used with edit start_line/end_line for precise editing.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';

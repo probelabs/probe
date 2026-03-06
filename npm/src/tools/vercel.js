@@ -9,7 +9,7 @@ import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
 import { analyzeAll } from './analyzeAll.js';
-import { searchSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
+import { searchSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, searchDelegateDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
@@ -143,11 +143,41 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- extract: Verify code snippets to ensure targets are actually relevant before including them.',
 		'- listFiles: Understand directory structure to find where relevant code might live.',
 		'',
-		'Strategy for complex queries:',
+		'CRITICAL - How probe search works (do NOT ignore):',
+		'- By default (exact=false), probe ALREADY handles stemming, case-insensitive matching, and camelCase/snake_case splitting.',
+		'- Searching "allowed_ips" ALREADY matches "AllowedIPs", "allowedIps", "allowed_ips", etc. Do NOT manually try case/style variations.',
+		'- Searching "getUserData" ALREADY matches "get", "user", "data" and their variations.',
+		'- NEVER repeat the same search query — you will get the same results.',
+		'- NEVER search trivial variations of the same keyword (e.g., AllowedIPs then allowedIps then allowed_ips). This is wasteful — probe handles it.',
+		'- If a search returns no results, the term likely does not exist in that path. Try a genuinely DIFFERENT keyword or concept, not a variation.',
+		'- If 2-3 consecutive searches return no results for a concept, STOP searching for it and move on.',
+		'',
+		'GOOD search strategy (do this):',
+		'  Query: "How does authentication work and how are sessions managed?"',
+		'  → search "authentication" → search "session management" (two different concepts)',
+		'  Query: "Find the IP allowlist middleware"',
+		'  → search "allowlist middleware" (one search, probe handles IP/ip/Ip variations)',
+		'  Query: "How does BM25 scoring work with SIMD optimization?"',
+		'  → search "BM25 scoring" → search "SIMD optimization" (two different concepts)',
+		'',
+		'BAD search strategy (never do this):',
+		'  → search "AllowedIPs" → search "allowedIps" → search "allowed_ips" (WRONG: these are trivial case variations, probe handles them)',
+		'  → search "CIDR" → search "cidr" → search "Cidr" → search "*cidr*" (WRONG: same keyword repeated with variations)',
+		'  → search "error handling" → search "error handling" → search "error handling" (WRONG: repeating exact same query)',
+		'',
+		'Keyword tips:',
+		'- Common programming keywords are filtered as stopwords when unquoted: function, class, return, new, struct, impl, var, let, const, etc.',
+		'- Avoid searching for these alone — combine with a specific term (e.g., "middleware function" is fine, "function" alone is too generic).',
+		'- To bypass stopword filtering: wrap terms in quotes ("return", "struct") or set exact=true. Both disable stemming and splitting too.',
+		'- Multiple words without operators use OR logic: foo bar = foo OR bar. Use AND explicitly if you need both: foo AND bar.',
+		'- camelCase terms are split: getUserData becomes "get", "user", "data" — so one search covers all naming styles.',
+		'',
+		'Strategy:',
 		'1. Analyze the query - identify key concepts, entities, and relationships',
-		'2. Run focused searches for each independent concept (e.g., for "how do payments work and how are emails sent", search "payments" and "emails" separately since they are unrelated)',
-		'3. Use extract to verify relevance of promising results',
-		'4. Combine all relevant targets in your final response',
+		'2. Run ONE focused search per concept with the most natural keyword. Trust probe to handle variations.',
+		'3. If a search returns results, use extract to verify relevance',
+		'4. Only try a different keyword if the first one returned irrelevant results (not if it returned no results — that means the concept is absent)',
+		'5. Combine all relevant targets in your final response',
 		'',
 		`Query: ${searchQuery}`,
 		`Search path(s): ${searchPath}`,
@@ -186,10 +216,16 @@ export const searchTool = (options = {}) => {
 		return result;
 	};
 
+	// Track previous non-paginated searches to detect and block duplicates
+	const previousSearches = new Set();
+	// Track pagination counts per query to cap runaway pagination
+	const paginationCounts = new Map();
+	const MAX_PAGES_PER_QUERY = 3;
+
 	return tool({
 		name: 'search',
 		description: searchDelegate
-			? `${searchDescription} (delegates code search to a subagent and returns extracted code blocks)`
+			? searchDelegateDescription
 			: searchDescription,
 		inputSchema: searchSchema,
 		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage }) => {
@@ -236,6 +272,29 @@ export const searchTool = (options = {}) => {
 			};
 
 			if (!searchDelegate) {
+				// Block duplicate non-paginated searches (models sometimes repeat the exact same call)
+				// Allow pagination: only nextPage=true is a legitimate repeat of the same query
+				const searchKey = `${searchQuery}::${searchPath}::${exact || false}`;
+				if (!nextPage) {
+					if (previousSearches.has(searchKey)) {
+						if (debug) {
+							console.error(`[DEDUP] Blocked duplicate search: "${searchQuery}" in "${searchPath}"`);
+						}
+						return 'DUPLICATE SEARCH BLOCKED: You already searched for this exact query in this path. Do NOT repeat the same search. If you need more results, set nextPage=true with the session ID from the previous search. Otherwise, try a genuinely different keyword, use extract to examine results you already found, or use attempt_completion if you have enough information.';
+					}
+					previousSearches.add(searchKey);
+					paginationCounts.set(searchKey, 0);
+				} else {
+					// Cap pagination to prevent runaway page-through of broad queries
+					const pageCount = (paginationCounts.get(searchKey) || 0) + 1;
+					paginationCounts.set(searchKey, pageCount);
+					if (pageCount > MAX_PAGES_PER_QUERY) {
+						if (debug) {
+							console.error(`[DEDUP] Blocked excessive pagination (page ${pageCount}/${MAX_PAGES_PER_QUERY}): "${searchQuery}" in "${searchPath}"`);
+						}
+						return `PAGINATION LIMIT REACHED: You have already retrieved ${MAX_PAGES_PER_QUERY} pages of results for this query. You have enough results — use extract to examine specific files, or use attempt_completion to return your findings.`;
+					}
+				}
 				try {
 					const result = maybeAnnotate(await runRawSearch());
 					// Track files found in search results for staleness detection
