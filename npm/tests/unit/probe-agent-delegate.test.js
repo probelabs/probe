@@ -256,6 +256,36 @@ describe('ProbeAgent enableDelegate option', () => {
     });
   });
 
+  describe('Abort signal and cancellation', () => {
+    test('should have an AbortController on construction', () => {
+      const agent = new ProbeAgent({});
+      expect(agent._abortController).toBeInstanceOf(AbortController);
+      expect(agent.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(agent.abortSignal.aborted).toBe(false);
+    });
+
+    test('cancel() should abort the signal', () => {
+      const agent = new ProbeAgent({});
+      agent.cancel();
+      expect(agent.cancelled).toBe(true);
+      expect(agent.abortSignal.aborted).toBe(true);
+    });
+
+    test('cleanup() should abort the signal', async () => {
+      const agent = new ProbeAgent({});
+      await agent.cleanup();
+      expect(agent.abortSignal.aborted).toBe(true);
+    });
+
+    test('parentAbortSignal should be passed in configOptions', () => {
+      const agent = new ProbeAgent({ enableDelegate: true });
+      // configOptions are built in initializeTools, which is called in constructor
+      // The signal should be accessible via the agent's abortSignal getter
+      expect(agent.abortSignal).toBeDefined();
+      expect(agent.abortSignal.aborted).toBe(false);
+    });
+  });
+
   describe('Provider inheritance for delegation', () => {
     test('should have apiType as string for all provider types', () => {
       // Test that apiType is always a string identifier

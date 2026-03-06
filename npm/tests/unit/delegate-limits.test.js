@@ -11,8 +11,10 @@ const __dirname = dirname(__filename);
 
 // Mock ProbeAgent
 const mockAnswer = jest.fn();
+const mockCancel = jest.fn();
 const MockProbeAgent = jest.fn().mockImplementation(() => ({
-  answer: mockAnswer
+  answer: mockAnswer,
+  cancel: mockCancel
 }));
 
 // Use absolute path for mocking
@@ -561,6 +563,72 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
 
       expect(call1SessionId).not.toBe(call2SessionId);
       expect(call1SessionId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    });
+  });
+
+  describe('Parent abort signal', () => {
+    it('should reject immediately if parent signal is already aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      await expect(
+        delegate({ task: 'Test task', parentAbortSignal: controller.signal })
+      ).rejects.toThrow(/parent operation was aborted/);
+
+      // Subagent should not even be created
+      expect(MockProbeAgent).not.toHaveBeenCalled();
+    });
+
+    it('should cancel subagent when parent signal aborts during execution', async () => {
+      const controller = new AbortController();
+
+      // Make subagent take a while
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Late'), 500))
+      );
+
+      // Abort after 50ms
+      setTimeout(() => controller.abort(), 50);
+
+      await expect(
+        delegate({ task: 'Test task', parentAbortSignal: controller.signal })
+      ).rejects.toThrow(/parent operation was aborted/);
+
+      // Subagent.cancel() should have been called
+      expect(mockCancel).toHaveBeenCalled();
+    });
+
+    it('should cancel subagent on timeout', async () => {
+      // Make subagent take too long
+      mockAnswer.mockImplementation(() =>
+        new Promise(resolve => setTimeout(() => resolve('Late'), 500))
+      );
+
+      await expect(
+        delegate({ task: 'Test task', timeout: 0.05 })
+      ).rejects.toThrow(/timed out/);
+
+      // Subagent.cancel() should have been called on timeout
+      expect(mockCancel).toHaveBeenCalled();
+    });
+
+    it('should not call cancel on successful completion', async () => {
+      mockAnswer.mockResolvedValue('Quick response');
+
+      await delegate({ task: 'Test task' });
+
+      expect(mockCancel).not.toHaveBeenCalled();
+    });
+
+    it('should clean up abort listener after successful completion', async () => {
+      const controller = new AbortController();
+      mockAnswer.mockResolvedValue('Quick response');
+
+      await delegate({ task: 'Test task', parentAbortSignal: controller.signal });
+
+      // Aborting after completion should NOT trigger cancel
+      controller.abort();
+      expect(mockCancel).not.toHaveBeenCalled();
     });
   });
 });

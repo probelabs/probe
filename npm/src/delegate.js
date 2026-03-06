@@ -386,10 +386,16 @@ export async function delegate({
 	mcpConfig = null,
 	mcpConfigPath = null,
 	delegationManager = null,  // Optional per-instance manager, falls back to default singleton
-	concurrencyLimiter = null  // Optional global AI concurrency limiter
+	concurrencyLimiter = null,  // Optional global AI concurrency limiter
+	parentAbortSignal = null   // Optional AbortSignal from parent to cancel this delegation
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
+	}
+
+	// Check if parent has already been cancelled
+	if (parentAbortSignal?.aborted) {
+		throw new Error('Delegation cancelled: parent operation was aborted');
 	}
 
 	// Support runtime timeout override via environment variables when timeout not explicitly passed
@@ -481,24 +487,47 @@ export async function delegate({
 			console.error(`[DELEGATE] Subagent config: promptType=${promptType}, enableDelegate=false, maxIterations=${remainingIterations}`);
 		}
 
-		// Set up timeout with proper cleanup
-		// TODO: Implement AbortController support in ProbeAgent.answer() for proper cancellation
-		// Current limitation: When timeout occurs, subagent.answer() continues running in background
-		// This is acceptable since:
-		// 1. The promise will eventually resolve/reject and be garbage collected
-		// 2. The delegation slot is properly released on timeout
-		// 3. The parent receives timeout error and can handle it
-		// Future improvement: Add signal parameter to ProbeAgent.answer(task, [], { signal })
+		// Set up timeout and parent abort handling.
+		// When timeout fires or parent aborts, we cancel the subagent so it
+		// stops making API calls and releases resources promptly.
 		const timeoutPromise = new Promise((_, reject) => {
 			timeoutId = setTimeout(() => {
+				subagent.cancel();
 				reject(new Error(`Delegation timed out after ${timeout} seconds`));
 			}, timeout * 1000);
 		});
 
-		// Execute the task with timeout
+		// Listen for parent abort signal
+		let parentAbortHandler;
+		const parentAbortPromise = new Promise((_, reject) => {
+			if (parentAbortSignal) {
+				if (parentAbortSignal.aborted) {
+					subagent.cancel();
+					reject(new Error('Delegation cancelled: parent operation was aborted'));
+					return;
+				}
+				parentAbortHandler = () => {
+					subagent.cancel();
+					reject(new Error('Delegation cancelled: parent operation was aborted'));
+				};
+				parentAbortSignal.addEventListener('abort', parentAbortHandler, { once: true });
+			}
+		});
+
+		// Execute the task with timeout and parent abort
 		const answerOptions = schema ? { schema } : undefined;
 		const answerPromise = answerOptions ? subagent.answer(task, [], answerOptions) : subagent.answer(task);
-		const response = await Promise.race([answerPromise, timeoutPromise]);
+		const racers = [answerPromise, timeoutPromise];
+		if (parentAbortSignal) racers.push(parentAbortPromise);
+		let response;
+		try {
+			response = await Promise.race(racers);
+		} finally {
+			// Clean up parent abort listener to prevent memory leaks
+			if (parentAbortHandler && parentAbortSignal) {
+				parentAbortSignal.removeEventListener('abort', parentAbortHandler);
+			}
+		}
 
 		// Clear timeout immediately after race completes to prevent memory leak
 		// Note: timeoutId is always set by this point (synchronous in Promise constructor)
