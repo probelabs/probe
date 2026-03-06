@@ -122,20 +122,20 @@ class DelegationManager {
 		}
 
 		// Need to wait in queue
-		if (debug) {
-			console.error(`[DelegationManager] Slot unavailable (${this.globalActive}/${this.maxConcurrent}), queuing... (queue size: ${this.waitQueue.length}, timeout: ${effectiveTimeout}ms)`);
-		}
+		console.error(`[DelegationManager] Slot unavailable (${this.globalActive}/${this.maxConcurrent}), queuing... (queue size: ${this.waitQueue.length + 1}, timeout: ${effectiveTimeout}ms)`);
 
 		// Create a promise that will be resolved when a slot becomes available
 		// or rejected if session limit is exceeded or queue timeout expires
 		return new Promise((resolve, reject) => {
+			const queuedAt = Date.now();
 			const entry = {
 				resolve: null,  // Will be wrapped below
 				reject: null,   // Will be wrapped below
 				parentSessionId,
 				debug,
-				queuedAt: Date.now(),
-				timeoutId: null
+				queuedAt,
+				timeoutId: null,
+				reminderId: null
 			};
 
 			// Wrap resolve/reject to clear timeout and prevent double-settling
@@ -144,12 +144,14 @@ class DelegationManager {
 				if (settled) return;
 				settled = true;
 				if (entry.timeoutId) clearTimeout(entry.timeoutId);
+				if (entry.reminderId) clearInterval(entry.reminderId);
 				resolve(value);
 			};
 			entry.reject = (error) => {
 				if (settled) return;
 				settled = true;
 				if (entry.timeoutId) clearTimeout(entry.timeoutId);
+				if (entry.reminderId) clearInterval(entry.reminderId);
 				reject(error);
 			};
 
@@ -163,6 +165,15 @@ class DelegationManager {
 					}
 					entry.reject(new Error(`Delegation queue timeout: waited ${effectiveTimeout}ms for an available slot`));
 				}, effectiveTimeout);
+			}
+
+			// Always emit periodic wait visibility while queued.
+			entry.reminderId = setInterval(() => {
+				const waitedSeconds = Math.round((Date.now() - queuedAt) / 1000);
+				console.error(`[DelegationManager] Still waiting for slot (${waitedSeconds}s). ${this.globalActive}/${this.maxConcurrent} active, ${this.waitQueue.length} queued.`);
+			}, 15000);
+			if (entry.reminderId.unref) {
+				entry.reminderId.unref();
 			}
 
 			this.waitQueue.push(entry);
@@ -221,9 +232,7 @@ class DelegationManager {
 				if (sessionCount >= this.maxPerSession) {
 					// Session limit reached - reject with error (consistent with tryAcquire behavior)
 					// This is a hard limit, not something that will resolve by waiting longer
-					if (debug) {
-						console.error(`[DelegationManager] Session limit (${this.maxPerSession}) reached for queued item, rejecting`);
-					}
+					console.error(`[DelegationManager] Session limit (${this.maxPerSession}) reached for queued item, rejecting`);
 					toReject.push({ reject, error: new Error(`Maximum delegations per session (${this.maxPerSession}) reached for session ${parentSessionId}`) });
 					// Continue to process next item in queue
 					continue;
@@ -233,10 +242,8 @@ class DelegationManager {
 			// Grant the slot
 			this._incrementCounters(parentSessionId);
 
-			if (debug) {
-				const waitTime = Date.now() - queuedAt;
-				console.error(`[DelegationManager] Granted slot from queue (waited ${waitTime}ms). Active: ${this.globalActive}/${this.maxConcurrent}`);
-			}
+			const waitTime = Date.now() - queuedAt;
+			console.error(`[DelegationManager] Granted slot from queue (waited ${waitTime}ms). Active: ${this.globalActive}/${this.maxConcurrent}`);
 
 			toResolve.push(resolve);
 		}
@@ -295,6 +302,9 @@ class DelegationManager {
 		for (const entry of this.waitQueue) {
 			if (entry.timeoutId) {
 				clearTimeout(entry.timeoutId);
+			}
+			if (entry.reminderId) {
+				clearInterval(entry.reminderId);
 			}
 			// Reject pending entries so they don't hang
 			if (entry.reject) {

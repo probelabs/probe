@@ -284,6 +284,7 @@ export function generateSandboxGlobals(options) {
       results.push(p);
 
       if (executing.size >= mapConcurrency) {
+        console.error(`[map] Concurrency limit reached (${executing.size}/${mapConcurrency}), waiting for a slot...`);
         await Promise.race(executing);
       }
     }

@@ -95,9 +95,7 @@ async function acquireFileLock(lockPath, version) {
 	try {
 		// Try to create lock file atomically (fails if already exists)
 		await fs.writeFile(lockPath, JSON.stringify(lockData), { flag: 'wx' });
-		if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-			console.log(`Acquired file lock: ${lockPath}`);
-		}
+		console.log(`Acquired file lock: ${lockPath}`);
 		return true;
     } catch (error) {
 		if (error.code === 'EEXIST') {
@@ -108,17 +106,13 @@ async function acquireFileLock(lockPath, version) {
 
 				if (lockAge > LOCK_TIMEOUT_MS) {
 					// Lock is stale, remove it
-					if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-						console.log(`Removing stale lock file (age: ${Math.round(lockAge / 1000)}s, pid: ${existingLock.pid})`);
-					}
+					console.log(`Removing stale lock file (age: ${Math.round(lockAge / 1000)}s, pid: ${existingLock.pid})`);
 					await fs.remove(lockPath);
 					return false; // Caller should retry
 				}
 
 				// Lock is fresh, another process is downloading
-				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-					console.log(`Download in progress by process ${existingLock.pid}, waiting...`);
-				}
+				console.log(`Download in progress by process ${existingLock.pid}, waiting...`);
 				return false;
 			} catch (readError) {
 				// Can't read lock file, might be corrupted - remove it
@@ -180,23 +174,23 @@ async function releaseFileLock(lockPath) {
  */
 async function waitForFileLock(lockPath, binaryPath) {
 	const startTime = Date.now();
+	let lastStatusTime = startTime;
+
+	console.log(`Waiting for file lock to clear: ${lockPath}`);
 
 	// Poll in a loop until binary appears, lock expires, or we timeout
 	while (Date.now() - startTime < MAX_LOCK_WAIT_MS) {
 		// Check #1: Is the binary now available?
 		if (await fs.pathExists(binaryPath)) {
-			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log(`Binary now available at ${binaryPath}, download completed by another process`);
-			}
+			const waitedSeconds = Math.round((Date.now() - startTime) / 1000);
+			console.log(`Binary now available at ${binaryPath}, download completed by another process (waited ${waitedSeconds}s)`);
 			return true;
 		}
 
 		// Check #2: Is the lock file gone? (download finished or failed)
 		const lockExists = await fs.pathExists(lockPath);
 		if (!lockExists) {
-			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log(`Lock file removed but binary not found - download may have failed`);
-			}
+			console.log(`Lock file removed but binary not found - download may have failed`);
 			return false;
 		}
 
@@ -205,22 +199,24 @@ async function waitForFileLock(lockPath, binaryPath) {
 			const lockData = JSON.parse(await fs.readFile(lockPath, 'utf-8'));
 			const lockAge = Date.now() - lockData.timestamp;
 			if (lockAge > LOCK_TIMEOUT_MS) {
-				if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-					console.log(`Lock expired (age: ${Math.round(lockAge / 1000)}s), will retry download`);
-				}
+				console.log(`Lock expired (age: ${Math.round(lockAge / 1000)}s), will retry download`);
 				return false;
 			}
 		} catch {
 			// Ignore errors reading lock file - will retry on next poll
 		}
 
+		if (Date.now() - lastStatusTime >= 15000) {
+			const elapsedSeconds = Math.round((Date.now() - startTime) / 1000);
+			console.log(`Still waiting for file lock (${elapsedSeconds}s/${MAX_LOCK_WAIT_MS / 1000}s max)`);
+			lastStatusTime = Date.now();
+		}
+
 		// Wait 1 second before checking again
 		await new Promise(resolve => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
 	}
 
-	if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-		console.log(`Timeout waiting for file lock`);
-	}
+	console.log(`Timeout waiting for file lock after ${MAX_LOCK_WAIT_MS / 1000}s`);
 	return false;
 }
 
@@ -247,9 +243,7 @@ async function withDownloadLock(version, downloadFn) {
 			}
 			downloadLocks.delete(lockKey);
 		} else {
-			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
-				console.log(`Download already in progress in this process for version ${lockKey}, waiting...`);
-			}
+			console.log(`Download already in progress in this process for version ${lockKey}, waiting...`);
 			try {
 				return await lock.promise;
 			} catch (error) {
@@ -262,10 +256,16 @@ async function withDownloadLock(version, downloadFn) {
 	}
 
 	// Create new download promise with timeout protection
+	let timeoutId = null;
 	const downloadPromise = Promise.race([
 		downloadFn(),
 		new Promise((_, reject) =>
-			setTimeout(() => reject(new Error(`Download timeout after ${LOCK_TIMEOUT_MS / 1000}s`)), LOCK_TIMEOUT_MS)
+			{
+				timeoutId = setTimeout(() => reject(new Error(`Download timeout after ${LOCK_TIMEOUT_MS / 1000}s`)), LOCK_TIMEOUT_MS);
+				if (timeoutId.unref) {
+					timeoutId.unref();
+				}
+			}
 		)
 	]);
 
@@ -278,6 +278,9 @@ async function withDownloadLock(version, downloadFn) {
 		const result = await downloadPromise;
 		return result;
 	} finally {
+		if (timeoutId) {
+			clearTimeout(timeoutId);
+		}
 		// Clean up lock after download completes (success or failure)
 		downloadLocks.delete(lockKey);
 	}
