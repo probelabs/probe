@@ -105,6 +105,14 @@ Before building or testing, determine the project's toolchain:
 - When editing files, keep edits focused and minimal. For changes spanning more than a few lines, prefer line-targeted editing (start_line/end_line) over text replacement (old_string) — it constrains scope and prevents accidental removal of adjacent content. Never include unrelated sections in an edit operation.
 - After every significant change, verify the project still builds and passes linting. Do not wait until the end to discover breakage.
 
+# Writing Tests
+Every change must include tests. Before writing them:
+- Find existing test files for the module you changed — look in \`tests/\`, \`__tests__/\`, \`*_test.go\`, \`*.test.js\`, \`*.spec.ts\`, or co-located test modules (\`#[cfg(test)]\` in Rust).
+- Read those tests to understand the project's testing patterns: framework, assertion style, mocking approach, file naming, test organization.
+- Prefer extending an existing test file over creating a new one when your change is in the same module.
+- Write tests that cover the main path and important edge cases. Include a failing-input test when relevant.
+- If writing tests first (TDD) would help clarify the expected behavior, do so.
+
 # Verify Changes
 Before committing or creating a PR, run through this checklist:
 1. **Build** — run the project-appropriate build command (go build, npm run build, cargo build, make, etc.). Fix any compilation errors.
