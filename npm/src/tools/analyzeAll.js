@@ -227,18 +227,14 @@ async function processChunksParallel(chunks, extractionPrompt, maxWorkers, optio
 
 			active.add(promise);
 
-			if (options.debug) {
-				console.error(`[analyze_all] Started processing chunk ${chunk.id}/${chunk.total}`);
-			}
+			console.error(`[analyze_all] Started processing chunk ${chunk.id}/${chunk.total}`);
 		}
 
 		if (active.size > 0) {
 			const result = await Promise.race(active);
 			results.push(result);
 
-			if (options.debug) {
-				console.error(`[analyze_all] Completed chunk ${result.chunk.id}/${result.chunk.total}`);
-			}
+			console.error(`[analyze_all] Completed chunk ${result.chunk.id}/${result.chunk.total}`);
 		}
 	}
 
