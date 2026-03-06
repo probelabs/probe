@@ -144,13 +144,19 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- listFiles: Understand directory structure to find where relevant code might live.',
 		'',
 		'CRITICAL - How probe search works (do NOT ignore):',
-		'- By default (exact=false), probe ALREADY handles stemming, case-insensitive matching, and camelCase/snake_case splitting.',
+		'- By default (exact=false), probe ALREADY handles stemming, case-insensitive matching, and camelCase/snake_case splitting automatically.',
 		'- Searching "allowed_ips" ALREADY matches "AllowedIPs", "allowedIps", "allowed_ips", etc. Do NOT manually try case/style variations.',
 		'- Searching "getUserData" ALREADY matches "get", "user", "data" and their variations.',
-		'- NEVER repeat the same search query — you will get the same results.',
+		'- NEVER repeat the same search query — you will get the same results. Changing the path does NOT change this.',
 		'- NEVER search trivial variations of the same keyword (e.g., AllowedIPs then allowedIps then allowed_ips). This is wasteful — probe handles it.',
-		'- If a search returns no results, the term likely does not exist in that path. Try a genuinely DIFFERENT keyword or concept, not a variation.',
-		'- If 2-3 consecutive searches return no results for a concept, STOP searching for it and move on.',
+		'- If a search returns no results, the term likely does not exist. Try a genuinely DIFFERENT keyword or concept, not a variation.',
+		'- If 2-3 searches return no results for a concept, STOP searching for it and move on. Do NOT keep retrying.',
+		'',
+		'When to use exact=true:',
+		'- Use exact=true when searching for a KNOWN symbol name (function, type, variable, struct).',
+		'- exact=true matches the literal string only — no stemming, no splitting.',
+		'- This is ideal for precise lookups: exact=true "ForwardMessage", exact=true "SessionLimiter", exact=true "ThrottleRetryLimit".',
+		'- Do NOT use exact=true for exploratory/conceptual queries — use the default for those.',
 		'',
 		'GOOD search strategy (do this):',
 		'  Query: "How does authentication work and how are sessions managed?"',
@@ -159,10 +165,18 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'  → search "allowlist middleware" (one search, probe handles IP/ip/Ip variations)',
 		'  Query: "How does BM25 scoring work with SIMD optimization?"',
 		'  → search "BM25 scoring" → search "SIMD optimization" (two different concepts)',
+		'  Query: "Find ForwardMessage and SessionLimiter functions"',
+		'  → search exact=true "ForwardMessage" → search exact=true "SessionLimiter" (known symbols, use exact)',
+		'  Query: "Find ThrottleRetryLimit usage"',
+		'  → search exact=true "ThrottleRetryLimit" (one search, if no results the symbol does not exist — stop)',
 		'',
 		'BAD search strategy (never do this):',
-		'  → search "AllowedIPs" → search "allowedIps" → search "allowed_ips" (WRONG: these are trivial case variations, probe handles them)',
-		'  → search "CIDR" → search "cidr" → search "Cidr" → search "*cidr*" (WRONG: same keyword repeated with variations)',
+		'  → search "AllowedIPs" → search "allowedIps" → search "allowed_ips" (WRONG: case/style variations, probe handles them)',
+		'  → search "limitDRL" → search "LimitDRL" (WRONG: case variation of same term)',
+		'  → search "throttle_retry_limit" after searching "ThrottleRetryLimit" (WRONG: snake_case variation, probe handles it)',
+		'  → search "ThrottleRetryLimit" path=tyk → search "ThrottleRetryLimit" path=gateway → search "ThrottleRetryLimit" path=apidef (WRONG: same query on different paths hoping for different results)',
+		'  → search "func (k *RateLimitAndQuotaCheck) handleRateLimitFailure" (WRONG: do not search full function signatures, just use exact=true "handleRateLimitFailure")',
+		'  → search "ForwardMessage" → search "ForwardMessage" → search "ForwardMessage" (WRONG: repeating the exact same query)',
 		'  → search "error handling" → search "error handling" → search "error handling" (WRONG: repeating exact same query)',
 		'',
 		'Keyword tips:',
@@ -171,12 +185,13 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- To bypass stopword filtering: wrap terms in quotes ("return", "struct") or set exact=true. Both disable stemming and splitting too.',
 		'- Multiple words without operators use OR logic: foo bar = foo OR bar. Use AND explicitly if you need both: foo AND bar.',
 		'- camelCase terms are split: getUserData becomes "get", "user", "data" — so one search covers all naming styles.',
+		'- Do NOT search for full function signatures like "func (r *Type) Method(args)". Just search for the method name with exact=true.',
 		'',
 		'Strategy:',
 		'1. Analyze the query - identify key concepts, entities, and relationships',
-		'2. Run ONE focused search per concept with the most natural keyword. Trust probe to handle variations.',
+		'2. Run ONE focused search per concept. For known symbol names use exact=true. For concepts use default (exact=false).',
 		'3. If a search returns results, use extract to verify relevance',
-		'4. Only try a different keyword if the first one returned irrelevant results (not if it returned no results — that means the concept is absent)',
+		'4. If a search returns NO results, the term does not exist in the codebase. Do NOT retry with variations, different paths, or longer strings. Move on.',
 		'5. Combine all relevant targets in your final response',
 		'',
 		`Query: ${searchQuery}`,
@@ -569,6 +584,50 @@ export const extractTool = (options = {}) => {
 
 					// Resolve relative paths in targets against cwd
 					extractFiles = parsedTargets.map(target => resolveTargetPath(target, effectiveCwd));
+
+					// Auto-fix: if resolved paths don't exist, try allowedFolders subdirs
+					// Handles when search returns relative paths (e.g., "gateway/file.go") and
+					// model constructs wrong absolute paths (e.g., /workspace/gateway/file.go
+					// instead of /workspace/tyk/gateway/file.go)
+					if (options.allowedFolders && options.allowedFolders.length > 0) {
+						extractFiles = extractFiles.map(target => {
+							const { filePart, suffix } = splitTargetSuffix(target);
+							if (existsSync(filePart)) return target;
+
+							// Try resolving the relative tail against each allowedFolder
+							const cwdPrefix = (effectiveCwd.endsWith('/') ? effectiveCwd : effectiveCwd + '/');
+							const relativePart = filePart.startsWith(cwdPrefix)
+								? filePart.slice(cwdPrefix.length)
+								: null;
+
+							if (relativePart) {
+								for (const folder of options.allowedFolders) {
+									const candidate = folder + '/' + relativePart;
+									if (existsSync(candidate)) {
+										if (debug) console.error(`[extract] Auto-fixed path: ${filePart} → ${candidate}`);
+										return candidate + suffix;
+									}
+								}
+							}
+
+							// Try stripping workspace prefix and resolving against allowedFolders
+							// e.g., /tmp/visor-workspaces/abc/gateway/file.go → try each folder + gateway/file.go
+							for (const folder of options.allowedFolders) {
+								const folderPrefix = folder.endsWith('/') ? folder : folder + '/';
+								const wsParent = folderPrefix.replace(/[^/]+\/$/, '');
+								if (filePart.startsWith(wsParent)) {
+									const tail = filePart.slice(wsParent.length);
+									const candidate = folderPrefix + tail;
+									if (candidate !== filePart && existsSync(candidate)) {
+										if (debug) console.error(`[extract] Auto-fixed path via workspace: ${filePart} → ${candidate}`);
+										return candidate + suffix;
+									}
+								}
+							}
+
+							return target;
+						});
+					}
 
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;
