@@ -14,6 +14,75 @@ import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
 
+/**
+ * Auto-quote search query terms that contain mixed case or underscores.
+ * Unquoted camelCase like "limitDRL" gets split by stemming into "limit" + "DRL".
+ * This wraps such terms in quotes so they match as literal strings.
+ *
+ * Examples:
+ *   "limitDRL limitRedis"    → '"limitDRL" "limitRedis"'
+ *   "ThrottleRetryLimit"     → '"ThrottleRetryLimit"'
+ *   "allowed_ips"            → '"allowed_ips"'
+ *   "rate limit"             → 'rate limit'  (no change, all lowercase)
+ *   '"already quoted"'       → '"already quoted"'  (no change)
+ *   'foo AND bar'            → 'foo AND bar'  (operators preserved)
+ */
+function autoQuoteSearchTerms(query) {
+	if (!query || typeof query !== 'string') return query;
+
+	// Split on whitespace, preserving quoted strings and operators
+	const tokens = [];
+	let i = 0;
+	while (i < query.length) {
+		// Skip whitespace
+		if (/\s/.test(query[i])) {
+			i++;
+			continue;
+		}
+		// Quoted string — keep as-is
+		if (query[i] === '"') {
+			const end = query.indexOf('"', i + 1);
+			if (end !== -1) {
+				tokens.push(query.substring(i, end + 1));
+				i = end + 1;
+			} else {
+				// Unclosed quote — take rest
+				tokens.push(query.substring(i));
+				break;
+			}
+			continue;
+		}
+		// Unquoted token
+		let j = i;
+		while (j < query.length && !/\s/.test(query[j]) && query[j] !== '"') {
+			j++;
+		}
+		tokens.push(query.substring(i, j));
+		i = j;
+	}
+
+	// Boolean operators that should not be quoted
+	const operators = new Set(['AND', 'OR', 'NOT']);
+
+	const result = tokens.map(token => {
+		// Already quoted
+		if (token.startsWith('"')) return token;
+		// Boolean operator
+		if (operators.has(token)) return token;
+		// Check if token needs quoting: has mixed case (upper+lower) or underscores
+		const hasUpper = /[A-Z]/.test(token);
+		const hasLower = /[a-z]/.test(token);
+		const hasUnderscore = token.includes('_');
+		const hasMixedCase = hasUpper && hasLower;
+		if (hasMixedCase || hasUnderscore) {
+			return `"${token}"`;
+		}
+		return token;
+	});
+
+	return result.join(' ');
+}
+
 const CODE_SEARCH_SCHEMA = {
 	type: 'object',
 	properties: {
@@ -264,6 +333,16 @@ export const searchTool = (options = {}) => {
 			: searchDescription,
 		inputSchema: searchSchema,
 		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage }) => {
+			// Auto-quote mixed-case and underscore terms to prevent unwanted stemming/splitting
+			// Skip when exact=true since that already preserves the literal string
+			if (!exact && searchQuery) {
+				const originalQuery = searchQuery;
+				searchQuery = autoQuoteSearchTerms(searchQuery);
+				if (debug && searchQuery !== originalQuery) {
+					console.error(`[search] Auto-quoted query: "${originalQuery}" → "${searchQuery}"`);
+				}
+			}
+
 			// Use parameter maxTokens if provided, otherwise use the default
 			const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
