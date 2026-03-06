@@ -570,6 +570,50 @@ export const extractTool = (options = {}) => {
 					// Resolve relative paths in targets against cwd
 					extractFiles = parsedTargets.map(target => resolveTargetPath(target, effectiveCwd));
 
+					// Auto-fix: if resolved paths don't exist, try allowedFolders subdirs
+					// Handles when search returns relative paths (e.g., "gateway/file.go") and
+					// model constructs wrong absolute paths (e.g., /workspace/gateway/file.go
+					// instead of /workspace/tyk/gateway/file.go)
+					if (options.allowedFolders && options.allowedFolders.length > 0) {
+						extractFiles = extractFiles.map(target => {
+							const { filePart, suffix } = splitTargetSuffix(target);
+							if (existsSync(filePart)) return target;
+
+							// Try resolving the relative tail against each allowedFolder
+							const cwdPrefix = (effectiveCwd.endsWith('/') ? effectiveCwd : effectiveCwd + '/');
+							const relativePart = filePart.startsWith(cwdPrefix)
+								? filePart.slice(cwdPrefix.length)
+								: null;
+
+							if (relativePart) {
+								for (const folder of options.allowedFolders) {
+									const candidate = folder + '/' + relativePart;
+									if (existsSync(candidate)) {
+										if (debug) console.error(`[extract] Auto-fixed path: ${filePart} → ${candidate}`);
+										return candidate + suffix;
+									}
+								}
+							}
+
+							// Try stripping workspace prefix and resolving against allowedFolders
+							// e.g., /tmp/visor-workspaces/abc/gateway/file.go → try each folder + gateway/file.go
+							for (const folder of options.allowedFolders) {
+								const folderPrefix = folder.endsWith('/') ? folder : folder + '/';
+								const wsParent = folderPrefix.replace(/[^/]+\/$/, '');
+								if (filePart.startsWith(wsParent)) {
+									const tail = filePart.slice(wsParent.length);
+									const candidate = folderPrefix + tail;
+									if (candidate !== filePart && existsSync(candidate)) {
+										if (debug) console.error(`[extract] Auto-fixed path via workspace: ${filePart} → ${candidate}`);
+										return candidate + suffix;
+									}
+								}
+							}
+
+							return target;
+						});
+					}
+
 					// Apply format mapping for outline-xml to xml
 					let effectiveFormat = format;
 					if (outline && format === 'outline-xml') {
