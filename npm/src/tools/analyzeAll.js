@@ -192,7 +192,8 @@ Instructions:
 			promptType: 'code-researcher',
 			allowedTools: ['extract'],
 			maxIterations: 5,
-			delegationManager: options.delegationManager  // Per-instance delegation limits
+			delegationManager: options.delegationManager,  // Per-instance delegation limits
+			parentAbortSignal: options.parentAbortSignal || null
 			// timeout removed - inherit default from delegate (300s)
 		});
 
@@ -328,7 +329,8 @@ Organize all findings into clear categories with items listed under each.${compl
 			promptType: 'code-researcher',
 			allowedTools: [],
 			maxIterations: 5,
-			delegationManager: options.delegationManager  // Per-instance delegation limits
+			delegationManager: options.delegationManager,  // Per-instance delegation limits
+			parentAbortSignal: options.parentAbortSignal || null
 			// timeout removed - inherit default from delegate (300s)
 		});
 
@@ -404,7 +406,8 @@ CRITICAL: Do NOT guess keywords. Actually run searches and see what returns resu
 			promptType: 'code-researcher',
 			// Full tool access for exploration and experimentation
 			maxIterations: 15,
-			delegationManager: options.delegationManager  // Per-instance delegation limits
+			delegationManager: options.delegationManager,  // Per-instance delegation limits
+			parentAbortSignal: options.parentAbortSignal || null
 			// timeout removed - inherit default from delegate (300s)
 		});
 
@@ -475,7 +478,8 @@ When done, use the attempt_completion tool with your answer as the result.`;
 			promptType: 'code-researcher',
 			allowedTools: [],
 			maxIterations: 5,
-			delegationManager: options.delegationManager  // Per-instance delegation limits
+			delegationManager: options.delegationManager,  // Per-instance delegation limits
+			parentAbortSignal: options.parentAbortSignal || null
 			// timeout removed - inherit default from delegate (300s)
 		});
 

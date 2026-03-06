@@ -193,6 +193,7 @@ export class ProbeAgent {
     this.enableExecutePlan = !!options.enableExecutePlan;
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
+    this._abortController = new AbortController();
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
     this.searchDelegate = options.searchDelegate !== undefined ? !!options.searchDelegate : true;
@@ -792,6 +793,7 @@ export class ProbeAgent {
       searchDelegateProvider: this.searchDelegateProvider,
       searchDelegateModel: this.searchDelegateModel,
       delegationManager: this.delegationManager,  // Per-instance delegation limits
+      parentAbortSignal: this._abortController.signal,  // Propagate cancellation to delegations
       outputBuffer: this._outputBuffer,
       concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
       isToolAllowed,
@@ -1362,6 +1364,19 @@ export class ProbeAgent {
     const controller = new AbortController();
     const timeoutState = { timeoutId: null };
 
+    // Link agent-level abort to this operation's controller
+    // so that cancel() / cleanup() stops the current streamText call
+    if (this._abortController.signal.aborted) {
+      controller.abort();
+    } else {
+      const onAgentAbort = () => controller.abort();
+      this._abortController.signal.addEventListener('abort', onAgentAbort, { once: true });
+      // Clean up listener when this controller aborts (from any source)
+      controller.signal.addEventListener('abort', () => {
+        this._abortController.signal.removeEventListener('abort', onAgentAbort);
+      }, { once: true });
+    }
+
     // Set up overall operation timeout (default 5 minutes)
     if (this.maxOperationTimeout && this.maxOperationTimeout > 0) {
       timeoutState.timeoutId = setTimeout(() => {
@@ -1729,7 +1744,8 @@ export class ProbeAgent {
                 allowEdit: this.allowEdit,
                 allowedTools: allowedToolsForDelegate,
                 debug: this.debug,
-                tracer: this.tracer
+                tracer: this.tracer,
+                parentAbortSignal: this._abortController.signal
               };
 
               if (this.debug) {
@@ -4545,6 +4561,11 @@ Convert your previous response content into actual JSON data that follows this s
    * Clean up resources (including MCP connections)
    */
   async cleanup() {
+    // Abort any in-flight operations (delegations, streaming, etc.)
+    if (!this._abortController.signal.aborted) {
+      this._abortController.abort();
+    }
+
     // Clean up MCP bridge
     if (this.mcpBridge) {
       try {
@@ -4574,12 +4595,24 @@ Convert your previous response content into actual JSON data that follows this s
   }
 
   /**
-   * Cancel the current request
+   * Cancel the current request and all in-flight delegations.
+   * Aborts the internal AbortController so streamText, subagents,
+   * and any code checking the signal will stop.
    */
   cancel() {
     this.cancelled = true;
+    this._abortController.abort();
     if (this.debug) {
       console.log(`[DEBUG] Agent cancelled for session ${this.sessionId}`);
     }
+  }
+
+  /**
+   * Get the abort signal for this agent.
+   * Delegations and subagents should check this signal.
+   * @returns {AbortSignal}
+   */
+  get abortSignal() {
+    return this._abortController.signal;
   }
 }

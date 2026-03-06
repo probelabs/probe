@@ -277,7 +277,8 @@ export const searchTool = (options = {}) => {
 					promptType: 'code-searcher',
 					allowedTools: ['search', 'extract', 'listFiles', 'attempt_completion'],
 					searchDelegate: false,
-					schema: CODE_SEARCH_SCHEMA
+					schema: CODE_SEARCH_SCHEMA,
+					parentAbortSignal: options.parentAbortSignal || null
 				});
 
 				const delegateResult = options.tracer?.withSpan
@@ -581,7 +582,7 @@ export const delegateTool = (options = {}) => {
 		name: 'delegate',
 		description: delegateDescription,
 		inputSchema: delegateSchema,
-		execute: async ({ task, currentIteration, maxIterations, parentSessionId, path, provider, model, tracer, searchDelegate }) => {
+		execute: async ({ task, currentIteration, maxIterations, parentSessionId, path, provider, model, tracer, searchDelegate, parentAbortSignal }) => {
 			// Validate required parameters - throw errors for consistency
 			if (!task || typeof task !== 'string') {
 				throw new Error('Task parameter is required and must be a non-empty string');
@@ -673,7 +674,8 @@ export const delegateTool = (options = {}) => {
 				enableMcp,
 				mcpConfig,
 				mcpConfigPath,
-				delegationManager  // Per-instance delegation limits
+				delegationManager,  // Per-instance delegation limits
+				parentAbortSignal
 			});
 
 			return result;
@@ -733,7 +735,8 @@ export const analyzeAllTool = (options = {}) => {
 					provider: options.provider,
 					model: options.model,
 					tracer: options.tracer,
-					delegationManager  // Per-instance delegation limits
+					delegationManager,  // Per-instance delegation limits
+					parentAbortSignal: options.parentAbortSignal || null
 				});
 
 				return result;
