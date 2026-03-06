@@ -126,6 +126,27 @@ const MAX_HISTORY_MESSAGES = 100;
 const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
 
 /**
+ * Truncate a string for debug logging, showing first and last portion.
+ */
+export function debugTruncate(s, limit = 200) {
+  if (s.length <= limit) return s;
+  const half = Math.floor(limit / 2);
+  return s.substring(0, half) + ` ... [${s.length} chars] ... ` + s.substring(s.length - half);
+}
+
+/**
+ * Log tool results details for debug output.
+ */
+export function debugLogToolResults(toolResults) {
+  if (!toolResults || toolResults.length === 0) return;
+  for (const tr of toolResults) {
+    const argsStr = JSON.stringify(tr.args || {});
+    const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result || '');
+    console.log(`[DEBUG]   tool: ${tr.toolName} | args: ${debugTruncate(argsStr)} | result: ${debugTruncate(resultStr)}`);
+  }
+}
+
+/**
  * ProbeAgent class to handle AI interactions with code search capabilities
  */
 export class ProbeAgent {
@@ -3385,6 +3406,11 @@ Follow these instructions carefully:
         completionAttempted = true;
       }, toolContext);
 
+      if (this.debug) {
+        const toolNames = Object.keys(tools);
+        console.log(`[DEBUG] Agent tools registered (${toolNames.length}): ${toolNames.join(', ')}`);
+      }
+
       let maxResponseTokens = this.maxResponseTokens;
       if (!maxResponseTokens) {
         maxResponseTokens = 4000;
@@ -3434,6 +3460,7 @@ Follow these instructions carefully:
 
               if (this.debug) {
                 console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                debugLogToolResults(toolResults);
               }
             }
           };
@@ -3645,6 +3672,7 @@ Double-check your response based on the criteria above. If everything looks good
               }
               if (this.debug) {
                 console.log(`[DEBUG] Completion prompt step finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                debugLogToolResults(toolResults);
               }
             }
           };
