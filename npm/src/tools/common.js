@@ -154,7 +154,7 @@ export const searchDelegateDescription = 'Search code in the repository by askin
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. Line numbers from output can be used with edit start_line/end_line for precise editing.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';
-export const bashDescription = 'Execute bash commands for system exploration and development tasks. Secure by default with built-in allow/deny lists.';
+export const bashDescription = 'Execute bash commands for system operations: building, running tests, git, package management, etc. NEVER use for code exploration (no grep, cat, find, head, tail) — use search and extract tools instead. Secure by default with built-in allow/deny lists.';
 export const analyzeAllDescription = 'Answer questions that require analyzing ALL matching data in the codebase. Use for aggregate questions like "What features exist?", "List all API endpoints", "Count TODO comments". The AI automatically plans the search strategy, processes all results via map-reduce, and synthesizes a comprehensive answer. WARNING: Slower than search - only use when you need complete coverage.';
 
 
