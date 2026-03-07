@@ -743,7 +743,11 @@ async function extractBinary(assetPath, outputDir) {
 			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {
 				console.log(`Extracting zip to ${extractDir}...`);
 			}
-			await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
+			if (isWindows) {
+				await exec(`powershell -NoProfile -Command "Expand-Archive -Path '${assetPath}' -DestinationPath '${extractDir}' -Force"`);
+			} else {
+				await exec(`unzip -q "${assetPath}" -d "${extractDir}"`);
+			}
 		} else {
 			// Assume it's a direct binary
 			if (process.env.DEBUG === '1' || process.env.VERBOSE === '1') {

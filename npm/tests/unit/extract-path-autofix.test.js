@@ -7,7 +7,7 @@
  */
 
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { tmpdir } from 'os';
 
 // Inline splitTargetSuffix to avoid circular import from vercel.js
@@ -31,14 +31,14 @@ function autoFixExtractPaths(extractFiles, effectiveCwd, allowedFolders, debug =
 		const { filePart, suffix } = splitTargetSuffix(target);
 		if (existsSync(filePart)) return target;
 
-		const cwdPrefix = (effectiveCwd.endsWith('/') ? effectiveCwd : effectiveCwd + '/');
+		const cwdPrefix = effectiveCwd.endsWith(sep) ? effectiveCwd : effectiveCwd + sep;
 		const relativePart = filePart.startsWith(cwdPrefix)
 			? filePart.slice(cwdPrefix.length)
 			: null;
 
 		if (relativePart) {
 			for (const folder of allowedFolders) {
-				const candidate = folder + '/' + relativePart;
+				const candidate = join(folder, relativePart);
 				if (existsSync(candidate)) {
 					return candidate + suffix;
 				}
@@ -46,11 +46,12 @@ function autoFixExtractPaths(extractFiles, effectiveCwd, allowedFolders, debug =
 		}
 
 		for (const folder of allowedFolders) {
-			const folderPrefix = folder.endsWith('/') ? folder : folder + '/';
-			const wsParent = folderPrefix.replace(/[^/]+\/$/, '');
+			const folderPrefix = folder.endsWith(sep) ? folder : folder + sep;
+			const sepEscaped = sep === '\\' ? '\\\\' : sep;
+			const wsParent = folderPrefix.replace(new RegExp('[^' + sepEscaped + ']+' + sepEscaped + '$'), '');
 			if (filePart.startsWith(wsParent)) {
 				const tail = filePart.slice(wsParent.length);
-				const candidate = folderPrefix + tail;
+				const candidate = join(folderPrefix, tail);
 				if (candidate !== filePart && existsSync(candidate)) {
 					return candidate + suffix;
 				}
