@@ -26,7 +26,7 @@ describe('Schema Validation Retry Logic Integration Tests', () => {
     // Test the first retry (retryCount 0)
     const prompt0 = schemaUtils.createJsonCorrectionPrompt(invalidResponse, schema, error, 0);
     expect(prompt0).toContain('CRITICAL JSON ERROR:');
-    expect(prompt0).toContain('attempt_completion with ONLY valid JSON');
+    expect(prompt0).toContain('ONLY valid JSON');
 
     // Test the second retry (retryCount 1)
     const prompt1 = schemaUtils.createJsonCorrectionPrompt(invalidResponse, schema, error, 1);

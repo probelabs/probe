@@ -69,13 +69,13 @@ Tasks = logical units of work, not files or steps.
 
 1. **Plan**: Call task tool with action="create" and a tasks array up front
 2. **Execute**: Update status to "in_progress" / "completed" as you work. Add, split, or cancel tasks as you learn more.
-3. **Finish**: All tasks must be "completed" or "cancelled" before calling attempt_completion.
+3. **Finish**: All tasks must be "completed" or "cancelled" before providing your final answer.
 
 ## Rules
 
 - Dependencies are enforced: a task cannot start until its dependencies are completed
 - Circular dependencies are rejected
-- attempt_completion is blocked while tasks remain unresolved
+- Completion is blocked while tasks remain unresolved
 `;
 
 /**
@@ -101,7 +101,7 @@ For each pending/in_progress task, either:
 - Complete it: call task tool with action="complete", id="task-X"
 - Cancel it: call task tool with action="update", id="task-X", status="cancelled"
 
-After all tasks are resolved, call attempt_completion again.`;
+After all tasks are resolved, provide your final answer.`;
 }
 
 /**

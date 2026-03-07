@@ -76,31 +76,22 @@ describe('MCP Tool Native Integration', () => {
 
   describe('MCP tools in _buildNativeTools', () => {
     test('should include MCP tools in the native tools object', () => {
-      let completionCalled = false;
-      const onComplete = (result) => { completionCalled = true; };
-
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
 
       // The tools object should contain the MCP tool
       expect(tools).toHaveProperty('test_mcp_tool');
-      // It should also contain standard tools like attempt_completion
-      expect(tools).toHaveProperty('attempt_completion');
     });
 
     test('should not include MCP tools when _disableTools is set', () => {
-      let completionCalled = false;
-      const onComplete = (result) => { completionCalled = true; };
+      const tools = agent._buildNativeTools({ _disableTools: true });
 
-      const tools = agent._buildNativeTools({ _disableTools: true }, onComplete);
-
-      // With _disableTools, only attempt_completion should be present
-      expect(tools).toHaveProperty('attempt_completion');
+      // With _disableTools, no tools should be present
+      expect(Object.keys(tools)).toHaveLength(0);
       expect(tools).not.toHaveProperty('test_mcp_tool');
     });
 
     test('should call getVercelTools on the bridge', () => {
-      const onComplete = () => {};
-      agent._buildNativeTools({}, onComplete);
+      agent._buildNativeTools({});
 
       // getVercelTools should have been called to retrieve MCP tools
       expect(mockMcpBridge.getVercelTools).toHaveBeenCalled();
@@ -109,11 +100,9 @@ describe('MCP Tool Native Integration', () => {
     test('should not include MCP tools when mcpBridge is null', () => {
       agent.mcpBridge = null;
 
-      const onComplete = () => {};
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
 
       // Should still have standard tools but no MCP tools
-      expect(tools).toHaveProperty('attempt_completion');
       expect(tools).not.toHaveProperty('test_mcp_tool');
     });
 
@@ -129,19 +118,18 @@ describe('MCP Tool Native Integration', () => {
       };
 
       // This should NOT throw "Cannot destructure property 'schema' of null"
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
 
       // MCP tools in toolImplementations should be skipped (no schema known)
       // They get included via mcpBridge.getVercelTools() instead
       expect(tools).not.toHaveProperty(mcpToolName);
       // MCP tool from the bridge should still be present
       expect(tools).toHaveProperty('test_mcp_tool');
-      expect(tools).toHaveProperty('attempt_completion');
+
     });
 
     test('should handle multiple MCP tools in toolImplementations without crash', () => {
@@ -156,12 +144,11 @@ describe('MCP Tool Native Integration', () => {
         agent.toolImplementations[name] = impl;
       }
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       // None of the MCP tools from toolImplementations should be in native tools
       for (const name of Object.keys(mcpTools)) {
         expect(tools).not.toHaveProperty(name);
@@ -247,13 +234,12 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
 
       expect(tools).toHaveProperty('tool_a');
       expect(tools).toHaveProperty('tool_b');
       expect(tools).toHaveProperty('tool_c');
-      expect(tools).toHaveProperty('attempt_completion');
+
     });
   });
 
@@ -278,14 +264,13 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       expect(tools).toHaveProperty('slack_send_dm');
-      expect(tools).toHaveProperty('attempt_completion');
+
     });
 
     test('should handle MCP tools with empty inputSchema', () => {
@@ -298,12 +283,11 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       expect(tools).toHaveProperty('simple_tool');
     });
 
@@ -316,12 +300,11 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       expect(tools).toHaveProperty('no_schema_tool');
     });
 
@@ -334,12 +317,11 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       expect(tools).toHaveProperty('no_desc_tool');
     });
 
@@ -401,17 +383,16 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       expect(tools).toHaveProperty('__tools___slack-send-dm');
       expect(tools).toHaveProperty('__tools___slack-search');
       expect(tools).toHaveProperty('__tools___slack-read-thread');
       expect(tools).toHaveProperty('__tools___slack-download-file');
-      expect(tools).toHaveProperty('attempt_completion');
+
     });
 
     test('should preserve MCP tool execute functions after wrapping', async () => {
@@ -429,8 +410,7 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
 
       // The wrapped tool should still call the original execute function
       expect(tools).toHaveProperty('search_tool');
@@ -459,12 +439,11 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       expect(tools).toHaveProperty('zod_tool');
       expect(tools).toHaveProperty('json_tool');
     });
@@ -503,12 +482,11 @@ describe('MCP Tool Native Integration', () => {
         }
       }));
 
-      const onComplete = () => {};
       expect(() => {
-        agent._buildNativeTools({}, onComplete);
+        agent._buildNativeTools({});
       }).not.toThrow();
 
-      const tools = agent._buildNativeTools({}, onComplete);
+      const tools = agent._buildNativeTools({});
       expect(tools).toHaveProperty('complex_tool');
     });
   });

@@ -307,10 +307,9 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
     });
 
-    test('should always include attempt_completion in native tools even when disableTools is true (fixes #333)', async () => {
-      // This test verifies that attempt_completion is always available as a native tool
-      // even when disableTools: true, because it's a completion signal not a regular tool.
-      // Without this, the agent would loop infinitely when tools are disabled.
+    test('should return empty tools when disableTools is true (model completes via text)', async () => {
+      // When tools are disabled, _buildNativeTools returns empty tools.
+      // The model completes naturally with text (no attempt_completion tool needed).
       const agent = new ProbeAgent({
         path: process.cwd(),
         disableTools: true
@@ -321,13 +320,10 @@ describe('ProbeAgent allowedTools option', () => {
       expect(agent.allowedTools.mode).toBe('none');
       expect(agent.allowedTools.isEnabled('attempt_completion')).toBe(false);
 
-      // But _buildNativeTools should always include attempt_completion
-      const nativeTools = agent._buildNativeTools({ _disableTools: true }, () => {});
-      expect(nativeTools.attempt_completion).toBeDefined();
-
-      // No other tools should be present when _disableTools is true
+      // _buildNativeTools should return empty tools
+      const nativeTools = agent._buildNativeTools({ _disableTools: true });
       const toolNames = Object.keys(nativeTools);
-      expect(toolNames).toEqual(['attempt_completion']);
+      expect(toolNames).toEqual([]);
     });
 
     test('should respect both enableBash flag and allowedTools in validTools', async () => {

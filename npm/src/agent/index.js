@@ -154,7 +154,9 @@ function parseArgs() {
     disableDefaultBashAllow: false,
     disableDefaultBashDeny: false,
     // Native thinking/reasoning effort
-    thinkingEffort: null
+    thinkingEffort: null,
+    // Completion prompt for post-completion validation/review
+    completionPrompt: null
   };
   
   for (let i = 0; i < args.length; i++) {
@@ -190,6 +192,8 @@ function parseArgs() {
       config.architectureFileName = args[++i];
     } else if (arg === '--schema' && i + 1 < args.length) {
       config.schema = args[++i];
+    } else if (arg === '--completion-prompt' && i + 1 < args.length) {
+      config.completionPrompt = args[++i];
     } else if (arg === '--provider' && i + 1 < args.length) {
       config.provider = args[++i];
     } else if (arg === '--model' && i + 1 < args.length) {
@@ -288,6 +292,7 @@ Options:
   --system-prompt <text|file>      Custom system prompt (text or file path)
   --architecture-file <name>       Architecture context filename in repo root (defaults to AGENTS.md with CLAUDE.md fallback; ARCHITECTURE.md is always included when present)
   --schema <schema|file>           Output schema (JSON, XML, any format - text or file path)
+  --completion-prompt <text>       Post-completion review prompt (validates/enriches the answer)
   --provider <name>                Force AI provider: anthropic, openai, google
   --model <name>                   Override model name
   --allow-edit                     Enable code modification capabilities (edit + create tools)
@@ -878,7 +883,8 @@ async function main() {
       enableTasks: config.enableTasks,
       thinkingEffort: config.thinkingEffort,
       searchDelegateProvider: config.searchDelegateProvider,
-      searchDelegateModel: config.searchDelegateModel
+      searchDelegateModel: config.searchDelegateModel,
+      completionPrompt: config.completionPrompt
     };
 
     const agent = new ProbeAgent(agentConfig);

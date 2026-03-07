@@ -25,7 +25,6 @@ export {
 	cleanupExecutePlanSchema,
 	delegateDescription,
 	bashDescription,
-	attemptCompletionSchema,
 	parseAndResolvePaths,
 	resolveTargetPath,
 	listFilesSchema,

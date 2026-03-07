@@ -143,11 +143,12 @@ describe('JSON Trailing Content Fix (Issue #447)', () => {
       // Look for the correction call pattern - it should destructure schema out
       // or use _maxIterationsOverride
 
-      // Find the attempt_completion correction call blocks
-      const attemptCompletionBlock = sourceCode.substring(
-        sourceCode.indexOf('completionAttempted && options.schema && !options._schemaFormatted && !options._skipValidation'),
-        sourceCode.indexOf('completionAttempted && options.schema && !options._schemaFormatted && !options._skipValidation') + 5000
+      // Find the schema validation correction call blocks
+      const schemaValidationBlock = sourceCode.substring(
+        sourceCode.indexOf('options.schema && !options._schemaFormatted && !options._skipValidation'),
+        sourceCode.indexOf('options.schema && !options._schemaFormatted && !options._skipValidation') + 5000
       );
+      const attemptCompletionBlock = schemaValidationBlock;
 
       // Verify that correction calls either:
       // 1. Don't spread full options (to avoid inheriting schema), OR

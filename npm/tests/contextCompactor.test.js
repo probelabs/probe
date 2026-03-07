@@ -82,13 +82,13 @@ describe('Context Compactor', () => {
       const messages = [
         { role: 'system', content: 'System' },
         { role: 'user', content: 'First query' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Searching...', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result 1', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer 1' } }] },
+        { role: 'assistant', content: 'Answer 1' },
         { role: 'user', content: 'Second query' },
-        { role: 'assistant', content: 'Extracting...' },
+        { role: 'assistant', content: 'Extracting...', toolInvocations: [{ toolName: 'extract', args: { file: 'f1' } }] },
         { role: 'tool', content: 'Result 2', toolName: 'extract' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer 2' } }] }
+        { role: 'assistant', content: 'Answer 2' }
       ];
 
       const segments = identifyMessageSegments(messages);
@@ -104,11 +104,11 @@ describe('Context Compactor', () => {
     it('should handle segment with multiple monologue messages', () => {
       const messages = [
         { role: 'user', content: 'Query' },
-        { role: 'assistant', content: 'First thought' },
-        { role: 'assistant', content: 'Second thought' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'First thought', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
+        { role: 'tool', content: 'Partial result', toolName: 'search' },
+        { role: 'assistant', content: 'Second thought', toolInvocations: [{ toolName: 'search', args: { query: 'q2' } }] },
         { role: 'tool', content: 'Result', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Done' } }] }
+        { role: 'assistant', content: 'Done' }
       ];
 
       const segments = identifyMessageSegments(messages);
@@ -116,10 +116,25 @@ describe('Context Compactor', () => {
       expect(segments[0].monologueIndices).toEqual([1, 2, 3, 4, 5]);
     });
 
-    it('should handle attempt_completion as segment end', () => {
+    it('should handle text-only assistant message as segment end', () => {
       const messages = [
         { role: 'user', content: 'Query' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Searching...', toolInvocations: [{ toolName: 'search', args: { query: 'test' } }] },
+        { role: 'tool', content: 'Found results', toolName: 'search' },
+        { role: 'assistant', content: 'Here is the answer' }
+      ];
+
+      const segments = identifyMessageSegments(messages);
+      expect(segments).toHaveLength(1);
+
+      expect(segments[0].userIndex).toBe(0);
+      expect(segments[0].finalIndex).toBe(3);
+    });
+
+    it('should handle legacy attempt_completion as segment end (backward compat)', () => {
+      const messages = [
+        { role: 'user', content: 'Query' },
+        { role: 'assistant', content: 'Searching...', toolInvocations: [{ toolName: 'search', args: { query: 'test' } }] },
         { role: 'tool', content: 'Found results', toolName: 'search' },
         { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Here is the answer' } }] }
       ];
@@ -132,9 +147,10 @@ describe('Context Compactor', () => {
     });
 
     it('should handle incomplete segment (no final answer)', () => {
+      // An assistant message with a pending tool call is not a completion
       const messages = [
         { role: 'user', content: 'Query' },
-        { role: 'assistant', content: '<thinking>In progress...</thinking>' }
+        { role: 'assistant', content: 'In progress...', toolInvocations: [{ toolName: 'search', args: { query: 'test' } }] }
       ];
 
       const segments = identifyMessageSegments(messages);
@@ -162,19 +178,17 @@ describe('Context Compactor', () => {
         { role: 'system', content: 'System' },
         // Segment 1 (old - should be compacted)
         { role: 'user', content: 'First query' },
-        { role: 'assistant', content: 'Thought 1' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Thought 1', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result 1', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer 1' } }] },
+        { role: 'assistant', content: 'Answer 1' },
         // Segment 2 (old - should be compacted)
         { role: 'user', content: 'Second query' },
-        { role: 'assistant', content: 'Thought 2' },
-        { role: 'assistant', content: 'Extracting...' },
+        { role: 'assistant', content: 'Thought 2', toolInvocations: [{ toolName: 'extract', args: { file: 'f1' } }] },
         { role: 'tool', content: 'Result 2', toolName: 'extract' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer 2' } }] },
-        // Segment 3 (active - should be preserved)
+        { role: 'assistant', content: 'Answer 2' },
+        // Segment 3 (active - should be preserved, has tool call so not a completion)
         { role: 'user', content: 'Third query' },
-        { role: 'assistant', content: 'Active thought' }
+        { role: 'assistant', content: 'Active thought', toolInvocations: [{ toolName: 'search', args: { query: 'q3' } }] }
       ];
 
       const compacted = compactMessages(messages, {
@@ -211,9 +225,9 @@ describe('Context Compactor', () => {
         { role: 'system', content: 'System 1' },
         { role: 'user', content: 'Query' },
         { role: 'system', content: 'System 2' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Searching...', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Done' } }] }
+        { role: 'assistant', content: 'Done' }
       ];
 
       const compacted = compactMessages(messages);
@@ -230,11 +244,11 @@ describe('Context Compactor', () => {
     it('should preserve segments when minSegmentsToKeep is high', () => {
       const messages = [
         { role: 'user', content: 'Query 1' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Searching...', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result 1', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Done' } }] },
+        { role: 'assistant', content: 'Done' },
         { role: 'user', content: 'Query 2' },
-        { role: 'assistant', content: 'Extracting...' }
+        { role: 'assistant', content: 'Extracting...', toolInvocations: [{ toolName: 'extract', args: { file: 'f1' } }] }
       ];
 
       const compacted = compactMessages(messages, {
@@ -248,12 +262,11 @@ describe('Context Compactor', () => {
     it('should respect keepLastSegment option', () => {
       const messages = [
         { role: 'user', content: 'Query 1' },
-        { role: 'assistant', content: 'Old thought' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Old thought', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer' } }] },
+        { role: 'assistant', content: 'Answer' },
         { role: 'user', content: 'Query 2' },
-        { role: 'assistant', content: 'New thought' }
+        { role: 'assistant', content: 'New thought', toolInvocations: [{ toolName: 'search', args: { query: 'q2' } }] }
       ];
 
       // With keepLastSegment=false and minSegmentsToKeep=1
@@ -274,12 +287,12 @@ describe('Context Compactor', () => {
     it('should handle segments without final answers', () => {
       const messages = [
         { role: 'user', content: 'Query 1' },
-        { role: 'assistant', content: 'Thought 1' },
+        { role: 'assistant', content: 'Thought 1', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer' } }] },
+        { role: 'assistant', content: 'Answer' },
         { role: 'user', content: 'Query 2' },
-        { role: 'assistant', content: 'Thought 2' }
-        // No final answer for segment 2
+        { role: 'assistant', content: 'Thought 2', toolInvocations: [{ toolName: 'search', args: { query: 'q2' } }] }
+        // No final answer for segment 2 (still has pending tool call)
       ];
 
       const compacted = compactMessages(messages, {
@@ -357,13 +370,13 @@ describe('Context Compactor', () => {
       const error = new Error('context length exceeded');
       const messages = [
         { role: 'user', content: 'Query 1' },
-        { role: 'assistant', content: 'Thought 1' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Thought 1', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result 1', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Answer 1' } }] },
+        { role: 'assistant', content: 'Answer 1' },
         { role: 'user', content: 'Query 2' },
-        { role: 'assistant', content: 'Thought 2' },
-        { role: 'assistant', content: 'Extracting...' }
+        { role: 'assistant', content: 'Thought 2', toolInvocations: [{ toolName: 'extract', args: { file: 'f1' } }] },
+        { role: 'tool', content: 'Extracted', toolName: 'extract' },
+        { role: 'assistant', content: 'Extracting...', toolInvocations: [{ toolName: 'extract', args: { file: 'f2' } }] }
       ];
 
       const result = handleContextLimitError(error, messages);
@@ -389,11 +402,11 @@ describe('Context Compactor', () => {
       const error = new Error('tokens exceed maximum');
       const messages = [
         { role: 'user', content: 'Query 1' },
-        { role: 'assistant', content: 'Searching...' },
+        { role: 'assistant', content: 'Searching...', toolInvocations: [{ toolName: 'search', args: { query: 'q1' } }] },
         { role: 'tool', content: 'Result', toolName: 'search' },
-        { role: 'assistant', content: '', toolInvocations: [{ toolName: 'attempt_completion', args: { result: 'Done' } }] },
+        { role: 'assistant', content: 'Done' },
         { role: 'user', content: 'Query 2' },
-        { role: 'assistant', content: 'Extracting...' }
+        { role: 'assistant', content: 'Extracting...', toolInvocations: [{ toolName: 'extract', args: { file: 'f1' } }] }
       ];
 
       const result = handleContextLimitError(error, messages, {
@@ -424,28 +437,27 @@ describe('Context Compactor', () => {
       const messages = [
         { role: 'system', content: 'You are a helpful assistant' },
 
-        // Turn 1 - Complete
+        // Turn 1 - Complete (tool call + tool result + completion text)
         { role: 'user', content: 'Search for all function definitions' },
-        { role: 'assistant', content: '<thinking>I need to search</thinking>' },
-        { role: 'assistant', content: '<search>function</search>' },
-        { role: 'user', content: '<tool_result>Found 50 functions</tool_result>' },
+        { role: 'assistant', content: 'I need to search', toolInvocations: [{ toolName: 'search', args: { query: 'function' } }] },
+        { role: 'tool', content: 'Found 50 functions', toolName: 'search' },
+        { role: 'assistant', content: 'Found 50 function definitions' },
 
         // Turn 2 - Complete
         { role: 'user', content: 'Extract the first function' },
-        { role: 'assistant', content: '<thinking>Let me extract</thinking>' },
-        { role: 'assistant', content: '<extract>file.js:10</extract>' },
-        { role: 'user', content: '<tool_result>function code here</tool_result>' },
+        { role: 'assistant', content: 'Let me extract', toolInvocations: [{ toolName: 'extract', args: { file: 'file.js:10' } }] },
+        { role: 'tool', content: 'function code here', toolName: 'extract' },
+        { role: 'assistant', content: 'Here is the extracted function' },
 
         // Turn 3 - Complete
         { role: 'user', content: 'Modify it to add error handling' },
-        { role: 'assistant', content: '<thinking>I will implement</thinking>' },
-        { role: 'assistant', content: '<implement>...</implement>' },
-        { role: 'user', content: '<tool_result>Success</tool_result>' },
+        { role: 'assistant', content: 'I will implement', toolInvocations: [{ toolName: 'implement', args: { file: 'file.js' } }] },
+        { role: 'tool', content: 'Success', toolName: 'implement' },
+        { role: 'assistant', content: 'Error handling added' },
 
-        // Turn 4 - Active
+        // Turn 4 - Active (has pending tool call)
         { role: 'user', content: 'Now test it' },
-        { role: 'assistant', content: '<thinking>Running tests</thinking>' },
-        { role: 'assistant', content: '<bash>npm test</bash>' }
+        { role: 'assistant', content: 'Running tests', toolInvocations: [{ toolName: 'bash', args: { command: 'npm test' } }] }
       ];
 
       const compacted = compactMessages(messages, {
@@ -460,41 +472,43 @@ describe('Context Compactor', () => {
       expect(compacted[0].role).toBe('system');
 
       // All user messages should be preserved
-      const userMessages = compacted.filter(m => m.role === 'user' && !m.content.includes('tool_result'));
+      const userMessages = compacted.filter(m => m.role === 'user');
       expect(userMessages.length).toBe(4);
 
-      // Turns 1-3 should have monologues removed
-      const hasThinking1 = compacted.some(m => m.content && m.content.includes('I need to search'));
-      const hasThinking2 = compacted.some(m => m.content && m.content.includes('Let me extract'));
-      const hasThinking3 = compacted.some(m => m.content && m.content.includes('I will implement'));
+      // Turns 1-3 should have intermediate tool calls removed
+      const hasToolCall1 = compacted.some(m => m.content && m.content.includes('I need to search') && Array.isArray(m.toolInvocations));
+      const hasToolCall2 = compacted.some(m => m.content && m.content.includes('Let me extract') && Array.isArray(m.toolInvocations));
+      const hasToolCall3 = compacted.some(m => m.content && m.content.includes('I will implement') && Array.isArray(m.toolInvocations));
 
-      expect(hasThinking1).toBe(false);
-      expect(hasThinking2).toBe(false);
-      expect(hasThinking3).toBe(false);
+      expect(hasToolCall1).toBe(false);
+      expect(hasToolCall2).toBe(false);
+      expect(hasToolCall3).toBe(false);
 
       // Active segment (Turn 4) should be fully preserved
       const hasThinking4 = compacted.some(m => m.content && m.content.includes('Running tests'));
-      const hasBash = compacted.some(m => m.content && m.content.includes('bash'));
 
       expect(hasThinking4).toBe(true);
-      expect(hasBash).toBe(true);
     });
 
     it('should provide meaningful statistics', () => {
-      const messages = Array.from({ length: 50 }, (_, i) => ({
-        role: i % 2 === 0 ? 'user' : 'assistant',
-        content: `Message ${i} with some content that takes up space`
-      }));
+      // Create segments with tool calls so intermediate messages can be compacted
+      const messages = [];
+      for (let i = 0; i < 10; i++) {
+        messages.push({ role: 'user', content: `Query ${i} with some content that takes up space` });
+        messages.push({ role: 'assistant', content: `Thinking about ${i}`, toolInvocations: [{ toolName: 'search', args: { query: `q${i}` } }] });
+        messages.push({ role: 'tool', content: `Result for query ${i} with detailed content`, toolName: 'search' });
+        messages.push({ role: 'assistant', content: `Answer ${i} with detailed explanation` });
+      }
 
       const compacted = compactMessages(messages, {
         keepLastSegment: true,
-        minSegmentsToKeep: 5
+        minSegmentsToKeep: 2
       });
 
       const stats = calculateCompactionStats(messages, compacted);
 
-      expect(stats.originalCount).toBe(50);
-      expect(stats.compactedCount).toBeLessThan(50);
+      expect(stats.originalCount).toBe(40);
+      expect(stats.compactedCount).toBeLessThan(40);
       expect(stats.reductionPercent).toBeGreaterThan(0);
       expect(stats.tokensSaved).toBeGreaterThan(0);
 

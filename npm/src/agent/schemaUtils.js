@@ -58,7 +58,7 @@ export function generateExampleFromSchema(schema, options = {}) {
 export function generateSchemaInstructions(schema, options = {}) {
   const { debug = false } = options;
 
-  let instructions = '\n\nIMPORTANT: When you provide your final answer using attempt_completion, you MUST format it as valid JSON matching this schema:\n\n';
+  let instructions = '\n\nIMPORTANT: When you provide your final answer, you MUST format it as valid JSON matching this schema:\n\n';
 
   try {
     const parsedSchema = typeof schema === 'string' ? JSON.parse(schema) : schema;
@@ -70,7 +70,7 @@ export function generateSchemaInstructions(schema, options = {}) {
     instructions += `${schema}\n\n`;
   }
 
-  instructions += 'Your response inside attempt_completion must be ONLY valid JSON - no plain text, no explanations, no markdown.\n\nIMPORTANT: First complete the requested analysis/task thoroughly, then provide your final answer in the JSON format above.';
+  instructions += 'Your final response must be ONLY valid JSON - no plain text, no explanations, no markdown.\n\nIMPORTANT: First complete the requested analysis/task thoroughly, then provide your final answer in the JSON format above.';
 
   return instructions;
 }
@@ -1167,22 +1167,22 @@ export function createJsonCorrectionPrompt(invalidResponse, schema, errorOrValid
   }
 
   // Create increasingly stronger prompts based on retry attempt
-  // These prompts explicitly instruct the AI to use attempt_completion with the JSON result
+  // These prompts instruct the AI to respond with valid JSON
   const strengthLevels = [
     {
       prefix: "CRITICAL JSON ERROR:",
-      instruction: "You MUST fix this and respond using attempt_completion with ONLY valid JSON as the result.",
-      emphasis: "Use attempt_completion with ONLY the corrected JSON in the result field. No explanatory text, no markdown, no code blocks."
+      instruction: "You MUST fix this and respond with ONLY valid JSON.",
+      emphasis: "Respond with ONLY the corrected JSON. No explanatory text, no markdown, no code blocks."
     },
     {
       prefix: "URGENT - JSON PARSING FAILED:",
-      instruction: "This is your second chance. Use attempt_completion with valid JSON that can be parsed by JSON.parse().",
-      emphasis: "ABSOLUTELY NO explanatory text or formatting. Use attempt_completion with ONLY raw JSON in the result."
+      instruction: "This is your second chance. Respond with valid JSON that can be parsed by JSON.parse().",
+      emphasis: "ABSOLUTELY NO explanatory text or formatting. Respond with ONLY raw JSON."
     },
     {
       prefix: "FINAL ATTEMPT - CRITICAL JSON ERROR:",
-      instruction: "This is the final retry. You MUST use attempt_completion with ONLY raw JSON in the result field.",
-      emphasis: "CORRECT: <attempt_completion><result>{\"key\": \"value\"}</result></attempt_completion>\nWRONG: Here is the JSON: {\"key\": \"value\"}\nWRONG: ```json{\"key\": \"value\"}```"
+      instruction: "This is the final retry. You MUST respond with ONLY raw JSON.",
+      emphasis: "CORRECT: {\"key\": \"value\"}\nWRONG: Here is the JSON: {\"key\": \"value\"}\nWRONG: ```json{\"key\": \"value\"}```"
     }
   ];
 
@@ -2081,8 +2081,7 @@ Provide only the corrected Mermaid diagram within a mermaid code block. Do not a
 
     try {
       // Don't pass schema to avoid infinite loop where AI returns raw mermaid code
-      // instead of using attempt_completion tool. The custom prompt already instructs
-      // to return only mermaid code blocks.
+      // instead of JSON. The custom prompt already instructs to return only mermaid code blocks.
       const result = await this.agent.answer(prompt, []);
 
       // Extract the mermaid code from the response

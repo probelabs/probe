@@ -396,7 +396,7 @@ export const searchTool = (options = {}) => {
 						if (debug) {
 							console.error(`[DEDUP] Blocked duplicate search: "${searchQuery}" (path: "${searchPath}")`);
 						}
-						return 'DUPLICATE SEARCH BLOCKED: You already searched for this exact query. Changing the path does NOT give different results — probe searches recursively. Do NOT repeat the same search. Try a genuinely different keyword, use extract to examine results you already found, or use attempt_completion if you have enough information.';
+						return 'DUPLICATE SEARCH BLOCKED: You already searched for this exact query. Changing the path does NOT give different results — probe searches recursively. Do NOT repeat the same search. Try a genuinely different keyword, use extract to examine results you already found, or provide your final answer if you have enough information.';
 					}
 					previousSearches.add(searchKey);
 					paginationCounts.set(searchKey, 0);
@@ -408,7 +408,7 @@ export const searchTool = (options = {}) => {
 						if (debug) {
 							console.error(`[DEDUP] Blocked excessive pagination (page ${pageCount}/${MAX_PAGES_PER_QUERY}): "${searchQuery}" in "${searchPath}"`);
 						}
-						return `PAGINATION LIMIT REACHED: You have already retrieved ${MAX_PAGES_PER_QUERY} pages of results for this query. You have enough results — use extract to examine specific files, or use attempt_completion to return your findings.`;
+						return `PAGINATION LIMIT REACHED: You have already retrieved ${MAX_PAGES_PER_QUERY} pages of results for this query. You have enough results — use extract to examine specific files, or provide your final answer with your findings.`;
 					}
 				}
 				try {
@@ -450,7 +450,7 @@ export const searchTool = (options = {}) => {
 					bashConfig: null,
 					architectureFileName: options.architectureFileName || null,
 					promptType: 'code-searcher',
-					allowedTools: ['search', 'extract', 'listFiles', 'attempt_completion'],
+					allowedTools: ['search', 'extract', 'listFiles'],
 					searchDelegate: false,
 					schema: CODE_SEARCH_SCHEMA,
 					parentAbortSignal: options.parentAbortSignal || null

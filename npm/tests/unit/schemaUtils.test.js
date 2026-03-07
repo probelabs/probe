@@ -1196,7 +1196,7 @@ Use this format for all API endpoints.`;
       expect(prompt).toContain(schema);
       expect(prompt).toContain(error);
       expect(prompt).toContain('CRITICAL JSON ERROR:');
-      expect(prompt).toContain('attempt_completion with ONLY valid JSON');
+      expect(prompt).toContain('ONLY valid JSON');
     });
 
     test('should create more urgent prompt for second retry (retryCount 1)', () => {

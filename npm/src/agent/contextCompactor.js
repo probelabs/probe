@@ -59,25 +59,32 @@ export function isContextLimitError(error) {
 }
 
 /**
- * Check if an assistant message contains an attempt_completion tool call.
- * Supports both native tool calling (toolInvocations/tool_calls) and text content.
+ * Check if an assistant message represents a completion (final answer).
+ * A completion is an assistant message with no tool calls and non-empty text content.
+ * Also supports backward compatibility with old attempt_completion tool calls.
  */
 function messageContainsCompletion(msg) {
-  // Native tool calling: Vercel AI SDK uses toolInvocations
+  // Backward compat: detect old attempt_completion tool calls in historical conversations
   if (Array.isArray(msg.toolInvocations)) {
     if (msg.toolInvocations.some(t => t.toolName === 'attempt_completion')) return true;
   }
-  // Native tool calling: OpenAI format uses tool_calls
   if (Array.isArray(msg.tool_calls)) {
     if (msg.tool_calls.some(t => t.function?.name === 'attempt_completion')) return true;
   }
-  // Multipart content (Vercel AI SDK v4+)
   if (Array.isArray(msg.content)) {
     if (msg.content.some(p => p.type === 'tool-call' && p.toolName === 'attempt_completion')) return true;
+    // New detection: assistant message with text parts but no tool-call parts
+    const hasToolCalls = msg.content.some(p => p.type === 'tool-call');
+    const hasText = msg.content.some(p => (p.type === 'text' && p.text?.trim()));
+    if (!hasToolCalls && hasText) return true;
   }
-  // Text content fallback
+  // Text content: no tool calls means this is a final text response
   const text = typeof msg.content === 'string' ? msg.content : '';
-  return text.includes('attempt_completion');
+  if (text.includes('attempt_completion')) return true;
+  // New: assistant message with text content and no tool invocations/calls is a completion
+  const hasNoToolCalls = !Array.isArray(msg.toolInvocations) && !Array.isArray(msg.tool_calls);
+  if (hasNoToolCalls && text.trim().length > 0) return true;
+  return false;
 }
 
 /**
@@ -87,7 +94,7 @@ function messageContainsCompletion(msg) {
  * A "segment" is:
  * - user message (role: 'user')
  * - followed by 0+ assistant messages (internal monologue)
- * - ending with attempt_completion tool call (final answer)
+ * - ending with a final answer (assistant message with no tool calls)
  *
  * @param {Array} messages - Array of message objects with {role, content}
  * @returns {Array} - Array of segments, each containing {userIndex, monologueIndices, finalIndex}
@@ -127,7 +134,7 @@ export function identifyMessageSegments(messages) {
 
     // Assistant message is part of monologue
     if (msg.role === 'assistant' && currentSegment) {
-      // Check if this contains an attempt_completion tool call (native or XML format)
+      // Check if this is a completion message (no tool calls, or legacy attempt_completion)
       const hasCompletion = messageContainsCompletion(msg);
 
       if (hasCompletion) {
@@ -155,7 +162,7 @@ export function identifyMessageSegments(messages) {
  *
  * Strategy:
  * 1. Keep all user messages
- * 2. Keep all final answers (attempt_completion)
+ * 2. Keep all final answers (completion messages)
  * 3. Remove intermediate monologue messages from completed segments
  * 4. Keep the most recent (active) segment intact
  *
