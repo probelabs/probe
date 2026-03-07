@@ -105,11 +105,40 @@ function normalizeTargets(targets) {
 		if (typeof target !== 'string') continue;
 		const trimmed = target.trim();
 		if (!trimmed || seen.has(trimmed)) continue;
-		seen.add(trimmed);
-		normalized.push(trimmed);
+
+		// Auto-fix: model sometimes puts multiple space-separated file paths in one string
+		// e.g. "src/ranking.rs src/simd_ranking.rs" — split them apart
+		const subTargets = splitSpaceSeparatedPaths(trimmed);
+		for (const sub of subTargets) {
+			if (!seen.has(sub)) {
+				seen.add(sub);
+				normalized.push(sub);
+			}
+		}
 	}
 
 	return normalized;
+}
+
+/**
+ * Split a string that may contain multiple space-separated file paths.
+ * Detects patterns like "path/file.ext path2/file2.ext" and splits them.
+ * Preserves single paths and paths with suffixes like ":10-20" or "#Symbol".
+ */
+function splitSpaceSeparatedPaths(target) {
+	// If no spaces, it's a single target
+	if (!/\s/.test(target)) return [target];
+
+	// Split on whitespace and check if parts look like file paths
+	const parts = target.split(/\s+/).filter(Boolean);
+	if (parts.length <= 1) return [target];
+
+	// Check if each part looks like a file path (has a dot extension or path separator)
+	const allLookLikePaths = parts.every(p => /[/\\]/.test(p) || /\.\w+/.test(p));
+	if (allLookLikePaths) return parts;
+
+	// Not confident these are separate paths — return as-is
+	return [target];
 }
 
 function extractJsonSnippet(text) {

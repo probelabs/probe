@@ -228,7 +228,17 @@ export function parseAndResolvePaths(pathStr, cwd) {
 	if (!pathStr) return [];
 
 	// Split on comma and trim whitespace
-	const paths = pathStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
+	let paths = pathStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
+
+	// Auto-fix: model sometimes passes space-separated file paths as one string
+	// e.g. "src/ranking.rs src/simd_ranking.rs" — split if each part looks like a path
+	paths = paths.flatMap(p => {
+		if (!/\s/.test(p)) return [p];
+		const parts = p.split(/\s+/).filter(Boolean);
+		if (parts.length <= 1) return [p];
+		const allLookLikePaths = parts.every(part => /[/\\]/.test(part) || /\.\w+/.test(part));
+		return allLookLikePaths ? parts : [p];
+	});
 
 	// Resolve relative paths against cwd
 	return paths.map(p => {
