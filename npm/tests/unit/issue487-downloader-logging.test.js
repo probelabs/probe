@@ -24,6 +24,27 @@ async function loadDownloaderWithMocks({ fsMock, axiosMock, tarMock, getEntryTyp
     default: tarMock
   }));
 
+  // Mock child_process to prevent real shell commands (e.g. powershell on Windows)
+  jest.unstable_mockModule('child_process', () => ({
+    exec: jest.fn((_cmd, cb) => cb(null, '', ''))
+  }));
+
+  // Mock os to always report linux so we get .tar.gz paths, not .zip
+  jest.unstable_mockModule('os', () => ({
+    default: {
+      platform: () => 'linux',
+      arch: () => 'x64',
+      type: () => 'Linux',
+      release: () => '5.0.0',
+      tmpdir: () => '/tmp',
+    },
+    platform: () => 'linux',
+    arch: () => 'x64',
+    type: () => 'Linux',
+    release: () => '5.0.0',
+    tmpdir: () => '/tmp',
+  }));
+
   jest.unstable_mockModule(directoryResolverPath, () => ({
     getPackageBinDir: jest.fn().mockResolvedValue('/tmp/probe-issue-487')
   }));
