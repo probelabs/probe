@@ -4,6 +4,8 @@
  */
 
 // Inline the function to avoid importing the full vercel.js module
+// Updated to match the new logic: only quote camelCase transitions and underscores,
+// NOT simple capitalized words like "Redis" or "Limiter"
 function autoQuoteSearchTerms(query) {
 	if (!query || typeof query !== 'string') return query;
 
@@ -38,11 +40,11 @@ function autoQuoteSearchTerms(query) {
 	const result = tokens.map(token => {
 		if (token.startsWith('"')) return token;
 		if (operators.has(token)) return token;
-		const hasUpper = /[A-Z]/.test(token);
-		const hasLower = /[a-z]/.test(token);
+		// Only quote when there's an actual case transition (camelCase/PascalCase) or underscores
+		// Simple capitalized words like "Redis" or "Limiter" should NOT be quoted
 		const hasUnderscore = token.includes('_');
-		const hasMixedCase = hasUpper && hasLower;
-		if (hasMixedCase || hasUnderscore) {
+		const hasCaseTransition = /[a-z][A-Z]/.test(token) || /[A-Z]{2,}[a-z]/.test(token);
+		if (hasCaseTransition || hasUnderscore) {
 			return `"${token}"`;
 		}
 		return token;
@@ -58,9 +60,16 @@ describe('autoQuoteSearchTerms', () => {
 		expect(autoQuoteSearchTerms('ForwardMessage')).toBe('"ForwardMessage"');
 	});
 
-	test('should quote PascalCase terms', () => {
+	test('should quote PascalCase terms with case transitions', () => {
 		expect(autoQuoteSearchTerms('ThrottleRetryLimit')).toBe('"ThrottleRetryLimit"');
 		expect(autoQuoteSearchTerms('SessionLimiter')).toBe('"SessionLimiter"');
+	});
+
+	test('should NOT quote simple capitalized words (no case transition)', () => {
+		expect(autoQuoteSearchTerms('Redis')).toBe('Redis');
+		expect(autoQuoteSearchTerms('Limiter')).toBe('Limiter');
+		expect(autoQuoteSearchTerms('Handler')).toBe('Handler');
+		expect(autoQuoteSearchTerms('rate limit middleware Redis')).toBe('rate limit middleware Redis');
 	});
 
 	test('should quote underscore terms', () => {

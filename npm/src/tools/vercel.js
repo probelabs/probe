@@ -69,12 +69,12 @@ function autoQuoteSearchTerms(query) {
 		if (token.startsWith('"')) return token;
 		// Boolean operator
 		if (operators.has(token)) return token;
-		// Check if token needs quoting: has mixed case (upper+lower) or underscores
-		const hasUpper = /[A-Z]/.test(token);
-		const hasLower = /[a-z]/.test(token);
+		// Check if token needs quoting: has camelCase/PascalCase transitions or underscores
+		// Simple capitalized words like "Redis" or "Limiter" should NOT be quoted —
+		// only quote when there's an actual case transition (e.g., "getUserData", "NewSlidingLog")
 		const hasUnderscore = token.includes('_');
-		const hasMixedCase = hasUpper && hasLower;
-		if (hasMixedCase || hasUnderscore) {
+		const hasCaseTransition = /[a-z][A-Z]/.test(token) || /[A-Z]{2,}[a-z]/.test(token);
+		if (hasCaseTransition || hasUnderscore) {
 			return `"${token}"`;
 		}
 		return token;
@@ -258,13 +258,14 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'',
 		'Combining searches with OR:',
 		'- Multiple unquoted words use OR logic: rate limit matches files containing EITHER "rate" OR "limit".',
-		'- For known symbol names, quote each term to prevent splitting: \'"limitDRL" "limitRedis"\' matches either exact symbol.',
+		'- IMPORTANT: Multiple quoted terms use AND logic by default: \'"RateLimit" "middleware"\' requires BOTH in the same file.',
+		'- To search for ANY of several quoted symbols, use the explicit OR operator: \'"ForwardMessage" OR "SessionLimiter"\'.',
 		'- Without quotes, camelCase like limitDRL gets split into "limit" + "DRL" — not what you want for symbol lookup.',
 		'- Use OR to search for multiple related symbols in ONE search instead of separate searches.',
 		'- This is much faster than running separate searches sequentially.',
-		'- Example: search \'"ForwardMessage" "SessionLimiter"\' finds files with either exact symbol in one call.',
-		'- Example: search \'"limitDRL" "doRollingWindowWrite"\' finds both rate limiting functions at once.',
-		'- Use AND only when you need both terms to appear in the same file: "rate AND limit".',
+		'- Example: search \'"ForwardMessage" OR "SessionLimiter"\' finds files with either exact symbol in one call.',
+		'- Example: search \'"limitDRL" OR "doRollingWindowWrite"\' finds both rate limiting functions at once.',
+		'- Use AND (or just put quoted terms together) when you need both terms in the same file.',
 		'',
 		'Parallel tool calls:',
 		'- When you need to search for INDEPENDENT concepts, call multiple search tools IN PARALLEL (same response).',
@@ -278,10 +279,10 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'  Query: "Find the IP allowlist middleware"',
 		'  → search "allowlist middleware" (one search, probe handles IP/ip/Ip variations)',
 		'  Query: "Find ForwardMessage and SessionLimiter"',
-		'  → search \'"ForwardMessage" "SessionLimiter"\' (one OR search finds both exact symbols)',
+		'  → search \'"ForwardMessage" OR "SessionLimiter"\' (one OR search finds both exact symbols)',
 		'  OR: search exact=true "ForwardMessage" + search exact=true "SessionLimiter" IN PARALLEL',
 		'  Query: "Find limitDRL and limitRedis functions"',
-		'  → search \'"limitDRL" "limitRedis"\' (one OR search, quoted to prevent camelCase splitting)',
+		'  → search \'"limitDRL" OR "limitRedis"\' (one OR search, quoted to prevent camelCase splitting)',
 		'  Query: "Find ThrottleRetryLimit usage"',
 		'  → search exact=true "ThrottleRetryLimit" (one search, if no results the symbol does not exist — stop)',
 		'  Query: "How does BM25 scoring work with SIMD optimization?"',
@@ -289,7 +290,7 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'',
 		'BAD search strategy (never do this):',
 		'  → search "AllowedIPs" → search "allowedIps" → search "allowed_ips" (WRONG: case/style variations, probe handles them)',
-		'  → search "limitDRL" → search "LimitDRL" (WRONG: case variation — combine with OR: \'"limitDRL" "limitRedis"\')',
+		'  → search "limitDRL" → search "LimitDRL" (WRONG: case variation — combine with OR: \'"limitDRL" OR "limitRedis"\')',
 		'  → search "throttle_retry_limit" after searching "ThrottleRetryLimit" (WRONG: snake_case variation, probe handles it)',
 		'  → search "ThrottleRetryLimit" path=tyk → search "ThrottleRetryLimit" path=gateway → search "ThrottleRetryLimit" path=apidef (WRONG: same query on different paths — probe searches recursively)',
 		'  → search "func (k *RateLimitAndQuotaCheck) handleRateLimitFailure" (WRONG: do not search full function signatures, just use exact=true "handleRateLimitFailure")',
@@ -302,15 +303,24 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- To bypass stopword filtering: wrap terms in quotes ("return", "struct") or set exact=true. Both disable stemming and splitting too.',
 		'- camelCase terms are split: getUserData becomes "get", "user", "data" — so one search covers all naming styles.',
 		'- Do NOT search for full function signatures like "func (r *Type) Method(args)". Just search for the method name with exact=true.',
+		'- Do NOT search for file names (e.g., "sliding_log.go"). Use listFiles to discover files by name.',
+		'',
+		'WHEN TO STOP — read this carefully:',
+		'- You have a LIMITED number of tool calls. Do NOT waste them on repeated or speculative searches.',
+		'- If you get a "DUPLICATE SEARCH BLOCKED" message, do NOT retry. Move to extract or output your answer.',
+		'- If you get 2+ blocked messages in a row, IMMEDIATELY output your final JSON answer.',
+		'- Once you have found the key files and verified them with extract, STOP and output your answer.',
+		'- You do NOT need to find every single reference. Focus on the most relevant code locations.',
+		'- It is MUCH better to return 5 highly relevant targets than to waste iterations searching for more.',
 		'',
 		'Strategy:',
 		'1. Analyze the query - identify key concepts and group related symbols',
-		'2. Combine related symbols into OR searches: \'"symbolA" "symbolB"\' finds files with either (quote to prevent splitting)',
+		'2. Combine related symbols into OR searches: \'"symbolA" OR "symbolB"\' finds files with either',
 		'3. Run INDEPENDENT searches in PARALLEL — do not wait for one to finish before starting another',
 		'4. For known symbol names use exact=true. For concepts use default (exact=false).',
 		'5. If a search returns results, use extract to verify relevance. Run multiple extracts in parallel too.',
 		'6. If a search returns NO results, the term does not exist. Do NOT retry with variations, different paths, or longer strings. Move on.',
-		'7. Combine all relevant targets in your final response',
+		'7. Once you have enough targets (typically 3-10), output your final JSON answer immediately.',
 		'',
 		`Query: ${searchQuery}`,
 		`Search path(s): ${searchPath}`,
@@ -351,6 +361,8 @@ export const searchTool = (options = {}) => {
 
 	// Track previous non-paginated searches to detect and block duplicates
 	const previousSearches = new Set();
+	// Track how many times a duplicate search has been blocked (for escalating messages)
+	let consecutiveDupBlocks = 0;
 	// Track pagination counts per query to cap runaway pagination
 	const paginationCounts = new Map();
 	const MAX_PAGES_PER_QUERY = 3;
@@ -422,12 +434,17 @@ export const searchTool = (options = {}) => {
 				const searchKey = `${searchQuery}::${exact || false}`;
 				if (!nextPage) {
 					if (previousSearches.has(searchKey)) {
+						consecutiveDupBlocks++;
 						if (debug) {
-							console.error(`[DEDUP] Blocked duplicate search: "${searchQuery}" (path: "${searchPath}")`);
+							console.error(`[DEDUP] Blocked duplicate search (${consecutiveDupBlocks}x): "${searchQuery}" (path: "${searchPath}")`);
 						}
-						return 'DUPLICATE SEARCH BLOCKED: You already searched for this exact query. Changing the path does NOT give different results — probe searches recursively. Do NOT repeat the same search. Try a genuinely different keyword, use extract to examine results you already found, or provide your final answer if you have enough information.';
+						if (consecutiveDupBlocks >= 3) {
+							return 'STOP. You have been blocked ' + consecutiveDupBlocks + ' times for repeating searches. You MUST output your final JSON answer NOW with whatever targets you have found. Do NOT call any more tools.';
+						}
+						return 'DUPLICATE SEARCH BLOCKED (' + consecutiveDupBlocks + 'x). You already searched for this. Do NOT repeat — probe searches recursively across all paths. Either: (1) use extract on results you already found, (2) try a COMPLETELY different keyword, or (3) output your final answer NOW.';
 					}
 					previousSearches.add(searchKey);
+					consecutiveDupBlocks = 0; // Reset on successful new search
 					paginationCounts.set(searchKey, 0);
 				} else {
 					// Cap pagination to prevent runaway page-through of broad queries
