@@ -214,6 +214,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 }])
             }
@@ -263,6 +264,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 }])
             }
@@ -369,6 +371,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 }])
             }
@@ -430,6 +433,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 }])
             }
@@ -485,6 +489,7 @@ pub fn process_file_for_extraction(
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
+                lsp_info: None,
                 parent_context: None,
             }]);
         }
@@ -591,6 +596,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: None,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 }])
             }
@@ -667,6 +673,7 @@ pub fn process_file_for_extraction(
                     matched_keywords: None,
                     matched_lines: matched_lines_vec,
                     tokenized_content: Some(tokenized_content),
+                    lsp_info: None,
                     parent_context: None,
                 }])
             }
@@ -716,6 +723,7 @@ pub fn process_file_for_extraction(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
+            lsp_info: None,
             parent_context: None,
         }])
     }
@@ -982,6 +990,7 @@ pub fn extract_all_symbols_from_file(path: &Path, allow_tests: bool) -> Result<V
                             matched_keywords: None,
                             matched_lines: None,
                             tokenized_content: None,
+                            lsp_info: None,
                             parent_context: None,
                         };
 

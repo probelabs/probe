@@ -22,17 +22,77 @@ pub use formatter::{
     format_and_print_extraction_results, format_extraction_dry_run, format_extraction_results,
 };
 #[allow(unused_imports)]
-pub use processor::process_file_for_extraction;
+pub use processor::process_file_for_extraction as process_file_for_extraction_multi;
 #[allow(unused_imports)]
 pub use prompts::PromptTemplate;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use probe_code::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use probe_code::models::SearchResult;
 use std::collections::HashSet;
 use std::io::Read;
+use std::ops::Deref;
 #[allow(unused_imports)]
 use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+pub struct ExtractionResultCompat {
+    primary: SearchResult,
+    all: Vec<SearchResult>,
+}
+
+impl Deref for ExtractionResultCompat {
+    type Target = SearchResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.primary
+    }
+}
+
+impl IntoIterator for ExtractionResultCompat {
+    type Item = SearchResult;
+    type IntoIter = std::vec::IntoIter<SearchResult>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.all.into_iter()
+    }
+}
+
+/// Backward-compatible extraction API used by integration tests.
+///
+/// This keeps the legacy signature (`lsp` flag + single-result return) while
+/// delegating to the multi-result processor implementation.
+#[allow(clippy::too_many_arguments)]
+pub fn process_file_for_extraction(
+    path: &std::path::Path,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    symbol: Option<&str>,
+    allow_tests: bool,
+    context_lines: usize,
+    specific_lines: Option<&std::collections::HashSet<usize>>,
+    symbols: bool,
+    _lsp: bool,
+) -> Result<ExtractionResultCompat> {
+    let results = processor::process_file_for_extraction(
+        path,
+        start_line,
+        end_line,
+        symbol,
+        allow_tests,
+        context_lines,
+        specific_lines,
+        symbols,
+    )?;
+    let primary = results
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("No extraction results for {:?}", path))?;
+    Ok(ExtractionResultCompat {
+        primary,
+        all: results,
+    })
+}
 
 /// Options for the extract command
 pub struct ExtractOptions {
@@ -64,6 +124,9 @@ pub struct ExtractOptions {
     pub instructions: Option<String>,
     /// Whether to ignore .gitignore files
     pub no_gitignore: bool,
+    /// Whether to include LSP-based enrichment data (compatibility field).
+    #[allow(dead_code)]
+    pub lsp: bool,
 }
 
 /// Handle the extract command
@@ -753,6 +816,40 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             "[DEBUG] After deduplication: {len} results",
             len = results.len()
         );
+    }
+
+    // Optionally enrich extracted results with LSP data (call hierarchy, references, etc.).
+    // This is best-effort; extraction output remains available even if LSP enrichment fails.
+    if options.lsp && !results.is_empty() {
+        if debug_mode {
+            eprintln!(
+                "[DEBUG] LSP enabled, enriching {} extracted result(s)",
+                results.len()
+            );
+        }
+        if let Err(e) =
+            crate::search::lsp_enrichment::enrich_results_with_lsp(&mut results, debug_mode)
+        {
+            if debug_mode {
+                eprintln!("[DEBUG] LSP enrichment failed: {e}");
+            }
+        } else {
+            // Normalize merged multi-symbol payloads into a single symbol payload so
+            // extract formatter can render top-level call_hierarchy/references sections.
+            for result in &mut results {
+                if let Some(lsp_info) = result.lsp_info.take() {
+                    if let Some(symbols) = lsp_info.get("symbols").and_then(|v| v.as_array()) {
+                        if let Some(first_symbol) = symbols.first() {
+                            result.lsp_info = Some(first_symbol.clone());
+                        } else {
+                            result.lsp_info = Some(lsp_info);
+                        }
+                    } else {
+                        result.lsp_info = Some(lsp_info);
+                    }
+                }
+            }
+        }
     }
 
     if debug_mode {

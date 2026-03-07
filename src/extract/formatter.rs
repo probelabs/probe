@@ -52,6 +52,8 @@ fn format_extraction_internal(
                     #[serde(serialize_with = "serialize_lines_as_array")]
                     lines: (usize, usize),
                     node_type: &'a str,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    lsp_info: Option<&'a serde_json::Value>,
                 }
 
                 // Helper function to serialize lines as an array
@@ -75,6 +77,7 @@ fn format_extraction_internal(
                         file: &r.file,
                         lines: r.lines,
                         node_type: &r.node_type,
+                        lsp_info: r.lsp_info.as_ref(),
                     })
                     .collect();
 
@@ -115,6 +118,8 @@ fn format_extraction_internal(
                     symbol_signature: Option<&'a String>,
                     #[serde(skip_serializing_if = "Option::is_none")]
                     original_input: Option<&'a str>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    lsp_info: Option<&'a serde_json::Value>,
                 }
 
                 // Helper function to serialize lines as an array
@@ -144,6 +149,7 @@ fn format_extraction_internal(
                         // you can uncomment the line below, but it's typically at the root.
                         // original_input: r.original_input.as_deref(),
                         original_input: None,
+                        lsp_info: r.lsp_info.as_ref(),
                     })
                     .collect();
 
@@ -417,7 +423,147 @@ fn format_extraction_internal(
                         }
                     }
 
-                    // In dry-run, we do NOT print the code or symbols
+                    // Show LSP information if available
+                    if let Some(lsp_info) = &result.lsp_info {
+                        match format {
+                            "markdown" => {
+                                writeln!(output, "### LSP Information")?;
+                            }
+                            _ => {
+                                writeln!(output, "LSP Information:")?;
+                            }
+                        }
+
+                        match serde_json::from_value::<
+                            probe_code::lsp_integration::EnhancedSymbolInfo,
+                        >(lsp_info.clone())
+                        {
+                            Ok(enhanced_symbol) => {
+                                // Always show a Call Hierarchy heading so users see the section even if empty
+                                if format == "markdown" {
+                                    writeln!(output, "#### Call Hierarchy")?;
+                                } else {
+                                    writeln!(output, "  Call Hierarchy:")?;
+                                }
+
+                                // Display call hierarchy if available
+                                if let Some(call_hierarchy) = &enhanced_symbol.call_hierarchy {
+                                    if !call_hierarchy.incoming_calls.is_empty() {
+                                        if format == "markdown" {
+                                            writeln!(output, "#### Incoming Calls:")?;
+                                        } else {
+                                            writeln!(output, "  Incoming Calls:")?;
+                                        }
+
+                                        for call in &call_hierarchy.incoming_calls {
+                                            let call_desc = format!(
+                                                "{} ({}:{})",
+                                                call.name, call.file_path, call.line
+                                            );
+                                            if format == "markdown" {
+                                                writeln!(output, "  - {call_desc}")?;
+                                            } else {
+                                                writeln!(output, "    - {}", call_desc.green())?;
+                                            }
+                                        }
+                                    }
+
+                                    if !call_hierarchy.outgoing_calls.is_empty() {
+                                        if format == "markdown" {
+                                            writeln!(output, "#### Outgoing Calls:")?;
+                                        } else {
+                                            writeln!(output, "  Outgoing Calls:")?;
+                                        }
+
+                                        for call in &call_hierarchy.outgoing_calls {
+                                            let call_desc = format!(
+                                                "{} ({}:{})",
+                                                call.name, call.file_path, call.line
+                                            );
+                                            if format == "markdown" {
+                                                writeln!(output, "  - {call_desc}")?;
+                                            } else {
+                                                writeln!(output, "    - {}", call_desc.green())?;
+                                            }
+                                        }
+                                    }
+
+                                    if call_hierarchy.incoming_calls.is_empty()
+                                        && call_hierarchy.outgoing_calls.is_empty()
+                                    {
+                                        if format == "markdown" {
+                                            writeln!(
+                                                output,
+                                                "  No call hierarchy information available"
+                                            )?;
+                                        } else {
+                                            writeln!(
+                                                output,
+                                                "  {}",
+                                                "No call hierarchy information available".dimmed()
+                                            )?
+                                        }
+                                    }
+                                }
+
+                                // Display references if available
+                                if !enhanced_symbol.references.is_empty() {
+                                    if format == "markdown" {
+                                        writeln!(output, "#### References:")?;
+                                    } else {
+                                        writeln!(output, "  References:")?;
+                                    }
+
+                                    for reference in &enhanced_symbol.references {
+                                        let ref_desc = format!(
+                                            "{}:{} - {}",
+                                            reference.file_path, reference.line, reference.context
+                                        );
+                                        if format == "markdown" {
+                                            writeln!(output, "  - {ref_desc}")?;
+                                        } else {
+                                            writeln!(output, "    - {}", ref_desc.blue())?;
+                                        }
+                                    }
+                                }
+
+                                // Documentation display removed to reduce noise and focus on call hierarchy and references
+                            }
+                            Err(e) => {
+                                // Debug: log deserialization error
+                                if std::env::var("PROBE_DEBUG").unwrap_or_default() == "1" {
+                                    eprintln!("[DEBUG] Failed to deserialize LSP info: {e}");
+                                }
+                                // Fallback: display raw JSON if we can't parse it
+                                if format == "markdown" {
+                                    writeln!(output, "#### Call Hierarchy")?;
+                                    writeln!(output, "  No call hierarchy information available")?;
+                                    writeln!(output, "```json")?;
+                                    writeln!(
+                                        output,
+                                        "{}",
+                                        serde_json::to_string_pretty(lsp_info)?
+                                    )?;
+                                    writeln!(output, "```")?;
+                                } else {
+                                    writeln!(output, "  Call Hierarchy:")?;
+                                    writeln!(
+                                        output,
+                                        "    {}",
+                                        "No call hierarchy information available".dimmed()
+                                    )?;
+                                    writeln!(
+                                        output,
+                                        "  Raw LSP Data: {}",
+                                        serde_json::to_string_pretty(lsp_info)?.dimmed()
+                                    )?;
+                                }
+                            }
+                        }
+                        writeln!(output)?;
+                    }
+
+                    // In dry-run, we do NOT print the code
                     if !is_dry_run {
                         // Check if we should display symbols instead of code
                         if symbols {
@@ -476,6 +622,233 @@ fn format_extraction_internal(
                                     }
                                     writeln!(output, "{}", result.code)?;
                                     writeln!(output, "```")?;
+                                }
+                            }
+                        }
+                    }
+
+                    // Display LSP information if available
+                    if let Some(lsp_info) = &result.lsp_info {
+                        writeln!(output)?;
+                        writeln!(output, "{}", "LSP Information:".blue().bold())?;
+
+                        // Display call hierarchy if available
+                        if let Some(call_hierarchy) =
+                            lsp_info.get("call_hierarchy").and_then(|v| v.as_object())
+                        {
+                            writeln!(output, "  {}:", "Call Hierarchy".cyan())?;
+                            // Incoming calls
+                            if let Some(incoming) = call_hierarchy
+                                .get("incoming_calls")
+                                .and_then(|v| v.as_array())
+                            {
+                                if !incoming.is_empty() {
+                                    writeln!(output, "    Incoming Calls:")?;
+                                    for call in incoming {
+                                        if let Some(call_obj) = call.as_object() {
+                                            let name = call_obj
+                                                .get("name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+                                            let file_path = call_obj
+                                                .get("file_path")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let line_disp =
+                                                match call_obj.get("line").and_then(|v| v.as_u64())
+                                                {
+                                                    Some(l) if l > 0 => l,
+                                                    Some(_) | None => 0,
+                                                };
+                                            let file_path = file_path
+                                                .strip_prefix("file://")
+                                                .unwrap_or(file_path);
+                                            if line_disp > 0 {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({}:{})",
+                                                    name, file_path, line_disp
+                                                )?;
+                                            } else {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({})",
+                                                    name, file_path
+                                                )?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Outgoing calls
+                            if let Some(outgoing) = call_hierarchy
+                                .get("outgoing_calls")
+                                .and_then(|v| v.as_array())
+                            {
+                                if !outgoing.is_empty() {
+                                    writeln!(output, "    Outgoing Calls:")?;
+                                    for call in outgoing {
+                                        if let Some(call_obj) = call.as_object() {
+                                            let name = call_obj
+                                                .get("name")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+                                            let file_path = call_obj
+                                                .get("file_path")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let line_disp =
+                                                match call_obj.get("line").and_then(|v| v.as_u64())
+                                                {
+                                                    Some(l) if l > 0 => l,
+                                                    Some(_) | None => 0,
+                                                };
+                                            let file_path = file_path
+                                                .strip_prefix("file://")
+                                                .unwrap_or(file_path);
+                                            if line_disp > 0 {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({}:{})",
+                                                    name, file_path, line_disp
+                                                )?;
+                                            } else {
+                                                writeln!(
+                                                    output,
+                                                    "      - {} ({})",
+                                                    name, file_path
+                                                )?;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Display references if available
+                        if let Some(references) =
+                            lsp_info.get("references").and_then(|v| v.as_array())
+                        {
+                            if !references.is_empty() {
+                                writeln!(output, "  References:")?;
+                                for reference in references {
+                                    if let Some(ref_obj) = reference.as_object() {
+                                        let file_path = ref_obj
+                                            .get("file_path")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let line_disp =
+                                            match ref_obj.get("line").and_then(|v| v.as_u64()) {
+                                                Some(l) if l > 0 => l,
+                                                Some(_) | None => 0,
+                                            };
+                                        let context = ref_obj
+                                            .get("context")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("reference");
+                                        let file_path =
+                                            file_path.strip_prefix("file://").unwrap_or(file_path);
+                                        if line_disp > 0 {
+                                            writeln!(
+                                                output,
+                                                "    - {} ({}:{})",
+                                                context, file_path, line_disp
+                                            )?;
+                                        } else {
+                                            writeln!(output, "    - {} ({})", context, file_path)?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Display search-based references if available (fallback mechanism)
+                        if let Some(search_references) =
+                            lsp_info.get("search_references").and_then(|v| v.as_array())
+                        {
+                            if !search_references.is_empty() {
+                                writeln!(output, "  {}:", "References (from search)".cyan())?;
+                                for reference in search_references {
+                                    if let Some(ref_obj) = reference.as_object() {
+                                        let file_path = ref_obj
+                                            .get("file_path")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("");
+                                        let line_disp =
+                                            match ref_obj.get("line").and_then(|v| v.as_u64()) {
+                                                Some(l) if l > 0 => l,
+                                                Some(_) | None => 0,
+                                            };
+                                        let context = ref_obj
+                                            .get("context")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("reference");
+                                        let file_path =
+                                            file_path.strip_prefix("file://").unwrap_or(file_path);
+                                        if line_disp > 0 {
+                                            writeln!(
+                                                output,
+                                                "      - {} ({}:{})",
+                                                context, file_path, line_disp
+                                            )?;
+                                        } else {
+                                            writeln!(
+                                                output,
+                                                "      - {} ({})",
+                                                context, file_path
+                                            )?;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Display search-only references if LSP didn't provide any data
+                        if let Some(search_only_references) =
+                            lsp_info.get("references").and_then(|v| v.as_array())
+                        {
+                            // Check if this is from search fallback (source field indicates this)
+                            if lsp_info.get("source").and_then(|v| v.as_str())
+                                == Some("search_fallback")
+                            {
+                                if !search_only_references.is_empty() {
+                                    writeln!(output, "  {}:", "References (from search)".green())?;
+                                    for reference in search_only_references {
+                                        if let Some(ref_obj) = reference.as_object() {
+                                            let file_path = ref_obj
+                                                .get("file_path")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            let line_disp = match ref_obj
+                                                .get("line")
+                                                .and_then(|v| v.as_u64())
+                                            {
+                                                Some(l) if l > 0 => l,
+                                                Some(_) | None => 0,
+                                            };
+                                            let context = ref_obj
+                                                .get("context")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("reference");
+                                            let file_path = file_path
+                                                .strip_prefix("file://")
+                                                .unwrap_or(file_path);
+                                            if line_disp > 0 {
+                                                writeln!(
+                                                    output,
+                                                    "    - {} ({}:{})",
+                                                    context, file_path, line_disp
+                                                )?;
+                                            } else {
+                                                writeln!(
+                                                    output,
+                                                    "    - {} ({})",
+                                                    context, file_path
+                                                )?;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -689,5 +1062,58 @@ pub fn get_language_from_extension(extension: &str) -> &'static str {
         "pl" | "pm" => "perl",
         "proto" => "protobuf",
         _ => "",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_no_zero_line_in_formatter() {
+        let lsp_info = json!({
+            "call_hierarchy": {
+                "outgoing": [ {"name":"f","file_path":"file://y.rs","line":0} ]
+            },
+            "references": [ {"file_path":"file://x.rs","line":0,"context":"ref"} ],
+            "search_references": [ {"file_path":"file://z.rs","line":0,"context":"ref"} ]
+        });
+        let result = SearchResult {
+            file: "src/main.rs".to_string(),
+            lines: (1, 1),
+            node_type: "function".to_string(),
+            code: "fn main(){}".to_string(),
+            symbol_signature: None,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            matched_lines: None,
+            tokenized_content: None,
+            lsp_info: Some(lsp_info),
+            parent_context: None,
+        };
+        let out =
+            format_extraction_results(&[result], "terminal", None, None, None, false).unwrap();
+        assert!(
+            !out.contains(":0"),
+            "output should not contain :0, got: {}",
+            out
+        );
     }
 }
