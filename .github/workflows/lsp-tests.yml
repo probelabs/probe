@@ -71,10 +71,10 @@ jobs:
 
       - name: Install phpactor (PHP language server)
         run: |
-          composer global require phpactor/phpactor
-          echo "Composer global bin path: $(composer global config bin-dir --absolute)"
-          # Add composer global bin to PATH for the current job
-          composer global config bin-dir --absolute >> "$GITHUB_PATH"
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL https://github.com/phpactor/phpactor/releases/latest/download/phpactor.phar -o "$HOME/.local/bin/phpactor"
+          chmod +x "$HOME/.local/bin/phpactor"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Show LSP tool versions
         run: |

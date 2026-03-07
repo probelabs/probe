@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, RwLock, Semaphore};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::database::{DatabaseBackend, DatabaseError, Workspace};
 use crate::git_service::{GitService, GitServiceError};
