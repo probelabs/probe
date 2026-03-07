@@ -3476,18 +3476,37 @@ Follow these instructions carefully:
             stopWhen: stepCountIs(maxIterations),
             maxTokens: maxResponseTokens,
             temperature: 0.3,
-            onStepFinish: ({ toolResults, text, finishReason, usage }) => {
+            onStepFinish: (stepResult) => {
+              const { toolResults, toolCalls, text, reasoningText, finishReason, usage } = stepResult;
               currentIteration++;
               toolContext.currentIteration = currentIteration;
 
-              // Record telemetry
+              // Record telemetry — include model's reasoning and tool call details
               if (this.tracer) {
-                this.tracer.addEvent('iteration.step', {
+                const stepEvent = {
                   'iteration': currentIteration,
                   'max_iterations': maxIterations,
                   'finish_reason': finishReason,
                   'has_tool_calls': !!(toolResults && toolResults.length > 0)
-                });
+                };
+                // Model's text output (its monologue explaining why it's calling tools)
+                if (text) {
+                  stepEvent['ai.text'] = text.substring(0, 10000);
+                  stepEvent['ai.text.length'] = text.length;
+                }
+                // Model's internal reasoning/thinking tokens (if available)
+                if (reasoningText) {
+                  stepEvent['ai.reasoning'] = reasoningText.substring(0, 10000);
+                  stepEvent['ai.reasoning.length'] = reasoningText.length;
+                }
+                // Tool call names and args for this step
+                if (toolCalls && toolCalls.length > 0) {
+                  stepEvent['ai.tool_calls'] = toolCalls.map(tc => ({
+                    name: tc.toolName,
+                    args: JSON.stringify(tc.args || {}).substring(0, 2000)
+                  }));
+                }
+                this.tracer.addEvent('iteration.step', stepEvent);
               }
 
               // Record token usage
@@ -3502,6 +3521,12 @@ Follow these instructions carefully:
 
               if (this.debug) {
                 console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                if (text) {
+                  console.log(`[DEBUG]   model text: ${debugTruncate(text)}`);
+                }
+                if (reasoningText) {
+                  console.log(`[DEBUG]   reasoning: ${debugTruncate(reasoningText)}`);
+                }
                 debugLogToolResults(toolResults);
               }
             }
@@ -3705,7 +3730,8 @@ Double-check your response based on the criteria above. If everything looks good
             stopWhen: stepCountIs(completionMaxIterations),
             maxTokens: maxResponseTokens,
             temperature: 0.3,
-            onStepFinish: ({ toolResults, text, finishReason, usage }) => {
+            onStepFinish: (stepResult) => {
+              const { toolResults, text, reasoningText, finishReason, usage } = stepResult;
               if (usage) {
                 this.tokenCounter.recordUsage(usage);
               }
@@ -3714,6 +3740,12 @@ Double-check your response based on the criteria above. If everything looks good
               }
               if (this.debug) {
                 console.log(`[DEBUG] Completion prompt step finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                if (text) {
+                  console.log(`[DEBUG]   model text: ${debugTruncate(text)}`);
+                }
+                if (reasoningText) {
+                  console.log(`[DEBUG]   reasoning: ${debugTruncate(reasoningText)}`);
+                }
                 debugLogToolResults(toolResults);
               }
             }
