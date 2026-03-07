@@ -499,8 +499,7 @@ export const searchTool = (options = {}) => {
 					allowedTools: ['search', 'extract', 'listFiles'],
 					searchDelegate: false,
 					schema: CODE_SEARCH_SCHEMA,
-					parentAbortSignal: options.parentAbortSignal || null,
-					maxIterations: 15  // Cap delegate to 15 iterations — good delegates finish in 3-6
+					parentAbortSignal: options.parentAbortSignal || null
 				});
 
 				const delegateResult = options.tracer?.withSpan
