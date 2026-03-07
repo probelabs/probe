@@ -645,7 +645,9 @@ impl LspClient {
                 Some(hierarchy)
             }
             Err(e) => {
-                warn!("Failed to get call hierarchy: {}", e);
+                // Best-effort enrichment: avoid noisy warning strings on stderr for recoverable
+                // LSP operation failures (tests treat `error:`-like output as command failure).
+                debug!("Best-effort call hierarchy enrichment failed: {}", e);
                 None
             }
         };
@@ -671,7 +673,9 @@ impl LspClient {
                 })
                 .collect(),
             Err(e) => {
-                warn!("Failed to get references: {}", e);
+                // Best-effort enrichment: keep extraction successful even if references fail.
+                // Log at debug level to avoid surfacing transient LSP server issues as stderr noise.
+                debug!("Best-effort references enrichment failed: {}", e);
                 Vec::new()
             }
         };
