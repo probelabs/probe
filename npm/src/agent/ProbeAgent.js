@@ -3490,7 +3490,7 @@ Follow these instructions carefully:
                 if (allHaveTools) {
                   const signatures = last3.map(s => {
                     const tc = s.toolCalls[0];
-                    return `${tc.toolName}::${JSON.stringify(tc.args)}`;
+                    return `${tc.toolName}::${JSON.stringify(tc.args ?? tc.input)}`;
                   });
                   if (signatures[0] === signatures[1] && signatures[1] === signatures[2]) {
                     if (this.debug) {
@@ -3515,11 +3515,14 @@ Follow these instructions carefully:
               if (steps.length >= 2) {
                 const last2 = steps.slice(-2);
                 if (last2.every(s => s.toolCalls?.length === 1)) {
-                  const sig1 = `${last2[0].toolCalls[0].toolName}::${JSON.stringify(last2[0].toolCalls[0].args)}`;
-                  const sig2 = `${last2[1].toolCalls[0].toolName}::${JSON.stringify(last2[1].toolCalls[0].args)}`;
+                  const tc1 = last2[0].toolCalls[0];
+                  const tc2 = last2[1].toolCalls[0];
+                  const sig1 = `${tc1.toolName}::${JSON.stringify(tc1.args ?? tc1.input)}`;
+                  const sig2 = `${tc2.toolName}::${JSON.stringify(tc2.args ?? tc2.input)}`;
                   if (sig1 === sig2) {
                     if (this.debug) {
-                      console.log(`[DEBUG] prepareStep: 2 consecutive identical tool calls, forcing toolChoice=none`);
+                      console.log(`[DEBUG] prepareStep: 2 consecutive identical tool calls (${tc1.toolName}), forcing toolChoice=none`);
+                      console.log(`[DEBUG]   sig: ${sig1.substring(0, 200)}`);
                     }
                     return { toolChoice: 'none' };
                   }
