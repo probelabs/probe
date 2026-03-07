@@ -2977,7 +2977,7 @@ Follow these instructions carefully:
 1. Analyze the user's request.
 2. Use the available tools step-by-step to fulfill the request.
 3. You MUST use the search tool before answering ANY code-related question. NEVER answer from memory or general knowledge — your answers must be grounded in actual code found via search/extract.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
-4. Ensure to get really deep and understand the full picture before answering.
+4. Ensure to get really deep and understand the full picture before answering. Follow call chains — if function A calls B, search for B too. Look for related subsystems (e.g., if asked about rate limiting, also check for quota, throttling, smoothing).
 5. Once the task is fully completed, provide your final answer directly as text. Always cite specific files and line numbers as evidence. Do NOT output planning or thinking text — go straight to the answer.
 6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
 7. NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed) — always use search and extract tools instead. Bash is only for system operations like building, running tests, or git commands.${this.allowEdit ? `
@@ -3568,7 +3568,8 @@ ${resultToReview}
 Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
 
                   return {
-                    userMessage: completionPromptMessage
+                    userMessage: completionPromptMessage,
+                    toolChoice: 'none' // Force text-only review — no tool calls
                   };
                 }
               }
@@ -3771,12 +3772,11 @@ Double-check your response based on the criteria above. If everything looks good
 
             currentMessages.push({ role: 'user', content: completionPromptMessage });
 
-            const completionMaxIterations = 5;
             const completionStreamOptions = {
               model: this.provider ? this.provider(this.model) : this.model,
               messages: this.prepareMessagesWithImages(currentMessages),
               tools,
-              stopWhen: stepCountIs(completionMaxIterations),
+              toolChoice: 'none', // Force text-only response — no tool calls during review
               maxTokens: maxResponseTokens,
               temperature: 0.3,
               onStepFinish: ({ toolResults, text, finishReason, usage }) => {
