@@ -5397,16 +5397,8 @@ impl LspDaemon {
             // Canonicalize each workspace path to ensure it's absolute
             let canonical_workspace = safe_canonicalize(&workspace_path);
 
-            let languages_to_init = if let Some(ref requested_languages) = languages {
-                // Only initialize requested languages that were detected
-                detected_languages
-                    .intersection(&requested_languages.iter().copied().collect())
-                    .copied()
-                    .collect::<Vec<_>>()
-            } else {
-                // Initialize all detected languages
-                detected_languages.into_iter().collect()
-            };
+            let languages_to_init =
+                Self::resolve_languages_to_init(&detected_languages, languages.as_ref());
 
             for language in languages_to_init {
                 // Skip unknown language
@@ -5463,6 +5455,34 @@ impl LspDaemon {
         }
 
         Ok((initialized, errors))
+    }
+
+    fn resolve_languages_to_init(
+        detected_languages: &std::collections::HashSet<Language>,
+        requested_languages: Option<&Vec<Language>>,
+    ) -> Vec<Language> {
+        if let Some(requested_languages) = requested_languages {
+            // Primary behavior: initialize only requested languages that were detected.
+            let requested_set: std::collections::HashSet<Language> =
+                requested_languages.iter().copied().collect();
+            let mut languages_to_init: Vec<Language> = detected_languages
+                .intersection(&requested_set)
+                .copied()
+                .collect();
+
+            // Fallback: if detection missed all requested languages, honor the explicit request.
+            if languages_to_init.is_empty() && !requested_languages.is_empty() {
+                languages_to_init = requested_languages
+                    .iter()
+                    .copied()
+                    .filter(|language| *language != Language::Unknown)
+                    .collect();
+            }
+            languages_to_init
+        } else {
+            // Initialize all detected languages
+            detected_languages.iter().copied().collect()
+        }
     }
 
     fn detect_workspace_language(&self, workspace_root: &Path) -> Result<Language> {
@@ -8063,6 +8083,8 @@ pub async fn start_daemon_background() -> Result<()> {
 mod queue_conversion_tests {
     use super::LspDaemon;
     use crate::indexing::QueueSnapshot;
+    use crate::language_detector::Language;
+    use std::collections::HashSet;
 
     #[test]
     fn queue_snapshot_conversion_merges_critical_into_high() {
@@ -8106,6 +8128,41 @@ mod queue_conversion_tests {
         assert!(info.memory_pressure);
         assert!(info.is_paused);
         assert_eq!(info.high_priority_items, 7);
+    }
+
+    #[test]
+    fn resolve_languages_to_init_prefers_detected_intersection() {
+        let mut detected = HashSet::new();
+        detected.insert(Language::Go);
+        detected.insert(Language::Php);
+        let requested = vec![Language::Php];
+
+        let result = LspDaemon::resolve_languages_to_init(&detected, Some(&requested));
+
+        assert_eq!(result, vec![Language::Php]);
+    }
+
+    #[test]
+    fn resolve_languages_to_init_falls_back_to_explicit_request() {
+        let mut detected = HashSet::new();
+        detected.insert(Language::Go);
+        let requested = vec![Language::Php];
+
+        let result = LspDaemon::resolve_languages_to_init(&detected, Some(&requested));
+
+        assert_eq!(result, vec![Language::Php]);
+    }
+
+    #[test]
+    fn resolve_languages_to_init_uses_all_detected_when_not_requested() {
+        let mut detected = HashSet::new();
+        detected.insert(Language::Go);
+        detected.insert(Language::Php);
+
+        let result = LspDaemon::resolve_languages_to_init(&detected, None);
+        let result_set: HashSet<Language> = result.into_iter().collect();
+
+        assert_eq!(result_set, detected);
     }
 }
 

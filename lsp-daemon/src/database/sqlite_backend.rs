@@ -694,6 +694,15 @@ impl ConnectionPool {
         // 2) Default ON for persistent databases to reduce reader stalls.
         true
     }
+
+    fn should_fallback_from_mvcc_open_error(message: &str) -> bool {
+        let msg_lower = message.to_ascii_lowercase();
+        msg_lower.contains("indexes not yet supported for mvcc")
+            || msg_lower.contains("couldn't read enough data")
+            || msg_lower.contains("poisonerror")
+            || msg_lower.contains("panic while opening core database")
+    }
+
     /// Create a new connection pool
     async fn new(config: SQLiteConfig) -> Result<Self, DatabaseError> {
         // Preflight: migrate legacy MVCC sidecar if present ("-lg" -> "-log")
@@ -821,27 +830,42 @@ impl ConnectionPool {
         let mut opts = coredb::DatabaseOpts::new()
             .with_indexes(indexes_enabled)
             .with_mvcc(requested_mvcc);
-        let core_database = match coredb::Database::open_file_with_flags(
-            io.clone(),
-            &config.path,
-            coredb::OpenFlags::default(),
-            opts.clone(),
-            None,
-        ) {
+        let open_core_database = |options: coredb::DatabaseOpts| -> Result<
+            std::sync::Arc<coredb::Database>,
+            DatabaseError,
+        > {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    coredb::Database::open_file_with_flags(
+                        io.clone(),
+                        &config.path,
+                        coredb::OpenFlags::default(),
+                        options,
+                        None,
+                    )
+                })) {
+                    Ok(result) => result.map_err(|e| DatabaseError::Configuration {
+                        message: format!(
+                            "Failed to open core database at '{}': {}",
+                            config.path, e
+                        ),
+                    }),
+                    Err(panic_err) => Err(DatabaseError::Configuration {
+                        message: format!(
+                            "Panic while opening core database at '{}': {}",
+                            config.path,
+                            extract_panic_message(panic_err)
+                        ),
+                    }),
+                }
+            };
+
+        let core_database = match open_core_database(opts.clone()) {
             Ok(db) => db,
-            Err(e) if requested_mvcc => {
-                let msg = e.to_string();
-                // Known limitation in some libsql/turso_core versions
-                let mvcc_index_incompatible = msg
-                    .to_ascii_lowercase()
-                    .contains("indexes not yet supported for mvcc");
-                let mvcc_log_read_err = msg
-                    .to_ascii_lowercase()
-                    .contains("couldn't read enough data");
-                if mvcc_index_incompatible || mvcc_log_read_err {
+            Err(DatabaseError::Configuration { message }) if requested_mvcc => {
+                if Self::should_fallback_from_mvcc_open_error(&message) {
                     warn!(
-                        "MVCC requested but unsupported with indexes in this engine: {} — falling back to MVCC=off",
-                        msg
+                        "MVCC open failed ({}), falling back to MVCC=off for {}",
+                        message, config.path
                     );
                     // Remove any persisted MVCC sidecar to avoid retry loops on next start
                     if let Some(marker) = Self::mvcc_sidecar_path(&config.path) {
@@ -863,32 +887,18 @@ impl ConnectionPool {
                     opts = coredb::DatabaseOpts::new()
                         .with_indexes(indexes_enabled)
                         .with_mvcc(false);
-                    coredb::Database::open_file_with_flags(
-                        io,
-                        &config.path,
-                        coredb::OpenFlags::default(),
-                        opts,
-                        None,
-                    )
-                    .map_err(|e2| DatabaseError::Configuration {
+                    open_core_database(opts).map_err(|e2| DatabaseError::Configuration {
                         message: format!(
                             "Failed to open core database at '{}' after MVCC fallback: {}",
                             config.path, e2
                         ),
                     })?
                 } else {
-                    return Err(DatabaseError::Configuration {
-                        message: format!(
-                            "Failed to open core database at '{}': {}",
-                            config.path, e
-                        ),
-                    });
+                    return Err(DatabaseError::Configuration { message });
                 }
             }
             Err(e) => {
-                return Err(DatabaseError::Configuration {
-                    message: format!("Failed to open core database at '{}': {}", config.path, e),
-                });
+                return Err(e);
             }
         };
 
@@ -9871,6 +9881,26 @@ mod tests {
             ..Default::default()
         };
         SQLiteBackend::new(config).await.unwrap()
+    }
+
+    #[test]
+    fn test_mvcc_fallback_error_detection_matches_known_engine_failures() {
+        assert!(ConnectionPool::should_fallback_from_mvcc_open_error(
+            "indexes not yet supported for mvcc"
+        ));
+        assert!(ConnectionPool::should_fallback_from_mvcc_open_error(
+            "couldn't read enough data from logical log"
+        ));
+        assert!(ConnectionPool::should_fallback_from_mvcc_open_error(
+            "Panic while opening core database at '/tmp/db': called `Result::unwrap()` on an `Err` value: PoisonError { .. }"
+        ));
+    }
+
+    #[test]
+    fn test_mvcc_fallback_error_detection_ignores_unrelated_errors() {
+        assert!(!ConnectionPool::should_fallback_from_mvcc_open_error(
+            "failed to create IO device"
+        ));
     }
 
     #[tokio::test]

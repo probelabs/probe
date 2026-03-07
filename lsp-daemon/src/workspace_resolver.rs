@@ -304,7 +304,13 @@ impl WorkspaceResolver {
         resolver: &Arc<Mutex<WorkspaceResolver>>,
         file_path: &Path,
     ) -> Result<PathBuf> {
-        let mut resolver = resolver.lock().unwrap();
+        let mut resolver = match resolver.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("WorkspaceResolver mutex was poisoned during resolve; recovering");
+                poisoned.into_inner()
+            }
+        };
         resolver.resolve_workspace_for_file(file_path)
     }
 
@@ -313,7 +319,13 @@ impl WorkspaceResolver {
         resolver: &Arc<Mutex<WorkspaceResolver>>,
         file_path: &Path,
     ) -> Result<PathBuf> {
-        let resolver = resolver.lock().unwrap();
+        let resolver = match resolver.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                warn!("WorkspaceResolver mutex was poisoned during detect; recovering");
+                poisoned.into_inner()
+            }
+        };
         resolver.detect_workspace(file_path)
     }
 }
@@ -529,6 +541,37 @@ mod tests {
         let workspace2_canonical = workspace2.canonicalize().unwrap();
         assert_eq!(workspace1_canonical, expected);
         assert_eq!(workspace2_canonical, expected);
+    }
+
+    #[tokio::test]
+    async fn test_shared_resolver_recovers_from_poisoned_mutex() {
+        let temp_dir = TempDir::new().unwrap();
+        let project_root = temp_dir.path().join("poisoned-shared-project");
+        fs::create_dir_all(&project_root).unwrap();
+        fs::write(
+            project_root.join("pyproject.toml"),
+            "[project]\nname = \"poisoned-shared\"",
+        )
+        .unwrap();
+
+        let file_path = project_root.join("main.py");
+        fs::write(&file_path, "print('hello')").unwrap();
+
+        let resolver = WorkspaceResolver::new_shared(None);
+        let poisoned = resolver.clone();
+
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoned.lock().unwrap();
+            panic!("intentional poison");
+        })
+        .join();
+
+        let workspace = WorkspaceResolver::resolve_workspace_shared(&resolver, &file_path)
+            .await
+            .unwrap();
+        let expected = project_root.canonicalize().unwrap();
+        let workspace_canonical = workspace.canonicalize().unwrap();
+        assert_eq!(workspace_canonical, expected);
     }
 
     #[test]
