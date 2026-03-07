@@ -691,19 +691,20 @@ export const extractTool = (options = {}) => {
 					// model constructs wrong absolute paths (e.g., /workspace/gateway/file.go
 					// instead of /workspace/tyk/gateway/file.go)
 					if (options.allowedFolders && options.allowedFolders.length > 0) {
+						const { join: pathJoin, sep: pathSep } = await import('path');
 						extractFiles = extractFiles.map(target => {
 							const { filePart, suffix } = splitTargetSuffix(target);
 							if (existsSync(filePart)) return target;
 
 							// Try resolving the relative tail against each allowedFolder
-							const cwdPrefix = (effectiveCwd.endsWith('/') ? effectiveCwd : effectiveCwd + '/');
+							const cwdPrefix = effectiveCwd.endsWith(pathSep) ? effectiveCwd : effectiveCwd + pathSep;
 							const relativePart = filePart.startsWith(cwdPrefix)
 								? filePart.slice(cwdPrefix.length)
 								: null;
 
 							if (relativePart) {
 								for (const folder of options.allowedFolders) {
-									const candidate = folder + '/' + relativePart;
+									const candidate = pathJoin(folder, relativePart);
 									if (existsSync(candidate)) {
 										if (debug) console.error(`[extract] Auto-fixed path: ${filePart} → ${candidate}`);
 										return candidate + suffix;
@@ -714,11 +715,12 @@ export const extractTool = (options = {}) => {
 							// Try stripping workspace prefix and resolving against allowedFolders
 							// e.g., /tmp/visor-workspaces/abc/gateway/file.go → try each folder + gateway/file.go
 							for (const folder of options.allowedFolders) {
-								const folderPrefix = folder.endsWith('/') ? folder : folder + '/';
-								const wsParent = folderPrefix.replace(/[^/]+\/$/, '');
+								const folderPrefix = folder.endsWith(pathSep) ? folder : folder + pathSep;
+								const sepEscaped = pathSep === '\\' ? '\\\\' : pathSep;
+								const wsParent = folderPrefix.replace(new RegExp('[^' + sepEscaped + ']+' + sepEscaped + '$'), '');
 								if (filePart.startsWith(wsParent)) {
 									const tail = filePart.slice(wsParent.length);
-									const candidate = folderPrefix + tail;
+									const candidate = pathJoin(folderPrefix, tail);
 									if (candidate !== filePart && existsSync(candidate)) {
 										if (debug) console.error(`[extract] Auto-fixed path via workspace: ${filePart} → ${candidate}`);
 										return candidate + suffix;
