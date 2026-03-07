@@ -140,8 +140,8 @@ export function debugTruncate(s, limit = 200) {
 export function debugLogToolResults(toolResults) {
   if (!toolResults || toolResults.length === 0) return;
   for (const tr of toolResults) {
-    const argsStr = JSON.stringify(tr.args || {});
-    const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result || '');
+    const argsStr = tr.args != null ? JSON.stringify(tr.args) : '<no args>';
+    const resultStr = tr.result != null ? (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)) : '<no result>';
     console.log(`[DEBUG]   tool: ${tr.toolName} | args: ${debugTruncate(argsStr)} | result: ${debugTruncate(resultStr)}`);
   }
 }
@@ -1879,9 +1879,12 @@ export class ProbeAgent {
       nativeTools.attempt_completion = tool({
         description: 'Signal task completion and provide the final result to the user',
         inputSchema: z.object({
-          result: z.string().describe('The final result to present to the user')
+          result: z.string().min(1).describe('The final result to present to the user. Must be a non-empty string.')
         }),
         execute: async ({ result }) => {
+          if (!result || typeof result !== 'string' || result.trim().length === 0) {
+            return 'ERROR: attempt_completion requires a non-empty "result" parameter containing your final answer.';
+          }
           onComplete(result);
           return result;
         }
@@ -1906,9 +1909,14 @@ export class ProbeAgent {
     nativeTools.attempt_completion = tool({
       description: 'Signal task completion and provide the final result to the user',
       inputSchema: z.object({
-        result: z.string().describe('The final result to present to the user')
+        result: z.string().min(1).describe('The final result to present to the user. Must be a non-empty string.')
       }),
       execute: async ({ result }) => {
+        // Guard: reject empty or missing result to prevent infinite loops
+        if (!result || typeof result !== 'string' || result.trim().length === 0) {
+          return 'ERROR: attempt_completion requires a non-empty "result" parameter containing your final answer. Provide your complete findings as the result string.';
+        }
+
         // Task completion blocking
         if (this.enableTasks && this.taskManager && this.taskManager.hasIncompleteTasks()) {
           const incompleteTasks = this.taskManager.getIncompleteTasks();
