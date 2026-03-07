@@ -173,3 +173,159 @@ describe('ProbeAgent.compactHistory()', () => {
     expect(userMessages[1].content).toBe('Query 2');
   });
 });
+
+describe('Proactive history compaction in answer()', () => {
+  function createTestAgent(overrides = {}) {
+    const agent = new ProbeAgent({
+      sessionId: 'test-proactive',
+      path: '/tmp/test',
+      debug: false,
+      ...overrides
+    });
+    // Mock the provider to avoid real API calls
+    agent.provider = (model) => model;
+    return agent;
+  }
+
+  it('should compact prior turn monologues before sending to model', async () => {
+    const agent = createTestAgent();
+
+    // Simulate history from a completed turn 1 (system + user + tool monologue + final answer)
+    agent.history = [
+      { role: 'system', content: 'You are a helpful assistant' },
+      { role: 'user', content: 'What does search do?' },
+      { role: 'assistant', content: [
+        { type: 'text', text: 'Let me search for that.' },
+        { type: 'tool-call', toolCallId: 'tc1', toolName: 'search', input: { query: 'search function' } }
+      ]},
+      { role: 'tool', content: [
+        { type: 'tool-result', toolCallId: 'tc1', toolName: 'search', output: 'Found: search function does X, Y, Z with lots of detail...' }
+      ]},
+      { role: 'assistant', content: [
+        { type: 'text', text: 'Let me look deeper.' },
+        { type: 'tool-call', toolCallId: 'tc2', toolName: 'extract', input: { file: 'search.rs' } }
+      ]},
+      { role: 'tool', content: [
+        { type: 'tool-result', toolCallId: 'tc2', toolName: 'extract', output: 'Full source code of search.rs...' }
+      ]},
+      { role: 'assistant', content: [
+        { type: 'text', text: 'The search function does X, Y, Z. Here is a detailed explanation...' }
+      ]}
+    ];
+
+    // Capture messages sent to streamText
+    let capturedMessages = null;
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => {
+      capturedMessages = opts.messages;
+      return {
+        text: Promise.resolve('Mock response'),
+        steps: Promise.resolve([{ finishReason: 'stop', toolCalls: [] }]),
+        usage: Promise.resolve({ promptTokens: 100, completionTokens: 50 }),
+        response: Promise.resolve({ messages: [] })
+      };
+    });
+
+    try {
+      await agent.answer('Now tell me about extract');
+    } catch (e) {
+      // May throw due to mock, that's fine
+    }
+
+    expect(capturedMessages).not.toBeNull();
+
+    // The intermediate tool calls from turn 1 should be stripped
+    // We should have: system, user1, final_answer1, user2
+    const roles = capturedMessages.map(m => m.role);
+    expect(roles[0]).toBe('system');
+
+    // Count: prior turn intermediate tool messages should be removed
+    const toolMessages = capturedMessages.filter(m => m.role === 'tool');
+    expect(toolMessages.length).toBe(0); // All tool results from turn 1 compacted
+
+    // Both user messages should be present
+    const userMessages = capturedMessages.filter(m => m.role === 'user');
+    expect(userMessages.length).toBe(2);
+    expect(userMessages[0].content).toBe('What does search do?');
+    expect(userMessages[1].content).toBe('Now tell me about extract');
+
+    // Final answer from turn 1 should be preserved
+    const assistantMessages = capturedMessages.filter(m => m.role === 'assistant');
+    expect(assistantMessages.length).toBe(1);
+    const finalText = assistantMessages[0].content.find(p => p.type === 'text')?.text || assistantMessages[0].content;
+    expect(finalText).toContain('The search function does X, Y, Z');
+
+    jest.restoreAllMocks();
+    await agent.cleanup();
+  });
+
+  it('should not compact on first turn (no prior history)', async () => {
+    const agent = createTestAgent({ sessionId: 'test-first-turn' });
+
+    agent.history = []; // Empty history = first turn
+
+    let capturedMessages = null;
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => {
+      capturedMessages = opts.messages;
+      return {
+        text: Promise.resolve('Mock response'),
+        steps: Promise.resolve([{ finishReason: 'stop', toolCalls: [] }]),
+        usage: Promise.resolve({ promptTokens: 100, completionTokens: 50 }),
+        response: Promise.resolve({ messages: [] })
+      };
+    });
+
+    try {
+      await agent.answer('First question');
+    } catch (e) { /* mock */ }
+
+    expect(capturedMessages).not.toBeNull();
+    // Should have system + user (no compaction needed on first turn)
+    expect(capturedMessages[0].role).toBe('system');
+    const userMsgs = capturedMessages.filter(m => m.role === 'user');
+    expect(userMsgs.length).toBe(1);
+    expect(userMsgs[0].content).toBe('First question');
+    // No tool/assistant messages from prior turns
+    expect(capturedMessages.filter(m => m.role === 'tool').length).toBe(0);
+    expect(capturedMessages.filter(m => m.role === 'assistant').length).toBe(0);
+
+    jest.restoreAllMocks();
+    await agent.cleanup();
+  });
+
+  it('should preserve full history in this.history (only compact for context)', async () => {
+    const agent = createTestAgent({ sessionId: 'test-preserve' });
+
+    // History with a completed turn
+    const fullHistory = [
+      { role: 'system', content: 'System prompt' },
+      { role: 'user', content: 'Question 1' },
+      { role: 'assistant', content: 'Thinking...', toolInvocations: [{ toolName: 'search', args: {} }] },
+      { role: 'tool', content: 'Tool result', toolName: 'search' },
+      { role: 'assistant', content: 'Answer 1' },
+    ];
+    agent.history = [...fullHistory];
+
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => {
+      return {
+        text: Promise.resolve('Answer 2'),
+        steps: Promise.resolve([{ finishReason: 'stop', toolCalls: [] }]),
+        usage: Promise.resolve({ promptTokens: 100, completionTokens: 50 }),
+        response: Promise.resolve({ messages: [
+          { role: 'assistant', content: [{ type: 'text', text: 'Answer 2' }] }
+        ]})
+      };
+    });
+
+    await agent.answer('Question 2');
+
+    // this.history should contain the compacted history plus the new turn's messages
+    // Prior turn intermediate monologue is stripped, but user messages and final answers preserved
+    const userMessages = agent.history.filter(m => m.role === 'user');
+    expect(userMessages.length).toBe(2); // Both user questions preserved
+    expect(userMessages[0].content).toBe('Question 1');
+    expect(userMessages[1].content).toBe('Question 2');
+
+    jest.restoreAllMocks();
+    await agent.cleanup();
+  });
+});

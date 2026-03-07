@@ -93,7 +93,7 @@ import { formatAvailableSkillsXml as formatAvailableSkills } from './skills/form
 import { createSkillToolInstances } from './skills/tools.js';
 import { RetryManager, createRetryManagerFromEnv } from './RetryManager.js';
 import { FallbackManager, createFallbackManagerFromEnv, buildFallbackProvidersFromEnv } from './FallbackManager.js';
-import { handleContextLimitError } from './contextCompactor.js';
+import { handleContextLimitError, compactMessages, calculateCompactionStats } from './contextCompactor.js';
 import { formatErrorForAI, ParameterError } from '../utils/error-types.js';
 import { getCommonPrefix, toRelativePath, safeRealpath } from '../utils/path-validation.js';
 import { truncateIfNeeded, getMaxOutputTokens } from './outputTruncator.js';
@@ -3227,6 +3227,25 @@ Follow these instructions carefully:
         ];
       }
 
+      // Proactively compact for multi-turn conversations.
+      // On turn 2+, previous turns contain full tool call/result history which can
+      // be 50K+ tokens. This drowns out the new user message and causes the model to
+      // focus on prior context rather than the new question.
+      // compactMessages strips intermediate monologue from completed segments,
+      // keeping user messages + final answers from prior turns.
+      // Must run AFTER adding the new user message so the compactor sees 2+ segments
+      // (completed prior turns + the new incomplete turn), preserving the latest segment.
+      if (this.history.length > 0) {
+        const compacted = compactMessages(currentMessages, { keepLastSegment: true, minSegmentsToKeep: 1 });
+        if (compacted.length < currentMessages.length) {
+          const stats = calculateCompactionStats(currentMessages, compacted);
+          if (this.debug) {
+            console.log(`[DEBUG] Proactive history compaction: ${currentMessages.length} → ${compacted.length} messages (${stats.reductionPercent}% reduction, ~${stats.tokensSaved} tokens saved)`);
+          }
+          currentMessages = compacted;
+        }
+      }
+
       let currentIteration = 0;
       let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
 
@@ -4141,8 +4160,6 @@ Double-check your response based on the criteria above. If everything looks good
    * @returns {Object} Compaction statistics
    */
   async compactHistory(options = {}) {
-    const { compactMessages, calculateCompactionStats } = await import('./contextCompactor.js');
-
     if (this.history.length === 0) {
       if (this.debug) {
         console.log(`[DEBUG] No history to compact for session ${this.sessionId}`);
