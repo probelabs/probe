@@ -412,7 +412,7 @@ export function main() {
         }
 
         logInfo('Sending message...'); // Log only if debug
-        const result = await chat.chat(message, chat.getSessionId(), null, imageUrls); // Use the chat's current session ID and pass images
+        const result = await chat.chat(message, { images: imageUrls });
 
         if (result && typeof result === 'object' && result.response !== undefined) {
           if (options.json) {
@@ -576,7 +576,7 @@ export function main() {
 
       const spinner = ora('Thinking...').start(); // Spinner is ok for interactive mode
       try {
-        const result = await chat.chat(message, null, null, imageUrls); // Uses internal session ID and pass images
+        const result = await chat.chat(message, { images: imageUrls });
         spinner.stop();
 
         logInfo(chalk.green('Assistant:'));
