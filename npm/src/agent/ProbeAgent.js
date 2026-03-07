@@ -3483,6 +3483,24 @@ Follow these instructions carefully:
                 if (recentTexts.every(t => detectStuckResponse(t))) return true;
               }
 
+              // Circuit breaker: repeated identical tool calls (e.g. model ignores dedup message)
+              if (steps.length >= 3) {
+                const last3 = steps.slice(-3);
+                const allHaveTools = last3.every(s => s.toolCalls?.length === 1);
+                if (allHaveTools) {
+                  const signatures = last3.map(s => {
+                    const tc = s.toolCalls[0];
+                    return `${tc.toolName}::${JSON.stringify(tc.args)}`;
+                  });
+                  if (signatures[0] === signatures[1] && signatures[1] === signatures[2]) {
+                    if (this.debug) {
+                      console.log(`[DEBUG] Circuit breaker: 3 consecutive identical tool calls detected (${last3[0].toolCalls[0].toolName}), forcing stop`);
+                    }
+                    return true;
+                  }
+                }
+              }
+
               return false;
             },
             prepareStep: ({ steps, stepNumber }) => {
@@ -3491,6 +3509,21 @@ Follow these instructions carefully:
                 return {
                   toolChoice: 'none',
                 };
+              }
+
+              // Force text-only response after 2 consecutive identical tool calls
+              if (steps.length >= 2) {
+                const last2 = steps.slice(-2);
+                if (last2.every(s => s.toolCalls?.length === 1)) {
+                  const sig1 = `${last2[0].toolCalls[0].toolName}::${JSON.stringify(last2[0].toolCalls[0].args)}`;
+                  const sig2 = `${last2[1].toolCalls[0].toolName}::${JSON.stringify(last2[1].toolCalls[0].args)}`;
+                  if (sig1 === sig2) {
+                    if (this.debug) {
+                      console.log(`[DEBUG] prepareStep: 2 consecutive identical tool calls, forcing toolChoice=none`);
+                    }
+                    return { toolChoice: 'none' };
+                  }
+                }
               }
 
               const lastStep = steps[steps.length - 1];
