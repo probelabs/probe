@@ -112,11 +112,10 @@ describe('JSON Validation Infinite Loop Fix', () => {
       // Verify that _schemaFormatted: true appears in the code
       const schemaFormattedCount = (sourceCode.match(/_schemaFormatted: true/g) || []).length;
 
-      // Should appear at least 3 times (for the 3 recursive calls we fixed)
-      expect(schemaFormattedCount).toBeGreaterThanOrEqual(3);
+      // Should appear at least 2 times (for the 2 recursive calls we fixed)
+      expect(schemaFormattedCount).toBeGreaterThanOrEqual(2);
 
       // Verify it's used in correction calls
-      expect(sourceCode).toContain('await this.answer(schemaPrompt, [], {');
       expect(sourceCode).toContain('await this.answer(schemaDefinitionPrompt, [], {');
       expect(sourceCode).toContain('await this.answer(correctionPrompt, [], {');
     });
@@ -125,10 +124,10 @@ describe('JSON Validation Infinite Loop Fix', () => {
       const probeAgentPath = join(__dirname, '../../src/agent/ProbeAgent.js');
       const sourceCode = readFileSync(probeAgentPath, 'utf-8');
 
-      // Verify that the three critical checks include the flag
+      // Verify that the critical checks include the flag
 
-      // 1. attempt_completion validation block should check !options._schemaFormatted
-      expect(sourceCode).toContain('completionAttempted && options.schema && !options._schemaFormatted');
+      // 1. Schema validation block should check !options._schemaFormatted
+      expect(sourceCode).toContain('options.schema && !options._schemaFormatted && !options._skipValidation');
 
       // 2. Final mermaid validation should check !options._schemaFormatted
       expect(sourceCode).toContain('!this.disableMermaidValidation && !options._schemaFormatted');

@@ -85,64 +85,14 @@ export const cleanupExecutePlanSchema = z.object({
 	clearSessionStore: z.boolean().optional().default(false).describe('Clear the session store (persisted data across execute_plan calls)')
 });
 
-// Schema for the attempt_completion tool - flexible validation for direct XML response
+// Legacy: attemptCompletionSchema kept as no-op for backward compatibility of external imports
+// The attempt_completion tool has been removed — the model now completes naturally via text.
 export const attemptCompletionSchema = {
-	// Custom validation that requires result parameter but allows direct XML response
 	safeParse: (params) => {
-		// Validate that params is an object
-		if (!params || typeof params !== 'object') {
-			return {
-				success: false,
-				error: {
-					issues: [{
-						code: 'invalid_type',
-						expected: 'object',
-						received: typeof params,
-						path: [],
-						message: 'Expected object'
-					}]
-				}
-			};
+		if (!params || typeof params !== 'object' || typeof params.result !== 'string') {
+			return { success: false, error: { issues: [{ code: 'invalid_type', path: ['result'], message: 'Deprecated' }] } };
 		}
-
-		// Validate that result parameter exists and is a string
-		if (!('result' in params)) {
-			return {
-				success: false,
-				error: {
-					issues: [{
-						code: 'invalid_type',
-						expected: 'string',
-						received: 'undefined',
-						path: ['result'],
-						message: 'Required'
-					}]
-				}
-			};
-		}
-
-		if (typeof params.result !== 'string') {
-			return {
-				success: false,
-				error: {
-					issues: [{
-						code: 'invalid_type',
-						expected: 'string',
-						received: typeof params.result,
-						path: ['result'],
-						message: 'Expected string'
-					}]
-				}
-			};
-		}
-
-		// Filter out command parameter if present (legacy compatibility)
-		const filteredData = { result: params.result };
-		
-		return {
-			success: true,
-			data: filteredData
-		};
+		return { success: true, data: { result: params.result } };
 	}
 };
 
@@ -185,6 +135,56 @@ export function createMessagePreview(message, charsPerSide = 200) {
 	const end = message.substring(message.length - charsPerSide);
 
 	return `${start}...${end}`;
+}
+
+
+/**
+ * Detect if a response indicates the agent is stuck in a loop or unable to proceed.
+ *
+ * @param {string} response - The agent's text response
+ * @returns {boolean} - True if the response indicates a stuck state
+ */
+export function detectStuckResponse(response) {
+	if (!response || typeof response !== 'string') {
+		return false;
+	}
+
+	const stuckPatterns = [
+		/\bi\s+cannot\s+proceed\b/i,
+		/\bi\s+can['']t\s+(?:proceed|continue|move\s+forward)\b/i,
+		/\bunable\s+to\s+(?:proceed|continue|complete)\b/i,
+		/\bblocked\b.*\b(?:proceed|continue)\b/i,
+		/\bneed\s+(?:the|an?)\s+\w+(?:\s+\w+)?\s+to\s+(?:proceed|continue)\b/i,
+		/\brequire[sd]?\s+(?:the|an?)\s+\w+\b.*\bto\s+(?:proceed|continue)\b/i,
+		/\bmissing\s+(?:required|necessary|essential)\b/i,
+		/\bdeadlock\b/i,
+		/\bwe\s+are\s+in\s+a\s+loop\b/i,
+		/\bstuck\s+in\s+a\s+loop\b/i,
+		/\bi\s+(?:have|['']ve)\s+(?:explained|stated|mentioned)\s+(?:this|the\s+situation|it)\s+(?:multiple|several)\s+times\b/i,
+		/\bi\s+(?:cannot|can['']t|could\s+not|couldn['']t)\s+(?:find|locate|get|retrieve|obtain)\s+(?:the|this|that|an?)\b/i,
+		/\bno\s+way\s+to\s+(?:find|get|obtain|retrieve)\b/i,
+		/\bi\s+(?:have|['']ve)\s+exhausted\s+(?:all|my)\s+(?:available\s+)?(?:options|methods|approaches)\b/i,
+		/\bneither\s+of\s+these\s+methods\b/i,
+	];
+
+	for (const pattern of stuckPatterns) {
+		if (pattern.test(response)) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
+ * Check if two responses both indicate a stuck state.
+ *
+ * @param {string} response1 - First response
+ * @param {string} response2 - Second response
+ * @returns {boolean} - True if both responses indicate a stuck state
+ */
+export function areBothStuckResponses(response1, response2) {
+	return detectStuckResponse(response1) && detectStuckResponse(response2);
 }
 
 

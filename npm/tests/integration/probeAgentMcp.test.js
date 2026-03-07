@@ -224,11 +224,10 @@ describe('ProbeAgent MCP Integration', () => {
       agent.mcpBridge = mockMcpBridge;
 
       // Build native tools and verify MCP tools are included
-      const tools = agent._buildNativeTools({}, () => {});
+      const tools = agent._buildNativeTools({});
 
       expect(tools).toHaveProperty('test_foobar');
       expect(tools).toHaveProperty('test_calculator');
-      expect(tools).toHaveProperty('attempt_completion');
 
       // Verify getVercelTools was called
       expect(mockMcpBridge.getVercelTools).toHaveBeenCalled();
@@ -254,10 +253,9 @@ describe('ProbeAgent MCP Integration', () => {
 
       agent.mcpBridge = mockMcpBridge;
 
-      const tools = agent._buildNativeTools({}, () => {});
+      const tools = agent._buildNativeTools({});
 
       // Should have standard tools but no MCP tools
-      expect(tools).toHaveProperty('attempt_completion');
       // No extra MCP tools should be present
       const toolNames = Object.keys(tools);
       const mcpToolNames = toolNames.filter(name => mockMcpBridge.isMcpTool(name));
@@ -445,7 +443,7 @@ describe('ProbeAgent MCP Integration', () => {
         expect(vercelToolNames.some(name => name.includes('calculator'))).toBe(true);
 
         // Verify MCP tools are included in _buildNativeTools
-        const nativeTools = agent._buildNativeTools({}, () => {});
+        const nativeTools = agent._buildNativeTools({});
         expect(Object.keys(nativeTools).some(name => name.includes('foobar'))).toBe(true);
         expect(Object.keys(nativeTools).some(name => name.includes('calculator'))).toBe(true);
       } else {

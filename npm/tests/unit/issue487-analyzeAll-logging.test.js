@@ -24,7 +24,7 @@ describe('Issue #487 - analyzeAll chunk-processing visibility', () => {
     );
 
     mockDelegate.mockImplementation(async ({ task }) => {
-      if (task.includes('Use attempt_completion with this EXACT format')) {
+      if (task.includes('Provide your answer in this EXACT format')) {
         return [
           'SEARCH_QUERY: chunk',
           'AGGREGATION: summarize',

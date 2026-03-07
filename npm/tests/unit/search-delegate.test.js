@@ -76,7 +76,7 @@ describe('searchDelegate behavior', () => {
     expect(mockDelegate).toHaveBeenCalledTimes(1);
     expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
       promptType: 'code-searcher',
-      allowedTools: ['search', 'extract', 'listFiles', 'attempt_completion'],
+      allowedTools: ['search', 'extract', 'listFiles'],
       searchDelegate: false,
       path: '/workspace',
       provider: 'google',

@@ -98,7 +98,7 @@ export interface ProbeAgentOptions {
   disableSkills?: boolean;
   /** Skill directories to scan relative to repo root */
   skillDirs?: string[];
-  /** Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation) */
+  /** Custom prompt to run after completion for validation/review (runs before mermaid/JSON validation) */
   completionPrompt?: string;
   /** Enable task management system for tracking multi-step progress */
   enableTasks?: boolean;

@@ -31,7 +31,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
-import { streamText, tool, stepCountIs, jsonSchema } from 'ai';
+import { streamText, tool, stepCountIs, jsonSchema, Output } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
@@ -43,7 +43,6 @@ import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
 import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES, isFormatSupportedByProvider } from './imageConfig.js';
 import {
   createTools,
-  attemptCompletionSchema,
   searchSchema,
   querySchema,
   extractSchema,
@@ -61,7 +60,7 @@ import {
   listSkillsSchema,
   useSkillSchema
 } from './tools.js';
-import { createMessagePreview } from '../tools/common.js';
+import { createMessagePreview, detectStuckResponse } from '../tools/common.js';
 import { taskSchema } from './tasks/taskTool.js';
 import { FileTracker } from '../tools/fileTracker.js';
 import {
@@ -140,8 +139,8 @@ export function debugTruncate(s, limit = 200) {
 export function debugLogToolResults(toolResults) {
   if (!toolResults || toolResults.length === 0) return;
   for (const tr of toolResults) {
-    const argsStr = JSON.stringify(tr.args || {});
-    const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result || '');
+    const argsStr = tr.args != null ? JSON.stringify(tr.args) : '<no args>';
+    const resultStr = tr.result != null ? (typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)) : '<no result>';
     console.log(`[DEBUG]   tool: ${tr.toolName} | args: ${debugTruncate(argsStr)} | result: ${debugTruncate(resultStr)}`);
   }
 }
@@ -196,7 +195,7 @@ export class ProbeAgent {
    * @param {Array<Object>} [options.fallback.providers] - List of provider configurations for custom fallback
    * @param {boolean} [options.fallback.stopOnSuccess=true] - Stop on first success
    * @param {number} [options.fallback.maxTotalAttempts=10] - Maximum total attempts across all providers
-   * @param {string} [options.completionPrompt] - Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation)
+   * @param {string} [options.completionPrompt] - Custom prompt to run after completion for validation/review (runs before mermaid/JSON validation)
    * @param {number} [options.maxOutputTokens] - Maximum tokens for tool output before truncation (default: 20000, can also be set via PROBE_MAX_OUTPUT_TOKENS env var)
    * @param {number} [options.requestTimeout] - Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests.
    * @param {number} [options.maxOperationTimeout] - Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback.
@@ -1682,12 +1681,11 @@ export class ProbeAgent {
    * - Delegate tool param injection
    *
    * @param {Object} options - Options from the answer() call
-   * @param {Function} onComplete - Callback when attempt_completion is called (receives result string)
    * @param {Object} context - Execution context { maxIterations, currentMessages }
    * @returns {Object} Tools object for streamText()
    * @private
    */
-  _buildNativeTools(options, onComplete, context = {}) {
+  _buildNativeTools(options, context = {}) {
     const { maxIterations = 30 } = context;
     const nativeTools = {};
     const isToolAllowed = (toolName) => this.allowedTools.isEnabled(toolName);
@@ -1874,18 +1872,8 @@ export class ProbeAgent {
       });
     };
 
-    // Only include attempt_completion when _disableTools is set
+    // When _disableTools is set, provide no tools — the model responds with text directly
     if (options._disableTools) {
-      nativeTools.attempt_completion = tool({
-        description: 'Signal task completion and provide the final result to the user',
-        inputSchema: z.object({
-          result: z.string().describe('The final result to present to the user')
-        }),
-        execute: async ({ result }) => {
-          onComplete(result);
-          return result;
-        }
-      });
       return nativeTools;
     }
 
@@ -1901,33 +1889,6 @@ export class ProbeAgent {
         nativeTools[toolName] = wrapTool(toolName, schema, description, toolImpl.execute);
       }
     }
-
-    // Always add attempt_completion
-    nativeTools.attempt_completion = tool({
-      description: 'Signal task completion and provide the final result to the user',
-      inputSchema: z.object({
-        result: z.string().describe('The final result to present to the user')
-      }),
-      execute: async ({ result }) => {
-        // Task completion blocking
-        if (this.enableTasks && this.taskManager && this.taskManager.hasIncompleteTasks()) {
-          const incompleteTasks = this.taskManager.getIncompleteTasks();
-          const highIterationCount = (context.currentIteration || 0) > maxIterations * 0.7;
-
-          if (!highIterationCount) {
-            const taskSummary = this.taskManager.getTaskSummary();
-            const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
-            if (this.debug) {
-              console.log('[DEBUG] Task checkpoint: Blocking completion due to incomplete tasks');
-            }
-            return blockedMessage;
-          }
-        }
-
-        onComplete(result);
-        return result;
-      }
-    });
 
     // Add MCP tools if available
     if (this.mcpBridge && !options._disableTools) {
@@ -3017,7 +2978,7 @@ Follow these instructions carefully:
 2. Use the available tools step-by-step to fulfill the request.
 3. You should always prefer the search tool for code-related questions.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
 4. Ensure to get really deep and understand the full picture before answering.
-5. Once the task is fully completed, use the attempt_completion tool to provide the final result.
+5. Once the task is fully completed, provide your final answer directly as text.
 6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
 7. NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed) — always use search and extract tools instead. Bash is only for system operations like building, running tests, or git commands.${this.allowEdit ? `
 7. When modifying files, choose the appropriate tool:
@@ -3224,7 +3185,8 @@ Follow these instructions carefully:
       let userMessage = { role: 'user', content: message.trim() };
 
       // If schema is provided, prepend JSON format requirement to user message
-      if (options.schema && !options._schemaFormatted) {
+      // Skip when _disableTools is set — native Output.object() handles schema constraint
+      if (options.schema && !options._schemaFormatted && !options._disableTools) {
         const schemaInstructions = generateSchemaInstructions(options.schema, { debug: this.debug });
         userMessage.content = message.trim() + schemaInstructions;
       }
@@ -3266,7 +3228,6 @@ Follow these instructions carefully:
       }
 
       let currentIteration = 0;
-      let completionAttempted = false;
       let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
 
       // Adjust max iterations if schema is provided
@@ -3432,13 +3393,9 @@ Follow these instructions carefully:
       // Iteration counter for telemetry
 
       // Native tool calling via Vercel AI SDK streamText + maxSteps
-      let completionResult = null;
       const toolContext = { maxIterations, currentIteration: 0, currentMessages };
 
-      const tools = this._buildNativeTools(options, (result) => {
-        completionResult = result;
-        completionAttempted = true;
-      }, toolContext);
+      const tools = this._buildNativeTools(options, toolContext);
 
       if (this.debug) {
         const toolNames = Object.keys(tools);
@@ -3455,6 +3412,10 @@ Follow these instructions carefully:
         }
       }
 
+      // Track whether completionPrompt has been injected into the loop
+      let completionPromptInjected = false;
+      let preCompletionResult = null; // Stores the result before completionPrompt for fallback
+
       // Context compaction retry loop
       let compactionAttempted = false;
       while (true) {
@@ -3465,21 +3426,133 @@ Follow these instructions carefully:
             model: this.provider ? this.provider(this.model) : this.model,
             messages: messagesForAI,
             tools,
-            stopWhen: stepCountIs(maxIterations),
+            stopWhen: ({ steps }) => {
+              // Hard limit
+              if (steps.length >= maxIterations) return true;
+
+              const lastStep = steps[steps.length - 1];
+              const modelWantsToStop = lastStep?.finishReason === 'stop'
+                && (!lastStep?.toolCalls || lastStep.toolCalls.length === 0);
+
+              if (modelWantsToStop) {
+                // Task blocking: force continuation when tasks are incomplete
+                if (this.enableTasks && this.taskManager?.hasIncompleteTasks()) {
+                  const highIterationCount = steps.length > maxIterations * 0.7;
+                  if (!highIterationCount) return false; // Force continuation
+                }
+
+                // Completion prompt: force one more round for review
+                if (this.completionPrompt && !options._completionPromptProcessed && !completionPromptInjected) {
+                  // Save the pre-completion result for fallback
+                  preCompletionResult = lastStep.text || null;
+                  return false; // Force continuation — prepareStep will inject the prompt
+                }
+              }
+
+              // Circuit breaker: consecutive no-tool steps
+              let trailingNoTool = 0;
+              for (let i = steps.length - 1; i >= 0; i--) {
+                if (!steps[i].toolCalls?.length) trailingNoTool++;
+                else break;
+              }
+              if (trailingNoTool >= 5) return true;
+
+              // Circuit breaker: identical/stuck responses
+              if (trailingNoTool >= 3) {
+                const recentTexts = steps.slice(-3).map(s => s.text);
+                if (recentTexts.every(t => t && t === recentTexts[0])) return true;
+                if (recentTexts.every(t => detectStuckResponse(t))) return true;
+              }
+
+              return false;
+            },
+            prepareStep: ({ steps, stepNumber }) => {
+              // Last-iteration warning
+              if (stepNumber === maxIterations - 1) {
+                return {
+                  toolChoice: 'none',
+                };
+              }
+
+              const lastStep = steps[steps.length - 1];
+              const modelJustStopped = lastStep?.finishReason === 'stop'
+                && (!lastStep?.toolCalls || lastStep.toolCalls.length === 0);
+
+              if (modelJustStopped) {
+                // Task blocking: inject reminder when tasks are incomplete
+                if (this.enableTasks && this.taskManager?.hasIncompleteTasks()) {
+                  const taskSummary = this.taskManager.getTaskSummary();
+                  const blockedMessage = createTaskCompletionBlockedMessage(taskSummary);
+                  return {
+                    userMessage: blockedMessage
+                  };
+                }
+
+                // Completion prompt: inject review message on first stop
+                if (this.completionPrompt && !options._completionPromptProcessed && !completionPromptInjected) {
+                  completionPromptInjected = true;
+                  const resultToReview = lastStep.text || preCompletionResult || '';
+
+                  if (this.debug) {
+                    console.log('[DEBUG] Injecting completion prompt into main loop via prepareStep...');
+                  }
+
+                  if (this.tracer) {
+                    this.tracer.recordEvent('completion_prompt.started', {
+                      'completion_prompt.original_result_length': resultToReview.length
+                    });
+                  }
+
+                  const completionPromptMessage = `${this.completionPrompt}
+
+Here is the result to review:
+<result>
+${resultToReview}
+</result>
+
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
+
+                  return {
+                    userMessage: completionPromptMessage
+                  };
+                }
+              }
+
+              return undefined;
+            },
             maxTokens: maxResponseTokens,
             temperature: 0.3,
-            onStepFinish: ({ toolResults, text, finishReason, usage }) => {
+            onStepFinish: (stepResult) => {
+              const { toolResults, toolCalls, text, reasoningText, finishReason, usage } = stepResult;
               currentIteration++;
               toolContext.currentIteration = currentIteration;
 
-              // Record telemetry
+              // Record telemetry — include model's reasoning and tool call details
               if (this.tracer) {
-                this.tracer.addEvent('iteration.step', {
+                const stepEvent = {
                   'iteration': currentIteration,
                   'max_iterations': maxIterations,
                   'finish_reason': finishReason,
                   'has_tool_calls': !!(toolResults && toolResults.length > 0)
-                });
+                };
+                // Model's text output (its monologue explaining why it's calling tools)
+                if (text) {
+                  stepEvent['ai.text'] = text.substring(0, 10000);
+                  stepEvent['ai.text.length'] = text.length;
+                }
+                // Model's internal reasoning/thinking tokens (if available)
+                if (reasoningText) {
+                  stepEvent['ai.reasoning'] = reasoningText.substring(0, 10000);
+                  stepEvent['ai.reasoning.length'] = reasoningText.length;
+                }
+                // Tool call names and args for this step
+                if (toolCalls && toolCalls.length > 0) {
+                  stepEvent['ai.tool_calls'] = toolCalls.map(tc => ({
+                    name: tc.toolName,
+                    args: JSON.stringify(tc.args || {}).substring(0, 2000)
+                  }));
+                }
+                this.tracer.addEvent('iteration.step', stepEvent);
               }
 
               // Record token usage
@@ -3494,10 +3567,37 @@ Follow these instructions carefully:
 
               if (this.debug) {
                 console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                if (text) {
+                  console.log(`[DEBUG]   model text: ${debugTruncate(text)}`);
+                }
+                if (reasoningText) {
+                  console.log(`[DEBUG]   reasoning: ${debugTruncate(reasoningText)}`);
+                }
                 debugLogToolResults(toolResults);
               }
             }
           };
+
+          // Native JSON schema output — use model's built-in JSON schema constraint
+          // when no tools are active (many providers like Gemini don't support
+          // structured output + function calling simultaneously).
+          // When tools ARE active, we rely on AJV post-validation + correction loop.
+          const hasActiveTools = Object.keys(tools).length > 0;
+          if (options.schema && !hasActiveTools) {
+            try {
+              const parsedSchema = typeof options.schema === 'string' ? JSON.parse(options.schema) : options.schema;
+              if (isJsonSchema(options.schema)) {
+                streamOptions.output = Output.object({ schema: jsonSchema(parsedSchema) });
+                if (this.debug) {
+                  console.log(`[DEBUG] Native JSON schema output enabled (no active tools)`);
+                }
+              }
+            } catch (e) {
+              if (this.debug) {
+                console.log(`[DEBUG] Failed to set native JSON schema output: ${e.message}`);
+              }
+            }
+          }
 
           // Add native thinking/reasoning providerOptions when thinkingEffort is set
           const providerOpts = this._buildThinkingProviderOptions(maxResponseTokens);
@@ -3513,7 +3613,7 @@ Follow these instructions carefully:
 
             if (this.debug) {
               const steps = await result.steps;
-              console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars, completion=${!!completionResult}`);
+              console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
             }
 
             // Record final token usage
@@ -3545,21 +3645,26 @@ Follow these instructions carefully:
             aiResult = await executeAIRequest();
           }
 
-          // Use completion result if available, otherwise use final text
-          if (completionResult) {
-            finalResult = completionResult;
-
-            // Stream the final result if callback is provided
-            if (options.onStream && finalResult) {
-              const chunkSize = 50;
-              for (let i = 0; i < finalResult.length; i += chunkSize) {
-                const chunk = finalResult.slice(i, Math.min(i + chunkSize, finalResult.length));
-                options.onStream(chunk);
+          // Try native JSON schema output first — Output.object() is set when no tools are active
+          if (options.schema && streamOptions.output) {
+            try {
+              const outputObject = await aiResult.result.output;
+              if (outputObject) {
+                finalResult = JSON.stringify(outputObject);
+              } else if (aiResult.finalText) {
+                finalResult = aiResult.finalText;
+              }
+            } catch (e) {
+              // NoObjectGeneratedError — fall back to text-based extraction
+              if (this.debug) {
+                console.log(`[DEBUG] Native JSON output failed, falling back to text: ${e.message}`);
+              }
+              if (aiResult.finalText) {
+                finalResult = aiResult.finalText;
               }
             }
           } else if (aiResult.finalText) {
             finalResult = aiResult.finalText;
-            completionAttempted = true;
           }
 
           // Update currentMessages from the result for history storage
@@ -3569,6 +3674,94 @@ Follow these instructions carefully:
             // Append the AI-generated messages to our message list
             for (const msg of resultMessages) {
               currentMessages.push(msg);
+            }
+          }
+
+          // Post-streamText completionPrompt fallback:
+          // The stopWhen/prepareStep mechanism only fires between tool-call steps.
+          // If the model answered without tool calls (or its final step had none),
+          // stopWhen never gets a chance to force continuation. In that case, run
+          // a second streamText pass with the completion prompt injected.
+          if (this.completionPrompt && !options._completionPromptProcessed && !completionPromptInjected && finalResult) {
+            completionPromptInjected = true;
+            preCompletionResult = finalResult;
+
+            if (this.debug) {
+              console.log('[DEBUG] Injecting completion prompt as post-streamText follow-up pass...');
+            }
+
+            if (this.tracer) {
+              this.tracer.recordEvent('completion_prompt.started', {
+                'completion_prompt.original_result_length': finalResult.length
+              });
+            }
+
+            const completionPromptMessage = `${this.completionPrompt}
+
+Here is the result to review:
+<result>
+${finalResult}
+</result>
+
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
+
+            currentMessages.push({ role: 'user', content: completionPromptMessage });
+
+            const completionMaxIterations = 5;
+            const completionStreamOptions = {
+              model: this.provider ? this.provider(this.model) : this.model,
+              messages: this.prepareMessagesWithImages(currentMessages),
+              tools,
+              stopWhen: stepCountIs(completionMaxIterations),
+              maxTokens: maxResponseTokens,
+              temperature: 0.3,
+              onStepFinish: ({ toolResults, text, finishReason, usage }) => {
+                if (usage) {
+                  this.tokenCounter.recordUsage(usage);
+                }
+                if (options.onStream && text) {
+                  options.onStream(text);
+                }
+                if (this.debug) {
+                  console.log(`[DEBUG] Completion prompt step finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                }
+              }
+            };
+
+            const providerOpts = this._buildThinkingProviderOptions(maxResponseTokens);
+            if (providerOpts) {
+              completionStreamOptions.providerOptions = providerOpts;
+            }
+
+            try {
+              const cpResult = await this.streamTextWithRetryAndFallback(completionStreamOptions);
+              const cpFinalText = await cpResult.text;
+              const cpUsage = await cpResult.usage;
+              if (cpUsage) {
+                this.tokenCounter.recordUsage(cpUsage, cpResult.experimental_providerMetadata);
+              }
+
+              // Append follow-up messages to conversation history
+              const cpMessages = await cpResult.response?.messages;
+              if (cpMessages) {
+                for (const msg of cpMessages) {
+                  currentMessages.push(msg);
+                }
+              }
+
+              // Use updated result if non-empty, otherwise keep original
+              if (cpFinalText && cpFinalText.trim().length > 0) {
+                finalResult = cpFinalText;
+              }
+
+              if (this.debug) {
+                console.log(`[DEBUG] Completion prompt follow-up produced ${cpFinalText?.length || 0} chars (using ${cpFinalText && cpFinalText.trim().length > 0 ? 'updated' : 'original'} result)`);
+              }
+            } catch (cpError) {
+              if (this.debug) {
+                console.log(`[DEBUG] Completion prompt follow-up failed: ${cpError.message}, keeping original result`);
+              }
+              // Keep original result on failure
             }
           }
 
@@ -3610,20 +3803,14 @@ Follow these instructions carefully:
             }
           }
 
-          // Handle AbortError from attempt_completion gracefully
-          if (completionResult) {
-            finalResult = completionResult;
-            break;
-          }
-
           console.error(`Error during streamText:`, error);
           finalResult = `Error: Failed to get response from AI model. ${error.message}`;
           throw new Error(finalResult);
         }
       }
 
-      if (currentIteration >= maxIterations && !completionAttempted) {
-        console.warn(`[WARN] Max tool iterations (${maxIterations}) reached for session ${this.sessionId}. Returning current error state.`);
+      if (currentIteration >= maxIterations) {
+        console.warn(`[WARN] Max tool iterations (${maxIterations}) reached for session ${this.sessionId}.`);
       }
 
       // Store final history
@@ -3654,232 +3841,55 @@ Follow these instructions carefully:
         // Continue even if storage fails
       }
 
-      // Completion prompt handling - inject one more user message into the existing conversation
-      // This continues the SAME agentic session (same tools, same TaskManager, same history)
-      // rather than spawning a recursive this.answer() call which would reset state
-      if (completionAttempted && this.completionPrompt && !options._completionPromptProcessed) {
-        if (this.debug) {
-          console.log('[DEBUG] Running completion prompt as continuation of current session...');
-        }
-
-        try {
-          const originalResult = finalResult;
-
-          if (this.tracer) {
-            this.tracer.recordEvent('completion_prompt.started', {
-              'completion_prompt.original_result_length': finalResult?.length || 0
-            });
-          }
-
-          // Append completion prompt as a user message to the existing conversation
-          const completionPromptMessage = `${this.completionPrompt}
-
-Here is the result to review:
-<result>
-${finalResult}
-</result>
-
-Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is using attempt_completion. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix) using attempt_completion.`;
-
-          currentMessages.push({ role: 'user', content: completionPromptMessage });
-
-          // Reset completion tracking for the follow-up turn
-          completionResult = null;
-          completionAttempted = false;
-
-          // Run one more streamText pass with the same tools and conversation context
-          // Give a small number of extra iterations for the follow-up
-          const completionMaxIterations = 5;
-          const completionStreamOptions = {
-            model: this.provider ? this.provider(this.model) : this.model,
-            messages: this.prepareMessagesWithImages(currentMessages),
-            tools,
-            stopWhen: stepCountIs(completionMaxIterations),
-            maxTokens: maxResponseTokens,
-            temperature: 0.3,
-            onStepFinish: ({ toolResults, text, finishReason, usage }) => {
-              if (usage) {
-                this.tokenCounter.recordUsage(usage);
-              }
-              if (options.onStream && text) {
-                options.onStream(text);
-              }
-              if (this.debug) {
-                console.log(`[DEBUG] Completion prompt step finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
-                debugLogToolResults(toolResults);
-              }
-            }
-          };
-
-          const providerOpts = this._buildThinkingProviderOptions(maxResponseTokens);
-          if (providerOpts) {
-            completionStreamOptions.providerOptions = providerOpts;
-          }
-
-          const cpResult = await this.streamTextWithRetryAndFallback(completionStreamOptions);
-          const cpFinalText = await cpResult.text;
-          const cpUsage = await cpResult.usage;
-          if (cpUsage) {
-            this.tokenCounter.recordUsage(cpUsage, cpResult.experimental_providerMetadata);
-          }
-
-          // Append follow-up messages to conversation history
-          const cpMessages = await cpResult.response?.messages;
-          if (cpMessages) {
-            for (const msg of cpMessages) {
-              currentMessages.push(msg);
-            }
-          }
-
-          // Use new completion result if the agent called attempt_completion again,
-          // otherwise keep the original result (the follow-up may have just done side-effects)
-          if (completionResult) {
-            finalResult = completionResult;
-            completionAttempted = true;
-          } else if (cpFinalText && cpFinalText.trim().length > 0) {
-            finalResult = cpFinalText;
-            completionAttempted = true;
-          } else {
-            // Follow-up produced nothing useful — keep the original
-            finalResult = originalResult;
-            completionAttempted = true;
-            if (this.debug) {
-              console.log('[DEBUG] Completion prompt returned empty result, keeping original.');
-            }
-          }
-
-          if (this.debug) {
-            console.log(`[DEBUG] Completion prompt finished. Final result length: ${finalResult?.length || 0}`);
-          }
-
-          if (this.tracer) {
-            this.tracer.recordEvent('completion_prompt.completed', {
-              'completion_prompt.final_result_length': finalResult?.length || 0,
-              'completion_prompt.used_original': finalResult === originalResult
-            });
-          }
-        } catch (error) {
-          console.error('[ERROR] Completion prompt failed:', error);
-          // Keep the original result if completion prompt fails
-          if (this.tracer) {
-            this.tracer.recordEvent('completion_prompt.error', {
-              'completion_prompt.error': error.message
-            });
-          }
-        }
+      // Log completion prompt telemetry if it was injected
+      if (completionPromptInjected && this.tracer) {
+        this.tracer.recordEvent('completion_prompt.completed', {
+          'completion_prompt.final_result_length': finalResult?.length || 0,
+          'completion_prompt.used_original': preCompletionResult && finalResult === preCompletionResult
+        });
       }
 
-      // Schema handling - format response according to provided schema
-      // Skip schema processing if result came from attempt_completion tool
-      // Don't apply schema formatting if we failed due to max iterations
-      const reachedMaxIterations = currentIteration >= maxIterations && !completionAttempted;
-      if (options.schema && !options._schemaFormatted && !completionAttempted && !reachedMaxIterations) {
-        if (this.debug) {
-          console.log('[DEBUG] Schema provided, applying automatic formatting...');
-        }
-        
+      // Schema handling - validate and fix response according to provided schema
+      // Skip if already formatted or in a recursive correction call
+      if (options.schema && !options._schemaFormatted && !options._skipValidation) {
         try {
-          // Step 1: Make a follow-up call to format according to schema
-          const schemaPrompt = `CRITICAL: You MUST respond with ONLY valid JSON DATA that conforms to this schema structure. DO NOT return the schema definition itself.
-
-Schema to follow (this is just the structure - provide ACTUAL DATA):
-${options.schema}
-
-REQUIREMENTS:
-- Return ONLY the JSON object/array with REAL DATA that matches the schema structure
-- DO NOT return the schema definition itself (no "$schema", "$id", "type", "properties", etc.)
-- NO additional text, explanations, or markdown formatting
-- NO code blocks or backticks
-- The JSON must be parseable by JSON.parse()
-- Fill in actual values that make sense based on your previous response content
-
-EXAMPLE:
-If schema defines {type: "object", properties: {name: {type: "string"}, age: {type: "number"}}}
-Return: {"name": "John Doe", "age": 25}
-NOT: {"type": "object", "properties": {"name": {"type": "string"}}}
-
-Convert your previous response content into actual JSON data that follows this schema structure.`;
-          
-          // Call answer recursively with _schemaFormatted flag to prevent infinite loop
-          finalResult = await this.answer(schemaPrompt, [], {
-            ...options,
-            _schemaFormatted: true,
-            _completionPromptProcessed: true  // Prevent cascading completion prompts in retry calls
-          });
-
-          // Step 2: Validate and fix Mermaid diagrams if present (BEFORE cleaning schema)
-          // This ensures mermaid validation sees the full response before JSON extraction strips content
+          // Step 1: Validate and fix Mermaid diagrams BEFORE cleaning schema
           if (!this.disableMermaidValidation) {
-            try {
+            if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: Validating result BEFORE schema cleaning...`);
+            }
+
+            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
+              debug: this.debug,
+              path: this.workspaceRoot || this.allowedFolders[0],
+              provider: this.clientApiProvider,
+              model: this.model,
+              tracer: this.tracer
+            });
+
+            if (mermaidValidation.wasFixed) {
+              finalResult = mermaidValidation.fixedResponse;
               if (this.debug) {
-                console.log(`[DEBUG] Mermaid validation: Starting enhanced mermaid validation...`);
-              }
-              
-              // Record mermaid validation start in telemetry
-              if (this.tracer) {
-                this.tracer.recordMermaidValidationEvent('schema_processing_started', {
-                  'mermaid_validation.context': 'schema_processing',
-                  'mermaid_validation.response_length': finalResult.length
-                });
-              }
-              
-              const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
-                debug: this.debug,
-                path: this.workspaceRoot || this.allowedFolders[0],
-                provider: this.clientApiProvider,
-                model: this.model,
-                tracer: this.tracer
-              });
-              
-              if (mermaidValidation.wasFixed) {
-                finalResult = mermaidValidation.fixedResponse;
-                if (this.debug) {
-                  console.log(`[DEBUG] Mermaid validation: Diagrams successfully fixed`);
-                  
-                  if (mermaidValidation.performanceMetrics) {
-                    const metrics = mermaidValidation.performanceMetrics;
-                    console.log(`[DEBUG] Mermaid validation: Performance - total: ${metrics.totalTimeMs}ms, AI fixing: ${metrics.aiFixingTimeMs}ms`);
-                    console.log(`[DEBUG] Mermaid validation: Results - ${metrics.diagramsFixed}/${metrics.diagramsProcessed} diagrams fixed`);
-                  }
-                  
-                  if (mermaidValidation.fixingResults) {
-                    mermaidValidation.fixingResults.forEach((fixResult, index) => {
-                      if (fixResult.wasFixed) {
-                        const method = fixResult.fixedWithHtmlDecoding ? 'HTML entity decoding' : 'AI correction';
-                        const time = fixResult.aiFixingTimeMs ? ` in ${fixResult.aiFixingTimeMs}ms` : '';
-                        console.log(`[DEBUG] Mermaid validation: Fixed diagram ${fixResult.diagramIndex + 1} with ${method}${time}`);
-                        console.log(`[DEBUG] Mermaid validation: Original error: ${fixResult.originalError}`);
-                      } else {
-                        console.log(`[DEBUG] Mermaid validation: Failed to fix diagram ${fixResult.diagramIndex + 1}: ${fixResult.fixingError}`);
-                      }
-                    });
-                  }
-                }
-              } else if (this.debug) {
-                console.log(`[DEBUG] Mermaid validation: No fixes needed or fixes unsuccessful`);
-                if (mermaidValidation.diagrams?.length > 0) {
-                  console.log(`[DEBUG] Mermaid validation: Found ${mermaidValidation.diagrams.length} diagrams, all valid: ${mermaidValidation.isValid}`);
+                console.log(`[DEBUG] Mermaid validation: Diagrams fixed`);
+                if (mermaidValidation.performanceMetrics) {
+                  console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
                 }
               }
-            } catch (error) {
-              if (this.debug) {
-                console.log(`[DEBUG] Mermaid validation: Process failed with error: ${error.message}`);
-                console.log(`[DEBUG] Mermaid validation: Stack trace: ${error.stack}`);
-              }
+            } else if (this.debug) {
+              console.log(`[DEBUG] Mermaid validation: Completed (no fixes needed)`);
             }
           } else if (this.debug) {
             console.log(`[DEBUG] Mermaid validation: Skipped due to disableMermaidValidation option`);
           }
 
-          // Step 3: Clean the response (remove code blocks, extract JSON)
-          // This happens AFTER mermaid validation to preserve full content for validation
+          // Step 2: Clean the schema response (remove code blocks, extract JSON)
           finalResult = cleanSchemaResponse(finalResult);
 
-          // Step 4: Validate and potentially correct JSON responses
+          // Step 3: Validate and potentially correct JSON responses
           if (isJsonSchema(options.schema)) {
             if (this.debug) {
-              console.log(`[DEBUG] JSON validation: Starting validation process for schema response`);
-              console.log(`[DEBUG] JSON validation: Cleaned response length: ${finalResult.length} chars`);
+              console.log(`[DEBUG] JSON validation: Starting validation process`);
+              console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
             }
 
             // Record JSON validation start in telemetry
@@ -3894,85 +3904,96 @@ Convert your previous response content into actual JSON data that follows this s
             let retryCount = 0;
             const maxRetries = 3;
 
-            // First check if the response is valid JSON but is actually a schema definition
+            // Check if the response is valid JSON but is actually a schema definition
             if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
               if (this.debug) {
-                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, needs correction...`);
-              }
-              // Mark as invalid so it goes through the fixing process
-              validation = {
-                isValid: false,
-                error: 'Response is a JSON schema definition instead of actual data',
-                enhancedError: 'Response is a JSON schema definition instead of actual data. Please return data that conforms to the schema, not the schema itself.'
-              };
-            }
-
-            // Use separate JsonFixingAgent for JSON corrections (isolates session like Mermaid fixing)
-            if (!validation.isValid) {
-              if (this.debug) {
-                console.log(`[DEBUG] JSON validation: Starting separate JsonFixingAgent session...`);
+                console.log(`[DEBUG] JSON validation: Response is a JSON schema definition instead of data, correcting...`);
               }
 
-              const { JsonFixingAgent } = await import('./schemaUtils.js');
-              const jsonFixer = new JsonFixingAgent({
-                path: this.workspaceRoot || this.allowedFolders[0],
-                provider: this.clientApiProvider,
-                model: this.model,
-                debug: this.debug,
-                tracer: this.tracer
+              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
+                finalResult,
+                options.schema,
+                0
+              );
+
+              finalResult = await this.answer(schemaDefinitionPrompt, [], {
+                ...options,
+                _schemaFormatted: true,
+                _skipValidation: true,
+                _disableTools: true,
+                _completionPromptProcessed: true,
+                _maxIterationsOverride: 3
               });
+              finalResult = cleanSchemaResponse(finalResult);
+              validation = validateJsonResponse(finalResult, { debug: this.debug, schema: options.schema });
+              retryCount = 1;
+            }
 
-              let currentResult = finalResult;
-              let currentValidation = validation;
-
-              while (!currentValidation.isValid && retryCount < maxRetries) {
+            // Try auto-wrapping for simple schemas before entering correction loop
+            if (!validation.isValid) {
+              const autoWrapped = tryAutoWrapForSimpleSchema(finalResult, options.schema, { debug: this.debug });
+              if (autoWrapped) {
                 if (this.debug) {
-                  console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, currentValidation.error);
-                  console.log(`[DEBUG] JSON validation: Invalid response sample: ${currentResult.substring(0, 300)}${currentResult.length > 300 ? '...' : ''}`);
+                  console.log(`[DEBUG] JSON validation: Auto-wrapped plain text for simple schema`);
                 }
-
-                try {
-                  // Use specialized JsonFixingAgent to fix the JSON in a separate session
-                  currentResult = await jsonFixer.fixJson(
-                    currentResult,
-                    options.schema,
-                    currentValidation,
-                    retryCount + 1
-                  );
-
-                  // Validate the corrected response
-                  currentValidation = validateJsonResponse(currentResult, { debug: this.debug, schema: options.schema });
-                  retryCount++;
-
-                  if (this.debug) {
-                    if (!currentValidation.isValid && retryCount < maxRetries) {
-                      console.log(`[DEBUG] JSON validation: Still invalid after correction ${retryCount}, retrying...`);
-                      console.log(`[DEBUG] JSON validation: Corrected response sample: ${currentResult.substring(0, 300)}${currentResult.length > 300 ? '...' : ''}`);
-                    } else if (currentValidation.isValid) {
-                      console.log(`[DEBUG] JSON validation: Successfully corrected after ${retryCount} attempts with JsonFixingAgent`);
-                    }
-                  }
-                } catch (error) {
-                  if (this.debug) {
-                    console.error(`[DEBUG] JSON validation: JsonFixingAgent error on attempt ${retryCount + 1}:`, error.message);
-                  }
-                  // If JsonFixingAgent fails, break out of loop
-                  break;
-                }
-              }
-
-              // Update finalResult with the fixed version
-              finalResult = currentResult;
-              validation = currentValidation;
-
-              if (!validation.isValid && this.debug) {
-                console.log(`[DEBUG] JSON validation: Still invalid after ${maxRetries} correction attempts with JsonFixingAgent:`, validation.error);
-                console.log(`[DEBUG] JSON validation: Final invalid response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
-              } else if (validation.isValid && this.debug) {
-                console.log(`[DEBUG] JSON validation: Final validation successful`);
+                finalResult = autoWrapped;
+                validation = validateJsonResponse(finalResult, { debug: this.debug, schema: options.schema });
               }
             }
-            
+
+            // Correction loop
+            while (!validation.isValid && retryCount < maxRetries) {
+              if (this.debug) {
+                console.log(`[DEBUG] JSON validation: Validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
+              }
+
+              let correctionPrompt;
+              try {
+                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
+                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
+                    finalResult,
+                    options.schema,
+                    retryCount
+                  );
+                } else {
+                  correctionPrompt = createJsonCorrectionPrompt(
+                    finalResult,
+                    options.schema,
+                    validation.error,
+                    retryCount
+                  );
+                }
+              } catch (error) {
+                correctionPrompt = createJsonCorrectionPrompt(
+                  finalResult,
+                  options.schema,
+                  validation.error,
+                  retryCount
+                );
+              }
+
+              finalResult = await this.answer(correctionPrompt, [], {
+                ...options,
+                _schemaFormatted: true,
+                _skipValidation: true,
+                _disableTools: true,
+                _completionPromptProcessed: true,
+                _maxIterationsOverride: 3
+              });
+              finalResult = cleanSchemaResponse(finalResult);
+
+              validation = validateJsonResponse(finalResult, { debug: this.debug, schema: options.schema });
+              retryCount++;
+
+              if (this.debug) {
+                if (validation.isValid) {
+                  console.log(`[DEBUG] JSON validation: Correction successful on attempt ${retryCount}`);
+                } else {
+                  console.log(`[DEBUG] JSON validation: Correction failed on attempt ${retryCount}: ${validation.error}`);
+                }
+              }
+            }
+
             // Record JSON validation completion in telemetry
             if (this.tracer) {
               this.tracer.recordJsonValidationEvent('completed', {
@@ -3983,195 +4004,21 @@ Convert your previous response content into actual JSON data that follows this s
                 'json_validation.error': validation.isValid ? null : validation.error
               });
             }
-          }
-        } catch (error) {
-          console.error('[ERROR] Schema formatting failed:', error);
-          // Return the original result if schema formatting fails
-        }
-      } else if (reachedMaxIterations && options.schema && this.debug) {
-        console.log('[DEBUG] Skipping schema formatting due to max iterations reached without completion');
-      } else if (completionAttempted && options.schema && !options._schemaFormatted && !options._skipValidation) {
-        // For attempt_completion results with schema, validate mermaid diagrams BEFORE cleaning schema
-        // This ensures mermaid validation sees the full response before JSON extraction strips content
-        // Skip this validation if we're in a recursive correction call (_skipValidation flag)
-        try {
-          // Validate and fix Mermaid diagrams if present (BEFORE schema cleaning)
-          if (!this.disableMermaidValidation) {
-            if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: Validating attempt_completion result BEFORE schema cleaning...`);
-            }
 
-            const mermaidValidation = await validateAndFixMermaidResponse(finalResult, {
-              debug: this.debug,
-              path: this.workspaceRoot || this.allowedFolders[0],
-              provider: this.clientApiProvider,
-              model: this.model,
-              tracer: this.tracer
-            });
-
-            if (mermaidValidation.wasFixed) {
-              finalResult = mermaidValidation.fixedResponse;
-              if (this.debug) {
-                console.log(`[DEBUG] Mermaid validation: attempt_completion diagrams fixed`);
-                if (mermaidValidation.performanceMetrics) {
-                  console.log(`[DEBUG] Mermaid validation: Fixed in ${mermaidValidation.performanceMetrics.totalTimeMs}ms`);
-                }
-              }
-            } else if (this.debug) {
-              console.log(`[DEBUG] Mermaid validation: attempt_completion result validation completed (no fixes needed)`);
-            }
-          } else if (this.debug) {
-            console.log(`[DEBUG] Mermaid validation: Skipped for attempt_completion result due to disableMermaidValidation option`);
-          }
-
-          // Now clean the schema response (may extract JSON and discard other content)
-          finalResult = cleanSchemaResponse(finalResult);
-          
-          // Validate and potentially correct JSON for attempt_completion results
-          if (isJsonSchema(options.schema)) {
-            if (this.debug) {
-              console.log(`[DEBUG] JSON validation: Starting validation process for attempt_completion result`);
-              console.log(`[DEBUG] JSON validation: Response length: ${finalResult.length} chars`);
-            }
-            
-            // Record JSON validation start in telemetry
-            if (this.tracer) {
-              this.tracer.recordJsonValidationEvent('attempt_completion_started', {
-                'json_validation.response_length': finalResult.length,
-                'json_validation.schema_type': 'JSON',
-                'json_validation.context': 'attempt_completion'
-              });
-            }
-            
-            let validation = validateJsonResponse(finalResult, { debug: this.debug });
-            let retryCount = 0;
-            const maxRetries = 3;
-            
-            // First check if the response is valid JSON but is actually a schema definition
-            if (validation.isValid && isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
-              if (this.debug) {
-                console.log(`[DEBUG] JSON validation: attempt_completion response is a JSON schema definition instead of data, correcting...`);
-              }
-              
-              // Use specialized correction prompt for schema definition confusion
-              const schemaDefinitionPrompt = createSchemaDefinitionCorrectionPrompt(
-                finalResult,
-                options.schema,
-                0
-              );
-              
-              // Strip schema from correction options to prevent inflated iteration budget (issue #447)
-              const { schema: _unusedSchema1, ...schemaDefCorrectionOptions } = options;
-              finalResult = await this.answer(schemaDefinitionPrompt, [], {
-                ...schemaDefCorrectionOptions,
-                _schemaFormatted: true,
-                _skipValidation: true,  // Skip validation in recursive correction calls to prevent loops
-                _completionPromptProcessed: true,  // Prevent cascading completion prompts in retry calls
-                _maxIterationsOverride: 3  // Correction should complete in 1-2 iterations (issue #447)
-              });
-              finalResult = cleanSchemaResponse(finalResult);
-              validation = validateJsonResponse(finalResult);
-              retryCount = 1; // Start at 1 since we already did one correction
-            }
-            
-            // Before entering correction loop, try auto-wrapping for simple schemas
-            // This avoids re-invoking AI for schemas like {text: string} where we can just wrap programmatically
-            if (!validation.isValid) {
-              const autoWrapped = tryAutoWrapForSimpleSchema(finalResult, options.schema, { debug: this.debug });
-              if (autoWrapped) {
-                if (this.debug) {
-                  console.log(`[DEBUG] JSON validation: Auto-wrapped plain text for simple schema`);
-                }
-                finalResult = autoWrapped;
-                validation = validateJsonResponse(finalResult, { debug: this.debug });
-              }
-            }
-
-            while (!validation.isValid && retryCount < maxRetries) {
-              if (this.debug) {
-                console.log(`[DEBUG] JSON validation: attempt_completion validation failed (attempt ${retryCount + 1}/${maxRetries}):`, validation.error);
-                console.log(`[DEBUG] JSON validation: Invalid response sample: ${finalResult.substring(0, 300)}${finalResult.length > 300 ? '...' : ''}`);
-              }
-              
-              // Check if the invalid response is actually a schema definition
-              let correctionPrompt;
-              try {
-                if (isJsonSchemaDefinition(finalResult, { debug: this.debug })) {
-                  if (this.debug) {
-                    console.log(`[DEBUG] JSON validation: attempt_completion response is still a schema definition, using specialized correction`);
-                  }
-                  correctionPrompt = createSchemaDefinitionCorrectionPrompt(
-                    finalResult,
-                    options.schema,
-                    retryCount
-                  );
-                } else {
-                  correctionPrompt = createJsonCorrectionPrompt(
-                    finalResult, 
-                    options.schema, 
-                    validation.error,
-                    retryCount
-                  );
-                }
-              } catch (error) {
-                // If we can't parse to check if it's a schema definition, use regular correction
-                correctionPrompt = createJsonCorrectionPrompt(
-                  finalResult, 
-                  options.schema, 
-                  validation.error,
-                  retryCount
-                );
-              }
-              
-              // Strip schema from correction options to prevent inflated iteration budget (issue #447)
-              const { schema: _unusedSchema2, ...correctionOptions } = options;
-              finalResult = await this.answer(correctionPrompt, [], {
-                ...correctionOptions,
-                _schemaFormatted: true,
-                _skipValidation: true,  // Skip validation in recursive correction calls to prevent loops
-                _disableTools: true,    // Only allow attempt_completion - prevent AI from using search/query tools
-                _completionPromptProcessed: true,  // Prevent cascading completion prompts in retry calls
-                _maxIterationsOverride: 3  // Correction should complete in 1-2 iterations (issue #447)
-              });
-              finalResult = cleanSchemaResponse(finalResult);
-              
-              // Validate the corrected response
-              validation = validateJsonResponse(finalResult, { debug: this.debug });
-              retryCount++;
-              
-              if (this.debug) {
-                if (validation.isValid) {
-                  console.log(`[DEBUG] JSON validation: attempt_completion correction successful on attempt ${retryCount}`);
-                } else {
-                  console.log(`[DEBUG] JSON validation: attempt_completion correction failed on attempt ${retryCount}: ${validation.error}`);
-                }
-              }
-            }
-            
-            // Record final validation result
-            if (this.tracer) {
-              this.tracer.recordJsonValidationEvent('attempt_completion_completed', {
-                'json_validation.success': validation.isValid,
-                'json_validation.retry_count': retryCount,
-                'json_validation.final_response_length': finalResult.length
-              });
-            }
-            
             if (!validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON validation: attempt_completion result validation failed after ${maxRetries} attempts: ${validation.error}`);
-              console.log(`[DEBUG] JSON validation: Final attempt_completion response: ${finalResult.substring(0, 500)}${finalResult.length > 500 ? '...' : ''}`);
+              console.log(`[DEBUG] JSON validation: Failed after ${maxRetries} attempts: ${validation.error}`);
             } else if (validation.isValid && this.debug) {
-              console.log(`[DEBUG] JSON validation: attempt_completion result validation successful`);
+              console.log(`[DEBUG] JSON validation: Final validation successful`);
             }
           }
         } catch (error) {
           if (this.debug) {
-            console.log(`[DEBUG] attempt_completion result cleanup failed: ${error.message}`);
+            console.log(`[DEBUG] Schema validation/cleanup failed: ${error.message}`);
           }
         }
       }
 
-      // Final mermaid validation for all responses (regardless of schema or attempt_completion)
+      // Final mermaid validation for all responses (regardless of schema)
       if (!this.disableMermaidValidation && !options._schemaFormatted) {
         try {
           if (this.debug) {
