@@ -3663,11 +3663,20 @@ Double-check your response based on the criteria above. If everything looks good
           const executeAIRequest = async () => {
             const result = await this.streamTextWithRetryAndFallback(streamOptions);
 
-            // Collect the final text
-            const finalText = await result.text;
+            // Use only the last step's text as the final answer.
+            // result.text concatenates ALL steps (including intermediate planning text),
+            // but the user should only see the final answer from the last step.
+            const steps = await result.steps;
+            let finalText;
+            if (steps && steps.length > 1) {
+              // Multi-step: use last step's text (the actual answer after tool calls)
+              const lastStepText = steps[steps.length - 1].text;
+              finalText = lastStepText || await result.text;
+            } else {
+              finalText = await result.text;
+            }
 
             if (this.debug) {
-              const steps = await result.steps;
               console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
             }
 
