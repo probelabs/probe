@@ -2976,9 +2976,9 @@ ${extractGuidance2}
 Follow these instructions carefully:
 1. Analyze the user's request.
 2. Use the available tools step-by-step to fulfill the request.
-3. You should always prefer the search tool for code-related questions.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
+3. You MUST use the search tool before answering ANY code-related question. NEVER answer from memory or general knowledge — your answers must be grounded in actual code found via search/extract.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
 4. Ensure to get really deep and understand the full picture before answering.
-5. Once the task is fully completed, provide your final answer directly as text.
+5. Once the task is fully completed, provide your final answer directly as text. Always cite specific files and line numbers as evidence. Do NOT output planning or thinking text — go straight to the answer.
 6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
 7. NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed) — always use search and extract tools instead. Bash is only for system operations like building, running tests, or git commands.${this.allowEdit ? `
 7. When modifying files, choose the appropriate tool:
