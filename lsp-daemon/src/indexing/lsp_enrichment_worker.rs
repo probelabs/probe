@@ -228,6 +228,25 @@ pub struct LspEnrichmentWorkerPool {
 }
 
 impl LspEnrichmentWorkerPool {
+    #[inline]
+    fn should_query_db_plans(queue_size: usize) -> bool {
+        queue_size == 0
+    }
+
+    #[inline]
+    fn should_run_db_fallback(queue_size: usize, plans_empty: bool) -> bool {
+        queue_size == 0 && plans_empty
+    }
+
+    fn build_policy_skip_reference_edges(symbol_uid: &str, language: &str) -> Vec<Edge> {
+        let mut sentinels = create_none_reference_edges(symbol_uid);
+        for e in sentinels.iter_mut() {
+            e.language = language.to_string();
+            e.metadata = Some("policy_skip_references".to_string());
+        }
+        sentinels
+    }
+
     /// Create a new worker pool (single worker design) using direct SingleServerManager access
     pub fn new(
         config: EnrichmentWorkerConfig,
@@ -426,8 +445,10 @@ impl LspEnrichmentWorkerPool {
                       "[heartbeat] queue={} dispatched_last_10s={}", qsize, dispatched_delta);
                 last_heartbeat = tokio::time::Instant::now();
             }
-            // Fetch from DB only if RAM queue is empty; otherwise dispatch RAM first to avoid stalls
-            let mut plans = if queue.size().await > 0 {
+            // Fetch from DB only if RAM queue is empty; otherwise dispatch RAM first to avoid stalls.
+            let queue_size_now = queue.size().await;
+            let should_query_db = Self::should_query_db_plans(queue_size_now);
+            let mut plans = if !should_query_db {
                 Vec::new()
             } else {
                 match cache_adapter.backend() {
@@ -479,8 +500,8 @@ impl LspEnrichmentWorkerPool {
                 }
             };
 
-            // Fallback path: if internal query returned nothing, assemble plans on the fly
-            if plans.is_empty() {
+            // Fallback path: run only when we actually queried DB and got no plans.
+            if Self::should_run_db_fallback(queue_size_now, plans.is_empty()) {
                 {
                     let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
                     let _ = uid_generator; // keep param referenced to avoid warning when UIDs come from queue
@@ -2003,23 +2024,27 @@ impl LspEnrichmentWorkerPool {
             let skip_core_refs = std::env::var("PROBE_LSP_REFS_SKIP_CORE")
                 .map(|v| v != "0" && v.to_lowercase() != "false")
                 .unwrap_or(true);
-            if skip_core_refs
+            let refs_skipped_by_policy = skip_core_refs
                 && crate::indexing::skiplist::should_skip_refs(
                     queue_item.language,
                     &queue_item.name,
                     &queue_item.kind,
-                )
-            {
+                );
+            if refs_skipped_by_policy {
                 debug!(
                     "Skipping LSP references for '{}' by per-language skiplist",
                     queue_item.name
                 );
-                let mut sentinels = create_none_implementation_edges(&queue_item.symbol_uid);
-                for e in sentinels.iter_mut() {
-                    e.language = language_str.to_string();
-                    e.metadata = Some("policy_skip_impls_not_candidate".to_string());
-                }
-                let _ = sqlite_backend.store_edges(&sentinels).await;
+                crate::edge_audit::inc("POLICY_REFS");
+                let sentinels =
+                    Self::build_policy_skip_reference_edges(&queue_item.symbol_uid, language_str);
+                stats
+                    .edges_attempted
+                    .fetch_add(sentinels.len() as u64, Ordering::Relaxed);
+                sqlite_backend
+                    .store_edges(&sentinels)
+                    .await
+                    .context("Failed to store policy-skip reference sentinels")?;
                 Self::mark_operation_complete(
                     sqlite_backend,
                     &queue_item.symbol_uid,
@@ -2027,142 +2052,144 @@ impl LspEnrichmentWorkerPool {
                     EnrichmentOperation::References,
                 )
                 .await?;
-                return Ok(());
             }
 
-            // Scope references to workspace by default
-            let refs_scope =
-                std::env::var("PROBE_LSP_REFS_SCOPE").unwrap_or_else(|_| "all".to_string());
-            if refs_scope.to_ascii_lowercase() != "all" {
-                let before = references_locations.len();
-                references_locations.retain(|loc| {
-                    if let Ok(url) = Url::parse(&loc.uri) {
-                        if let Ok(path) = url.to_file_path() {
-                            return path.starts_with(&workspace_root);
+            if !refs_skipped_by_policy {
+                // Scope references to workspace by default
+                let refs_scope =
+                    std::env::var("PROBE_LSP_REFS_SCOPE").unwrap_or_else(|_| "all".to_string());
+                if refs_scope.to_ascii_lowercase() != "all" {
+                    let before = references_locations.len();
+                    references_locations.retain(|loc| {
+                        if let Ok(url) = Url::parse(&loc.uri) {
+                            if let Ok(path) = url.to_file_path() {
+                                return path.starts_with(&workspace_root);
+                            }
+                        }
+                        false
+                    });
+                    let suppressed = before.saturating_sub(references_locations.len());
+                    if suppressed > 0 {
+                        debug!(
+                            "References: suppressed {} external locations (scope=workspace)",
+                            suppressed
+                        );
+                    }
+                }
+                if !references_locations.is_empty() {
+                    stats
+                        .references_found
+                        .fetch_add(references_locations.len() as u64, Ordering::Relaxed);
+                }
+
+                let (_ref_symbols, mut ref_edges) = database_adapter
+                    .convert_references_to_database(
+                        &references_locations,
+                        &abs_file_path,
+                        (adj_line, adj_char),
+                        language_str,
+                        1,
+                        &workspace_root,
+                    )
+                    .await
+                    .context("Failed to convert references to database edges")?;
+
+                // Phase-2 edges-only mode: do not update symbol_state here
+
+                if !ref_edges.is_empty() {
+                    ref_edges.retain(|e| e.source_symbol_uid != e.target_symbol_uid);
+                    if ref_edges.iter().any(|e| {
+                        e.source_symbol_uid != queue_item.symbol_uid
+                            && e.source_symbol_uid != "none"
+                    }) {
+                        if let Some(sample) = ref_edges
+                            .iter()
+                            .find(|e| e.source_symbol_uid != queue_item.symbol_uid)
+                        {
+                            debug!(target: "lsp_daemon::edge_audit", "[uid_mismatch] queue_uid='{}' example_source='{}' relation={:?}", queue_item.symbol_uid, sample.source_symbol_uid, sample.relation);
                         }
                     }
-                    false
-                });
-                let suppressed = before.saturating_sub(references_locations.len());
-                if suppressed > 0 {
-                    debug!(
-                        "References: suppressed {} external locations (scope=workspace)",
-                        suppressed
-                    );
-                }
-            }
-            if !references_locations.is_empty() {
-                stats
-                    .references_found
-                    .fetch_add(references_locations.len() as u64, Ordering::Relaxed);
-            }
-
-            let (_ref_symbols, mut ref_edges) = database_adapter
-                .convert_references_to_database(
-                    &references_locations,
-                    &abs_file_path,
-                    (adj_line, adj_char),
-                    language_str,
-                    1,
-                    &workspace_root,
-                )
-                .await
-                .context("Failed to convert references to database edges")?;
-
-            // Phase-2 edges-only mode: do not update symbol_state here
-
-            if !ref_edges.is_empty() {
-                ref_edges.retain(|e| e.source_symbol_uid != e.target_symbol_uid);
-                if ref_edges.iter().any(|e| {
-                    e.source_symbol_uid != queue_item.symbol_uid && e.source_symbol_uid != "none"
-                }) {
-                    if let Some(sample) = ref_edges
-                        .iter()
-                        .find(|e| e.source_symbol_uid != queue_item.symbol_uid)
-                    {
-                        debug!(target: "lsp_daemon::edge_audit", "[uid_mismatch] queue_uid='{}' example_source='{}' relation={:?}", queue_item.symbol_uid, sample.source_symbol_uid, sample.relation);
-                    }
-                }
-                stats
-                    .edges_attempted
-                    .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
-                sqlite_backend
-                    .store_edges(&ref_edges)
-                    .await
-                    .context("Failed to store reference edges in database")?;
-                stats
-                    .reference_edges_persisted
-                    .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
-            } else {
-                {
-                    let uid = queue_item.symbol_uid.clone();
-                    let mtime = std::fs::metadata(&queue_item.file_path)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0);
-                    empty_cache
-                        .record_empty(&uid, EmptyRelation::References, mtime)
-                        .await;
-
-                    // Anomaly guard for references
-                    let anomalous = ANOMALY_GUARD
-                        .get_or_init(AnomalyGuard::from_env)
-                        .record_zero_and_check(OpKey {
-                            uid: uid.clone(),
-                            kind: OpKind::References,
-                        })
-                        .await;
-                    let attempt = empty_cache
-                        .seen_count(&uid, EmptyRelation::References)
+                    stats
+                        .edges_attempted
+                        .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
+                    sqlite_backend
+                        .store_edges(&ref_edges)
                         .await
-                        .unwrap_or(1);
-                    let min_seen = empty_cache.min_seen();
-                    if anomalous
-                        || empty_cache
-                            .is_stable(&uid, EmptyRelation::References, mtime)
-                            .await
+                        .context("Failed to store reference edges in database")?;
+                    stats
+                        .reference_edges_persisted
+                        .fetch_add(ref_edges.len() as u64, Ordering::Relaxed);
+                } else {
                     {
-                        if anomalous {
-                            warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                        let uid = queue_item.symbol_uid.clone();
+                        let mtime = std::fs::metadata(&queue_item.file_path)
+                            .and_then(|m| m.modified())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        empty_cache
+                            .record_empty(&uid, EmptyRelation::References, mtime)
+                            .await;
+
+                        // Anomaly guard for references
+                        let anomalous = ANOMALY_GUARD
+                            .get_or_init(AnomalyGuard::from_env)
+                            .record_zero_and_check(OpKey {
+                                uid: uid.clone(),
+                                kind: OpKind::References,
+                            })
+                            .await;
+                        let attempt = empty_cache
+                            .seen_count(&uid, EmptyRelation::References)
+                            .await
+                            .unwrap_or(1);
+                        let min_seen = empty_cache.min_seen();
+                        if anomalous
+                            || empty_cache
+                                .is_stable(&uid, EmptyRelation::References, mtime)
+                                .await
+                        {
+                            if anomalous {
+                                warn!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
                                   "[anomaly] Refs zero-results loop detected uid='{}' → persisting durable 'none'", uid);
-                        } else {
-                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                            } else {
+                                info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
                                   "[empty-cache] Refs empty: attempt {}/{} uid='{}' → persisting durable 'none'",
                                   attempt, min_seen, uid);
-                        }
-                        let mut sentinels = create_none_reference_edges(&uid);
-                        for e in sentinels.iter_mut() {
-                            e.language = language_str.to_string();
-                            e.metadata = Some(if anomalous {
-                                "lsp_references_anomaly_empty".to_string()
-                            } else {
-                                "lsp_references_stable_empty".to_string()
-                            });
-                        }
-                        stats
-                            .edges_attempted
-                            .fetch_add(sentinels.len() as u64, Ordering::Relaxed);
-                        sqlite_backend
-                            .store_edges(&sentinels)
-                            .await
-                            .context("Failed to store Refs stable-empty sentinels")?;
-                    } else {
-                        info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
+                            }
+                            let mut sentinels = create_none_reference_edges(&uid);
+                            for e in sentinels.iter_mut() {
+                                e.language = language_str.to_string();
+                                e.metadata = Some(if anomalous {
+                                    "lsp_references_anomaly_empty".to_string()
+                                } else {
+                                    "lsp_references_stable_empty".to_string()
+                                });
+                            }
+                            stats
+                                .edges_attempted
+                                .fetch_add(sentinels.len() as u64, Ordering::Relaxed);
+                            sqlite_backend
+                                .store_edges(&sentinels)
+                                .await
+                                .context("Failed to store Refs stable-empty sentinels")?;
+                        } else {
+                            info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
                               "[empty-cache] Refs empty: attempt {}/{} uid='{}' (memory-only, will retry)",
                               attempt, min_seen, uid);
+                        }
                     }
                 }
-            }
 
-            Self::mark_operation_complete(
-                sqlite_backend,
-                &queue_item.symbol_uid,
-                language_str,
-                EnrichmentOperation::References,
-            )
-            .await?;
+                Self::mark_operation_complete(
+                    sqlite_backend,
+                    &queue_item.symbol_uid,
+                    language_str,
+                    EnrichmentOperation::References,
+                )
+                .await?;
+            }
             // end Refs
         }
 
@@ -2766,6 +2793,7 @@ impl LspEnrichmentWorkerPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::EdgeRelation;
 
     #[test]
     fn test_enrichment_worker_config_default() {
@@ -2830,6 +2858,35 @@ mod tests {
         assert!(config.batch_size > 0);
         assert!(config.request_timeout > Duration::from_secs(0));
         assert!(config.empty_queue_delay > Duration::from_secs(0));
+    }
+
+    #[test]
+    fn queue_non_empty_skips_db_query_and_fallback() {
+        let queue_size = 3usize;
+        assert!(!LspEnrichmentWorkerPool::should_query_db_plans(queue_size));
+        assert!(!LspEnrichmentWorkerPool::should_run_db_fallback(
+            queue_size, true
+        ));
+    }
+
+    #[test]
+    fn fallback_runs_only_when_db_query_returned_no_plans() {
+        assert!(LspEnrichmentWorkerPool::should_query_db_plans(0));
+        assert!(LspEnrichmentWorkerPool::should_run_db_fallback(0, true));
+        assert!(!LspEnrichmentWorkerPool::should_run_db_fallback(0, false));
+    }
+
+    #[test]
+    fn policy_skip_reference_edges_use_reference_relation() {
+        let edges = LspEnrichmentWorkerPool::build_policy_skip_reference_edges("uid-1", "rust");
+        assert!(!edges.is_empty());
+        for e in edges {
+            assert_eq!(e.relation, EdgeRelation::References);
+            assert_eq!(e.source_symbol_uid, "uid-1");
+            assert_eq!(e.target_symbol_uid, "none");
+            assert_eq!(e.language, "rust");
+            assert_eq!(e.metadata.as_deref(), Some("policy_skip_references"));
+        }
     }
 
     // ---- impl-header detector focused tests ----
