@@ -69,12 +69,12 @@ function autoQuoteSearchTerms(query) {
 		if (token.startsWith('"')) return token;
 		// Boolean operator
 		if (operators.has(token)) return token;
-		// Check if token needs quoting: has mixed case (upper+lower) or underscores
-		const hasUpper = /[A-Z]/.test(token);
-		const hasLower = /[a-z]/.test(token);
+		// Check if token needs quoting: has camelCase/PascalCase transitions or underscores
+		// Simple capitalized words like "Redis" or "Limiter" should NOT be quoted —
+		// only quote when there's an actual case transition (e.g., "getUserData", "NewSlidingLog")
 		const hasUnderscore = token.includes('_');
-		const hasMixedCase = hasUpper && hasLower;
-		if (hasMixedCase || hasUnderscore) {
+		const hasCaseTransition = /[a-z][A-Z]/.test(token) || /[A-Z]{2,}[a-z]/.test(token);
+		if (hasCaseTransition || hasUnderscore) {
 			return `"${token}"`;
 		}
 		return token;
@@ -499,7 +499,8 @@ export const searchTool = (options = {}) => {
 					allowedTools: ['search', 'extract', 'listFiles'],
 					searchDelegate: false,
 					schema: CODE_SEARCH_SCHEMA,
-					parentAbortSignal: options.parentAbortSignal || null
+					parentAbortSignal: options.parentAbortSignal || null,
+					maxIterations: 15  // Cap delegate to 15 iterations — good delegates finish in 3-6
 				});
 
 				const delegateResult = options.tracer?.withSpan
