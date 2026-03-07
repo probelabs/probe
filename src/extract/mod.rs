@@ -22,17 +22,77 @@ pub use formatter::{
     format_and_print_extraction_results, format_extraction_dry_run, format_extraction_results,
 };
 #[allow(unused_imports)]
-pub use processor::process_file_for_extraction;
+pub use processor::process_file_for_extraction as process_file_for_extraction_multi;
 #[allow(unused_imports)]
 pub use prompts::PromptTemplate;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use probe_code::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use probe_code::models::SearchResult;
 use std::collections::HashSet;
 use std::io::Read;
+use std::ops::Deref;
 #[allow(unused_imports)]
 use std::path::PathBuf;
+
+#[derive(Debug, Clone)]
+pub struct ExtractionResultCompat {
+    primary: SearchResult,
+    all: Vec<SearchResult>,
+}
+
+impl Deref for ExtractionResultCompat {
+    type Target = SearchResult;
+
+    fn deref(&self) -> &Self::Target {
+        &self.primary
+    }
+}
+
+impl IntoIterator for ExtractionResultCompat {
+    type Item = SearchResult;
+    type IntoIter = std::vec::IntoIter<SearchResult>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.all.into_iter()
+    }
+}
+
+/// Backward-compatible extraction API used by integration tests.
+///
+/// This keeps the legacy signature (`lsp` flag + single-result return) while
+/// delegating to the multi-result processor implementation.
+#[allow(clippy::too_many_arguments)]
+pub fn process_file_for_extraction(
+    path: &std::path::Path,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+    symbol: Option<&str>,
+    allow_tests: bool,
+    context_lines: usize,
+    specific_lines: Option<&std::collections::HashSet<usize>>,
+    symbols: bool,
+    _lsp: bool,
+) -> Result<ExtractionResultCompat> {
+    let results = processor::process_file_for_extraction(
+        path,
+        start_line,
+        end_line,
+        symbol,
+        allow_tests,
+        context_lines,
+        specific_lines,
+        symbols,
+    )?;
+    let primary = results
+        .first()
+        .cloned()
+        .ok_or_else(|| anyhow!("No extraction results for {:?}", path))?;
+    Ok(ExtractionResultCompat {
+        primary,
+        all: results,
+    })
+}
 
 /// Options for the extract command
 pub struct ExtractOptions {
@@ -64,7 +124,8 @@ pub struct ExtractOptions {
     pub instructions: Option<String>,
     /// Whether to ignore .gitignore files
     pub no_gitignore: bool,
-    /// Whether to enable LSP integration for enhanced extraction
+    /// Whether to include LSP-based enrichment data (compatibility field).
+    #[allow(dead_code)]
     pub lsp: bool,
 }
 
@@ -79,7 +140,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
     }
 
     // Check if debug mode is enabled
-    let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     if debug_mode {
         eprintln!("\n[DEBUG] ===== Extract Command Started =====");
@@ -513,10 +574,6 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         context_lines: usize,
         debug_mode: bool,
         format: String,
-        #[allow(dead_code)]
-        lsp: bool,
-        #[allow(dead_code)]
-        include_stdlib: bool,
 
         #[allow(dead_code)]
         original_input: Option<String>,
@@ -540,107 +597,12 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
                 context_lines: options.context_lines,
                 debug_mode,
                 format: options.format.clone(),
-                lsp: options.lsp,
-                include_stdlib: options.include_stdlib,
                 original_input: original_input.clone(),
                 system_prompt: system_prompt.clone(),
                 user_instructions: options.instructions.clone(),
             },
         )
         .collect();
-
-    // Check LSP readiness if LSP is enabled
-    if options.lsp && !file_params.is_empty() {
-        let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
-
-        if debug_mode {
-            eprintln!("[DEBUG] LSP enabled, checking server readiness...");
-        }
-
-        // Create readiness config for extract operations
-        let readiness_config = crate::lsp_integration::readiness::ReadinessConfig {
-            max_wait_secs: 30, // Wait up to 30 seconds for extract operations
-            poll_interval_ms: 500,
-            show_progress: !options.format.eq("json") && !options.format.eq("xml"), // Show progress unless JSON/XML format
-            auto_start_daemon: true,
-        };
-
-        // Check readiness for the first file to determine language server needs
-        let first_file_path = &file_params[0].path;
-
-        if debug_mode {
-            eprintln!("[DEBUG] Checking LSP readiness for: {:?}", first_file_path);
-        }
-
-        // Handle runtime creation - check if we're already in a runtime
-        let readiness_result = if tokio::runtime::Handle::try_current().is_ok() {
-            // We're already in a runtime, spawn a task
-            if debug_mode {
-                eprintln!("[DEBUG] Already in runtime, spawning LSP readiness check task...");
-            }
-
-            // For simplicity, just skip the readiness check if we're already in a runtime
-            // This avoids the "runtime from within runtime" error
-            if debug_mode {
-                eprintln!("[DEBUG] Skipping LSP readiness check to avoid runtime conflicts");
-            }
-            Ok(crate::lsp_integration::readiness::ReadinessCheckResult {
-                is_ready: true, // Assume ready for now
-                server_type: None,
-                expected_timeout_secs: None,
-                elapsed_secs: 0,
-                status_message: "Skipped due to runtime context".to_string(),
-            })
-        } else {
-            // Not in a runtime, create one
-            match tokio::runtime::Runtime::new() {
-                Ok(runtime) => runtime.block_on(
-                    crate::lsp_integration::readiness::check_lsp_readiness_for_file(
-                        first_file_path,
-                        readiness_config,
-                    ),
-                ),
-                Err(e) => {
-                    if debug_mode {
-                        eprintln!(
-                            "[DEBUG] Failed to create tokio runtime for LSP check: {}",
-                            e
-                        );
-                    }
-                    Err(anyhow::anyhow!(
-                        "Could not initialize async runtime for LSP check: {}",
-                        e
-                    ))
-                }
-            }
-        };
-
-        match readiness_result {
-            Ok(result) => {
-                if debug_mode {
-                    eprintln!(
-                        "[DEBUG] LSP readiness check result: ready={}, server_type={:?}",
-                        result.is_ready, result.server_type
-                    );
-                }
-                if !result.is_ready {
-                    eprintln!(
-                        "⚠ LSP server not ready ({}), proceeding without LSP enhancement",
-                        result.status_message
-                    );
-                }
-            }
-            Err(e) => {
-                if debug_mode {
-                    eprintln!("[DEBUG] LSP readiness check failed: {}", e);
-                }
-                eprintln!(
-                    "⚠ LSP readiness check failed: {}, proceeding without LSP enhancement",
-                    e
-                );
-            }
-        }
-    }
 
     // Process files in parallel
     file_params.par_iter().for_each(|params| {
@@ -684,7 +646,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             eprintln!("[DEBUG] Test file detected: {:?}", params.path);
         }
 
-        match processor::process_file_for_extraction_with_lsp(
+        match processor::process_file_for_extraction(
             &params.path,
             params.start_line,
             params.end_line,
@@ -692,8 +654,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             params.allow_tests,
             params.context_lines,
             params.specific_lines.as_ref(),
-            false,       // symbols functionality removed
-            options.lsp, // Pass LSP flag
+            false, // symbols functionality removed
         ) {
             Ok(result_vec) => {
                 if params.debug_mode {
@@ -855,6 +816,40 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
             "[DEBUG] After deduplication: {len} results",
             len = results.len()
         );
+    }
+
+    // Optionally enrich extracted results with LSP data (call hierarchy, references, etc.).
+    // This is best-effort; extraction output remains available even if LSP enrichment fails.
+    if options.lsp && !results.is_empty() {
+        if debug_mode {
+            eprintln!(
+                "[DEBUG] LSP enabled, enriching {} extracted result(s)",
+                results.len()
+            );
+        }
+        if let Err(e) =
+            crate::search::lsp_enrichment::enrich_results_with_lsp(&mut results, debug_mode)
+        {
+            if debug_mode {
+                eprintln!("[DEBUG] LSP enrichment failed: {e}");
+            }
+        } else {
+            // Normalize merged multi-symbol payloads into a single symbol payload so
+            // extract formatter can render top-level call_hierarchy/references sections.
+            for result in &mut results {
+                if let Some(lsp_info) = result.lsp_info.take() {
+                    if let Some(symbols) = lsp_info.get("symbols").and_then(|v| v.as_array()) {
+                        if let Some(first_symbol) = symbols.first() {
+                            result.lsp_info = Some(first_symbol.clone());
+                        } else {
+                            result.lsp_info = Some(lsp_info);
+                        }
+                    } else {
+                        result.lsp_info = Some(lsp_info);
+                    }
+                }
+            }
+        }
     }
 
     if debug_mode {

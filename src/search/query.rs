@@ -479,8 +479,9 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
 
                 // Process each keyword
                 for keyword in keywords {
+                    let keyword_key = keyword.to_lowercase();
                     // Note: We still generate patterns for excluded terms so they can be found and then filtered out
-                    if debug_mode && plan.excluded_terms.contains(keyword) {
+                    if debug_mode && plan.excluded_terms.contains(&keyword_key) {
                         println!(
                             "DEBUG: Generating pattern for globally excluded keyword (will be filtered during evaluation): '{keyword}'"
                         );
@@ -489,7 +490,7 @@ pub fn create_structured_patterns(plan: &QueryPlan) -> Vec<(String, HashSet<usiz
                     // No need for an additional check here for `*excluded` as the outer check handles it.
 
                     // Find the keyword's index in term_indices
-                    if let Some(&idx) = plan.term_indices.get(keyword) {
+                    if let Some(&idx) = plan.term_indices.get(&keyword_key) {
                         let base_pattern = regex_escape(keyword);
 
                         // For exact terms, use stricter matching

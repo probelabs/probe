@@ -21,10 +21,12 @@ import { fileURLToPath } from 'url';
 // Import from parent package
 import { search, query, extract, grep, getBinaryPath, setBinaryPath } from '../index.js';
 
+type OutputFormat = 'outline' | 'outline-xml' | 'json';
+
 // Parse command-line arguments
-function parseArgs(): { timeout?: number; lsp?: boolean } {
+function parseArgs(): { timeout?: number; lsp?: boolean; format?: OutputFormat } {
   const args = process.argv.slice(2);
-  const config: { timeout?: number; lsp?: boolean } = {};
+  const config: { timeout?: number; lsp?: boolean; format?: OutputFormat } = {};
   
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--timeout' || args[i] === '-t') && i + 1 < args.length) {
@@ -39,6 +41,15 @@ function parseArgs(): { timeout?: number; lsp?: boolean } {
     } else if (args[i] === '--lsp') {
       config.lsp = true;
       console.error('LSP mode enabled');
+    } else if (args[i] === '--format' && i + 1 < args.length) {
+      const format = args[i + 1] as OutputFormat;
+      if (format === 'outline' || format === 'outline-xml' || format === 'json') {
+        config.format = format;
+        console.error(`Output format set to ${format}`);
+      } else {
+        console.error(`Invalid format value: ${args[i + 1]}. Using default.`);
+      }
+      i++; // Skip the next argument
     } else if (args[i] === '--help' || args[i] === '-h') {
       console.error(`
 Probe MCP Server
@@ -50,6 +61,7 @@ Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
   --lsp                    Enable LSP (Language Server Protocol) for enhanced features
                            Automatically initializes language servers for the current workspace
+  --format <format>        Output format for search responses (outline|outline-xml|json)
   --help, -h              Show this help message
 `);
       process.exit(0);
@@ -148,14 +160,28 @@ interface ExtractCodeArgs {
   lsp?: boolean;
 }
 
+interface GrepArgs {
+  pattern: string;
+  paths: string[];
+  ignoreCase?: boolean;
+  count?: boolean;
+  context?: number;
+}
+
 class ProbeServer {
   private server: Server;
   private defaultTimeout: number;
   private lspEnabled: boolean;
+  private defaultFormat: OutputFormat;
 
-  constructor(timeout: number = 30, lspEnabled: boolean = false) {
+  constructor(
+    timeout: number = 30,
+    lspEnabled: boolean = false,
+    defaultFormat: OutputFormat = 'outline-xml'
+  ) {
     this.defaultTimeout = timeout;
     this.lspEnabled = lspEnabled;
+    this.defaultFormat = defaultFormat;
     this.server = new Server(
       {
         name: '@probelabs/probe',

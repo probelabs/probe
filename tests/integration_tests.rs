@@ -804,6 +804,7 @@ fn test_skipped_files_with_match_counts() {
         question: None,
         exact: false,
         no_gitignore: false,
+        lsp: false,
     };
 
     // Perform search

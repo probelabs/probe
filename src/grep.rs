@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use anyhow::{Context, Result};
 use colored::*;
 use ignore::WalkBuilder;
@@ -436,7 +438,11 @@ fn build_walker_parallel(
         .git_ignore(!no_gitignore)
         .git_global(!no_gitignore)
         .git_exclude(!no_gitignore)
-        .threads(num_cpus::get()); // Use all available CPU cores
+        .threads(
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(1),
+        ); // Use all available CPU cores
 
     for pattern in ignore_patterns {
         walker_builder.add_custom_ignore_filename(pattern);

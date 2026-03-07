@@ -250,8 +250,10 @@ fn test_format_and_print_extraction_results() {
         parent_file_id: None,
         block_id: None,
         matched_keywords: None,
+        matched_lines: None,
         tokenized_content: None,
         lsp_info: None,
+        parent_context: None,
     };
 
     // Test different formats

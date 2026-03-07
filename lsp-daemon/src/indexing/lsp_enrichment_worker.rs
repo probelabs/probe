@@ -652,15 +652,14 @@ impl LspEnrichmentWorkerPool {
                             info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
                                   "[empty-cache] skip {:?} uid='{}' attempt={} min_seen={} ttl={}s",
                                   rel, uid, seen, min_seen, empty_cache.ttl_secs());
-                            if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend() {
-                                let _ = Self::mark_operation_complete(
-                                    sqlite_backend,
-                                    uid,
-                                    plan.symbol.language.as_str(),
-                                    op,
-                                )
-                                .await;
-                            }
+                            let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+                            let _ = Self::mark_operation_complete(
+                                sqlite_backend,
+                                uid,
+                                plan.symbol.language.as_str(),
+                                op,
+                            )
+                            .await;
                         } else {
                             filtered_ops.push(op);
                         }
@@ -856,16 +855,14 @@ impl LspEnrichmentWorkerPool {
                                 info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
                                       "[empty-cache] skip {:?} uid='{}' attempt={} min_seen={} ttl={}s",
                                       rel, uid, seen, min_seen, empty_cache.ttl_secs());
-                                if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend()
-                                {
-                                    let _ = Self::mark_operation_complete(
-                                        sqlite_backend,
-                                        &uid,
-                                        qi.language.as_str(),
-                                        op,
-                                    )
-                                    .await;
-                                }
+                                let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+                                let _ = Self::mark_operation_complete(
+                                    sqlite_backend,
+                                    &uid,
+                                    qi.language.as_str(),
+                                    op,
+                                )
+                                .await;
                             } else {
                                 kept.push(op);
                             }
@@ -1059,15 +1056,14 @@ impl LspEnrichmentWorkerPool {
                             info!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
                                   "[empty-cache] skip {:?} uid='{}' attempt={} min_seen={} ttl={}s",
                                   rel, uid, seen, min_seen, empty_cache.ttl_secs());
-                            if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend() {
-                                let _ = Self::mark_operation_complete(
-                                    sqlite_backend,
-                                    uid,
-                                    queue_item.language.as_str(),
-                                    op,
-                                )
-                                .await;
-                            }
+                            let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+                            let _ = Self::mark_operation_complete(
+                                sqlite_backend,
+                                uid,
+                                queue_item.language.as_str(),
+                                op,
+                            )
+                            .await;
                         } else {
                             filtered_ops.push(op);
                         }
@@ -1503,7 +1499,7 @@ impl LspEnrichmentWorkerPool {
         cache_adapter: &Arc<DatabaseCacheAdapter>,
         config: &EnrichmentWorkerConfig,
         stats: &Arc<EnrichmentWorkerStats>,
-        enrichment_tracker: &Arc<EnrichmentTracker>,
+        _enrichment_tracker: &Arc<EnrichmentTracker>,
         uid_generator: &Arc<SymbolUIDGenerator>,
         empty_cache: &Arc<EmptyResultCache>,
         db_workspace_root: std::path::PathBuf,
@@ -1512,16 +1508,15 @@ impl LspEnrichmentWorkerPool {
         if let Some(pstr) = queue_item.file_path.to_str() {
             if pstr.starts_with("/dep/") {
                 let language_str = queue_item.language.as_str();
-                if let BackendType::SQLite(sqlite_backend) = cache_adapter.backend() {
-                    for op in queue_item.operations.iter().copied() {
-                        let _ = Self::mark_operation_complete(
-                            sqlite_backend,
-                            &queue_item.symbol_uid,
-                            language_str,
-                            op,
-                        )
-                        .await;
-                    }
+                let BackendType::SQLite(sqlite_backend) = cache_adapter.backend();
+                for op in queue_item.operations.iter().copied() {
+                    let _ = Self::mark_operation_complete(
+                        sqlite_backend,
+                        &queue_item.symbol_uid,
+                        language_str,
+                        op,
+                    )
+                    .await;
                 }
                 tracing::debug!(target: "lsp_daemon::indexing::lsp_enrichment_worker",
                     "[dep-skip] Skipping enrichment for uid='{}' path='{}' ops={:?}",
@@ -1778,7 +1773,6 @@ impl LspEnrichmentWorkerPool {
 
                 if !edges.is_empty() {
                     // Drop self-loop edges to avoid EID010 and meaningless relations
-                    let before = edges.len();
                     edges.retain(|e| e.source_symbol_uid != e.target_symbol_uid);
                     if edges.iter().any(|e| {
                         e.source_symbol_uid != queue_item.symbol_uid

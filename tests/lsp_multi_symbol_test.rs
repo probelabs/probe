@@ -34,6 +34,7 @@ func Subtract(x, y int) int {
 }"#
         .to_string(),
         node_type: "function_declaration".to_string(),
+        symbol_signature: None,
         score: Some(1.0),
         tfidf_score: None,
         bm25_score: Some(1.0),
@@ -57,7 +58,9 @@ func Subtract(x, y int) int {
         lsp_info: None, // This should be populated by enrichment
         block_id: None,
         matched_by_filename: Some(false),
+        matched_lines: None,
         tokenized_content: None,
+        parent_context: None,
     }
 }
 

@@ -16,6 +16,9 @@ export function setupTestEnvironment() {
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.OPENAI_API_KEY;
     delete process.env.GOOGLE_API_KEY;
+    // Some installed @probelabs/probe versions require at least one API key at construction
+    // time, even when tests replace model calls with mocks immediately afterwards.
+    process.env.OPENAI_API_KEY = 'test-key';
     
     // Set test mode
     process.env.NODE_ENV = 'test';

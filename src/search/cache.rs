@@ -734,6 +734,7 @@ mod tests {
             matched_lines: None,
             tokenized_content: None,
             lsp_info: None,
+            parent_context: None,
         };
 
         let result2 = SearchResult {
@@ -763,6 +764,7 @@ mod tests {
             matched_lines: None,
             tokenized_content: None,
             lsp_info: None,
+            parent_context: None,
         };
 
         // Generate cache keys for both results

@@ -1006,6 +1006,7 @@ fn process_uncovered_lines_batch(ctx: &mut BatchProcessingContext) {
                 },
                 tokenized_content: Some(context_terms),
                 lsp_info: None,
+                parent_context: None,
             };
 
             // Add to result creation time
@@ -1519,7 +1520,7 @@ pub fn process_file_with_results(
                             block.node_type.clone()
                         },
                         code: full_code,
-                        symbol_signature,
+                        symbol_signature: None,
                         matched_by_filename: None,
                         rank: None,
                         score: None,
@@ -1551,6 +1552,7 @@ pub fn process_file_with_results(
                         },
                         tokenized_content: Some(block_terms),
                         lsp_info: None,
+                        parent_context: None,
                     };
 
                     let result_creation_duration_value = result_creation_start.elapsed();

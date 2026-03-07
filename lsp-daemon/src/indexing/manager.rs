@@ -3429,12 +3429,6 @@ impl IndexingManager {
 
                 // Find orphan symbols and queue them for enrichment
                 if workers_started {
-                    // Get the batch size from environment variable
-                    let batch_size = std::env::var("PROBE_LSP_ENRICHMENT_BATCH_SIZE")
-                        .ok()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(100);
-
                     // Get cache adapter for database access
                     {
                         // Use the indexing manager's workspace root for DB routing
@@ -3557,10 +3551,6 @@ impl IndexingManager {
                                             let retry_ready = enrichment_tracker
                                                 .get_symbols_ready_for_retry()
                                                 .await;
-                                            let mut missing_snapshot: std::collections::HashMap<
-                                                Language,
-                                                (u64, u64),
-                                            > = std::collections::HashMap::new();
                                             for plan in pending_plans {
                                                 let uid = &plan.symbol.symbol_uid;
                                                 let has_failed =

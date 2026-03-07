@@ -12,7 +12,7 @@ use tracing::{debug, info, warn};
 
 use crate::database::{DatabaseBackend, Edge, EdgeRelation, SymbolState};
 use crate::path_resolver::PathResolver;
-use crate::protocol::{CallHierarchyItem, CallHierarchyResult, Position, Range};
+use crate::protocol::{CallHierarchyItem, CallHierarchyResult};
 use crate::symbol::{
     generate_version_aware_uid, normalize_uid_with_hint, uid_generator::SymbolUIDGenerator,
     SymbolInfo, SymbolKind, SymbolLocation,

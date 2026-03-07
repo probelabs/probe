@@ -22,6 +22,21 @@ use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock as AsyncRw
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
+// Format SQL for concise logging (single line, truncated)
+fn format_sql_snippet(sql: &str) -> String {
+    let s = sql.trim().replace('\n', " ").replace('\t', " ");
+    let max_len: usize = std::env::var("PROBE_LSP_SQL_SNIPPET_LEN")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|&n| n >= 32)
+        .unwrap_or(160);
+    if s.len() > max_len {
+        format!("{}…", &s[..max_len])
+    } else {
+        s
+    }
+}
+
 macro_rules! debug_execute {
     ($conn:expr, $sql:expr, $params:expr) => {{
         debug!("🔧 SQL_DEBUG: About to EXECUTE: {}", $sql);
@@ -83,6 +98,11 @@ static READER_GATES: Lazy<DashMap<String, Arc<AsyncRwLock<()>>>> = Lazy::new(Das
 static READER_SEMAPHORES: Lazy<DashMap<String, Arc<Semaphore>>> = Lazy::new(DashMap::new);
 // Serialize ad-hoc direct writes when bypassing the writer task
 static DIRECT_WRITE_SEMAPHORES: Lazy<DashMap<String, Arc<Semaphore>>> = Lazy::new(DashMap::new);
+
+// Track recent slow connection checkouts (global) to detect bursts
+static SLOW_CHECKOUT_TIMES: Lazy<
+    tokio::sync::Mutex<std::collections::VecDeque<std::time::Instant>>,
+> = Lazy::new(|| tokio::sync::Mutex::new(std::collections::VecDeque::with_capacity(256)));
 
 #[derive(Clone, Debug)]
 struct GateOwnerInfo {
@@ -249,6 +269,20 @@ where
         let elapsed = start.elapsed();
         match res {
             Ok(rows) => {
+                // Slow-query marker at INFO for visibility under RUST_LOG=info
+                let slow_ms: u128 = std::env::var("PROBE_LSP_DB_SLOW_MS")
+                    .ok()
+                    .and_then(|s| s.parse::<u128>().ok())
+                    .unwrap_or(500);
+                if elapsed.as_millis() >= slow_ms {
+                    info!(
+                        target: "lsp_daemon::database::sqlite_backend",
+                        "[slow-sql] query context={} elapsed_ms={} sql=\"{}\"",
+                        context,
+                        elapsed.as_millis(),
+                        format_sql_snippet(sql)
+                    );
+                }
                 if elapsed.as_millis() < 1000 {
                     debug!(
                         "✅ SQL_DEBUG: Query OK in {} ms (context={})",
@@ -265,6 +299,21 @@ where
                 Ok(rows)
             }
             Err(e) => {
+                // If the query failed but ran long, log at INFO as slow as well
+                let slow_ms: u128 = std::env::var("PROBE_LSP_DB_SLOW_MS")
+                    .ok()
+                    .and_then(|s| s.parse::<u128>().ok())
+                    .unwrap_or(500);
+                if elapsed.as_millis() >= slow_ms {
+                    info!(
+                        target: "lsp_daemon::database::sqlite_backend",
+                        "[slow-sql] query FAILED context={} elapsed_ms={} err={} sql=\"{}\"",
+                        context,
+                        elapsed.as_millis(),
+                        e,
+                        format_sql_snippet(sql)
+                    );
+                }
                 if elapsed.as_millis() < 1000 {
                     warn!(
                         "❌ SQL_DEBUG: Query FAILED in {} ms (context={}): {}",
@@ -372,6 +421,20 @@ where
         let elapsed = start.elapsed();
         match res {
             Ok(result) => {
+                // Slow-exec marker at INFO for visibility
+                let slow_ms: u128 = std::env::var("PROBE_LSP_DB_SLOW_MS")
+                    .ok()
+                    .and_then(|s| s.parse::<u128>().ok())
+                    .unwrap_or(500);
+                if elapsed.as_millis() >= slow_ms {
+                    info!(
+                        target: "lsp_daemon::database::sqlite_backend",
+                        "[slow-sql] exec context={} elapsed_ms={} sql=\"{}\"",
+                        context,
+                        elapsed.as_millis(),
+                        format_sql_snippet(sql)
+                    );
+                }
                 if elapsed.as_millis() < 1000 {
                     debug!(
                         "✅ SQL_DEBUG: Execute OK in {} ms (context={})",
@@ -388,6 +451,20 @@ where
                 Ok(result)
             }
             Err(e) => {
+                let slow_ms: u128 = std::env::var("PROBE_LSP_DB_SLOW_MS")
+                    .ok()
+                    .and_then(|s| s.parse::<u128>().ok())
+                    .unwrap_or(500);
+                if elapsed.as_millis() >= slow_ms {
+                    info!(
+                        target: "lsp_daemon::database::sqlite_backend",
+                        "[slow-sql] exec FAILED context={} elapsed_ms={} err={} sql=\"{}\"",
+                        context,
+                        elapsed.as_millis(),
+                        e,
+                        format_sql_snippet(sql)
+                    );
+                }
                 if elapsed.as_millis() < 1000 {
                     warn!(
                         "❌ SQL_DEBUG: Execute FAILED in {} ms (context={}): {}",
@@ -525,6 +602,8 @@ struct ConnectionPool {
     available: Vec<Connection>,
     /// Maximum pool size
     max_size: usize,
+    /// Notify waiters when a connection becomes available
+    notify: std::sync::Arc<tokio::sync::Notify>,
     /// Configuration
     config: SQLiteConfig,
     /// Number of checked-out connections (not in `available`)
@@ -631,7 +710,6 @@ impl ConnectionPool {
                 let mvcc_log_path = base.with_file_name(format!("{}-log", fname));
                 let mvcc_marker = PathBuf::from(format!("{}.mvcc", &config.path));
                 let wal_exists = wal_path.exists();
-                let mvcc_exists = mvcc_log_path.exists() || mvcc_marker.exists();
 
                 if mvcc_log_path.exists() {
                     if let Ok(meta) = std::fs::metadata(&mvcc_log_path) {
@@ -846,10 +924,16 @@ impl ConnectionPool {
         // Migrations removed: ensure minimal schema instead
         Self::ensure_minimal_schema(&conn, &config, indexes_enabled, requested_mvcc).await?;
 
-        // Pre-populate with some connections
-        let initial_size = 1;
-        let mut available = Vec::with_capacity(initial_size);
-        for _ in 0..initial_size {
+        // Pool sizing (guarded by env)
+        let pool_size: usize = std::env::var("PROBE_LSP_DB_POOL_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(4);
+
+        // Pre-populate with connections to avoid creation spikes under load
+        let mut available = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
             if let Ok(core_conn) = core_database.connect() {
                 let conn = Connection::create(core_conn);
                 // Defer connection tuning to checkout time to avoid awaits here
@@ -863,7 +947,8 @@ impl ConnectionPool {
             indexes_enabled,
             available,
             // Allow more concurrent readers; writes are serialized by the writer gate
-            max_size: 4,
+            max_size: pool_size,
+            notify: std::sync::Arc::new(tokio::sync::Notify::new()),
             config,
             checked_out: std::sync::atomic::AtomicUsize::new(0),
             quiesced: std::sync::atomic::AtomicBool::new(false),
@@ -1661,10 +1746,30 @@ impl ConnectionPool {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        let conn = if let Some(conn) = self.available.pop() {
-            conn
-        } else {
-            // Create a new connection if we haven't hit the max
+        let enforce = std::env::var("PROBE_LSP_DB_POOL_ENFORCE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let wait_ms: u64 = std::env::var("PROBE_LSP_DB_CONN_WAIT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(200);
+
+        let conn = loop {
+            if let Some(conn) = self.available.pop() {
+                break conn;
+            }
+            if enforce {
+                let checked = self.checked_out.load(Ordering::Relaxed);
+                if checked >= self.max_size {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_millis(wait_ms),
+                        self.notify.notified(),
+                    )
+                    .await;
+                    continue;
+                }
+            }
+            // Create a new connection
             let core_conn =
                 self.core_database
                     .connect()
@@ -1673,7 +1778,7 @@ impl ConnectionPool {
                     })?;
             let conn = Connection::create(core_conn);
             Self::configure_connection(&conn, &self.config).await?;
-            conn
+            break conn;
         };
         self.checked_out.fetch_add(1, Ordering::Relaxed);
         Ok(conn)
@@ -1685,6 +1790,7 @@ impl ConnectionPool {
             self.available.push(conn);
         }
         self.checked_out.fetch_sub(1, Ordering::Relaxed);
+        self.notify.notify_one();
         // If pool is full, just drop the connection
     }
 
@@ -1695,6 +1801,7 @@ impl ConnectionPool {
     async fn checkout_arc(
         pool_arc: &Arc<Mutex<ConnectionPool>>,
     ) -> Result<Connection, DatabaseError> {
+        let t_total = Instant::now();
         // Respect quiesce without holding the lock during sleep
         loop {
             let quiesced = {
@@ -1707,7 +1814,8 @@ impl ConnectionPool {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
 
-        // Try fast path: pop an available connection
+        // Try fast path, otherwise enforce cap if requested
+        // Fast path
         {
             let mut pool = pool_arc.lock().await;
             if let Some(conn) = pool.available.pop() {
@@ -1716,34 +1824,109 @@ impl ConnectionPool {
             }
         }
 
-        // Slow path: create a new connection outside the lock
-        let (core_database, config) = {
-            let pool = pool_arc.lock().await;
-            (pool.core_database.clone(), pool.config.clone())
+        let enforce = std::env::var("PROBE_LSP_DB_POOL_ENFORCE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let wait_ms: u64 = std::env::var("PROBE_LSP_DB_CONN_WAIT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(200);
+
+        let conn = loop {
+            let (core_database, config, at_cap, notify) = {
+                let pool = pool_arc.lock().await;
+                let checked = pool.checked_out.load(Ordering::Relaxed);
+                let at_cap = enforce && checked >= pool.max_size && pool.available.is_empty();
+                (
+                    pool.core_database.clone(),
+                    pool.config.clone(),
+                    at_cap,
+                    pool.notify.clone(),
+                )
+            };
+            if at_cap {
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(wait_ms), notify.notified()).await;
+                // Retry fast path
+                let mut pool = pool_arc.lock().await;
+                if let Some(conn) = pool.available.pop() {
+                    pool.checked_out.fetch_add(1, Ordering::Relaxed);
+                    break conn;
+                }
+                continue;
+            } else {
+                // Reserve a slot under the lock to avoid overshooting cap under bursts
+                {
+                    let pool = pool_arc.lock().await;
+                    pool.checked_out.fetch_add(1, Ordering::Relaxed);
+                }
+                let core_conn =
+                    core_database
+                        .connect()
+                        .map_err(|e| DatabaseError::OperationFailed {
+                            message: format!("Failed to create new connection: {e}"),
+                        })?;
+                let conn = Connection::create(core_conn);
+                Self::configure_connection(&conn, &config).await?;
+                break conn;
+            }
         };
-        let core_conn = core_database
-            .connect()
-            .map_err(|e| DatabaseError::OperationFailed {
-                message: format!("Failed to create new connection: {e}"),
-            })?;
-        let conn = Connection::create(core_conn);
-        Self::configure_connection(&conn, &config).await?;
-        {
-            let pool = pool_arc.lock().await;
-            pool.checked_out.fetch_add(1, Ordering::Relaxed);
+        let waited = t_total.elapsed().as_millis();
+        let slow_ms: u128 = std::env::var("PROBE_LSP_DB_CONN_SLOW_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(200);
+        if waited >= slow_ms {
+            // Snapshot pool stats for debugging
+            let (checked_out, available_len, max_size, path) = {
+                let pool = pool_arc.lock().await;
+                (
+                    pool.checked_out.load(Ordering::Relaxed),
+                    pool.available.len(),
+                    pool.max_size,
+                    pool.config.path.clone(),
+                )
+            };
+            info!(
+                target: "lsp_daemon::database::sqlite_backend",
+                "[conn] checkout slow elapsed_ms={} checked_out={} available={} max_size={} path=\"{}\" created_new=true",
+                waited, checked_out, available_len, max_size, path
+            );
+            // Track bursts of slow checkouts over a 10s window
+            let now = std::time::Instant::now();
+            let mut q = SLOW_CHECKOUT_TIMES.lock().await;
+            q.push_back(now);
+            while let Some(front) = q.front().cloned() {
+                if now.duration_since(front) > std::time::Duration::from_secs(10) {
+                    q.pop_front();
+                } else {
+                    break;
+                }
+            }
+            if q.len() >= 5 {
+                info!(
+                    target: "lsp_daemon::database::sqlite_backend",
+                    "[conn] burst slow-checkouts last_10s={}",
+                    q.len()
+                );
+            }
         }
         Ok(conn)
     }
 
-    /// Return a connection to the pool without holding the lock across awaits
+    /// Return a connection to the pool without blocking the runtime thread.
+    /// Performs the mutex lock inside a spawned task to avoid `block_on` in async contexts.
     fn return_connection_arc(pool_arc: &Arc<Mutex<ConnectionPool>>, conn: Connection) {
-        // Best-effort return; if pool is full, just drop the connection
-        futures::executor::block_on(async {
+        let pool_arc = pool_arc.clone();
+        // Best-effort async return; if pool is full, just drop the connection.
+        // Use spawn to avoid blocking even if called on a runtime worker.
+        let _ = tokio::spawn(async move {
             let mut pool = pool_arc.lock().await;
             if pool.available.len() < pool.max_size {
                 pool.available.push(conn);
             }
             pool.checked_out.fetch_sub(1, Ordering::Relaxed);
+            pool.notify.notify_one();
         });
     }
 }
@@ -4270,7 +4453,21 @@ impl SQLiteBackend {
     /// and decrements the active counter on drop.
     pub async fn begin_reader(&self, label: &str) -> ReaderGuard {
         let gate = self.reader_rw_gate_for_path();
+        let t0 = Instant::now();
         let guard = gate.clone().read_owned().await;
+        let waited = t0.elapsed().as_millis();
+        let gate_slow_ms: u128 = std::env::var("PROBE_LSP_READER_GATE_SLOW_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(200);
+        if waited >= gate_slow_ms {
+            info!(
+                target: "lsp_daemon::database::sqlite_backend",
+                "[gate] reader acquire slow label={} waited_ms={}",
+                label,
+                waited
+            );
+        }
         self.reader_active.fetch_add(1, Ordering::Relaxed);
         {
             let mut last = self.reader_last.lock().await;
@@ -7513,8 +7710,45 @@ impl SQLiteBackend {
     ) -> Result<Option<turso::Row>, DatabaseError> {
         let mut attempt = 0;
         loop {
-            match rows.next().await {
-                Ok(opt) => return Ok(opt),
+            // Optional per-step timeout and slow-step logging
+            let step_timeout_ms: u64 = std::env::var("PROBE_LSP_DB_ROW_TIMEOUT_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let slow_step_ms: u128 = std::env::var("PROBE_LSP_DB_STEP_SLOW_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(500);
+            let started = Instant::now();
+            let step_res = if step_timeout_ms > 0 {
+                match timeout(Duration::from_millis(step_timeout_ms), rows.next()).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        return Err(DatabaseError::OperationFailed {
+                            message: format!(
+                                "{}: step() timed out after {} ms",
+                                context, step_timeout_ms
+                            ),
+                        });
+                    }
+                }
+            } else {
+                rows.next().await
+            };
+
+            match step_res {
+                Ok(opt) => {
+                    let elapsed = started.elapsed().as_millis();
+                    if elapsed >= slow_step_ms {
+                        info!(
+                            target: "lsp_daemon::database::sqlite_backend",
+                            "[slow-sql] step context={} elapsed_ms={}",
+                            context,
+                            elapsed
+                        );
+                    }
+                    return Ok(opt);
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     if msg.contains("database is locked") && attempt < max_retries {

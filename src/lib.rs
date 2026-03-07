@@ -66,6 +66,8 @@
 //!     keep_input: false,
 //!     prompt: None,
 //!     instructions: None,
+//!     no_gitignore: false,
+//!     lsp: false,
 //! };
 //!
 //! handle_extract(options).unwrap();

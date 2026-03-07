@@ -40,6 +40,7 @@ struct SearchParams {
     timeout: u64,
     question: Option<String>,
     no_gitignore: bool,
+    verbose: bool,
     lsp: bool,
 }
 
@@ -734,6 +735,7 @@ async fn main() -> Result<()> {
                     || std::env::var("PROBE_NO_GITIGNORE")
                         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                         .unwrap_or(false),
+                verbose: false,
                 lsp: args.lsp,
             })?
         }
@@ -787,6 +789,7 @@ async fn main() -> Result<()> {
                 || std::env::var("PROBE_NO_GITIGNORE")
                     .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                     .unwrap_or(false),
+            verbose: false,
             lsp,
         })?,
         Some(Commands::Extract {
@@ -886,6 +889,9 @@ async fn main() -> Result<()> {
             // extra readiness work here so each subcommand can control connection
             // behavior (auto-start, timeouts, formats, etc.).
             LspManager::handle_command(&subcommand, "terminal").await?;
+        }
+        Some(Commands::Config { subcommand }) => {
+            handle_config_command(&subcommand)?;
         }
     }
 

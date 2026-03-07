@@ -1244,8 +1244,9 @@ impl LspManager {
                 }
                 Ok(Err(e)) => {
                     println!(
-                        "{} Failed to get initial logs; falling back to persisted logs (streaming)",
-                        "⚠".yellow()
+                        "{} Failed to get initial logs ({}); falling back to persisted logs (streaming)",
+                        "⚠".yellow(),
+                        e
                     );
                     let entries = Self::read_persisted_log_tail(lines, min_level)?;
                     for entry in &entries {
@@ -3687,7 +3688,7 @@ impl LspManager {
                     let age = status
                         .snapshot_age_secs
                         .unwrap_or_else(|| now.saturating_sub(updated));
-                    let when = chrono::NaiveDateTime::from_timestamp_opt(updated as i64, 0)
+                    let when = chrono::DateTime::from_timestamp(updated as i64, 0)
                         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                         .unwrap_or_else(|| updated.to_string());
                     println!("  {}: {} (age: {}s)", "Last Update".bold(), when, age);
@@ -3966,40 +3967,39 @@ impl LspManager {
                     println!("  {}: {}", "Edges".bold(), database.total_edges);
                     println!("  {}: {}", "Files".bold(), database.total_files);
                     if let Some(ref ea) = database.edge_audit {
-                        // Print all non-zero counters we track, including extended ones
-                        let mut printed = false;
-                        macro_rules! print_if {
-                            ($label:literal, $val:expr) => {
-                                if $val > 0 {
-                                    if !printed {
-                                        println!("  {}:", "Edge Audit".bold());
-                                        printed = true;
-                                    }
-                                    println!("    {}: {}", $label, $val);
-                                }
-                            };
+                        // Print all non-zero counters we track, including extended ones.
+                        let counters = [
+                            ("EID001 abs path", ea.eid001_abs_path),
+                            ("EID002 uid/file mismatch", ea.eid002_uid_path_mismatch),
+                            ("EID003 malformed uid", ea.eid003_malformed_uid),
+                            ("EID004 zero line", ea.eid004_zero_line),
+                            (
+                                "EID009 non-relative file_path",
+                                ea.eid009_non_relative_file_path,
+                            ),
+                            ("EID010 self-loop", ea.eid010_self_loop),
+                            ("EID011 orphan source", ea.eid011_orphan_source),
+                            ("EID012 orphan target", ea.eid012_orphan_target),
+                            ("EID013 line mismatch", ea.eid013_line_mismatch),
+                            ("EA011 external source (dropped)", ea.ea011_external_source),
+                            ("PM001 path map failed", ea.pm001_path_map_failed),
+                            ("POLICY skip references", ea.policy_skip_references),
+                            ("POLICY skip impls", ea.policy_skip_impls),
+                            (
+                                "POLICY skip impls (not candidate)",
+                                ea.policy_skip_impls_not_candidate,
+                            ),
+                        ];
+                        let non_zero: Vec<_> = counters
+                            .into_iter()
+                            .filter(|(_, value)| *value > 0)
+                            .collect();
+                        if !non_zero.is_empty() {
+                            println!("  {}:", "Edge Audit".bold());
+                            for (label, value) in non_zero {
+                                println!("    {}: {}", label, value);
+                            }
                         }
-                        print_if!("EID001 abs path", ea.eid001_abs_path);
-                        print_if!("EID002 uid/file mismatch", ea.eid002_uid_path_mismatch);
-                        print_if!("EID003 malformed uid", ea.eid003_malformed_uid);
-                        print_if!("EID004 zero line", ea.eid004_zero_line);
-                        print_if!(
-                            "EID009 non-relative file_path",
-                            ea.eid009_non_relative_file_path
-                        );
-                        print_if!("EID010 self-loop", ea.eid010_self_loop);
-                        print_if!("EID011 orphan source", ea.eid011_orphan_source);
-                        print_if!("EID012 orphan target", ea.eid012_orphan_target);
-                        print_if!("EID013 line mismatch", ea.eid013_line_mismatch);
-                        print_if!("EA011 external source (dropped)", ea.ea011_external_source);
-                        print_if!("PM001 path map failed", ea.pm001_path_map_failed);
-                        // Policy counters (non-error) also useful
-                        print_if!("POLICY skip references", ea.policy_skip_references);
-                        print_if!("POLICY skip impls", ea.policy_skip_impls);
-                        print_if!(
-                            "POLICY skip impls (not candidate)",
-                            ea.policy_skip_impls_not_candidate
-                        );
                     }
                     if database.db_quiesced {
                         println!("  {}: {}", "DB Quiesced".bold(), "true".yellow());

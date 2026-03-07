@@ -849,22 +849,71 @@ impl LspDaemon {
                                 res = ipc_listener.accept() => {
                                     match res {
                                         Ok(stream) => {
-                                            // Acquire a connection slot; wait briefly rather than dropping
-                                            match semaphore.clone().acquire_owned().await {
-                                                Ok(permit) => {
-                                                    let d = daemon_ipc.clone_refs();
-                                                    tokio::spawn(async move {
-                                                        let _permit = permit;
-                                                        if let Err(e) = d.handle_connection(stream).await {
-                                                            error!("[ipc] Error handling connection: {}", e);
+                                            // Optional fast-accept path: defer permit to per-connection task
+                                            let defer = std::env::var("PROBE_LSP_ACCEPT_DEFER_PERMIT")
+                                                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                                                .unwrap_or(false);
+                                            if defer {
+                                                let d = daemon_ipc.clone_refs();
+                                                let sem = semaphore.clone();
+                                                tokio::spawn(async move {
+                                                    let permit_t0 = std::time::Instant::now();
+                                                    match sem.acquire_owned().await {
+                                                        Ok(permit) => {
+                                                            let waited = permit_t0.elapsed().as_millis();
+                                                            let slow_ms: u128 = std::env::var("PROBE_LSP_IPC_PERMIT_SLOW_MS")
+                                                                .ok()
+                                                                .and_then(|s| s.parse().ok())
+                                                                .unwrap_or(200);
+                                                            if waited >= slow_ms {
+                                                                info!("[ipc] connection permit waited_ms={}", waited);
+                                                            }
+                                                            let _permit = permit;
+                                                            if let Err(e) = d.handle_connection(stream).await {
+                                                                error!("[ipc] Error handling connection: {}", e);
+                                                            }
                                                         }
-                                                    });
-                                                }
-                                                Err(_) => {
-                                                    // Reject connection quickly when at limit
-                                                    drop(stream);
-                                                    *daemon_ipc.connections_rejected_due_to_limit.write().await += 1;
-                                                    warn!("[ipc] Connection limit reached ({} connections)", MAX_CONCURRENT_CONNECTIONS);
+                                                        Err(_) => {
+                                                            // Could not acquire; drop stream
+                                                            drop(stream);
+                                                            *d.connections_rejected_due_to_limit.write().await += 1;
+                                                            warn!(
+                                                                "[ipc] Connection limit reached ({} connections)",
+                                                                MAX_CONCURRENT_CONNECTIONS
+                                                            );
+                                                        }
+                                                    }
+                                                });
+                                            } else {
+                                                // Original behavior: acquire permit before spawning connection task
+                                                let permit_t0 = std::time::Instant::now();
+                                                match semaphore.clone().acquire_owned().await {
+                                                    Ok(permit) => {
+                                                        let waited = permit_t0.elapsed().as_millis();
+                                                        let slow_ms: u128 = std::env::var("PROBE_LSP_IPC_PERMIT_SLOW_MS")
+                                                            .ok()
+                                                            .and_then(|s| s.parse().ok())
+                                                            .unwrap_or(200);
+                                                        if waited >= slow_ms {
+                                                            info!("[ipc] connection permit waited_ms={}", waited);
+                                                        }
+                                                        let d = daemon_ipc.clone_refs();
+                                                        tokio::spawn(async move {
+                                                            let _permit = permit;
+                                                            if let Err(e) = d.handle_connection(stream).await {
+                                                                error!("[ipc] Error handling connection: {}", e);
+                                                            }
+                                                        });
+                                                    }
+                                                    Err(_) => {
+                                                        // Reject connection quickly when at limit
+                                                        drop(stream);
+                                                        *daemon_ipc.connections_rejected_due_to_limit.write().await += 1;
+                                                        warn!(
+                                                            "[ipc] Connection limit reached ({} connections)",
+                                                            MAX_CONCURRENT_CONNECTIONS
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -1294,12 +1343,24 @@ impl LspDaemon {
                 break;
             }
 
-            // Read framed message with timeout
+            // Read framed message with timeout and trace long reads
+            let read_start = Instant::now();
             let message_data = match MessageCodec::read_framed(&mut reader, READ_TIMEOUT).await {
                 Ok(data) => data,
                 Err(e) => {
                     let error_msg = e.to_string();
                     if error_msg.contains("Timeout") {
+                        let ipc_trace = std::env::var("PROBE_LSP_IPC_TRACE")
+                            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                            .unwrap_or(false);
+                        if ipc_trace {
+                            info!(
+                                "[ipc] read timeout (first_frame_seen={}, since_connect={} ms) client={}",
+                                saw_first_frame,
+                                connection_start.elapsed().as_millis(),
+                                client_id
+                            );
+                        }
                         if !saw_first_frame && connection_start.elapsed() > first_deadline {
                             debug!(
                                 "First-frame timeout from client {} after {:?}; closing",
@@ -1330,6 +1391,17 @@ impl LspDaemon {
                     }
                 }
             };
+            let read_elapsed = read_start.elapsed().as_millis();
+            let ipc_read_slow_ms: u128 = std::env::var("PROBE_LSP_IPC_READ_SLOW_MS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(200);
+            if read_elapsed >= ipc_read_slow_ms {
+                info!(
+                    "[ipc] slow read_framed elapsed_ms={} client={}",
+                    read_elapsed, client_id
+                );
+            }
 
             // Mark that we passed the first read
             saw_first_frame = true;
@@ -1364,6 +1436,21 @@ impl LspDaemon {
                 _ => "Other",
             };
             tracing::debug!("[ipc] recv {}", req_name);
+            let ipc_trace = std::env::var("PROBE_LSP_IPC_TRACE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false);
+            if ipc_trace
+                || matches!(
+                    request,
+                    DaemonRequest::IndexingStatus { .. } | DaemonRequest::IndexingStatusFast { .. }
+                )
+            {
+                info!(
+                    "[ipc] recv {} after {} ms (since connect)",
+                    req_name,
+                    connection_start.elapsed().as_millis()
+                );
+            }
 
             // Update activity timestamp
             last_activity = Instant::now();
@@ -1514,6 +1601,13 @@ impl LspDaemon {
                 _ => "Other",
             };
             tracing::debug!("[ipc] sent {}", resp_name);
+            if ipc_trace || resp_name == "IndexingStatusResponse" {
+                info!(
+                    "[ipc] sent {} in {} ms",
+                    resp_name,
+                    request_start.elapsed().as_millis()
+                );
+            }
 
             // Check if shutdown was requested
             if let DaemonResponse::Shutdown { .. } = response {
@@ -2271,7 +2365,8 @@ impl LspDaemon {
             }
 
             DaemonRequest::IndexingStatus { request_id } => {
-                tracing::debug!("[status] IndexingStatus request received");
+                let t_req = std::time::Instant::now();
+                info!("[status] IndexingStatus request received");
                 // Prefer control-plane snapshot (no DB) to guarantee responsiveness
                 if let Some(tx) = &self.control_tx {
                     let (resp_tx, resp_rx) = oneshot::channel();
@@ -2279,7 +2374,10 @@ impl LspDaemon {
                     if let Ok(Ok(mut status)) =
                         tokio::time::timeout(Duration::from_millis(700), resp_rx).await
                     {
-                        tracing::debug!("[status] responded via control-plane snapshot");
+                        info!(
+                            "[status] responded via control-plane snapshot in {} ms",
+                            t_req.elapsed().as_millis()
+                        );
                         // If Database is missing, fill it best-effort without blocking long
                         if status.database.is_none() {
                             if let Ok(Ok(db)) = tokio::time::timeout(
@@ -2296,7 +2394,10 @@ impl LspDaemon {
                 }
                 // Fallback: serve cached fast snapshot or build minimal
                 if let Some(mut snap) = self.fast_snapshot.read().await.clone() {
-                    tracing::debug!("[status] responding with cached fast snapshot");
+                    info!(
+                        "[status] responding with cached fast snapshot in {} ms",
+                        t_req.elapsed().as_millis()
+                    );
                     if snap.database.is_none() {
                         if let Ok(Ok(db)) = tokio::time::timeout(
                             Duration::from_millis(600),
@@ -2312,7 +2413,10 @@ impl LspDaemon {
                         status: snap,
                     };
                 }
-                tracing::debug!("[status] fast snapshot missing; building on-demand");
+                info!(
+                    "[status] fast snapshot missing; building on-demand ({} ms so far)",
+                    t_req.elapsed().as_millis()
+                );
                 let mut status = self
                     .build_status_fast()
                     .await
@@ -2325,7 +2429,10 @@ impl LspDaemon {
                         status.database = Some(db);
                     }
                 }
-                tracing::debug!("[status] built fast snapshot on-demand");
+                info!(
+                    "[status] built fast snapshot on-demand in {} ms",
+                    t_req.elapsed().as_millis()
+                );
                 DaemonResponse::IndexingStatusResponse { request_id, status }
             }
 
@@ -5901,7 +6008,7 @@ impl LspDaemon {
     }
 
     async fn handle_indexing_status(&self) -> Result<crate::protocol::IndexingStatusInfo> {
-        use crate::protocol::{IndexingProgressInfo, IndexingQueueInfo, IndexingWorkerInfo};
+        use crate::protocol::{IndexingProgressInfo, IndexingWorkerInfo};
 
         let manager_opt = {
             let guard = self.indexing_manager.lock().await;
@@ -6250,7 +6357,7 @@ impl LspDaemon {
     /// Build a fast, DB-free status snapshot from in-memory structures only.
     /// This avoids database calls and remains responsive under heavy load.
     async fn build_status_fast(&self) -> Result<crate::protocol::IndexingStatusInfo> {
-        use crate::protocol::{IndexingProgressInfo, IndexingQueueInfo, IndexingWorkerInfo};
+        use crate::protocol::{IndexingProgressInfo, IndexingWorkerInfo};
         let manager_opt = {
             let guard = self.indexing_manager.lock().await;
             guard.clone()
@@ -6274,7 +6381,7 @@ impl LspDaemon {
                     last_activity: w.last_activity,
                 })
                 .collect();
-            let mut out = crate::protocol::IndexingStatusInfo {
+            let out = crate::protocol::IndexingStatusInfo {
                 manager_status: format!("{status:?}"),
                 progress: IndexingProgressInfo {
                     total_files: progress.total_files,
@@ -6386,15 +6493,28 @@ impl LspDaemon {
         ) = match backend {
             crate::database_cache_adapter::BackendType::SQLite(sqlite_backend) => {
                 // Try without blocking first
-                let (symbol_count, edge_count, file_count, mut db_quiesced, counts_locked) =
-                    match sqlite_backend
-                        .get_table_counts_try()
-                        .await
-                        .context("Failed to get table counts (try)")?
-                    {
-                        Some((s, e, f)) => (s, e, f, false, false),
-                        None => (0, 0, 0, false, true),
-                    };
+                let (
+                    mut symbol_count,
+                    mut edge_count,
+                    mut file_count,
+                    mut db_quiesced,
+                    counts_locked,
+                ) = match sqlite_backend
+                    .get_table_counts_try()
+                    .await
+                    .context("Failed to get table counts (try)")?
+                {
+                    Some((s, e, f)) => (s, e, f, false, false),
+                    None => (0, 0, 0, false, true),
+                };
+                // If live snapshot is locked, fall back to cached counts so Database never looks empty
+                if counts_locked {
+                    if let Some((s, e, f, _age)) = sqlite_backend.get_cached_counts().await {
+                        symbol_count = s;
+                        edge_count = e;
+                        file_count = f;
+                    }
+                }
 
                 // Get workspace ID
                 let workspace_id = self

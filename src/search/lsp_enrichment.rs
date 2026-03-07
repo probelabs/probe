@@ -117,10 +117,18 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                 if let Some(first_result) = results.first() {
                     let file_path = std::path::Path::new(&first_result.file);
 
-                    // Check readiness with a shorter timeout for enrichment
+                    // Keep readiness probing short: enrichment is best-effort and should not
+                    // consume most of the per-attempt timeout in CI retry loops.
+                    let readiness_wait_secs = if std::env::var("PROBE_CI").is_ok()
+                        || std::env::var("CI").is_ok()
+                    {
+                        3
+                    } else {
+                        5
+                    };
                     let readiness_config = crate::lsp_integration::readiness::ReadinessConfig {
-                        max_wait_secs: 15, // Shorter wait for search enrichment
-                        poll_interval_ms: 1000,
+                        max_wait_secs: readiness_wait_secs,
+                        poll_interval_ms: 500,
                         show_progress: debug_mode,
                         auto_start_daemon: false, // Don't auto-start during enrichment
                     };
@@ -130,9 +138,8 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                             if !readiness_result.is_ready {
                                 if debug_mode {
                                     println!("[DEBUG] LSP server not ready for enrichment: {}", readiness_result.status_message);
-                                    println!("[DEBUG] Proceeding without LSP enrichment");
+                                    println!("[DEBUG] Continuing best-effort enrichment without readiness gate");
                                 }
-                                return;
                             } else if debug_mode {
                                 println!("[DEBUG] LSP server ready for enrichment");
                             }
@@ -140,9 +147,8 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
                         Err(e) => {
                             if debug_mode {
                                 println!("[DEBUG] Failed to check LSP readiness: {}", e);
-                                println!("[DEBUG] Proceeding without LSP enrichment");
+                                println!("[DEBUG] Continuing best-effort enrichment without readiness gate");
                             }
-                            return;
                         }
                     }
                 } else {
@@ -382,6 +388,12 @@ fn is_lsp_relevant_result(result: &SearchResult, debug_mode: bool) -> bool {
             || trimmed.starts_with("static ")
             || trimmed.starts_with("def ")
             || trimmed.starts_with("function ")
+            || trimmed.starts_with("public function ")
+            || trimmed.starts_with("private function ")
+            || trimmed.starts_with("protected function ")
+            || trimmed.starts_with("public static function ")
+            || trimmed.starts_with("private static function ")
+            || trimmed.starts_with("protected static function ")
             || trimmed.starts_with("func ")
             || trimmed.starts_with("class ")
             || trimmed.starts_with("interface ")
@@ -752,6 +764,11 @@ fn extract_symbol_from_code_block_with_position_original(
         });
 
         if !code_contains_function {
+            // For line-level extracts inside a function body, infer the enclosing symbol
+            // from the full file so LSP enrichment can still proceed.
+            if let Some(symbol) = find_enclosing_symbol_from_file(result, debug_mode) {
+                return Some(symbol);
+            }
             if debug_mode {
                 println!(
                     "[DEBUG] Skipping non-function-like block with node_type: {}",
@@ -825,7 +842,16 @@ fn extract_symbol_from_code_block_with_position_original(
     }
 
     // Try to extract symbol name based on common patterns
-    let symbol_name = extract_symbol_name_from_line(first_line, &result.node_type, debug_mode)?;
+    let symbol_name = match extract_symbol_name_from_line(first_line, &result.node_type, debug_mode)
+    {
+        Some(name) => name,
+        None => {
+            if let Some(symbol) = find_enclosing_symbol_from_file(result, debug_mode) {
+                return Some(symbol);
+            }
+            return None;
+        }
+    };
 
     if debug_mode {
         println!("[DEBUG] Extracted symbol name: '{symbol_name}'");
@@ -914,6 +940,126 @@ fn find_symbol_position_with_tree_sitter(
     position.map(|(line, column)| ((base_line - 1 + line as usize) as u32, column))
 }
 
+/// Infer the most specific enclosing callable symbol for a result line by
+/// parsing the full file and walking AST parents.
+fn find_enclosing_symbol_from_file(result: &SearchResult, debug_mode: bool) -> Option<SymbolInfo> {
+    let file_path = Path::new(&result.file);
+    let extension = file_path.extension()?.to_str()?;
+    let language_impl = get_language_impl(extension)?;
+    let file_content = std::fs::read_to_string(file_path).ok()?;
+
+    let mut parser = get_pooled_parser(extension).ok()?;
+    if parser
+        .set_language(&language_impl.get_tree_sitter_language())
+        .is_err()
+    {
+        return_pooled_parser(extension, parser);
+        return None;
+    }
+
+    let tree = match parser.parse(&file_content, None) {
+        Some(t) => t,
+        None => {
+            return_pooled_parser(extension, parser);
+            return None;
+        }
+    };
+
+    let target_line = result.lines.0.saturating_sub(1) as u32;
+    let mut best: Option<(u32, SymbolInfo)> = None;
+    find_best_enclosing_callable_symbol(
+        tree.root_node(),
+        file_content.as_bytes(),
+        target_line,
+        &mut best,
+    );
+
+    return_pooled_parser(extension, parser);
+
+    if let Some((_, symbol)) = best {
+        if debug_mode {
+            println!(
+                "[DEBUG] Inferred enclosing symbol '{}' at {}:{}:{} for line {}",
+                symbol.name, result.file, symbol.line, symbol.column, result.lines.0
+            );
+        }
+        Some(symbol)
+    } else {
+        if debug_mode {
+            println!(
+                "[DEBUG] Could not infer enclosing symbol for {}:{}",
+                result.file, result.lines.0
+            );
+        }
+        None
+    }
+}
+
+fn find_best_enclosing_callable_symbol(
+    node: tree_sitter::Node,
+    content: &[u8],
+    target_line: u32,
+    best: &mut Option<(u32, SymbolInfo)>,
+) {
+    let start = node.start_position().row as u32;
+    let end = node.end_position().row as u32;
+    if target_line < start || target_line > end {
+        return;
+    }
+
+    let is_callable = matches!(
+        node.kind(),
+        "function_item"
+            | "function_definition"
+            | "method_definition"
+            | "function_declaration"
+            | "method_declaration"
+            | "function"
+            | "method"
+    );
+
+    if is_callable {
+        if let Some((name, line, column)) = extract_identifier_from_callable_node(node, content) {
+            let span = end.saturating_sub(start);
+            let should_replace = match best {
+                Some((best_span, _)) => span < *best_span,
+                None => true,
+            };
+            if should_replace {
+                *best = Some((span, SymbolInfo { name, line, column }));
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        find_best_enclosing_callable_symbol(child, content, target_line, best);
+    }
+}
+
+fn extract_identifier_from_callable_node(
+    node: tree_sitter::Node,
+    content: &[u8],
+) -> Option<(String, u32, u32)> {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if matches!(
+            child.kind(),
+            "identifier" | "field_identifier" | "type_identifier" | "property_identifier" | "name"
+        ) {
+            let name = child.utf8_text(content).ok()?;
+            if !name.is_empty() {
+                return Some((
+                    name.to_string(),
+                    child.start_position().row as u32,
+                    child.start_position().column as u32,
+                ));
+            }
+        }
+    }
+    None
+}
+
 /// Recursively search for an identifier in the tree-sitter AST
 fn find_identifier_position_in_tree(
     node: tree_sitter::Node,
@@ -976,7 +1122,12 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
         | "function"
         | "file"
         | "import"
-        | "code" => {
+        | "code"
+        | "merged_ast_line"
+        | "merged_ast_range"
+        | "merged_ast_specific_lines"
+        | "range"
+        | "context" => {
             // Handle various function patterns
 
             // Rust: pub fn function_name, async fn function_name, pub async fn function_name
@@ -1067,6 +1218,69 @@ fn extract_symbol_name_from_line(line: &str, node_type: &str, debug_mode: bool) 
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dummy_result(file: &str, line: usize, code: &str) -> SearchResult {
+        SearchResult {
+            file: file.to_string(),
+            lines: (line, line),
+            node_type: "merged_ast_line".to_string(),
+            code: code.to_string(),
+            symbol_signature: None,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            matched_lines: None,
+            tokenized_content: None,
+            lsp_info: None,
+            parent_context: None,
+        }
+    }
+
+    #[test]
+    fn infers_enclosing_symbol_for_js_function_body_line() {
+        let fixture = "tests/fixtures/javascript/project1/src/calculator.js";
+        assert!(Path::new(fixture).exists(), "fixture missing: {fixture}");
+
+        let result = dummy_result(fixture, 14, "const sum = add(a, b);");
+        let symbol =
+            find_enclosing_symbol_from_file(&result, false).expect("expected enclosing symbol");
+
+        assert_eq!(symbol.name, "calculate");
+        assert_eq!(symbol.line, 12); // zero-indexed line for "function calculate(...)"
+    }
+
+    #[test]
+    fn infers_enclosing_symbol_for_php_method_body_line() {
+        let fixture = "tests/fixtures/php/project1/src/Calculator.php";
+        assert!(Path::new(fixture).exists(), "fixture missing: {fixture}");
+
+        let result = dummy_result(fixture, 24, "$sum = Utils::add($a, $b);");
+        let symbol =
+            find_enclosing_symbol_from_file(&result, false).expect("expected enclosing symbol");
+
+        assert_eq!(symbol.name, "calculate");
+        assert_eq!(symbol.line, 21); // zero-indexed line for "public function calculate(...)"
+    }
 }
 
 /// Extract a name/identifier after a keyword
