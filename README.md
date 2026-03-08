@@ -39,14 +39,31 @@ Today's AI coding tools use a caveman approach: grep some files, read random lin
 
 ## Why Probe?
 
-| Traditional Approach | Probe |
-|---------------------|-------|
-| Grep + read random lines | Semantic search with Elasticsearch syntax |
-| Treats code as text | Understands code structure via tree-sitter AST |
-| Returns fragments | Returns complete functions, classes, structs |
-| Requires indexing | Zero setup, instant results |
-| 10+ loops to gather context | One call, complete picture |
-| Struggles at scale | Built for million-line codebases |
+Most code search tools fall into two camps: **text-based** (grep, ripgrep) or **embedding-based** (vector search requiring indexing and an embedding model). Probe takes a third path: **AST-aware structural search with zero setup**.
+
+| | grep/ripgrep | Embedding tools (grepai, Octocode) | Probe |
+|---|---|---|---|
+| **Setup time** | None | Minutes (indexing + embedding service) | None |
+| **Code understanding** | Text only | Text chunks (can split mid-function) | AST-aware (returns complete functions/classes) |
+| **Search method** | Regex | Vector similarity | Elasticsearch-style boolean queries + BM25 |
+| **Result quality** | Line fragments | ~512-char chunks | Complete semantic code blocks |
+| **Ranking** | None (line order) | Cosine similarity | BM25/TF-IDF/Hybrid with SIMD acceleration |
+| **External dependencies** | None | Embedding API (Ollama/OpenAI) | None |
+| **Token awareness** | No | Partial | Yes (`--max-tokens`, session dedup) |
+| **Works offline** | Yes | Only with local model | Always |
+| **AI agent integration** | None | MCP server | Full agent loop + MCP + Vercel AI SDK |
+
+### The key insight: AI agents don't need embedding search
+
+Embedding-based tools solve vocabulary mismatch -- finding "authentication" when the code says `verify_credentials`. But when an AI agent is the consumer, **the LLM already handles this**:
+
+```
+User: "find the authentication logic"
+  -> LLM generates: probe search "verify_credentials OR authenticate OR login OR auth_handler"
+  -> Probe returns complete AST blocks in milliseconds
+```
+
+The LLM translates intent into precise boolean queries. Probe gives it a powerful query language (`AND`, `OR`, `+required`, `-excluded`, `"exact phrases"`, `ext:rs`, `lang:python`) purpose-built for this. Combined with session dedup, the agent can run 3-4 rapid searches and cover more ground than a single embedding query -- faster, deterministic, and with zero setup cost.
 
 ---
 
@@ -118,13 +135,15 @@ npx -y @probelabs/probe@latest agent "Refactor the login function" --allow-edit
 
 - **Code-Aware**: Tree-sitter AST parsing understands your code's actual structure
 - **Semantic Search**: Elasticsearch-style queries (`AND`, `OR`, `NOT`, phrases, filters)
-- **Complete Context**: Returns entire functions, classes, or structs—not fragments
-- **One Call, Full Context**: Captures what takes other tools 10+ loops to gather
-- **Zero Indexing**: Instant results on any codebase, no setup required
-- **Fully Local**: Your code never leaves your machine
-- **Blazing Fast**: Ripgrep-powered scanning handles million-line codebases
-- **Smart Ranking**: BM25, TF-IDF, and hybrid algorithms surface what matters
-- **Multi-Language**: Rust, Python, JavaScript, TypeScript, Go, C/C++, Java, and more
+- **Complete Context**: Returns entire functions, classes, or structs -- not text chunks that break mid-function
+- **Zero Indexing**: Instant results on any codebase. No embedding models, no vector databases, no setup
+- **Deterministic**: Same query always returns the same results. No model variance, no stale indexes
+- **Fully Local**: Your code never leaves your machine. No API calls for search
+- **Blazing Fast**: SIMD-accelerated pattern matching + ripgrep scanning + rayon parallelism
+- **Smart Ranking**: BM25, TF-IDF, and hybrid algorithms with optional BERT reranking
+- **Token-Aware**: `--max-tokens` budget, session-based dedup to avoid repeating context
+- **Built-in Agent**: Multi-provider (Anthropic, OpenAI, Google, Bedrock) with retry, fallback, and context compaction
+- **Multi-Language**: Rust, Python, JavaScript, TypeScript, Go, C/C++, Java, Ruby, PHP, Swift, C#, and more
 
 ---
 
@@ -462,6 +481,7 @@ LSP capabilities include call hierarchy enrichment (`extract --lsp`), direct sym
 
 ### Guides & Reference
 - [Query Patterns](./docs/guides/query-patterns.md) - Effective search strategies
+- [How Probe Compares](./docs/reference/comparison.md) - vs embedding search, knowledge graphs, LSP tools
 - [Architecture](./docs/reference/architecture.md) - System design and internals
 - [Environment Variables](./docs/reference/environment-variables.md) - All configuration options
 - [FAQ](./docs/reference/faq.md) - Frequently asked questions

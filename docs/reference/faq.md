@@ -17,12 +17,44 @@ Probe is a semantic code search and AI agent platform consisting of two products
 
 | Feature | grep/ripgrep | Probe |
 |---------|--------------|-------|
-| Speed | Fast | Fast (uses ripgrep internally) |
+| Speed | Fast | Fast (uses ripgrep internally + SIMD acceleration) |
 | AST awareness | No | Yes (tree-sitter) |
 | Semantic search | No | Yes (BM25, TF-IDF, BERT) |
 | Code block extraction | No | Yes (full functions/classes) |
-| AI integration | No | Yes (MCP, SDK) |
+| AI integration | No | Yes (MCP, SDK, built-in agent) |
 | Token limits | No | Yes (--max-tokens) |
+
+### How is Probe different from embedding-based tools (grepai, Octocode)?
+
+Embedding-based tools convert code into vectors and use cosine similarity for search. Probe uses keyword matching with AST-aware code extraction and BM25 ranking instead.
+
+| Feature | Embedding tools | Probe |
+|---------|----------------|-------|
+| Setup | Requires indexing + embedding service | Zero setup, works instantly |
+| Natural language search | Built-in (vector similarity) | Delegated to AI agent (LLM generates boolean queries) |
+| Exact search | Weak (approximate matching) | Strong (SIMD-accelerated exact patterns) |
+| Result unit | Text chunks (can split mid-function) | Complete AST blocks (functions, classes, structs) |
+| External dependencies | Ollama, OpenAI, or other embedding API | None |
+| Determinism | Results vary with model/index state | Same query always returns same results |
+| Latency | 100ms+ (embedding generation + vector lookup) | Milliseconds (in-process pattern matching) |
+| Index maintenance | Must re-index on code changes | No index to maintain |
+
+**Why no embeddings?** When an AI agent uses Probe, the LLM itself handles vocabulary mismatch. It knows "authentication" might be `verify_token`, `check_credentials`, or `auth_middleware`, and generates precise boolean queries covering all variants. This is faster, cheaper, and more deterministic than embedding-based similarity search.
+
+### How does Probe compare to code knowledge graph tools (Stakgraph, ABCoder)?
+
+Knowledge graph tools build a structural representation of your codebase (call graphs, dependency edges, type hierarchies). Probe focuses on search and extraction -- it finds and returns code, while graph tools map relationships.
+
+| Feature | Graph tools (Stakgraph, ABCoder) | Probe |
+|---------|--------------------------------|-------|
+| Call graph | Yes (function-level edges) | Coming soon (via LSP integration) |
+| Dependency analysis | Yes (typed relationships) | Not yet |
+| Setup | Heavy (Neo4j, batch parsing, LSP servers) | Zero |
+| Search | Limited (graph traversal, node name lookup) | Full-featured (boolean queries, BM25, AST-aware) |
+| Token awareness | Limited | Built-in (--max-tokens, session dedup) |
+| Real-time | Requires rebuild on changes | Always current (stateless) |
+
+These tools are complementary: graph tools excel at "what calls this function?" while Probe excels at "find me the code that handles X."
 
 ### Is Probe free?
 
