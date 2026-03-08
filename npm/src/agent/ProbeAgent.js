@@ -2976,9 +2976,9 @@ ${extractGuidance2}
 Follow these instructions carefully:
 1. Analyze the user's request.
 2. Use the available tools step-by-step to fulfill the request.
-3. You should always prefer the search tool for code-related questions.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
-4. Ensure to get really deep and understand the full picture before answering.
-5. Once the task is fully completed, provide your final answer directly as text.
+3. You MUST use the search tool before answering ANY code-related question. NEVER answer from memory or general knowledge — your answers must be grounded in actual code found via search/extract.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
+4. Ensure to get really deep and understand the full picture before answering. Follow call chains — if function A calls B, search for B too. Look for related subsystems (e.g., if asked about rate limiting, also check for quota, throttling, smoothing).
+5. Once the task is fully completed, provide your final answer directly as text. Always cite specific files and line numbers as evidence. Do NOT output planning or thinking text — go straight to the answer.
 6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
 7. NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed) — always use search and extract tools instead. Bash is only for system operations like building, running tests, or git commands.${this.allowEdit ? `
 7. When modifying files, choose the appropriate tool:
@@ -3483,6 +3483,24 @@ Follow these instructions carefully:
                 if (recentTexts.every(t => detectStuckResponse(t))) return true;
               }
 
+              // Circuit breaker: repeated identical tool calls (e.g. model ignores dedup message)
+              if (steps.length >= 3) {
+                const last3 = steps.slice(-3);
+                const allHaveTools = last3.every(s => s.toolCalls?.length === 1);
+                if (allHaveTools) {
+                  const signatures = last3.map(s => {
+                    const tc = s.toolCalls[0];
+                    return `${tc.toolName}::${JSON.stringify(tc.args ?? tc.input)}`;
+                  });
+                  if (signatures[0] === signatures[1] && signatures[1] === signatures[2]) {
+                    if (this.debug) {
+                      console.log(`[DEBUG] Circuit breaker: 3 consecutive identical tool calls detected (${last3[0].toolCalls[0].toolName}), forcing stop`);
+                    }
+                    return true;
+                  }
+                }
+              }
+
               return false;
             },
             prepareStep: ({ steps, stepNumber }) => {
@@ -3491,6 +3509,24 @@ Follow these instructions carefully:
                 return {
                   toolChoice: 'none',
                 };
+              }
+
+              // Force text-only response after 2 consecutive identical tool calls
+              if (steps.length >= 2) {
+                const last2 = steps.slice(-2);
+                if (last2.every(s => s.toolCalls?.length === 1)) {
+                  const tc1 = last2[0].toolCalls[0];
+                  const tc2 = last2[1].toolCalls[0];
+                  const sig1 = `${tc1.toolName}::${JSON.stringify(tc1.args ?? tc1.input)}`;
+                  const sig2 = `${tc2.toolName}::${JSON.stringify(tc2.args ?? tc2.input)}`;
+                  if (sig1 === sig2) {
+                    if (this.debug) {
+                      console.log(`[DEBUG] prepareStep: 2 consecutive identical tool calls (${tc1.toolName}), forcing toolChoice=none`);
+                      console.log(`[DEBUG]   sig: ${sig1.substring(0, 200)}`);
+                    }
+                    return { toolChoice: 'none' };
+                  }
+                }
               }
 
               const lastStep = steps[steps.length - 1];
@@ -3532,7 +3568,8 @@ ${resultToReview}
 Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
 
                   return {
-                    userMessage: completionPromptMessage
+                    userMessage: completionPromptMessage,
+                    toolChoice: 'none' // Force text-only review — no tool calls
                   };
                 }
               }
@@ -3585,7 +3622,13 @@ Double-check your response based on the criteria above. If everything looks good
               }
 
               if (this.debug) {
-                console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                const toolSummary = toolCalls?.length
+                  ? toolCalls.map(tc => {
+                      const args = tc.args ? JSON.stringify(tc.args) : '';
+                      return args ? `${tc.toolName}(${debugTruncate(args, 120)})` : tc.toolName;
+                    }).join(', ')
+                  : 'none';
+                console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: [${toolSummary}])`);
                 if (text) {
                   console.log(`[DEBUG]   model text: ${debugTruncate(text)}`);
                 }
@@ -3627,11 +3670,20 @@ Double-check your response based on the criteria above. If everything looks good
           const executeAIRequest = async () => {
             const result = await this.streamTextWithRetryAndFallback(streamOptions);
 
-            // Collect the final text
-            const finalText = await result.text;
+            // Use only the last step's text as the final answer.
+            // result.text concatenates ALL steps (including intermediate planning text),
+            // but the user should only see the final answer from the last step.
+            const steps = await result.steps;
+            let finalText;
+            if (steps && steps.length > 1) {
+              // Multi-step: use last step's text (the actual answer after tool calls)
+              const lastStepText = steps[steps.length - 1].text;
+              finalText = lastStepText || await result.text;
+            } else {
+              finalText = await result.text;
+            }
 
             if (this.debug) {
-              const steps = await result.steps;
               console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
             }
 
@@ -3726,12 +3778,11 @@ Double-check your response based on the criteria above. If everything looks good
 
             currentMessages.push({ role: 'user', content: completionPromptMessage });
 
-            const completionMaxIterations = 5;
             const completionStreamOptions = {
               model: this.provider ? this.provider(this.model) : this.model,
               messages: this.prepareMessagesWithImages(currentMessages),
               tools,
-              stopWhen: stepCountIs(completionMaxIterations),
+              toolChoice: 'none', // Force text-only response — no tool calls during review
               maxTokens: maxResponseTokens,
               temperature: 0.3,
               onStepFinish: ({ toolResults, text, finishReason, usage }) => {

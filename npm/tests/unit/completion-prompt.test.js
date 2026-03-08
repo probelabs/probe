@@ -421,33 +421,29 @@ describe('completionPrompt via stopWhen/prepareStep integration', () => {
     return agent;
   }
 
-  test('stopWhen should return false when completionPrompt should fire', () => {
+  test('stopWhen should return false when completionPrompt should fire', async () => {
     const agent = createMockedAgent();
 
-    // Build the streamOptions to test the stopWhen callback
-    let capturedOptions = null;
+    // Capture only the FIRST call's options (main loop), not the completion follow-up
+    let firstCallOptions = null;
     jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => {
-      capturedOptions = opts;
+      if (!firstCallOptions) firstCallOptions = opts;
       return createMockStreamResult('Result text', []);
     });
 
-    // Trigger answer to capture the streamOptions
-    agent.answer('Do the task').catch(() => {});
+    await agent.answer('Do the task');
 
-    // Wait for the mock to be called
-    return new Promise(resolve => setTimeout(resolve, 100)).then(() => {
-      expect(capturedOptions).not.toBeNull();
-      const { stopWhen } = capturedOptions;
+    expect(firstCallOptions).not.toBeNull();
+    const { stopWhen } = firstCallOptions;
 
-      // Simulate: model stops with text, no tool calls
-      const steps = [{ finishReason: 'stop', toolCalls: [], text: 'My answer' }];
-      const shouldStop = stopWhen({ steps });
+    // Simulate: model stops with text, no tool calls
+    const steps = [{ finishReason: 'stop', toolCalls: [], text: 'My answer' }];
+    const shouldStop = stopWhen({ steps });
 
-      // Should NOT stop — completionPrompt hasn't been injected yet
-      expect(shouldStop).toBe(false);
+    // Should NOT stop — completionPrompt hasn't been injected yet
+    expect(shouldStop).toBe(false);
 
-      jest.restoreAllMocks();
-    });
+    jest.restoreAllMocks();
   });
 
   test('stopWhen should allow stop after completionPrompt has been injected', async () => {

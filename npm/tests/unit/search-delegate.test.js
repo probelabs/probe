@@ -360,4 +360,54 @@ describe('searchDelegate behavior', () => {
     expect(result).toBe('RAW-SEARCH');
     expect(mockDelegate).not.toHaveBeenCalled();
   });
+
+  test('dedup messages escalate with repeat count and force stop after 3', async () => {
+    mockSearch.mockResolvedValue('search result');
+
+    const tool = searchTool({
+      cwd: '/workspace',
+      searchDelegate: false
+    });
+
+    // First call succeeds
+    const r1 = await tool.execute({ query: 'test query', path: '.' });
+    expect(r1).toBe('search result');
+
+    // Second call is first dedup block (1x)
+    const r2 = await tool.execute({ query: 'test query', path: '.' });
+    expect(r2).toContain('DUPLICATE SEARCH BLOCKED (1x)');
+
+    // Third call is second dedup block (2x)
+    const r3 = await tool.execute({ query: 'test query', path: '.' });
+    expect(r3).toContain('DUPLICATE SEARCH BLOCKED (2x)');
+
+    // Fourth call triggers force-stop message (3x)
+    const r4 = await tool.execute({ query: 'test query', path: '.' });
+    expect(r4).toContain('STOP');
+    expect(r4).toContain('3 times');
+    expect(r4).toContain('final JSON answer NOW');
+  });
+
+  test('dedup counter resets after a successful new search', async () => {
+    mockSearch.mockResolvedValue('search result');
+
+    const tool = searchTool({
+      cwd: '/workspace',
+      searchDelegate: false
+    });
+
+    // First query
+    await tool.execute({ query: 'query1', path: '.' });
+    // Duplicate → 1x
+    const r1 = await tool.execute({ query: 'query1', path: '.' });
+    expect(r1).toContain('1x');
+
+    // Different query succeeds and resets counter
+    const r2 = await tool.execute({ query: 'query2', path: '.' });
+    expect(r2).toBe('search result');
+
+    // Duplicate of query2 should be 1x (not 2x)
+    const r3 = await tool.execute({ query: 'query2', path: '.' });
+    expect(r3).toContain('1x');
+  });
 });
