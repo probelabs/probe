@@ -87,6 +87,9 @@ jobs:
             echo '[target.x86_64-pc-windows-msvc]' > .cargo/config.toml
             echo 'rustflags = ["-C", "target-feature=+crt-static", "-C", "link-args=/DEBUG:NONE", "-C", "link-args=/NOLOGO"]' >> .cargo/config.toml
             cargo build --release --target ${{ matrix.target }}
+          elif [[ "$TARGET" == *"unknown-linux-musl" ]]; then
+            # Use cross for musl targets so required C cross toolchains are provided.
+            cross build --release --target ${{ matrix.target }}
           else
             # For other platforms, use the default build
             cargo build --release --target ${{ matrix.target }}
