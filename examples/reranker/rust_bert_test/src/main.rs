@@ -73,9 +73,9 @@ fn test_with_remote_model(queries: &[&str], document: &str) -> Result<()> {
 
     // Use rust-bert's default BERT resources
     let model = SequenceClassificationBuilder::new()
-        .with_model(ModelResource::Torch(Box::new(RemoteResource::from_pretrained(
-            BertModelResources::BERT_BASE_UNCASED,
-        ))))
+        .with_model(ModelResource::Torch(Box::new(
+            RemoteResource::from_pretrained(BertModelResources::BERT_BASE_UNCASED),
+        )))
         .with_config(RemoteResource::from_pretrained(
             BertConfigResources::BERT_BASE_UNCASED,
         ))
@@ -89,11 +89,15 @@ fn test_with_remote_model(queries: &[&str], document: &str) -> Result<()> {
     run_scoring(&model, queries, document)
 }
 
-fn run_scoring(model: &SequenceClassificationModel, queries: &[&str], document: &str) -> Result<()> {
+fn run_scoring(
+    model: &SequenceClassificationModel,
+    queries: &[&str],
+    document: &str,
+) -> Result<()> {
     println!("Model loaded successfully!\n");
-    println!("="*80);
+    println!("=" * 80);
     println!("SCORING RESULTS");
-    println!("="*80);
+    println!("=" * 80);
 
     let mut scores = Vec::new();
 
@@ -117,9 +121,9 @@ fn run_scoring(model: &SequenceClassificationModel, queries: &[&str], document: 
     }
 
     // Compare scores
-    println!("\n" + &"="*80);
+    println!("\n" + &"=" * 80);
     println!("SCORE COMPARISON");
-    println!("="*80);
+    println!("=" * 80);
 
     if scores.len() == 2 {
         let relevant_score = scores[0].1;

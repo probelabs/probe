@@ -32,7 +32,8 @@ const SEARCH_FLAG_MAP = {
 	session: '--session',
 	timeout: '--timeout',
 	language: '--language',
-	format: '--format'
+	format: '--format',
+	lsp: '--lsp'
 };
 
 /**
@@ -58,7 +59,7 @@ const SEARCH_FLAG_MAP = {
  * @param {string} [options.session] - Session ID for caching results
  * @param {number} [options.timeout] - Timeout in seconds (default: 30)
  * @param {string} [options.language] - Limit search to files of a specific programming language
- * @param {string} [options.format] - Output format ('json', 'outline-xml', etc.)
+ * @param {boolean} [options.lsp] - Use LSP (Language Server Protocol) for enhanced symbol information
  * @param {Object} [options.binaryOptions] - Options for getting the binary
  * @param {boolean} [options.binaryOptions.forceDownload] - Force download even if binary exists
  * @param {string} [options.binaryOptions.version] - Specific version to download
@@ -85,8 +86,8 @@ export async function search(options) {
 	if (options.json && !options.format) {
 		cliArgs.push('--format', 'json');
 	} else if (options.format) {
-		// Format is already handled by buildCliArgs through SEARCH_FLAG_MAP
-		// but we need to ensure json parsing for json format
+		// Format is handled by buildCliArgs through SEARCH_FLAG_MAP.
+		// Ensure json parsing is enabled for json format.
 		if (options.format === 'json') {
 			options.json = true;
 		}

@@ -15,9 +15,12 @@ pub fn run_simple_test() -> Result<()> {
     // Note: This uses BERT-base, not TinyBERT
     let config = SequenceClassificationConfig {
         model_type: ModelType::Bert,
-        model_resource: RemoteResource::from_pretrained(BertModelResources::BERT_BASE_UNCASED).into(),
-        config_resource: RemoteResource::from_pretrained(BertConfigResources::BERT_BASE_UNCASED).into(),
-        vocab_resource: RemoteResource::from_pretrained(BertVocabResources::BERT_BASE_UNCASED).into(),
+        model_resource: RemoteResource::from_pretrained(BertModelResources::BERT_BASE_UNCASED)
+            .into(),
+        config_resource: RemoteResource::from_pretrained(BertConfigResources::BERT_BASE_UNCASED)
+            .into(),
+        vocab_resource: RemoteResource::from_pretrained(BertVocabResources::BERT_BASE_UNCASED)
+            .into(),
         ..Default::default()
     };
 
@@ -56,16 +59,22 @@ pub fn run_simple_test() -> Result<()> {
     }
 
     // Analyze results
-    println!("\n" + &"="*60);
+    println!("\n" + &"=" * 60);
     println!("ANALYSIS");
-    println!(&"="*60);
+    println!(&"=" * 60);
 
     if results.len() == 2 {
         let (q1, label1) = &results[0];
         let (q2, label2) = &results[1];
 
-        println!("\nQuery 1: '{}' -> Label: {}, Score: {:.4}", q1, label1.label, label1.score);
-        println!("Query 2: '{}' -> Label: {}, Score: {:.4}", q2, label2.label, label2.score);
+        println!(
+            "\nQuery 1: '{}' -> Label: {}, Score: {:.4}",
+            q1, label1.label, label1.score
+        );
+        println!(
+            "Query 2: '{}' -> Label: {}, Score: {:.4}",
+            q2, label2.label, label2.score
+        );
 
         // Note: For classification models, the score is a probability
         // and the label indicates the class (e.g., "POSITIVE", "NEGATIVE")

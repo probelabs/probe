@@ -285,6 +285,7 @@ fn text_search_fallback(
             matched_keywords: None,
             matched_lines: None,
             tokenized_content: Some(tokenized_content),
+            lsp_info: None,
             parent_context: None,
         }]);
     }
@@ -388,6 +389,7 @@ pub fn find_all_symbols_in_file(
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
+                lsp_info: None,
                 parent_context: None,
             }]);
         }
@@ -557,6 +559,7 @@ pub fn find_all_symbols_in_file(
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: Some(tokenized_content),
+                lsp_info: None,
                 parent_context: None,
             }
         })
@@ -594,6 +597,34 @@ pub fn find_symbol_in_file(
         .into_iter()
         .next()
         .ok_or_else(|| anyhow::anyhow!("Symbol '{}' not found in file {:?}", symbol, path))
+}
+
+/// Find a symbol and best-effort return its (line, column) position.
+///
+/// Position is 0-indexed and estimated from the returned block by locating the leaf
+/// symbol text (for nested symbols, the part after the last dot).
+pub fn find_symbol_in_file_with_position(
+    path: &Path,
+    symbol: &str,
+    content: &str,
+    allow_tests: bool,
+    context_lines: usize,
+) -> Result<(SearchResult, Option<(u32, u32)>)> {
+    let result = find_symbol_in_file(path, symbol, content, allow_tests, context_lines)?;
+    let needle = symbol.split('.').next_back().unwrap_or(symbol);
+    let lines: Vec<&str> = content.lines().collect();
+    let start = result.lines.0.saturating_sub(1);
+    let end = result.lines.1.min(lines.len());
+    let mut position = None;
+
+    for (offset, line) in lines[start..end].iter().enumerate() {
+        if let Some(col) = line.find(needle) {
+            position = Some(((start + offset) as u32, col as u32));
+            break;
+        }
+    }
+
+    Ok((result, position))
 }
 
 #[cfg(test)]

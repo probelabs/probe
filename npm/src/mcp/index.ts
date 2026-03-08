@@ -21,11 +21,13 @@ import { fileURLToPath } from 'url';
 // Import from parent package
 import { search, query, extract, grep, getBinaryPath, setBinaryPath } from '../index.js';
 
-// Parse command-line arguments
-function parseArgs(): { timeout?: number; format?: string } {
-  const args = process.argv.slice(2);
-  const config: { timeout?: number; format?: string } = {};
+type OutputFormat = 'outline' | 'outline-xml' | 'json';
 
+// Parse command-line arguments
+function parseArgs(): { timeout?: number; lsp?: boolean; format?: OutputFormat } {
+  const args = process.argv.slice(2);
+  const config: { timeout?: number; lsp?: boolean; format?: OutputFormat } = {};
+  
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === '--timeout' || args[i] === '-t') && i + 1 < args.length) {
       const timeout = parseInt(args[i + 1], 10);
@@ -36,9 +38,17 @@ function parseArgs(): { timeout?: number; format?: string } {
         console.error(`Invalid timeout value: ${args[i + 1]}. Using default.`);
       }
       i++; // Skip the next argument
+    } else if (args[i] === '--lsp') {
+      config.lsp = true;
+      console.error('LSP mode enabled');
     } else if (args[i] === '--format' && i + 1 < args.length) {
-      config.format = args[i + 1];
-      console.error(`Format set to ${config.format}`);
+      const format = args[i + 1] as OutputFormat;
+      if (format === 'outline' || format === 'outline-xml' || format === 'json') {
+        config.format = format;
+        console.error(`Output format set to ${format}`);
+      } else {
+        console.error(`Invalid format value: ${args[i + 1]}. Using default.`);
+      }
       i++; // Skip the next argument
     } else if (args[i] === '--help' || args[i] === '-h') {
       console.error(`
@@ -49,7 +59,9 @@ Usage:
 
 Options:
   --timeout, -t <seconds>  Set timeout for search operations (default: 30)
-  --format <format>       Set output format (default: outline)
+  --lsp                    Enable LSP (Language Server Protocol) for enhanced features
+                           Automatically initializes language servers for the current workspace
+  --format <format>        Output format for search responses (outline|outline-xml|json)
   --help, -h              Show this help message
 `);
       process.exit(0);
@@ -120,17 +132,37 @@ interface SearchCodeArgs {
   exact?: boolean;
   strictElasticSyntax?: boolean;
   session?: string;
-  nextPage?: boolean;
+  timeout?: number;
+  noGitignore?: boolean;
+  lsp?: boolean;
+}
+
+interface QueryCodeArgs {
+  path: string;
+  pattern: string;
+  language?: string;
+  ignore?: string[];
+  allowTests?: boolean;
+  maxResults?: number;
+  format?: 'markdown' | 'plain' | 'json' | 'color';
+  timeout?: number;
+  noGitignore?: boolean;
 }
 
 interface ExtractCodeArgs {
   path: string;
   files: string[];
+  allowTests?: boolean;
+  contextLines?: number;
+  format?: 'markdown' | 'plain' | 'json';
+  timeout?: number;
+  noGitignore?: boolean;
+  lsp?: boolean;
 }
 
 interface GrepArgs {
   pattern: string;
-  paths: string | string[];
+  paths: string[];
   ignoreCase?: boolean;
   count?: boolean;
   context?: number;
@@ -139,11 +171,17 @@ interface GrepArgs {
 class ProbeServer {
   private server: Server;
   private defaultTimeout: number;
-  private defaultFormat?: string;
+  private lspEnabled: boolean;
+  private defaultFormat: OutputFormat;
 
-  constructor(timeout: number = 30, format?: string) {
+  constructor(
+    timeout: number = 30,
+    lspEnabled: boolean = false,
+    defaultFormat: OutputFormat = 'outline-xml'
+  ) {
     this.defaultTimeout = timeout;
-    this.defaultFormat = format;
+    this.lspEnabled = lspEnabled;
+    this.defaultFormat = defaultFormat;
     this.server = new Server(
       {
         name: '@probelabs/probe',
@@ -201,8 +239,11 @@ class ProbeServer {
               },
               nextPage: {
                 type: 'boolean',
-                description: 'Set to true when requesting the next page of results. Requires passing the same session ID from the previous search output.',
-                default: false
+                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
+              },
+              lsp: {
+                type: 'boolean',
+                description: 'Use LSP (Language Server Protocol) for call hierarchy, reference counts, and enhanced symbol information',
               }
             },
             required: ['path', 'query']
@@ -221,7 +262,34 @@ class ProbeServer {
               files: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Array of file paths to extract from. Formats: "file.js" (entire file), "file.js:42" (code block at line 42), "file.js:10-20" (lines 10-20), "file.js#funcName" (specific symbol). Line numbers and symbols are part of the path string, not separate parameters. Paths can be absolute or relative to the project directory.',
+                description: 'Files and lines or sybmbols to  extract from: /path/to/file.rs:10, /path/to/file.rs#func_name Path should be absolute.',
+              },
+              allowTests: {
+                type: 'boolean',
+                description: 'Allow test files and test code blocks in results (disabled by default)',
+              },
+              contextLines: {
+                type: 'number',
+                description: 'Number of context lines to include before and after the extracted block when AST parsing fails to find a suitable node',
+                default: 0
+              },
+              format: {
+                type: 'string',
+                enum: ['markdown', 'plain', 'json'],
+                description: 'Output format for the extracted code',
+                default: 'markdown'
+              },
+              timeout: {
+                type: 'number',
+                description: 'Timeout for the extract operation in seconds (default: 30)',
+              },
+              noGitignore: {
+                type: 'boolean',
+                description: 'Skip .gitignore files (will use PROBE_NO_GITIGNORE environment variable if not set)',
+              },
+              lsp: {
+                type: 'boolean',
+                description: 'Use LSP (Language Server Protocol) for call hierarchy, reference counts, and enhanced symbol information',
               }
             },
             required: ['path', 'files'],
@@ -365,7 +433,24 @@ class ProbeServer {
       } else if (this.defaultFormat === 'json') {
         options.json = true;
       }
-
+      if (args.session !== undefined && args.session.trim() !== '') {
+        options.session = args.session;
+      } else {
+        options.session = "new";
+      }
+      // Use timeout from args, or fall back to instance default
+      if (args.timeout !== undefined) {
+        options.timeout = args.timeout;
+      } else if (this.defaultTimeout !== undefined) {
+        options.timeout = this.defaultTimeout;
+      }
+      // Pass LSP flag if enabled globally or per-request
+      if (args.lsp !== undefined) {
+        options.lsp = args.lsp;
+      } else if (this.lspEnabled) {
+        options.lsp = true;
+      }
+      
       console.error("Executing search with options:", JSON.stringify(options, null, 2));
       
       try {
@@ -404,6 +489,19 @@ class ProbeServer {
         format: 'xml',
         allowTests: true,  // Include test files by default
       };
+      
+      // Use noGitignore from args, or fall back to PROBE_NO_GITIGNORE environment variable
+      if (args.noGitignore !== undefined) {
+        options.noGitignore = args.noGitignore;
+      } else if (process.env.PROBE_NO_GITIGNORE) {
+        options.noGitignore = process.env.PROBE_NO_GITIGNORE === 'true';
+      }
+      // Pass LSP flag if enabled globally or per-request
+      if (args.lsp !== undefined) {
+        options.lsp = args.lsp;
+      } else if (this.lspEnabled) {
+        options.lsp = true;
+      }
       
       // Call extract with the complete options object
       try {
@@ -507,6 +605,48 @@ class ProbeServer {
     // The @probelabs/probe package now handles binary path management internally
     // We don't need to verify or download the binary in the MCP server anymore
     
+    // Initialize LSP servers for the current workspace if --lsp flag is enabled
+    if (this.lspEnabled) {
+      const workspaceRoot = process.cwd();
+      console.error(`Initializing LSP servers for workspace: ${workspaceRoot}`);
+      
+      try {
+        // Execute probe lsp init command to pre-warm language servers
+        // Use recursive flag to discover nested projects in monorepos
+        const initCmd = process.platform === 'win32' 
+          ? `probe lsp init -w "${workspaceRoot}" --recursive`
+          : `probe lsp init -w '${workspaceRoot}' --recursive`;
+        
+        const { stdout, stderr } = await execAsync(initCmd, {
+          timeout: 10000, // 10 second timeout for initialization - don't wait too long
+          env: { ...process.env }
+        });
+        
+        if (stderr && !stderr.includes('Successfully initialized')) {
+          console.error(`LSP initialization warnings: ${stderr}`);
+        }
+        
+        console.error(`LSP servers initialized successfully for workspace: ${workspaceRoot}`);
+        
+        // Parse initialization output to show what was initialized
+        if (stdout) {
+          const lines = stdout.split('\n');
+          const initializedServers = lines.filter(line => 
+            line.includes('✓') || line.includes('language server')
+          );
+          if (initializedServers.length > 0) {
+            console.error('Initialized language servers:');
+            initializedServers.forEach(line => console.error(`  ${line.trim()}`));
+          }
+        }
+      } catch (error: any) {
+        // Don't fail MCP server startup if LSP initialization fails
+        // LSP will still work with cold start on first use
+        console.error(`Warning: Failed to initialize LSP servers: ${error.message || error}`);
+        console.error('LSP features will still be available but may have slower first-use performance');
+      }
+    }
+    
     // Just connect the server to the transport
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
@@ -514,5 +654,10 @@ class ProbeServer {
   }
 }
 
-const server = new ProbeServer(cliConfig.timeout, cliConfig.format || 'outline');
+// Instantiate server with (timeout, lspEnabled, format)
+const server = new ProbeServer(
+  cliConfig.timeout ?? 30,
+  cliConfig.lsp ?? false,
+  cliConfig.format || 'outline-xml'
+);
 server.run().catch(console.error);

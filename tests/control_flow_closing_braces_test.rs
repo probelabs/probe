@@ -65,8 +65,9 @@ fn test_loop_closing_braces_in_outline_format() {
             "./src/search/search_output.rs",
             "--format",
             "outline",
+            // Increase results to avoid ranking a non-structural match at top
             "--max-results",
-            "1",
+            "20",
         ])
         .output()
         .expect("Failed to execute probe command");

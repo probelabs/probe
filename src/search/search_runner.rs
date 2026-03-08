@@ -247,6 +247,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         timeout,
         question,
         no_gitignore,
+        lsp,
     } = options;
     // Start the timeout thread
     let timeout_handle = timeout::start_timeout_thread(*timeout);
@@ -760,6 +761,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                 matched_keywords: None,
                 matched_lines: None,
                 tokenized_content: None,
+                lsp_info: None,
                 parent_context: None,
             });
         }
@@ -1018,6 +1020,7 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
                     preprocessed_queries: None,
                     no_merge: *no_merge,
                     query_plan: &plan,
+                    lsp: *lsp,
                 };
 
                 if debug_mode {
