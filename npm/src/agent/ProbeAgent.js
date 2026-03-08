@@ -3622,7 +3622,13 @@ Double-check your response based on the criteria above. If everything looks good
               }
 
               if (this.debug) {
-                console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: ${toolResults?.length || 0})`);
+                const toolSummary = toolCalls?.length
+                  ? toolCalls.map(tc => {
+                      const args = tc.args ? JSON.stringify(tc.args) : '';
+                      return args ? `${tc.toolName}(${debugTruncate(args, 120)})` : tc.toolName;
+                    }).join(', ')
+                  : 'none';
+                console.log(`[DEBUG] Step ${currentIteration}/${maxIterations} finished (reason: ${finishReason}, tools: [${toolSummary}])`);
                 if (text) {
                   console.log(`[DEBUG]   model text: ${debugTruncate(text)}`);
                 }
