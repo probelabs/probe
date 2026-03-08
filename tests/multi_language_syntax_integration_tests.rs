@@ -122,6 +122,7 @@ pub fn standalone_function() {
             0,
             None,
             false,
+            false,
         );
 
         if let Ok(results) = result {
@@ -142,6 +143,7 @@ pub fn standalone_function() {
                 true,
                 0,
                 None,
+                false,
                 false,
             );
 
@@ -200,6 +202,7 @@ impl TestService {
             true,
             0,
             None,
+            false,
             false,
         );
 

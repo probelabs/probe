@@ -2967,6 +2967,7 @@ mod tests {
             matched_lines: None,
             matched_keywords: None,
             tokenized_content: None,
+            lsp_info: None,
             parent_context: None,
         };
 
@@ -2996,6 +2997,7 @@ mod tests {
             matched_lines: None,
             matched_keywords: None,
             tokenized_content: None,
+            lsp_info: None,
             parent_context: None,
         };
 
