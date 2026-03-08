@@ -32,6 +32,7 @@ const SEARCH_FLAG_MAP = {
 	session: '--session',
 	timeout: '--timeout',
 	language: '--language',
+	format: '--format',
 	lsp: '--lsp'
 };
 
@@ -85,8 +86,8 @@ export async function search(options) {
 	if (options.json && !options.format) {
 		cliArgs.push('--format', 'json');
 	} else if (options.format) {
-		// Format is already handled by buildCliArgs through SEARCH_FLAG_MAP
-		// but we need to ensure json parsing for json format
+		// Format is handled by buildCliArgs through SEARCH_FLAG_MAP.
+		// Ensure json parsing is enabled for json format.
 		if (options.format === 'json') {
 			options.json = true;
 		}

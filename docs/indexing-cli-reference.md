@@ -1721,10 +1721,10 @@ probe lsp completion powershell > $PROFILE
 
 ## Environment Variables
 
-See the [Configuration Reference](./indexing-configuration.md#environment-variables) for complete environment variable documentation.
+See [reference/environment-variables.md](./reference/environment-variables.md) and `probe lsp index-config --help` for current runtime options.
 
 ## Next Steps
 
-- **[Language-Specific Guide](./indexing-languages.md)** - Per-language indexing details
-- **[Performance Guide](./indexing-performance.md)** - Optimization strategies
-- **[API Reference](./indexing-api-reference.md)** - Integration guide for developers
+- **[LSP Features](./lsp-features.md)** - LSP capabilities and workflows
+- **[LSP Quick Reference](./lsp-quick-reference.md)** - Day-to-day command cheat sheet
+- **[Indexing Overview](./indexing-overview.md)** - Indexing concepts and workflow

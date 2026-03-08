@@ -445,6 +445,14 @@ Full documentation available at [probelabs.com/probe](https://probelabs.com/prob
 - [Query Command](./docs/probe-cli/query.md) - AST-based structural pattern matching
 - [CLI Reference](./docs/probe-cli/cli-reference.md) - Complete command-line reference
 
+### LSP & Indexing
+- [LSP Features](./docs/lsp-features.md) - What `--lsp` adds for semantic code intelligence
+- [LSP Quick Reference](./docs/lsp-quick-reference.md) - Day-to-day LSP command cheatsheet
+- [Indexing Overview](./docs/indexing-overview.md) - Project indexing concepts and workflow
+- [Indexing CLI Reference](./docs/indexing-cli-reference.md) - `probe lsp index*` command reference
+
+LSP capabilities include call hierarchy enrichment (`extract --lsp`), direct symbol operations (`probe lsp call definition|references|hover|...`), daemon diagnostics (`probe lsp logs --analyze`), and workspace indexing (`probe lsp index`, `probe lsp index-status`).
+
 ### Probe Agent
 - [Agent Overview](./docs/probe-agent/overview.md) - What is Probe Agent and when to use it
 - [API Reference](./docs/probe-agent/sdk/api-reference.md) - ProbeAgent class documentation

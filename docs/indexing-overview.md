@@ -340,11 +340,9 @@ probe extract src/complex_algorithm.rs#optimize_me --lsp --output json
 
 ## Next Steps
 
-- **[Architecture Guide](./indexing-architecture.md)** - Deep dive into system internals
-- **[Configuration Reference](./indexing-configuration.md)** - All settings and environment variables
-- **[CLI Commands](./indexing-cli-reference.md)** - Complete command documentation
-- **[Performance Guide](./indexing-performance.md)** - Optimization and tuning
-- **[API Reference](./indexing-api-reference.md)** - Integration for developers
+- **[LSP Features](./lsp-features.md)** - LSP capabilities and workflows
+- **[LSP Quick Reference](./lsp-quick-reference.md)** - Day-to-day command cheat sheet
+- **[CLI Commands](./indexing-cli-reference.md)** - Complete indexing command documentation
 
 ## Troubleshooting
 
@@ -365,4 +363,4 @@ probe extract src/complex_algorithm.rs#optimize_me --lsp --output json
 - Check status with `probe lsp status`
 - Restart daemon: `probe lsp restart`
 
-For comprehensive troubleshooting, see the [Performance Guide](./indexing-performance.md#troubleshooting).
+For command-level troubleshooting, see [Indexing CLI Reference](./indexing-cli-reference.md).

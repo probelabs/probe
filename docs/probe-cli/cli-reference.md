@@ -699,6 +699,6 @@ export PROBE_LSP_WORKSPACE_CACHE_TTL_DAYS=14
 ```
 
 For comprehensive LSP documentation, see:
-- **[LSP Features Overview](./lsp-features.md)** - Quick introduction to LSP capabilities
-- **[Indexing Overview](./indexing-overview.md)** - Complete LSP indexing system guide
-- **[LSP CLI Reference](./indexing-cli-reference.md)** - Detailed command documentation
+- **[LSP Features Overview](../lsp-features.md)** - Quick introduction to LSP capabilities
+- **[Indexing Overview](../indexing-overview.md)** - Complete LSP indexing system guide
+- **[LSP CLI Reference](../indexing-cli-reference.md)** - Detailed command documentation
