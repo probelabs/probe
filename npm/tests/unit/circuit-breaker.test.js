@@ -109,6 +109,40 @@ describe('ProbeAgent circuit breaker for repeated tool calls', () => {
     jest.restoreAllMocks();
   });
 
+  test('stopWhen detects 3 consecutive tool errors (e.g. workspace deleted)', async () => {
+    const agent = createMockedAgent();
+
+    let capturedOptions = null;
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => {
+      capturedOptions = opts;
+      return createMockStreamResult('Answer');
+    });
+
+    agent.answer('test question').catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const { stopWhen } = capturedOptions;
+
+    // 3 consecutive steps where all tool results are errors
+    const errorResult = '<error type="path_error" recoverable="true"><message>Path does not exist: /tmp/workspace</message></error>';
+    const steps = [
+      { toolCalls: [{ toolName: 'search', args: { query: 'from' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'require' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'use' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+    ];
+    expect(stopWhen({ steps })).toBe(true);
+
+    // Mixed results (some errors, some success) should NOT trigger
+    const mixedSteps = [
+      { toolCalls: [{ toolName: 'search', args: { query: 'one' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'two' } }], toolResults: [{ result: 'some results' }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'three' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+    ];
+    expect(stopWhen({ steps: mixedSteps })).toBe(false);
+
+    jest.restoreAllMocks();
+  });
+
   test('prepareStep forces toolChoice=none after 2 consecutive identical tool calls', async () => {
     const agent = createMockedAgent();
 

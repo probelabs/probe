@@ -478,7 +478,11 @@ export const searchTool = (options = {}) => {
 					return result;
 				} catch (error) {
 					console.error('Error executing search command:', error);
-					return formatErrorForAI(error);
+					const formatted = formatErrorForAI(error);
+					if (error.category === 'path_error' || error.message?.includes('does not exist')) {
+						return formatted + '\n\nThe path does not exist. Use the listFiles tool to verify the correct directory structure before retrying. If the workspace itself is gone, output your final answer with whatever information you have.';
+					}
+					return formatted;
 				}
 			}
 

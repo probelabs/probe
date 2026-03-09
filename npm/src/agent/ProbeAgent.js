@@ -3499,6 +3499,20 @@ Follow these instructions carefully:
                     return true;
                   }
                 }
+
+                // Circuit breaker: consecutive tool errors (e.g. workspace deleted mid-run)
+                const allErrors = last3.every(s =>
+                  s.toolResults?.length > 0 && s.toolResults.every(tr => {
+                    const r = typeof tr.result === 'string' ? tr.result : '';
+                    return r.includes('<error ') || r.includes('Path does not exist');
+                  })
+                );
+                if (allErrors) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] Circuit breaker: 3 consecutive tool calls all returned errors, forcing stop`);
+                  }
+                  return true;
+                }
               }
 
               return false;
