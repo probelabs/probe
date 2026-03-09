@@ -109,7 +109,7 @@ describe('ProbeAgent circuit breaker for repeated tool calls', () => {
     jest.restoreAllMocks();
   });
 
-  test('stopWhen detects 3 consecutive tool errors (e.g. workspace deleted)', async () => {
+  test('prepareStep forces toolChoice=none after 3 consecutive tool errors', async () => {
     const agent = createMockedAgent();
 
     let capturedOptions = null;
@@ -121,24 +121,26 @@ describe('ProbeAgent circuit breaker for repeated tool calls', () => {
     agent.answer('test question').catch(() => {});
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    const { stopWhen } = capturedOptions;
+    const { prepareStep } = capturedOptions;
 
-    // 3 consecutive steps where all tool results are errors
+    // 3 consecutive steps where all tool results are errors → force text output
     const errorResult = '<error type="path_error" recoverable="true"><message>Path does not exist: /tmp/workspace</message></error>';
-    const steps = [
+    const errorSteps = [
       { toolCalls: [{ toolName: 'search', args: { query: 'from' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
       { toolCalls: [{ toolName: 'search', args: { query: 'require' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
       { toolCalls: [{ toolName: 'search', args: { query: 'use' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
     ];
-    expect(stopWhen({ steps })).toBe(true);
+    const result = prepareStep({ steps: errorSteps, stepNumber: 4 });
+    expect(result).toEqual({ toolChoice: 'none' });
 
-    // Mixed results (some errors, some success) should NOT trigger
+    // Mixed results (some errors, some success) should NOT force text-only
     const mixedSteps = [
       { toolCalls: [{ toolName: 'search', args: { query: 'one' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
       { toolCalls: [{ toolName: 'search', args: { query: 'two' } }], toolResults: [{ result: 'some results' }], finishReason: 'tool-calls' },
       { toolCalls: [{ toolName: 'search', args: { query: 'three' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
     ];
-    expect(stopWhen({ steps: mixedSteps })).toBe(false);
+    const mixedResult = prepareStep({ steps: mixedSteps, stepNumber: 4 });
+    expect(mixedResult?.toolChoice).toBeUndefined();
 
     jest.restoreAllMocks();
   });

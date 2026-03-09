@@ -3500,19 +3500,6 @@ Follow these instructions carefully:
                   }
                 }
 
-                // Circuit breaker: consecutive tool errors (e.g. workspace deleted mid-run)
-                const allErrors = last3.every(s =>
-                  s.toolResults?.length > 0 && s.toolResults.every(tr => {
-                    const r = typeof tr.result === 'string' ? tr.result : '';
-                    return r.includes('<error ') || r.includes('Path does not exist');
-                  })
-                );
-                if (allErrors) {
-                  if (this.debug) {
-                    console.log(`[DEBUG] Circuit breaker: 3 consecutive tool calls all returned errors, forcing stop`);
-                  }
-                  return true;
-                }
               }
 
               return false;
@@ -3540,6 +3527,24 @@ Follow these instructions carefully:
                     }
                     return { toolChoice: 'none' };
                   }
+                }
+              }
+
+              // Force text-only response after 3 consecutive tool errors
+              // (e.g. workspace deleted mid-run — let the model produce its answer)
+              if (steps.length >= 3) {
+                const last3 = steps.slice(-3);
+                const allErrors = last3.every(s =>
+                  s.toolResults?.length > 0 && s.toolResults.every(tr => {
+                    const r = typeof tr.result === 'string' ? tr.result : '';
+                    return r.includes('<error ') || r.includes('does not exist');
+                  })
+                );
+                if (allErrors) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] prepareStep: 3 consecutive tool errors, forcing toolChoice=none`);
+                  }
+                  return { toolChoice: 'none' };
                 }
               }
 
