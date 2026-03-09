@@ -3565,7 +3565,8 @@ Here is the result to review:
 ${resultToReview}
 </result>
 
-Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
+IMPORTANT: First review ALL completed work in the conversation above before taking any action.
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If your text has inaccuracies, fix the text. Only call a tool if you find a genuinely MISSING action — NEVER redo work that was already completed successfully. Respond with the COMPLETE corrected answer.`;
 
                   return {
                     userMessage: completionPromptMessage,
@@ -3774,7 +3775,8 @@ Here is the result to review:
 ${finalResult}
 </result>
 
-Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
+IMPORTANT: First review ALL completed work in the conversation above before taking any action.
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If your text has inaccuracies, fix the text. Only call a tool if you find a genuinely MISSING action — NEVER redo work that was already completed successfully. Respond with the COMPLETE corrected answer.`;
 
             currentMessages.push({ role: 'user', content: completionPromptMessage });
 
