@@ -109,6 +109,42 @@ describe('ProbeAgent circuit breaker for repeated tool calls', () => {
     jest.restoreAllMocks();
   });
 
+  test('prepareStep forces toolChoice=none after 3 consecutive tool errors', async () => {
+    const agent = createMockedAgent();
+
+    let capturedOptions = null;
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => {
+      capturedOptions = opts;
+      return createMockStreamResult('Answer');
+    });
+
+    agent.answer('test question').catch(() => {});
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const { prepareStep } = capturedOptions;
+
+    // 3 consecutive steps where all tool results are errors → force text output
+    const errorResult = '<error type="path_error" recoverable="true"><message>Path does not exist: /tmp/workspace</message></error>';
+    const errorSteps = [
+      { toolCalls: [{ toolName: 'search', args: { query: 'from' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'require' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'use' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+    ];
+    const result = prepareStep({ steps: errorSteps, stepNumber: 4 });
+    expect(result).toEqual({ toolChoice: 'none' });
+
+    // Mixed results (some errors, some success) should NOT force text-only
+    const mixedSteps = [
+      { toolCalls: [{ toolName: 'search', args: { query: 'one' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'two' } }], toolResults: [{ result: 'some results' }], finishReason: 'tool-calls' },
+      { toolCalls: [{ toolName: 'search', args: { query: 'three' } }], toolResults: [{ result: errorResult }], finishReason: 'tool-calls' },
+    ];
+    const mixedResult = prepareStep({ steps: mixedSteps, stepNumber: 4 });
+    expect(mixedResult?.toolChoice).toBeUndefined();
+
+    jest.restoreAllMocks();
+  });
+
   test('prepareStep forces toolChoice=none after 2 consecutive identical tool calls', async () => {
     const agent = createMockedAgent();
 
