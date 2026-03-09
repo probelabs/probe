@@ -1444,11 +1444,13 @@ export class ProbeAgent {
         result = await this._executeWithVercelProvider(options, controller);
       }
 
-      // Wrap textStream so limiter slot is held until stream completes
+      // Wrap textStream so limiter slot is held until stream completes.
+      // result.textStream is a read-only getter on DefaultStreamTextResult,
+      // so we wrap the result in a Proxy that intercepts the textStream property.
       if (limiter && result.textStream) {
         const originalStream = result.textStream;
         const debug = this.debug;
-        result.textStream = (async function* () {
+        const wrappedStream = (async function* () {
           try {
             for await (const chunk of originalStream) {
               yield chunk;
@@ -1461,6 +1463,13 @@ export class ProbeAgent {
             }
           }
         })();
+        return new Proxy(result, {
+          get(target, prop) {
+            if (prop === 'textStream') return wrappedStream;
+            const value = target[prop];
+            return typeof value === 'function' ? value.bind(target) : value;
+          }
+        });
       } else if (limiter) {
         // No textStream (shouldn't happen, but release just in case)
         limiter.release(null);
