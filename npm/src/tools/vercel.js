@@ -386,6 +386,8 @@ export const searchTool = (options = {}) => {
 			: searchDescription,
 		inputSchema: searchSchema,
 		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage }) => {
+			// Save original query before auto-quoting for dedup key
+			const originalSearchQuery = searchQuery;
 			// Auto-quote mixed-case and underscore terms to prevent unwanted stemming/splitting
 			// Skip when exact=true since that already preserves the literal string
 			if (!exact && searchQuery) {
@@ -441,9 +443,10 @@ export const searchTool = (options = {}) => {
 			if (!searchDelegate) {
 				// Block duplicate non-paginated searches (models sometimes repeat the exact same call)
 				// Allow pagination: only nextPage=true is a legitimate repeat of the same query
-				// Use query+exact as the key (ignore path) to prevent path-hopping evasion
-				// where model searches same term on different subpaths hoping for different results
-				const searchKey = `${searchQuery}::${exact || false}`;
+				// Use original query (before auto-quoting) so exact=true and exact=false for
+				// the same term are treated as the same logical search.
+				// Include the resolved searchPath so searches across different repos aren't blocked.
+				const searchKey = `${originalSearchQuery}::${searchPath}`;
 				if (!nextPage) {
 					if (previousSearches.has(searchKey)) {
 						consecutiveDupBlocks++;
