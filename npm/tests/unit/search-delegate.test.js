@@ -388,6 +388,45 @@ describe('searchDelegate behavior', () => {
     expect(r4).toContain('final JSON answer NOW');
   });
 
+  test('dedup allows same query on different paths (multi-repo)', async () => {
+    mockSearch.mockResolvedValue('search result');
+
+    const tool = searchTool({
+      cwd: '/workspace',
+      searchDelegate: false
+    });
+
+    // Search in repo A
+    const r1 = await tool.execute({ query: 'deadlineTimeout', path: '/workspace/repo-a', exact: true });
+    expect(r1).toBe('search result');
+
+    // Same query in repo B — should NOT be blocked
+    const r2 = await tool.execute({ query: 'deadlineTimeout', path: '/workspace/repo-b', exact: true });
+    expect(r2).toBe('search result');
+
+    // Same query in repo A again — this IS a duplicate
+    const r3 = await tool.execute({ query: 'deadlineTimeout', path: '/workspace/repo-a', exact: true });
+    expect(r3).toContain('DUPLICATE SEARCH BLOCKED');
+  });
+
+  test('dedup treats auto-quoted and exact versions of same query as same search', async () => {
+    mockSearch.mockResolvedValue('search result');
+
+    const tool = searchTool({
+      cwd: '/workspace',
+      searchDelegate: false
+    });
+
+    // camelCase query with exact=true (no auto-quoting)
+    const r1 = await tool.execute({ query: 'deadlineTimeout', path: '.', exact: true });
+    expect(r1).toBe('search result');
+
+    // Same camelCase query with exact=false (gets auto-quoted to "deadlineTimeout")
+    // Should be treated as duplicate since it's the same logical search
+    const r2 = await tool.execute({ query: 'deadlineTimeout', path: '.', exact: false });
+    expect(r2).toContain('DUPLICATE SEARCH BLOCKED');
+  });
+
   test('dedup counter resets after a successful new search', async () => {
     mockSearch.mockResolvedValue('search result');
 
