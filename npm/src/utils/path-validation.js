@@ -110,7 +110,7 @@ export async function validateCwdPath(inputPath, defaultPath = process.cwd()) {
 		}
 		if (error.code === 'ENOENT') {
 			throw new PathError(`Path does not exist: ${normalizedPath}`, {
-				suggestion: 'The specified path does not exist. Please verify the path is correct or use a different directory.',
+				suggestion: 'The specified path does not exist. Use the listFiles tool to check the correct directory structure, then retry with a valid path.',
 				details: { path: normalizedPath }
 			});
 		}

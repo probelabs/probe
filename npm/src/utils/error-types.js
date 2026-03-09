@@ -181,14 +181,14 @@ export function categorizeError(error) {
       errorCode === 'enoent') {
     return new PathError(message, {
       originalError: error,
-      suggestion: 'The specified path does not exist. Please verify the path or use a different directory.'
+      suggestion: 'The specified path does not exist. Use the listFiles tool to check the correct directory structure, then retry with a valid path.'
     });
   }
 
   if (lowerMessage.includes('not a directory') || errorCode === 'enotdir') {
     return new PathError(message, {
       originalError: error,
-      suggestion: 'The path is not a directory. Please provide a valid directory path.'
+      suggestion: 'The path is not a directory. Use the listFiles tool to find the correct directory, then retry.'
     });
   }
 

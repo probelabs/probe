@@ -3508,6 +3508,7 @@ Follow these instructions carefully:
                     return true;
                   }
                 }
+
               }
 
               return false;
@@ -3535,6 +3536,24 @@ Follow these instructions carefully:
                     }
                     return { toolChoice: 'none' };
                   }
+                }
+              }
+
+              // Force text-only response after 3 consecutive tool errors
+              // (e.g. workspace deleted mid-run — let the model produce its answer)
+              if (steps.length >= 3) {
+                const last3 = steps.slice(-3);
+                const allErrors = last3.every(s =>
+                  s.toolResults?.length > 0 && s.toolResults.every(tr => {
+                    const r = typeof tr.result === 'string' ? tr.result : '';
+                    return r.includes('<error ') || r.includes('does not exist');
+                  })
+                );
+                if (allErrors) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] prepareStep: 3 consecutive tool errors, forcing toolChoice=none`);
+                  }
+                  return { toolChoice: 'none' };
                 }
               }
 
@@ -3574,7 +3593,8 @@ Here is the result to review:
 ${resultToReview}
 </result>
 
-Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
+IMPORTANT: First review ALL completed work in the conversation above before taking any action.
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If your text has inaccuracies, fix the text. Only call a tool if you find a genuinely MISSING action — NEVER redo work that was already completed successfully. Respond with the COMPLETE corrected answer.`;
 
                   return {
                     userMessage: completionPromptMessage,
@@ -3783,7 +3803,8 @@ Here is the result to review:
 ${finalResult}
 </result>
 
-Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If something needs to be fixed or is missing, do it now, then respond with the COMPLETE updated answer (everything you did in total, not just the fix).`;
+IMPORTANT: First review ALL completed work in the conversation above before taking any action.
+Double-check your response based on the criteria above. If everything looks good, respond with your previous answer exactly as-is. If your text has inaccuracies, fix the text. Only call a tool if you find a genuinely MISSING action — NEVER redo work that was already completed successfully. Respond with the COMPLETE corrected answer.`;
 
             currentMessages.push({ role: 'user', content: completionPromptMessage });
 
