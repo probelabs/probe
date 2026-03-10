@@ -219,6 +219,21 @@ export function indentFlexibleMatch(contentLines, searchLines) {
     }
 
     if (allMatch) {
+      // Limit indent tolerance: reject matches where indentation differs by more than
+      // 1 level. Larger differences likely mean the match is in a completely different
+      // scope/nesting level — silent file corruption risk (issue #507).
+      // For tabs: 1 tab = 1 level, so max diff = 1.
+      // For spaces: detect indent unit (2 or 4), allow 1 unit of difference.
+      const indentDiff = Math.abs(windowMinIndent - searchMinIndent);
+      if (indentDiff > 0) {
+        // Detect whether indentation is tab-based or space-based
+        const sampleLine = windowLines.find(l => l.trim().length > 0) || searchLines.find(l => l.trim().length > 0) || '';
+        const useTabs = sampleLine.startsWith('\t');
+        const maxAllowedDiff = useTabs ? 1 : 4; // 1 tab or 4 spaces = 1 indent level
+        if (indentDiff > maxAllowedDiff) {
+          continue; // Skip — too far off in nesting
+        }
+      }
       const matchedText = windowLines.join('\n');
       matches.push(matchedText);
     }

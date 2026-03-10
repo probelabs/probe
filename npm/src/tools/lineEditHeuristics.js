@@ -92,6 +92,17 @@ export function restoreIndentation(newStr, originalLines) {
   const newIndent = detectBaseIndent(newStr);
 
   if (targetIndent !== newIndent) {
+    // Limit auto-reindent tolerance: reject when indentation differs by more than
+    // 1 level. Larger differences likely mean the match landed in a completely
+    // different scope — allowing it risks silent file corruption (issue #507).
+    // For tabs: 1 tab = 1 level, so max diff = 1 char.
+    // For spaces: 1 level = up to 4 spaces, so max diff = 4 chars.
+    const indentDiff = Math.abs(targetIndent.length - newIndent.length);
+    const useTabs = targetIndent.includes('\t') || newIndent.includes('\t');
+    const maxAllowedDiff = useTabs ? 1 : 4;
+    if (indentDiff > maxAllowedDiff) {
+      return { result: newStr, modifications };
+    }
     const reindented = reindent(newStr, targetIndent);
     if (reindented !== newStr) {
       modifications.push(`reindented from "${newIndent}" to "${targetIndent}"`);

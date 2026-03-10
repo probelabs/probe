@@ -204,5 +204,71 @@ describe('fuzzyMatch module', () => {
       expect(result).not.toBeNull();
       expect(result.count).toBe(2);
     });
+
+    test('should reject tab-indented match with 3+ level difference (issue #507)', () => {
+      // Reproduces issue #507: old_string at 4-tab indent (deeply nested loop)
+      // should NOT match content at 1-tab indent (different scope entirely)
+      const contentLines = [
+        '\tends := i + batchSize',  // 1-tab indent (function body)
+      ];
+      const searchLines = [
+        '\t\t\t\tends := i + batchSize',  // 4-tab indent (nested loop)
+      ];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Indent diff = 3 tabs = 3 levels, exceeds max of 1 for tabs
+      expect(result).toBeNull();
+    });
+
+    test('should reject tab-indented match with 2-level difference', () => {
+      const contentLines = [
+        '\treturn indexBaseName + "_" + tableName',  // 1 tab
+      ];
+      const searchLines = [
+        '\t\t\treturn indexBaseName + "_" + tableName',  // 3 tabs
+      ];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 2 tabs > 1 allowed
+      expect(result).toBeNull();
+    });
+
+    test('should allow tab-indented match with 1-level difference', () => {
+      const contentLines = [
+        '\tif (x) {',
+        '\t\treturn true;',
+        '\t}',
+      ];
+      const searchLines = [
+        '\t\tif (x) {',
+        '\t\t\treturn true;',
+        '\t\t}',
+      ];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 1 tab = exactly 1 level, should be allowed
+      expect(result).not.toBeNull();
+    });
+
+    test('should allow space-indented match with 1-level difference (up to 4 spaces)', () => {
+      const contentLines = ['    if (x) {', '        return true;', '    }'];
+      const searchLines = ['  if (x) {', '      return true;', '  }'];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 2 spaces, well within 4-space max
+      expect(result).not.toBeNull();
+    });
+
+    test('should reject space-indented match with >4 space difference', () => {
+      const contentLines = [
+        '          if (x) {',      // 10 spaces
+        '              return 1;', // 14 spaces
+        '          }',
+      ];
+      const searchLines = [
+        '  if (x) {',      // 2 spaces
+        '      return 1;', // 6 spaces
+        '  }',
+      ];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 8 spaces > 4 allowed
+      expect(result).toBeNull();
+    });
   });
 });

@@ -172,6 +172,34 @@ describe('restoreIndentation', () => {
     expect(result).toBe('    function foo() {\n      return 1;\n    }');
     expect(modifications.length).toBe(1);
   });
+
+  test('should reject reindent when tab indent differs by >1 level (issue #507)', () => {
+    // New code at 4-tab indent, original at 1-tab → diff = 3 tabs > 1 allowed
+    const newStr = '\t\t\t\tends := i + batchSize';
+    const originalLines = ['\tends := i + batchSize'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    // Should NOT reindent — diff too large, likely wrong scope
+    expect(result).toBe(newStr);
+    expect(modifications.length).toBe(0);
+  });
+
+  test('should allow reindent when tab indent differs by exactly 1 level', () => {
+    const newStr = '\t\treturn x;';
+    const originalLines = ['\treturn x;'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    // Diff = 1 tab, within tolerance → should reindent
+    expect(result).toBe('\treturn x;');
+    expect(modifications.length).toBe(1);
+  });
+
+  test('should reject reindent when space indent differs by >4 chars', () => {
+    // 8-space indent original, 0-space new → diff = 8 > 4
+    const newStr = 'return x;';
+    const originalLines = ['        return x;'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    expect(result).toBe(newStr);
+    expect(modifications.length).toBe(0);
+  });
 });
 
 describe('cleanNewString', () => {
