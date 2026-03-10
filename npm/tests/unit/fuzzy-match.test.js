@@ -270,5 +270,152 @@ describe('fuzzyMatch module', () => {
       // Diff = 8 spaces > 4 allowed
       expect(result).toBeNull();
     });
+
+    test('issue #507 full scenario: Go code at 4-tab vs 1-tab should not match', () => {
+      // Realistic Go file: buildIndexName at 1-tab indent, LLM searches at 4-tab indent
+      const contentLines = [
+        'func (c *SQLPump) buildIndexName(indexBaseName, tableName string) string {',
+        '\tends := i + batchSize',
+        '\tif ends > len(keys) {',
+        '\t\tends = len(keys)',
+        '\t}',
+        '\tbatch := keys[i:ends]',
+        '\treturn indexBaseName + "_" + tableName',
+        '}',
+      ];
+      // LLM old_string from deeply nested loop body (4 tabs)
+      const searchLines = [
+        '\t\t\t\tends := i + batchSize',
+        '\t\t\t\tif ends > len(keys) {',
+        '\t\t\t\t\tends = len(keys)',
+        '\t\t\t\t}',
+        '\t\t\t\tbatch := keys[i:ends]',
+      ];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // searchMinIndent=4, windowMinIndent=1, diff=3 tabs > 1 max
+      expect(result).toBeNull();
+    });
+
+    test('should allow zero indent search vs 1-tab content', () => {
+      const contentLines = ['\treturn x;'];
+      const searchLines = ['return x;'];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 1 tab, exactly at max
+      expect(result).not.toBeNull();
+      expect(result.matchedText).toBe('\treturn x;');
+    });
+
+    test('should reject zero indent search vs 2-tab content', () => {
+      const contentLines = ['\t\treturn x;'];
+      const searchLines = ['return x;'];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 2 tabs > 1 max
+      expect(result).toBeNull();
+    });
+
+    test('should allow zero indent search vs 4-space content (boundary)', () => {
+      const contentLines = ['    return x;'];
+      const searchLines = ['return x;'];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 4 spaces, exactly at max
+      expect(result).not.toBeNull();
+    });
+
+    test('should reject zero indent search vs 5-space content (just over boundary)', () => {
+      const contentLines = ['     return x;'];  // 5 spaces
+      const searchLines = ['return x;'];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 5 spaces > 4 max
+      expect(result).toBeNull();
+    });
+
+    test('should match when indent diff is exactly 0 (same level)', () => {
+      const contentLines = ['\t\t\tif (x) {', '\t\t\t\treturn 1;', '\t\t\t}'];
+      const searchLines = ['\t\t\tif (x) {', '\t\t\t\treturn 1;', '\t\t\t}'];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      expect(result).not.toBeNull();
+      expect(result.count).toBe(1);
+    });
+
+    test('should only match correctly-indented window among multiple candidates', () => {
+      // Two structurally identical blocks at different indent levels
+      const contentLines = [
+        '\tif (ok) {',         // 1-tab block
+        '\t\treturn true;',
+        '\t}',
+        '\t\t\t\tif (ok) {',  // 4-tab block
+        '\t\t\t\t\treturn true;',
+        '\t\t\t\t}',
+      ];
+      // Search at 3-tab indent
+      const searchLines = [
+        '\t\t\tif (ok) {',
+        '\t\t\t\treturn true;',
+        '\t\t\t}',
+      ];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // 1-tab block: diff = 2 tabs > 1 → rejected
+      // 4-tab block: diff = 1 tab = 1 → allowed
+      expect(result).not.toBeNull();
+      expect(result.count).toBe(1);
+      expect(result.matchedText).toBe('\t\t\t\tif (ok) {\n\t\t\t\t\treturn true;\n\t\t\t\t}');
+    });
+
+    test('should reject multi-line block with blank lines when indent diff too large (tabs)', () => {
+      const contentLines = [
+        '\tif (x) {',
+        '',
+        '\t\treturn y;',
+        '\t}',
+      ];
+      const searchLines = [
+        '\t\t\t\tif (x) {',
+        '',
+        '\t\t\t\t\treturn y;',
+        '\t\t\t\t}',
+      ];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 3 tabs > 1 max
+      expect(result).toBeNull();
+    });
+
+    test('should handle single-line with only whitespace difference at boundary', () => {
+      // 4 spaces vs 8 spaces = diff of 4, at boundary
+      const contentLines = ['        x = 1;'];  // 8 spaces
+      const searchLines = ['    x = 1;'];        // 4 spaces
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Diff = 4 spaces, exactly at max
+      expect(result).not.toBeNull();
+    });
+  });
+
+  describe('findFuzzyMatch with indent limits', () => {
+    test('should not match via indent-flexible for issue #507 scenario', () => {
+      // Even through the full orchestrator, the deeply-nested search should not
+      // fuzzy-match against shallow content
+      const content = [
+        'func buildIndexName() string {',
+        '\tends := i + batchSize',
+        '}',
+      ].join('\n');
+      const search = '\t\t\t\tends := i + batchSize';
+      const result = findFuzzyMatch(content, search);
+      // line-trimmed would match (it trims all whitespace), so it may still find it
+      // but that's OK — line-trimmed is a different, stricter strategy
+      if (result) {
+        // If it matches, it should NOT be via indent-flexible
+        expect(result.strategy).not.toBe('indent-flexible');
+      }
+    });
+
+    test('should still match via line-trimmed even when indent-flexible would reject', () => {
+      // line-trimmed compares trimmed lines, so indent diff doesn't matter
+      const content = '\t\t\t\treturn x + y;';
+      const search = '\treturn x + y;';
+      const result = findFuzzyMatch(content, search);
+      expect(result).not.toBeNull();
+      // line-trimmed is tried first and matches
+      expect(result.strategy).toBe('line-trimmed');
+    });
   });
 });

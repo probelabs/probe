@@ -200,6 +200,72 @@ describe('restoreIndentation', () => {
     expect(result).toBe(newStr);
     expect(modifications.length).toBe(0);
   });
+
+  test('should allow reindent at exactly 4-space boundary', () => {
+    // 4-space original, 0-space new → diff = 4, exactly at max
+    const newStr = 'return x;\nreturn y;';
+    const originalLines = ['    return x;', '    return y;'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    expect(result).toBe('    return x;\n    return y;');
+    expect(modifications.length).toBe(1);
+  });
+
+  test('should reject reindent at 5-space diff (just over boundary)', () => {
+    // 5-space original, 0-space new → diff = 5 > 4
+    const newStr = 'return x;';
+    const originalLines = ['     return x;'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    expect(result).toBe(newStr);
+    expect(modifications.length).toBe(0);
+  });
+
+  test('should allow zero indent to 1-tab reindent', () => {
+    const newStr = 'return x;';
+    const originalLines = ['\treturn x;'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    expect(result).toBe('\treturn x;');
+    expect(modifications.length).toBe(1);
+  });
+
+  test('should reject zero indent to 2-tab reindent', () => {
+    const newStr = 'return x;';
+    const originalLines = ['\t\treturn x;'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    expect(result).toBe(newStr);
+    expect(modifications.length).toBe(0);
+  });
+
+  test('should reject tab reindent for multi-line Go block (issue #507)', () => {
+    // Realistic scenario: replacement code at 4-tab indent, original at 1-tab
+    const newStr = '\t\t\t\tends := i + batchSize\n\t\t\t\tif ends > len(keys) {\n\t\t\t\t\tends = len(keys)\n\t\t\t\t}';
+    const originalLines = [
+      '\tends := i + batchSize',
+      '\tif ends > len(keys) {',
+      '\t\tends = len(keys)',
+      '\t}',
+    ];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    // Diff = 3 tabs > 1 max — should NOT reindent
+    expect(result).toBe(newStr);
+    expect(modifications.length).toBe(0);
+  });
+
+  test('should allow 2-space to 4-space reindent (diff=2, within space limit)', () => {
+    const newStr = '  if (x) {\n    return 1;\n  }';
+    const originalLines = ['    if (x) {', '      return 1;', '    }'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    expect(result).toBe('    if (x) {\n      return 1;\n    }');
+    expect(modifications.length).toBe(1);
+  });
+
+  test('should handle both sides being tab-indented at different levels', () => {
+    // 3-tab new vs 2-tab original → diff = 1 tab, allowed
+    const newStr = '\t\t\treturn x;';
+    const originalLines = ['\t\treturn x;'];
+    const { result, modifications } = restoreIndentation(newStr, originalLines);
+    expect(result).toBe('\t\treturn x;');
+    expect(modifications.length).toBe(1);
+  });
 });
 
 describe('cleanNewString', () => {
