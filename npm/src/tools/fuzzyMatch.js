@@ -80,13 +80,8 @@ export function lineTrimmedMatch(contentLines, searchLines) {
       const windowMinIndent = getMinIndent(windowLines);
       const searchMinIndent = getMinIndent(searchLines);
       const indentDiff = Math.abs(windowMinIndent - searchMinIndent);
-      if (indentDiff > 0) {
-        const sampleLine = windowLines.find(l => l.trim().length > 0) || searchLines.find(l => l.trim().length > 0) || '';
-        const useTabs = sampleLine.startsWith('\t');
-        const maxAllowedDiff = useTabs ? 1 : 4;
-        if (indentDiff > maxAllowedDiff) {
-          continue; // Skip — too far off in nesting
-        }
+      if (isIndentDiffTooLarge(windowLines, searchLines, indentDiff)) {
+        continue; // Skip — too far off in nesting
       }
       const matchedText = windowLines.join('\n');
       matches.push(matchedText);
@@ -157,14 +152,9 @@ export function whitespaceNormalizedMatch(content, search) {
     const matchMinIndent = getMinIndent(matchedLines);
     const searchMinIndent = getMinIndent(searchLines);
     const indentDiff = Math.abs(matchMinIndent - searchMinIndent);
-    if (indentDiff > 0) {
-      const sampleLine = matchedLines.find(l => l.trim().length > 0) || searchLines.find(l => l.trim().length > 0) || '';
-      const useTabs = sampleLine.startsWith('\t');
-      const maxAllowedDiff = useTabs ? 1 : 4;
-      if (indentDiff > maxAllowedDiff) {
-        searchStart = idx + 1;
-        continue; // Skip — too far off in nesting
-      }
+    if (isIndentDiffTooLarge(matchedLines, searchLines, indentDiff)) {
+      searchStart = idx + 1;
+      continue; // Skip — too far off in nesting
     }
 
     matches.push(matchedText);
@@ -258,14 +248,8 @@ export function indentFlexibleMatch(contentLines, searchLines) {
       // For tabs: 1 tab = 1 level, so max diff = 1.
       // For spaces: detect indent unit (2 or 4), allow 1 unit of difference.
       const indentDiff = Math.abs(windowMinIndent - searchMinIndent);
-      if (indentDiff > 0) {
-        // Detect whether indentation is tab-based or space-based
-        const sampleLine = windowLines.find(l => l.trim().length > 0) || searchLines.find(l => l.trim().length > 0) || '';
-        const useTabs = sampleLine.startsWith('\t');
-        const maxAllowedDiff = useTabs ? 1 : 4; // 1 tab or 4 spaces = 1 indent level
-        if (indentDiff > maxAllowedDiff) {
-          continue; // Skip — too far off in nesting
-        }
+      if (isIndentDiffTooLarge(windowLines, searchLines, indentDiff)) {
+        continue; // Skip — too far off in nesting
       }
       const matchedText = windowLines.join('\n');
       matches.push(matchedText);
@@ -278,6 +262,25 @@ export function indentFlexibleMatch(contentLines, searchLines) {
     matchedText: matches[0],
     count: matches.length,
   };
+}
+
+/**
+ * Check if an indentation difference exceeds the allowed limit.
+ * Uses tab-aware threshold: 1 for tabs, 4 for spaces.
+ * Checks BOTH sides for tab usage to avoid asymmetric detection.
+ *
+ * @param {string[]} linesA - First set of lines
+ * @param {string[]} linesB - Second set of lines
+ * @param {number} indentDiff - Absolute difference in min indent
+ * @returns {boolean} true if the diff exceeds the limit
+ */
+function isIndentDiffTooLarge(linesA, linesB, indentDiff) {
+  if (indentDiff <= 0) return false;
+  const sampleA = linesA.find(l => l.trim().length > 0) || '';
+  const sampleB = linesB.find(l => l.trim().length > 0) || '';
+  const useTabs = sampleA.startsWith('\t') || sampleB.startsWith('\t');
+  const maxAllowedDiff = useTabs ? 1 : 4;
+  return indentDiff > maxAllowedDiff;
 }
 
 /**

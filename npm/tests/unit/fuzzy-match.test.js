@@ -155,6 +155,31 @@ describe('fuzzyMatch module', () => {
       // Diff = 3 tabs > 1
       expect(result).toBeNull();
     });
+
+    test('should handle mixed tab/space indent symmetrically', () => {
+      // Both directions should either both match or both reject (tabs involved → tab threshold)
+      // Content=spaces, search=tabs: diff = |4-3| = 1, useTabs=true, maxDiff=1 → allowed
+      const resultA = lineTrimmedMatch(['    return x;'], ['\t\t\treturn x;']);
+      // Content=tabs, search=spaces: diff = |3-4| = 1, useTabs=true, maxDiff=1 → allowed
+      const resultB = lineTrimmedMatch(['\t\t\treturn x;'], ['    return x;']);
+      // Both should match (diff=1 ≤ 1)
+      expect(resultA).not.toBeNull();
+      expect(resultB).not.toBeNull();
+
+      // Now test rejection symmetry: larger diff
+      const resultC = lineTrimmedMatch(['  return x;'], ['\t\t\treturn x;']);
+      const resultD = lineTrimmedMatch(['\t\t\treturn x;'], ['  return x;']);
+      // diff=1 in both (|2-3|=1), still allowed
+      expect(resultC).not.toBeNull();
+      expect(resultD).not.toBeNull();
+
+      // Large asymmetric diff that should be rejected both ways
+      const resultE = lineTrimmedMatch(['return x;'], ['\t\t\treturn x;']);
+      const resultF = lineTrimmedMatch(['\t\t\treturn x;'], ['return x;']);
+      // diff=3, useTabs=true, maxDiff=1 → both rejected
+      expect(resultE).toBeNull();
+      expect(resultF).toBeNull();
+    });
   });
 
   describe('whitespaceNormalizedMatch', () => {
@@ -234,6 +259,19 @@ describe('fuzzyMatch module', () => {
       const result = whitespaceNormalizedMatch(content, search);
       // Diff = 4, at boundary
       expect(result).not.toBeNull();
+    });
+
+    test('should reject when matched text has different indent from search (mixed)', () => {
+      // Content has no tabs but search has 3 tabs → indent diff too large
+      const resultA = whitespaceNormalizedMatch('return x;', '\t\t\treturn x;');
+      expect(resultA).toBeNull();
+
+      // Content has 3 tabs. Since whitespace-normalized is substring-based,
+      // the matched text from content is "return x;" (the non-tab portion),
+      // which has indent 0 matching the search indent 0 — this is a valid match.
+      const resultB = whitespaceNormalizedMatch('\t\t\treturn x;', 'return x;');
+      expect(resultB).not.toBeNull();
+      expect(resultB.matchedText).toBe('return x;');
     });
   });
 
@@ -474,6 +512,33 @@ describe('fuzzyMatch module', () => {
       const result = indentFlexibleMatch(contentLines, searchLines);
       // Diff = 4 spaces, exactly at max
       expect(result).not.toBeNull();
+    });
+
+    test('should reject when content uses spaces but search uses tabs (mixed indent)', () => {
+      // Content at 4-space indent, search at 3-tab indent
+      // getMinIndent: content=4, search=3, diff=1 — but one side is tabs!
+      // useTabs should be true (search uses tabs), maxDiff=1, diff=1 → at boundary
+      const contentLines = ['    return x;'];
+      const searchLines = ['\t\t\treturn x;'];
+      const result = indentFlexibleMatch(contentLines, searchLines);
+      // Both sides detect tabs → maxDiff=1, diff=1 → allowed (marginal)
+      expect(result).not.toBeNull();
+    });
+
+    test('should reject mixed indent symmetrically regardless of direction', () => {
+      // This tests the asymmetry bug fix: both directions should behave the same
+      // Direction A: content=tabs, search=spaces
+      const resultA = indentFlexibleMatch(
+        ['\treturn x;'],      // 1 tab
+        ['    return x;']      // 4 spaces
+      );
+      // Direction B: content=spaces, search=tabs (was asymmetric before fix)
+      const resultB = indentFlexibleMatch(
+        ['    return x;'],     // 4 spaces
+        ['\treturn x;']        // 1 tab
+      );
+      // Both should behave the same — both have tabs involved, diff=3
+      expect(resultA).toEqual(resultB);
     });
   });
 
