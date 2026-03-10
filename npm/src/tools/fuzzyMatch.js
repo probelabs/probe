@@ -73,7 +73,17 @@ export function lineTrimmedMatch(contentLines, searchLines) {
       }
     }
     if (allMatch) {
-      const matchedText = contentLines.slice(i, i + windowSize).join('\n');
+      // Limit indent tolerance: even though trimmed content matches, reject when
+      // the indentation level difference is too large — it likely means the match
+      // is in a completely different scope (issue #507).
+      const windowLines = contentLines.slice(i, i + windowSize);
+      const windowMinIndent = getMinIndent(windowLines);
+      const searchMinIndent = getMinIndent(searchLines);
+      const indentDiff = Math.abs(windowMinIndent - searchMinIndent);
+      if (isIndentDiffTooLarge(windowLines, searchLines, indentDiff)) {
+        continue; // Skip — too far off in nesting
+      }
+      const matchedText = windowLines.join('\n');
       matches.push(matchedText);
     }
   }
@@ -134,6 +144,19 @@ export function whitespaceNormalizedMatch(content, search) {
     }
 
     const matchedText = content.substring(originalStart, actualEnd);
+
+    // Limit indent tolerance: reject matches where the indentation level
+    // difference is too large — likely a wrong-scope match (issue #507).
+    const matchedLines = matchedText.split('\n');
+    const searchLines = search.split('\n');
+    const matchMinIndent = getMinIndent(matchedLines);
+    const searchMinIndent = getMinIndent(searchLines);
+    const indentDiff = Math.abs(matchMinIndent - searchMinIndent);
+    if (isIndentDiffTooLarge(matchedLines, searchLines, indentDiff)) {
+      searchStart = idx + 1;
+      continue; // Skip — too far off in nesting
+    }
+
     matches.push(matchedText);
 
     searchStart = idx + 1;
@@ -219,6 +242,15 @@ export function indentFlexibleMatch(contentLines, searchLines) {
     }
 
     if (allMatch) {
+      // Limit indent tolerance: reject matches where indentation differs by more than
+      // 1 level. Larger differences likely mean the match is in a completely different
+      // scope/nesting level — silent file corruption risk (issue #507).
+      // For tabs: 1 tab = 1 level, so max diff = 1.
+      // For spaces: detect indent unit (2 or 4), allow 1 unit of difference.
+      const indentDiff = Math.abs(windowMinIndent - searchMinIndent);
+      if (isIndentDiffTooLarge(windowLines, searchLines, indentDiff)) {
+        continue; // Skip — too far off in nesting
+      }
       const matchedText = windowLines.join('\n');
       matches.push(matchedText);
     }
@@ -230,6 +262,25 @@ export function indentFlexibleMatch(contentLines, searchLines) {
     matchedText: matches[0],
     count: matches.length,
   };
+}
+
+/**
+ * Check if an indentation difference exceeds the allowed limit.
+ * Uses tab-aware threshold: 1 for tabs, 4 for spaces.
+ * Checks BOTH sides for tab usage to avoid asymmetric detection.
+ *
+ * @param {string[]} linesA - First set of lines
+ * @param {string[]} linesB - Second set of lines
+ * @param {number} indentDiff - Absolute difference in min indent
+ * @returns {boolean} true if the diff exceeds the limit
+ */
+function isIndentDiffTooLarge(linesA, linesB, indentDiff) {
+  if (indentDiff <= 0) return false;
+  const sampleA = linesA.find(l => l.trim().length > 0) || '';
+  const sampleB = linesB.find(l => l.trim().length > 0) || '';
+  const useTabs = sampleA.startsWith('\t') || sampleB.startsWith('\t');
+  const maxAllowedDiff = useTabs ? 1 : 4;
+  return indentDiff > maxAllowedDiff;
 }
 
 /**
