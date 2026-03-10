@@ -106,6 +106,55 @@ describe('fuzzyMatch module', () => {
       const result = lineTrimmedMatch(contentLines, searchLines);
       expect(result).toBeNull();
     });
+
+    test('should reject match when tab indent differs by >1 level (issue #507)', () => {
+      // LLM sends old_string at 4-tab indent, file has it at 1-tab
+      const contentLines = ['\tends := i + batchSize'];
+      const searchLines = ['\t\t\t\tends := i + batchSize'];
+      const result = lineTrimmedMatch(contentLines, searchLines);
+      // Trimmed content matches, but indent diff = 3 tabs > 1
+      expect(result).toBeNull();
+    });
+
+    test('should reject match when space indent differs by >4', () => {
+      const contentLines = ['  return x;'];      // 2 spaces
+      const searchLines = ['        return x;']; // 8 spaces
+      const result = lineTrimmedMatch(contentLines, searchLines);
+      // Diff = 6 spaces > 4
+      expect(result).toBeNull();
+    });
+
+    test('should allow match when tab indent differs by exactly 1', () => {
+      const contentLines = ['\treturn x;'];
+      const searchLines = ['\t\treturn x;'];
+      const result = lineTrimmedMatch(contentLines, searchLines);
+      expect(result).not.toBeNull();
+      expect(result.matchedText).toBe('\treturn x;');
+    });
+
+    test('should allow match when space indent differs by <=4', () => {
+      const contentLines = ['    return x;'];  // 4 spaces
+      const searchLines = ['return x;'];       // 0 spaces
+      const result = lineTrimmedMatch(contentLines, searchLines);
+      // Diff = 4, at boundary
+      expect(result).not.toBeNull();
+    });
+
+    test('should reject multi-line match with large tab indent difference', () => {
+      const contentLines = [
+        '\tif (ok) {',
+        '\t\treturn true;',
+        '\t}',
+      ];
+      const searchLines = [
+        '\t\t\t\tif (ok) {',
+        '\t\t\t\t\treturn true;',
+        '\t\t\t\t}',
+      ];
+      const result = lineTrimmedMatch(contentLines, searchLines);
+      // Diff = 3 tabs > 1
+      expect(result).toBeNull();
+    });
   });
 
   describe('whitespaceNormalizedMatch', () => {
@@ -146,6 +195,45 @@ describe('fuzzyMatch module', () => {
       const result = whitespaceNormalizedMatch(content, search);
       expect(result).not.toBeNull();
       expect(result.count).toBe(2);
+    });
+
+    test('should reject match when tab indent differs by >1 level (issue #507)', () => {
+      const content = '\tends := i + batchSize';
+      const search = '\t\t\t\tends := i + batchSize';
+      const result = whitespaceNormalizedMatch(content, search);
+      // Tabs collapse to single space in normalized form, so normalized strings match,
+      // but indent diff = 3 tabs > 1 max → reject
+      expect(result).toBeNull();
+    });
+
+    test('should allow match when tab indent differs by 1', () => {
+      const content = '\t\treturn x;';
+      const search = '\treturn x;';
+      const result = whitespaceNormalizedMatch(content, search);
+      expect(result).not.toBeNull();
+    });
+
+    test('should reject multi-line match with large tab indent diff', () => {
+      const content = '\tends := i + batchSize\n\tif ends > len(keys) {\n\t\tends = len(keys)\n\t}';
+      const search = '\t\t\t\tends := i + batchSize\n\t\t\t\tif ends > len(keys) {\n\t\t\t\t\tends = len(keys)\n\t\t\t\t}';
+      const result = whitespaceNormalizedMatch(content, search);
+      expect(result).toBeNull();
+    });
+
+    test('should reject match when space indent differs by >4', () => {
+      const content = '  return x;';
+      const search = '        return x;'; // 8 spaces
+      const result = whitespaceNormalizedMatch(content, search);
+      // Diff = 6 > 4
+      expect(result).toBeNull();
+    });
+
+    test('should allow match when space indent differs by <=4', () => {
+      const content = '    return x;';
+      const search = 'return x;';
+      const result = whitespaceNormalizedMatch(content, search);
+      // Diff = 4, at boundary
+      expect(result).not.toBeNull();
     });
   });
 
@@ -390,9 +478,8 @@ describe('fuzzyMatch module', () => {
   });
 
   describe('findFuzzyMatch with indent limits', () => {
-    test('should not match via indent-flexible for issue #507 scenario', () => {
-      // Even through the full orchestrator, the deeply-nested search should not
-      // fuzzy-match against shallow content
+    test('should return null for issue #507 scenario (all strategies reject)', () => {
+      // No strategy should match when indent diff is too large
       const content = [
         'func buildIndexName() string {',
         '\tends := i + batchSize',
@@ -400,22 +487,40 @@ describe('fuzzyMatch module', () => {
       ].join('\n');
       const search = '\t\t\t\tends := i + batchSize';
       const result = findFuzzyMatch(content, search);
-      // line-trimmed would match (it trims all whitespace), so it may still find it
-      // but that's OK — line-trimmed is a different, stricter strategy
-      if (result) {
-        // If it matches, it should NOT be via indent-flexible
-        expect(result.strategy).not.toBe('indent-flexible');
-      }
+      // All strategies reject: line-trimmed (indent diff=3 tabs), indent-flexible (same)
+      expect(result).toBeNull();
     });
 
-    test('should still match via line-trimmed even when indent-flexible would reject', () => {
-      // line-trimmed compares trimmed lines, so indent diff doesn't matter
-      const content = '\t\t\t\treturn x + y;';
+    test('should match via line-trimmed when indent diff is within limit', () => {
+      // 1-tab diff is acceptable for line-trimmed
+      const content = '\t\treturn x + y;';
       const search = '\treturn x + y;';
       const result = findFuzzyMatch(content, search);
       expect(result).not.toBeNull();
-      // line-trimmed is tried first and matches
       expect(result.strategy).toBe('line-trimmed');
+    });
+
+    test('issue #507 full Go scenario: no match through any strategy', () => {
+      const content = [
+        'func (c *SQLPump) buildIndexName(indexBaseName, tableName string) string {',
+        '\tends := i + batchSize',
+        '\tif ends > len(keys) {',
+        '\t\tends = len(keys)',
+        '\t}',
+        '\tbatch := keys[i:ends]',
+        '\treturn indexBaseName + "_" + tableName',
+        '}',
+      ].join('\n');
+      // LLM sends old_string at 4-tab indent (from a deeply nested loop)
+      const search = [
+        '\t\t\t\tends := i + batchSize',
+        '\t\t\t\tif ends > len(keys) {',
+        '\t\t\t\t\tends = len(keys)',
+        '\t\t\t\t}',
+        '\t\t\t\tbatch := keys[i:ends]',
+      ].join('\n');
+      const result = findFuzzyMatch(content, search);
+      expect(result).toBeNull();
     });
   });
 });

@@ -73,7 +73,22 @@ export function lineTrimmedMatch(contentLines, searchLines) {
       }
     }
     if (allMatch) {
-      const matchedText = contentLines.slice(i, i + windowSize).join('\n');
+      // Limit indent tolerance: even though trimmed content matches, reject when
+      // the indentation level difference is too large — it likely means the match
+      // is in a completely different scope (issue #507).
+      const windowLines = contentLines.slice(i, i + windowSize);
+      const windowMinIndent = getMinIndent(windowLines);
+      const searchMinIndent = getMinIndent(searchLines);
+      const indentDiff = Math.abs(windowMinIndent - searchMinIndent);
+      if (indentDiff > 0) {
+        const sampleLine = windowLines.find(l => l.trim().length > 0) || searchLines.find(l => l.trim().length > 0) || '';
+        const useTabs = sampleLine.startsWith('\t');
+        const maxAllowedDiff = useTabs ? 1 : 4;
+        if (indentDiff > maxAllowedDiff) {
+          continue; // Skip — too far off in nesting
+        }
+      }
+      const matchedText = windowLines.join('\n');
       matches.push(matchedText);
     }
   }
@@ -134,6 +149,24 @@ export function whitespaceNormalizedMatch(content, search) {
     }
 
     const matchedText = content.substring(originalStart, actualEnd);
+
+    // Limit indent tolerance: reject matches where the indentation level
+    // difference is too large — likely a wrong-scope match (issue #507).
+    const matchedLines = matchedText.split('\n');
+    const searchLines = search.split('\n');
+    const matchMinIndent = getMinIndent(matchedLines);
+    const searchMinIndent = getMinIndent(searchLines);
+    const indentDiff = Math.abs(matchMinIndent - searchMinIndent);
+    if (indentDiff > 0) {
+      const sampleLine = matchedLines.find(l => l.trim().length > 0) || searchLines.find(l => l.trim().length > 0) || '';
+      const useTabs = sampleLine.startsWith('\t');
+      const maxAllowedDiff = useTabs ? 1 : 4;
+      if (indentDiff > maxAllowedDiff) {
+        searchStart = idx + 1;
+        continue; // Skip — too far off in nesting
+      }
+    }
+
     matches.push(matchedText);
 
     searchStart = idx + 1;
