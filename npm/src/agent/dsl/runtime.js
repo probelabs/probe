@@ -181,9 +181,17 @@ export function createDSLRuntime(options) {
         'dsl.error': e.message?.substring(0, 500),
       });
 
+      // Enrich "X is not defined" errors with available tool names
+      let errorMsg = `Execution failed: ${e.message}`;
+      if (e.message && e.message.includes('is not defined')) {
+        const globalNames = Object.keys(toolGlobals).sort();
+        errorMsg += `\nAvailable functions: ${globalNames.join(', ')}`;
+        errorMsg += `\nNote: Tools with hyphens (e.g. "my-tool") are available with underscores: my_tool()`;
+      }
+
       return {
         status: 'error',
-        error: `Execution failed: ${e.message}`,
+        error: errorMsg,
         logs,
       };
     }

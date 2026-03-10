@@ -234,7 +234,14 @@ export function generateSandboxGlobals(options) {
         }
         return tryParseJSONValue(text);
       };
-      globals[name] = traceToolCall(name, rawMcpFn, tracer, logFn);
+      const tracedFn = traceToolCall(name, rawMcpFn, tracer, logFn);
+      globals[name] = tracedFn;
+      // Register sanitized alias for names with hyphens/dots/etc that aren't valid JS identifiers
+      // e.g. "workable-api" → also available as "workable_api"
+      const sanitized = name.replace(/[^a-zA-Z0-9_$]/g, '_');
+      if (sanitized !== name) {
+        globals[sanitized] = tracedFn;
+      }
     }
   }
 

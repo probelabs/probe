@@ -778,6 +778,7 @@ return table;
 - Do NOT define helper functions that call tools. Write all logic inline or use for..of loops.
 - Do NOT use regex literals (/pattern/) — use String methods like indexOf, includes, startsWith instead.
 - ONLY use functions listed below. Do NOT call functions that are not listed.
+- MCP tools with hyphens in their names (e.g. \`workable-api\`) are available using underscores: \`workable_api()\`. Hyphens are not valid in JS identifiers.
 
 ### Available functions
 
