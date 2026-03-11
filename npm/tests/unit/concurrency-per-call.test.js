@@ -509,6 +509,77 @@ describe('Per-LLM-call concurrency limiter — issue #512', () => {
       expect(limiter.totalReleases).toBe(1);
     });
 
+    test('engine stream wrapper acquires and releases slot', async () => {
+      async function* fakeEngineStream() {
+        yield 'chunk1';
+        yield 'chunk2';
+        yield 'chunk3';
+      }
+      const result = { textStream: fakeEngineStream(), usage: Promise.resolve({}) };
+      const wrapped = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, false);
+
+      expect(limiter.active).toBe(0);
+      const chunks = [];
+      for await (const chunk of wrapped.textStream) {
+        // Slot should be held while iterating
+        expect(limiter.active).toBe(1);
+        chunks.push(chunk);
+      }
+      expect(chunks).toEqual(['chunk1', 'chunk2', 'chunk3']);
+      expect(limiter.active).toBe(0);
+      expect(limiter.totalAcquires).toBe(1);
+      expect(limiter.totalReleases).toBe(1);
+    });
+
+    test('engine stream wrapper releases slot on error', async () => {
+      async function* failingEngineStream() {
+        yield 'ok';
+        throw new Error('engine error');
+      }
+      const result = { textStream: failingEngineStream(), usage: Promise.resolve({}) };
+      const wrapped = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, false);
+
+      const chunks = [];
+      try {
+        for await (const chunk of wrapped.textStream) {
+          chunks.push(chunk);
+        }
+      } catch (err) {
+        expect(err.message).toBe('engine error');
+      }
+      expect(chunks).toEqual(['ok']);
+      expect(limiter.active).toBe(0);
+      expect(limiter.totalReleases).toBe(1);
+    });
+
+    test('engine stream wrapper releases slot on early break', async () => {
+      async function* longEngineStream() {
+        yield 'a';
+        yield 'b';
+        yield 'c';
+        yield 'd';
+        yield 'e';
+      }
+      const result = { textStream: longEngineStream(), usage: Promise.resolve({}) };
+      const wrapped = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, false);
+
+      for await (const chunk of wrapped.textStream) {
+        if (chunk === 'b') break; // early exit
+      }
+      expect(limiter.active).toBe(0);
+      expect(limiter.totalReleases).toBe(1);
+    });
+
+    test('engine stream wrapper preserves other result properties', () => {
+      async function* emptyStream() {}
+      const usage = Promise.resolve({ tokens: 100 });
+      const result = { textStream: emptyStream(), usage, extra: 'metadata' };
+      const wrapped = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, false);
+
+      expect(wrapped.usage).toBe(usage);
+      expect(wrapped.extra).toBe('metadata');
+    });
+
     test('each retry attempt independently acquires and releases', async () => {
       let callCount = 0;
       const model = createMockModel();

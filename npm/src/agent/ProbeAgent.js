@@ -1490,6 +1490,38 @@ export class ProbeAgent {
   }
 
   /**
+   * Wrap an engine stream result so its textStream async generator acquires
+   * and releases a concurrency limiter slot. Acquire happens when iteration
+   * begins; release happens in finally (completion, error, or break).
+   *
+   * @param {Object} result - Engine result with { textStream, usage, ... }
+   * @param {Object} limiter - Concurrency limiter with acquire/release/getStats
+   * @param {boolean} debug - Enable debug logging
+   * @returns {Object} Result with wrapped textStream
+   * @private
+   */
+  static _wrapEngineStreamWithLimiter(result, limiter, debug) {
+    const originalStream = result.textStream;
+    async function* gatedStream() {
+      await limiter.acquire(null);
+      if (debug) {
+        const stats = limiter.getStats();
+        console.log(`[DEBUG] Acquired AI slot for engine stream (${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize})`);
+      }
+      try {
+        yield* originalStream;
+      } finally {
+        limiter.release(null);
+        if (debug) {
+          const stats = limiter.getStats();
+          console.log(`[DEBUG] Released AI slot after engine stream (${stats.globalActive}/${stats.maxConcurrent})`);
+        }
+      }
+    }
+    return { ...result, textStream: gatedStream() };
+  }
+
+  /**
    * Execute streamText with retry and fallback support
    * @param {Object} options - streamText options
    * @returns {Promise<Object>} - streamText result
@@ -1540,6 +1572,12 @@ export class ProbeAgent {
       if (useClaudeCode || useCodex) {
         try {
           result = await this._tryEngineStreamPath(options, controller, timeoutState);
+          // Gate engine stream with concurrency limiter if configured.
+          // Engine paths bypass the Vercel model wrapper, so we wrap the
+          // textStream async generator with acquire/release instead.
+          if (result && limiter) {
+            result = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, this.debug);
+          }
         } catch (error) {
           if (this.debug) {
             const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
