@@ -106,6 +106,10 @@ export interface ProbeAgentOptions {
   requestTimeout?: number;
   /** Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback. */
   maxOperationTimeout?: number;
+  /** Timeout behavior: 'graceful' winds down with bonus steps giving the agent a chance to respond, 'hard' aborts immediately (default: 'graceful'). Env var: TIMEOUT_BEHAVIOR */
+  timeoutBehavior?: 'graceful' | 'hard';
+  /** Number of bonus steps during graceful timeout wind-down (default: 4, range: 1-20). Env var: GRACEFUL_TIMEOUT_BONUS_STEPS */
+  gracefulTimeoutBonusSteps?: number;
 }
 
 /**

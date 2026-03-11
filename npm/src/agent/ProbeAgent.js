@@ -391,6 +391,23 @@ export class ProbeAgent {
       console.log(`[DEBUG] Max operation timeout: ${this.maxOperationTimeout}ms`);
     }
 
+    // Timeout behavior: 'graceful' (default) winds down with bonus steps, 'hard' aborts immediately
+    this.timeoutBehavior = options.timeoutBehavior ?? (() => {
+      const val = process.env.TIMEOUT_BEHAVIOR;
+      if (val === 'hard') return 'hard';
+      return 'graceful';
+    })();
+
+    // Number of bonus steps during graceful timeout wind-down (default 4)
+    this.gracefulTimeoutBonusSteps = options.gracefulTimeoutBonusSteps ?? (() => {
+      const parsed = parseInt(process.env.GRACEFUL_TIMEOUT_BONUS_STEPS, 10);
+      return (isNaN(parsed) || parsed < 1 || parsed > 20) ? 4 : parsed;
+    })();
+
+    if (this.debug) {
+      console.log(`[DEBUG] Timeout behavior: ${this.timeoutBehavior}, bonus steps: ${this.gracefulTimeoutBonusSteps}`);
+    }
+
     // Retry configuration
     this.retryConfig = options.retry || {};
     this.retryManager = null; // Will be initialized lazily when needed
@@ -1555,12 +1572,31 @@ export class ProbeAgent {
 
     // Set up overall operation timeout (default 5 minutes)
     if (this.maxOperationTimeout && this.maxOperationTimeout > 0) {
-      timeoutState.timeoutId = setTimeout(() => {
-        controller.abort();
-        if (this.debug) {
-          console.log(`[DEBUG] Operation timed out after ${this.maxOperationTimeout}ms (max operation timeout)`);
-        }
-      }, this.maxOperationTimeout);
+      const gts = this._gracefulTimeoutState;
+      if (this.timeoutBehavior === 'graceful' && gts) {
+        // Graceful mode: soft timeout sets wind-down flag, hard abort is safety net
+        timeoutState.timeoutId = setTimeout(() => {
+          gts.triggered = true;
+          if (this.debug) {
+            console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — entering wind-down mode (${gts.bonusStepsMax} bonus steps)`);
+          }
+          // Safety net: hard abort after 60s if wind-down doesn't complete
+          timeoutState.hardAbortId = setTimeout(() => {
+            controller.abort();
+            if (this.debug) {
+              console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
+            }
+          }, 60000);
+        }, this.maxOperationTimeout);
+      } else {
+        // Hard mode: immediate abort (legacy behavior)
+        timeoutState.timeoutId = setTimeout(() => {
+          controller.abort();
+          if (this.debug) {
+            console.log(`[DEBUG] Operation timed out after ${this.maxOperationTimeout}ms (max operation timeout)`);
+          }
+        }, this.maxOperationTimeout);
+      }
     }
 
     try {
@@ -1598,6 +1634,10 @@ export class ProbeAgent {
       if (timeoutState.timeoutId) {
         clearTimeout(timeoutState.timeoutId);
         timeoutState.timeoutId = null;
+      }
+      if (timeoutState.hardAbortId) {
+        clearTimeout(timeoutState.hardAbortId);
+        timeoutState.hardAbortId = null;
       }
     }
   }
@@ -3552,6 +3592,15 @@ Follow these instructions carefully:
       let completionPromptInjected = false;
       let preCompletionResult = null; // Stores the result before completionPrompt for fallback
 
+      // Graceful timeout state — shared between setTimeout (in streamTextWithRetryAndFallback)
+      // and prepareStep/stopWhen callbacks (in streamText loop)
+      const gracefulTimeoutState = {
+        triggered: false,      // Set to true when soft timeout fires
+        bonusStepsUsed: 0,     // Steps taken after soft timeout
+        bonusStepsMax: this.gracefulTimeoutBonusSteps
+      };
+      this._gracefulTimeoutState = gracefulTimeoutState;
+
       // Context compaction retry loop
       let compactionAttempted = false;
       while (true) {
@@ -3563,6 +3612,17 @@ Follow these instructions carefully:
             messages: messagesForAI,
             tools,
             stopWhen: ({ steps }) => {
+              // Graceful timeout wind-down: override normal limits, stop only when bonus steps exhausted
+              if (gracefulTimeoutState.triggered) {
+                if (gracefulTimeoutState.bonusStepsUsed >= gracefulTimeoutState.bonusStepsMax) {
+                  if (this.debug) {
+                    console.log(`[DEBUG] stopWhen: graceful timeout bonus steps exhausted (${gracefulTimeoutState.bonusStepsUsed}/${gracefulTimeoutState.bonusStepsMax}), forcing stop`);
+                  }
+                  return true;
+                }
+                return false; // Allow more bonus steps
+              }
+
               // Hard limit
               if (steps.length >= maxIterations) return true;
 
@@ -3622,6 +3682,35 @@ Follow these instructions carefully:
               return false;
             },
             prepareStep: ({ steps, stepNumber }) => {
+              // Graceful timeout wind-down: force text-only response with wrap-up reminder
+              if (gracefulTimeoutState.triggered) {
+                gracefulTimeoutState.bonusStepsUsed++;
+                const remaining = gracefulTimeoutState.bonusStepsMax - gracefulTimeoutState.bonusStepsUsed;
+
+                if (gracefulTimeoutState.bonusStepsUsed === 1) {
+                  // First wind-down step: inject wrap-up message
+                  if (this.debug) {
+                    console.log(`[DEBUG] prepareStep: graceful timeout wind-down step 1/${gracefulTimeoutState.bonusStepsMax}`);
+                  }
+                  if (this.tracer) {
+                    this.tracer.addEvent('graceful_timeout.wind_down_started', {
+                      bonus_steps_max: gracefulTimeoutState.bonusStepsMax,
+                      current_iteration: currentIteration,
+                      max_iterations: maxIterations
+                    });
+                  }
+                  return {
+                    toolChoice: 'none',
+                    userMessage: `⚠️ TIME LIMIT REACHED. You are running out of time. You have ${remaining} step(s) remaining. Provide your BEST answer NOW using the information you have already gathered. Do NOT call any more tools. Summarize your findings and respond completely. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`
+                  };
+                }
+
+                if (this.debug) {
+                  console.log(`[DEBUG] prepareStep: graceful timeout wind-down step ${gracefulTimeoutState.bonusStepsUsed}/${gracefulTimeoutState.bonusStepsMax} (${remaining} remaining)`);
+                }
+                return { toolChoice: 'none' };
+              }
+
               // Last-iteration warning
               if (stepNumber === maxIterations - 1) {
                 return {
@@ -3746,6 +3835,14 @@ Double-check your response based on the criteria above. If everything looks good
                   }));
                 }
                 this.tracer.addEvent('iteration.step', stepEvent);
+
+                // Track graceful timeout wind-down steps
+                if (gracefulTimeoutState.triggered) {
+                  this.tracer.addEvent('graceful_timeout.wind_down_step', {
+                    bonus_step: gracefulTimeoutState.bonusStepsUsed,
+                    bonus_max: gracefulTimeoutState.bonusStepsMax
+                  });
+                }
               }
 
               // Record token usage
