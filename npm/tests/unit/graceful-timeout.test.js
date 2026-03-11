@@ -414,3 +414,133 @@ describe('Full wind-down cycle simulation', () => {
     expect(stopWhen({ steps: manySteps })).toBe(true);
   });
 });
+
+// ---- Empty-text fallback tests ----------------------------------------------
+
+describe('Graceful timeout empty-text fallback', () => {
+  function createMockedAgent(opts = {}) {
+    const agent = createAgent(opts);
+    jest.spyOn(agent, 'getSystemMessage').mockResolvedValue('You are a test agent.');
+    jest.spyOn(agent, 'prepareMessagesWithImages').mockImplementation(msgs => msgs);
+    jest.spyOn(agent, '_buildThinkingProviderOptions').mockReturnValue(null);
+    agent.provider = null;
+    return agent;
+  }
+
+  test('uses concatenated step text when wind-down produces empty finalText', async () => {
+    const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
+
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => {
+      // Simulate: timeout triggers during the await of result.steps
+      // Force the graceful timeout state to be triggered
+      agent._gracefulTimeoutState.triggered = true;
+      return {
+        // Last step has empty text (finishReason: 'other'), but step 1 has useful text
+        text: Promise.resolve('Some useful intermediate text from step 1'),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.resolve([
+          { text: 'Some useful intermediate text from step 1', finishReason: 'tool-calls', toolCalls: [{ toolName: 'search' }] },
+          { text: '', finishReason: 'other', toolCalls: [] },
+        ]),
+      };
+    });
+
+    const result = await agent.answer('test question');
+    // Should use the concatenated text instead of the default fallback
+    expect(result).toContain('Some useful intermediate text');
+    expect(result).not.toContain('unable to complete');
+  });
+
+  test('builds fallback from tool results when all step texts are empty', async () => {
+    const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
+
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => {
+      agent._gracefulTimeoutState.triggered = true;
+      return {
+        text: Promise.resolve(''),  // All step texts empty
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.resolve([
+          {
+            text: '',
+            finishReason: 'tool-calls',
+            toolCalls: [{ toolName: 'search' }],
+            toolResults: [{ result: 'BM25 is a ranking algorithm used in src/ranking.rs' }],
+          },
+          { text: '', finishReason: 'other', toolCalls: [], toolResults: [] },
+        ]),
+      };
+    });
+
+    const result = await agent.answer('test question');
+    expect(result).toContain('timed out');
+    expect(result).toContain('partial information');
+    expect(result).toContain('BM25 is a ranking algorithm');
+  });
+
+  test('uses generic timeout message when no tool results available', async () => {
+    const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
+
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => {
+      agent._gracefulTimeoutState.triggered = true;
+      return {
+        text: Promise.resolve(''),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.resolve([
+          { text: '', finishReason: 'other', toolCalls: [], toolResults: [] },
+        ]),
+      };
+    });
+
+    const result = await agent.answer('test question');
+    expect(result).toContain('timed out');
+    expect(result).toContain('try again');
+  });
+
+  test('does not trigger fallback when timeout did not fire', async () => {
+    const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
+
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => {
+      // gracefulTimeoutState.triggered stays false
+      return {
+        text: Promise.resolve('Normal response text'),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.resolve([
+          { text: 'Normal response text', finishReason: 'stop', toolCalls: [] },
+        ]),
+      };
+    });
+
+    const result = await agent.answer('test question');
+    expect(result).toBe('Normal response text');
+  });
+
+  test('does not trigger fallback when wind-down produces non-empty text', async () => {
+    const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
+
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => {
+      agent._gracefulTimeoutState.triggered = true;
+      return {
+        text: Promise.resolve('Model successfully wrapped up with partial results'),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.resolve([
+          { text: '', finishReason: 'tool-calls', toolCalls: [{ toolName: 'search' }] },
+          { text: 'Model successfully wrapped up with partial results', finishReason: 'stop', toolCalls: [] },
+        ]),
+      };
+    });
+
+    const result = await agent.answer('test question');
+    expect(result).toBe('Model successfully wrapped up with partial results');
+    expect(result).not.toContain('timed out');
+  });
+});
