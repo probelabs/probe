@@ -465,5 +465,84 @@ describe('Per-LLM-call concurrency limiter — issue #512', () => {
       expect(limiter.totalAcquires).toBe(3);
       expect(limiter.totalReleases).toBe(3);
     });
+
+    test('cancel during in-flight pull does not double-release', async () => {
+      // Simulate a slow stream where cancel races with an in-flight read.
+      // Without the releaseOnce guard this would release twice → active goes to -1.
+      const model = createMockModel();
+      let readResolve;
+      model.doStream = async () => {
+        let callCount = 0;
+        const stream = new ReadableStream({
+          pull(controller) {
+            callCount++;
+            if (callCount === 1) {
+              controller.enqueue({ type: 'text-delta', textDelta: 'first' });
+            } else {
+              // Second pull blocks until externally resolved — simulates slow read
+              return new Promise(resolve => { readResolve = resolve; });
+            }
+          }
+        });
+        return { stream, rawCall: { rawPrompt: null, rawSettings: {} } };
+      };
+
+      const wrapped = ProbeAgent._wrapModelWithLimiter(model, limiter, false);
+      const result = await wrapped.doStream({});
+      expect(limiter.active).toBe(1);
+
+      const reader = result.stream.getReader();
+      // Read first chunk (succeeds immediately)
+      await reader.read();
+
+      // Now the stream's pull is blocked on the slow second read.
+      // Cancel the stream — this should release the slot once.
+      await reader.cancel();
+
+      // Resolve the blocked pull so it runs to completion
+      if (readResolve) readResolve();
+      // Give microtask queue time to settle
+      await new Promise(r => setTimeout(r, 20));
+
+      // The critical assertion: active must be exactly 0, not -1
+      expect(limiter.active).toBe(0);
+      expect(limiter.totalReleases).toBe(1);
+    });
+
+    test('each retry attempt independently acquires and releases', async () => {
+      let callCount = 0;
+      const model = createMockModel();
+      model.doStream = async () => {
+        callCount++;
+        if (callCount <= 2) {
+          throw new Error(`transient error ${callCount}`);
+        }
+        // Third call succeeds
+        const stream = new ReadableStream({
+          pull(controller) { controller.close(); }
+        });
+        return { stream, rawCall: { rawPrompt: null, rawSettings: {} } };
+      };
+
+      const wrapped = ProbeAgent._wrapModelWithLimiter(model, limiter, false);
+
+      // First two calls fail (acquire + release on error each time)
+      await expect(wrapped.doStream({})).rejects.toThrow('transient error 1');
+      expect(limiter.active).toBe(0);
+      expect(limiter.totalAcquires).toBe(1);
+      expect(limiter.totalReleases).toBe(1);
+
+      await expect(wrapped.doStream({})).rejects.toThrow('transient error 2');
+      expect(limiter.active).toBe(0);
+      expect(limiter.totalAcquires).toBe(2);
+      expect(limiter.totalReleases).toBe(2);
+
+      // Third call succeeds
+      const result = await wrapped.doStream({});
+      await consumeStream(result.stream);
+      expect(limiter.active).toBe(0);
+      expect(limiter.totalAcquires).toBe(3);
+      expect(limiter.totalReleases).toBe(3);
+    });
   });
 });

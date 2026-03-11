@@ -1410,15 +1410,24 @@ export class ProbeAgent {
 
               // Wrap the ReadableStream to release the slot when it completes,
               // errors, or is cancelled — covering all stream termination paths.
+              // Guard against double-release: if cancel() races with an in-flight
+              // pull() that is awaiting originalReader.read(), both paths could
+              // try to release. The flag ensures exactly one release.
               const originalStream = result.stream;
               const originalReader = originalStream.getReader();
+              let released = false;
+              const releaseOnce = () => {
+                if (released) return;
+                released = true;
+                limiter.release(null);
+              };
               const wrappedStream = new ReadableStream({
                 async pull(controller) {
                   try {
                     const { done, value } = await originalReader.read();
                     if (done) {
                       controller.close();
-                      limiter.release(null);
+                      releaseOnce();
                       if (debug) {
                         const stats = limiter.getStats();
                         console.log(`[DEBUG] Released AI slot after LLM stream complete (${stats.globalActive}/${stats.maxConcurrent})`);
@@ -1427,7 +1436,7 @@ export class ProbeAgent {
                       controller.enqueue(value);
                     }
                   } catch (err) {
-                    limiter.release(null);
+                    releaseOnce();
                     if (debug) {
                       console.log(`[DEBUG] Released AI slot on LLM stream error`);
                     }
@@ -1435,7 +1444,7 @@ export class ProbeAgent {
                   }
                 },
                 cancel() {
-                  limiter.release(null);
+                  releaseOnce();
                   if (debug) {
                     console.log(`[DEBUG] Released AI slot on LLM stream cancel`);
                   }
