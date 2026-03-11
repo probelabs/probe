@@ -12,8 +12,21 @@
  */
 
 import { createHash } from 'crypto';
-import { resolve, isAbsolute } from 'path';
+import { resolve, isAbsolute, normalize } from 'path';
 import { findSymbol } from './symbolEdit.js';
+
+/**
+ * Normalize a file path for consistent storage and lookup.
+ * Resolves '.', '..', double slashes, and ensures absolute paths are canonical.
+ * Does NOT resolve symlinks (that would be expensive and might fail for non-existent files).
+ * @param {string} filePath - Path to normalize
+ * @returns {string} Normalized path
+ */
+function normalizePath(filePath) {
+  if (!filePath) return filePath;
+  // resolve() handles '.', '..', double slashes, and makes the path absolute
+  return resolve(filePath);
+}
 
 /**
  * Compute a SHA-256 content hash for a code block.
@@ -106,10 +119,11 @@ export class FileTracker {
    * @param {string} resolvedPath - Absolute path to the file
    */
   markFileSeen(resolvedPath) {
-    this._seenFiles.add(resolvedPath);
-    this._textEditCounts.set(resolvedPath, 0);
+    const normalized = normalizePath(resolvedPath);
+    this._seenFiles.add(normalized);
+    this._textEditCounts.set(normalized, 0);
     if (this.debug) {
-      console.error(`[FileTracker] Marked as seen: ${resolvedPath}`);
+      console.error(`[FileTracker] Marked as seen: ${normalized}`);
     }
   }
 
@@ -119,7 +133,7 @@ export class FileTracker {
    * @returns {boolean}
    */
   isFileSeen(resolvedPath) {
-    return this._seenFiles.has(resolvedPath);
+    return this._seenFiles.has(normalizePath(resolvedPath));
   }
 
   /**
@@ -132,7 +146,7 @@ export class FileTracker {
    * @param {string} [source='extract'] - How the content was obtained
    */
   trackSymbolContent(resolvedPath, symbolName, code, startLine, endLine, source = 'extract') {
-    const key = `${resolvedPath}#${symbolName}`;
+    const key = `${normalizePath(resolvedPath)}#${symbolName}`;
     const contentHash = computeContentHash(code);
     this._contentRecords.set(key, {
       contentHash,
@@ -154,7 +168,7 @@ export class FileTracker {
    * @returns {Object|null} The stored record or null
    */
   getSymbolRecord(resolvedPath, symbolName) {
-    return this._contentRecords.get(`${resolvedPath}#${symbolName}`) || null;
+    return this._contentRecords.get(`${normalizePath(resolvedPath)}#${symbolName}`) || null;
   }
 
   /**
@@ -165,7 +179,7 @@ export class FileTracker {
    * @returns {{ok: boolean, reason?: string, message?: string}}
    */
   checkSymbolContent(resolvedPath, symbolName, currentCode) {
-    const key = `${resolvedPath}#${symbolName}`;
+    const key = `${normalizePath(resolvedPath)}#${symbolName}`;
     const record = this._contentRecords.get(key);
 
     if (!record) {
@@ -253,7 +267,7 @@ export class FileTracker {
    * @returns {{ok: boolean, reason?: string, message?: string}}
    */
   checkBeforeEdit(resolvedPath) {
-    if (!this._seenFiles.has(resolvedPath)) {
+    if (!this._seenFiles.has(normalizePath(resolvedPath))) {
       return {
         ok: false,
         reason: 'untracked',
@@ -269,8 +283,9 @@ export class FileTracker {
    * @param {string} resolvedPath - Absolute path to the file
    */
   async trackFileAfterWrite(resolvedPath) {
-    this._seenFiles.add(resolvedPath);
-    this.invalidateFileRecords(resolvedPath);
+    const normalized = normalizePath(resolvedPath);
+    this._seenFiles.add(normalized);
+    this.invalidateFileRecords(normalized);
   }
 
   /**
@@ -279,10 +294,11 @@ export class FileTracker {
    * @param {string} resolvedPath - Absolute path to the file
    */
   recordTextEdit(resolvedPath) {
-    const count = (this._textEditCounts.get(resolvedPath) || 0) + 1;
-    this._textEditCounts.set(resolvedPath, count);
+    const normalized = normalizePath(resolvedPath);
+    const count = (this._textEditCounts.get(normalized) || 0) + 1;
+    this._textEditCounts.set(normalized, count);
     if (this.debug) {
-      console.error(`[FileTracker] Text edit #${count} for ${resolvedPath}`);
+      console.error(`[FileTracker] Text edit #${count} for ${normalized}`);
     }
   }
 
@@ -292,7 +308,7 @@ export class FileTracker {
    * @returns {{ok: boolean, editCount?: number, message?: string}}
    */
   checkTextEditStaleness(resolvedPath) {
-    const count = this._textEditCounts.get(resolvedPath) || 0;
+    const count = this._textEditCounts.get(normalizePath(resolvedPath)) || 0;
     if (count >= this.maxConsecutiveTextEdits) {
       return {
         ok: false,
@@ -323,7 +339,7 @@ export class FileTracker {
    * @param {string} resolvedPath - Absolute path to the file
    */
   invalidateFileRecords(resolvedPath) {
-    const prefix = resolvedPath + '#';
+    const prefix = normalizePath(resolvedPath) + '#';
     for (const key of this._contentRecords.keys()) {
       if (key.startsWith(prefix)) {
         this._contentRecords.delete(key);
@@ -340,7 +356,7 @@ export class FileTracker {
    * @returns {boolean}
    */
   isTracked(resolvedPath) {
-    return this.isFileSeen(resolvedPath);
+    return this.isFileSeen(normalizePath(resolvedPath));
   }
 
   /**

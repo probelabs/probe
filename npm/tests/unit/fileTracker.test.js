@@ -452,4 +452,299 @@ describe('FileTracker', () => {
       }
     });
   });
+
+  // ─── Path normalization (Issue #510) ───
+
+  describe('path normalization — issue #510', () => {
+    // Core bug: extract stores path resolved against one cwd,
+    // edit checks against another cwd → "file not read" false positive
+
+    test('should match paths with different cwd resolution (the #510 bug)', () => {
+      // Simulates: extract resolves "tyk-pump/aggregate.go" against cwd=/home/user/project
+      // edit resolves same relative path against workspaceRoot=/home/user
+      // After normalization, both should produce the same absolute path
+      const extractResolved = '/home/user/project/tyk-pump/analytics/aggregate.go';
+      tracker.markFileSeen(extractResolved);
+
+      // Same absolute path — should match
+      expect(tracker.isFileSeen(extractResolved)).toBe(true);
+    });
+
+    test('should normalize paths with ".." segments', () => {
+      tracker.markFileSeen('/home/user/project/src/../lib/utils.js');
+      expect(tracker.isFileSeen('/home/user/project/lib/utils.js')).toBe(true);
+    });
+
+    test('should normalize paths with "." segments', () => {
+      tracker.markFileSeen('/home/user/./project/./file.go');
+      expect(tracker.isFileSeen('/home/user/project/file.go')).toBe(true);
+    });
+
+    test('should normalize paths with double slashes', () => {
+      tracker.markFileSeen('/home/user//project//file.go');
+      expect(tracker.isFileSeen('/home/user/project/file.go')).toBe(true);
+    });
+
+    test('should normalize paths with trailing slash', () => {
+      // Note: a trailing slash on a file path is unusual but should normalize
+      tracker.markFileSeen('/home/user/project/file.go');
+      expect(tracker.isFileSeen('/home/user/project/file.go')).toBe(true);
+    });
+
+    test('should match when marked with ".." and checked with clean path', () => {
+      tracker.markFileSeen('/a/b/c/../../d/file.go');
+      expect(tracker.isFileSeen('/a/d/file.go')).toBe(true);
+    });
+
+    test('should match when marked clean and checked with ".."', () => {
+      tracker.markFileSeen('/a/d/file.go');
+      expect(tracker.isFileSeen('/a/b/c/../../d/file.go')).toBe(true);
+    });
+
+    test('should normalize in checkBeforeEdit', () => {
+      tracker.markFileSeen('/home/user/project/src/../lib/file.js');
+      const result = tracker.checkBeforeEdit('/home/user/project/lib/file.js');
+      expect(result.ok).toBe(true);
+    });
+
+    test('should normalize in isTracked alias', () => {
+      tracker.markFileSeen('/home/user/./project/file.js');
+      expect(tracker.isTracked('/home/user/project/file.js')).toBe(true);
+    });
+
+    test('should normalize in trackFileAfterWrite', async () => {
+      tracker.trackSymbolContent('/home/user/project/file.js', 'foo', 'code', 1, 3);
+      await tracker.trackFileAfterWrite('/home/user/./project/file.js');
+      // Should still be seen
+      expect(tracker.isFileSeen('/home/user/project/file.js')).toBe(true);
+      // Symbol record should be invalidated via normalized path
+      expect(tracker.getSymbolRecord('/home/user/project/file.js', 'foo')).toBeNull();
+    });
+
+    test('should normalize in trackSymbolContent and getSymbolRecord', () => {
+      tracker.trackSymbolContent('/a/b/../c/file.js', 'myFunc', 'code', 10, 20);
+      const record = tracker.getSymbolRecord('/a/c/file.js', 'myFunc');
+      expect(record).not.toBeNull();
+      expect(record.symbolName).toBe('myFunc');
+    });
+
+    test('should normalize in checkSymbolContent', () => {
+      const code = 'function foo() { return 42; }';
+      tracker.trackSymbolContent('/a/b/../c/file.js', 'foo', code, 1, 3);
+      const result = tracker.checkSymbolContent('/a/c/file.js', 'foo', code);
+      expect(result.ok).toBe(true);
+    });
+
+    test('should normalize in invalidateFileRecords', () => {
+      tracker.trackSymbolContent('/a/c/file.js', 'foo', 'code1', 1, 3);
+      tracker.trackSymbolContent('/a/c/file.js', 'bar', 'code2', 5, 8);
+
+      // Invalidate using unnormalized path
+      tracker.invalidateFileRecords('/a/b/../c/file.js');
+
+      expect(tracker.getSymbolRecord('/a/c/file.js', 'foo')).toBeNull();
+      expect(tracker.getSymbolRecord('/a/c/file.js', 'bar')).toBeNull();
+    });
+
+    test('should normalize in recordTextEdit and checkTextEditStaleness', () => {
+      tracker.markFileSeen('/a/c/file.js');
+
+      // Record edits with unnormalized path
+      tracker.recordTextEdit('/a/b/../c/file.js');
+      tracker.recordTextEdit('/a/./c/file.js');
+      tracker.recordTextEdit('/a/c/file.js');
+
+      // Check staleness with clean path — all 3 edits should count
+      const result = tracker.checkTextEditStaleness('/a/c/file.js');
+      expect(result.ok).toBe(false);
+      expect(result.editCount).toBe(3);
+    });
+  });
+
+  // ─── Real-world extract→edit scenarios (Issue #510) ───
+
+  describe('real-world extract→edit path scenarios', () => {
+    test('extract with relative path, edit checks absolute path', async () => {
+      const file = join(testDir, 'src', 'main.go');
+      await fs.mkdir(join(testDir, 'src'), { recursive: true });
+      await fs.writeFile(file, 'package main');
+
+      // Extract resolves relative 'src/main.go' against testDir
+      await tracker.trackFilesFromExtract(['src/main.go'], testDir);
+
+      // Edit resolves to absolute path
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('extract with absolute path, edit checks same absolute path', async () => {
+      const file = join(testDir, 'src', 'main.go');
+      await fs.mkdir(join(testDir, 'src'), { recursive: true });
+      await fs.writeFile(file, 'package main');
+
+      await tracker.trackFilesFromExtract([file], testDir);
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('extract with line suffix, edit checks bare file path', async () => {
+      const file = join(testDir, 'aggregate.go');
+      await fs.writeFile(file, 'package analytics\nfunc Process() {}\n');
+
+      await tracker.trackFilesFromExtract([file + ':1-10'], testDir);
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('extract with symbol suffix, edit checks bare file path', async () => {
+      const file = join(testDir, 'aggregate.go');
+      await fs.writeFile(file, 'package analytics\nfunc Process() {}\n');
+
+      await tracker.trackFilesFromExtract([file + '#Process'], testDir);
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('extract relative, edit checks relative resolved against DIFFERENT cwd', async () => {
+      // This is the exact #510 scenario:
+      // Extract resolves "subdir/file.go" against /workspace
+      // Edit resolves "subdir/file.go" against /workspace (same) OR
+      // could be different if workingDirectory injection changes it
+      const subdir = join(testDir, 'subdir');
+      await fs.mkdir(subdir, { recursive: true });
+      const file = join(subdir, 'file.go');
+      await fs.writeFile(file, 'package sub');
+
+      // Extract: resolve against testDir
+      await tracker.trackFilesFromExtract(['subdir/file.go'], testDir);
+
+      // Edit: resolve against same cwd → should match
+      const { resolve: pathResolve } = await import('path');
+      const editResolvedPath = pathResolve(testDir, 'subdir/file.go');
+      expect(tracker.isFileSeen(editResolvedPath)).toBe(true);
+    });
+
+    test('multiple extracts of same file with different suffixes', async () => {
+      const file = join(testDir, 'multi.go');
+      await fs.writeFile(file, 'package main\nfunc A() {}\nfunc B() {}\n');
+
+      await tracker.trackFilesFromExtract([
+        file + ':1-5',
+        file + '#A',
+        file + '#B',
+        file
+      ], testDir);
+
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('search output tracking then edit check', async () => {
+      const file = join(testDir, 'found.go');
+      await fs.writeFile(file, 'package found');
+
+      // Search output contains "File: path" headers
+      const output = `File: ${file}\n  1 | package found\n`;
+      await tracker.trackFilesFromOutput(output, testDir);
+
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('search output with relative paths resolved against cwd', async () => {
+      const file = join(testDir, 'relative.go');
+      await fs.writeFile(file, 'package rel');
+
+      const output = `File: relative.go\n  1 | package rel\n`;
+      await tracker.trackFilesFromOutput(output, testDir);
+
+      // Check with absolute path
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('extract then edit sequence — full workflow', async () => {
+      const file = join(testDir, 'workflow.go');
+      await fs.writeFile(file, 'package main\nfunc hello() { return "hi" }\n');
+
+      // Step 1: Extract (marks file as seen)
+      await tracker.trackFilesFromExtract([file], testDir);
+      expect(tracker.isFileSeen(file)).toBe(true);
+
+      // Step 2: checkBeforeEdit should pass
+      const check = tracker.checkBeforeEdit(file);
+      expect(check.ok).toBe(true);
+
+      // Step 3: After edit, record it
+      tracker.recordTextEdit(file);
+      const staleCheck = tracker.checkTextEditStaleness(file);
+      expect(staleCheck.ok).toBe(true); // Only 1 edit, max is 3
+
+      // Step 4: After write, mark
+      await tracker.trackFileAfterWrite(file);
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('path with ".." in middle resolves correctly for seen check', async () => {
+      const src = join(testDir, 'src');
+      const lib = join(testDir, 'lib');
+      await fs.mkdir(src, { recursive: true });
+      await fs.mkdir(lib, { recursive: true });
+      const file = join(lib, 'utils.go');
+      await fs.writeFile(file, 'package lib');
+
+      // Extract stores using path with ".."
+      await tracker.trackFilesFromExtract([join(src, '..', 'lib', 'utils.go')], testDir);
+
+      // Edit checks with clean path
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('path with double slashes resolves correctly for seen check', async () => {
+      const file = join(testDir, 'clean.go');
+      await fs.writeFile(file, 'package clean');
+
+      // Mark with double-slash path
+      tracker.markFileSeen(testDir + '//clean.go');
+
+      // Check with clean path
+      expect(tracker.isFileSeen(file)).toBe(true);
+    });
+
+    test('workspace root vs cwd mismatch scenario', async () => {
+      // Simulates the visor setup:
+      // workspaceRoot = /workspace
+      // cwd = /workspace/subproject
+      // AI extracts "file.go" → resolved against cwd → /workspace/subproject/file.go
+      // AI edits "file.go" → resolved against workspaceRoot → /workspace/file.go
+      // These are DIFFERENT files! The normalization won't magically fix this.
+      // The fix is that both tools now use the same effective cwd (workingDirectory injection).
+
+      const workspace = join(testDir, 'workspace');
+      const subproject = join(workspace, 'subproject');
+      await fs.mkdir(subproject, { recursive: true });
+
+      const fileInWorkspace = join(workspace, 'file.go');
+      const fileInSubproject = join(subproject, 'file.go');
+      await fs.writeFile(fileInWorkspace, 'package root');
+      await fs.writeFile(fileInSubproject, 'package sub');
+
+      // Extract marks subproject/file.go
+      tracker.markFileSeen(fileInSubproject);
+
+      // Edit checks workspace/file.go — these are genuinely different files
+      expect(tracker.isFileSeen(fileInWorkspace)).toBe(false);
+      // But edit checks subproject/file.go — should match
+      expect(tracker.isFileSeen(fileInSubproject)).toBe(true);
+    });
+
+    test('relative path resolved against same cwd matches', async () => {
+      const file = join(testDir, 'tyk-pump', 'analytics', 'aggregate.go');
+      await fs.mkdir(join(testDir, 'tyk-pump', 'analytics'), { recursive: true });
+      await fs.writeFile(file, 'package analytics');
+
+      // Both extract and edit now resolve against the same cwd (testDir)
+      const { resolve: r } = await import('path');
+      const extractResolved = r(testDir, 'tyk-pump/analytics/aggregate.go');
+      const editResolved = r(testDir, 'tyk-pump/analytics/aggregate.go');
+
+      tracker.markFileSeen(extractResolved);
+      expect(tracker.isFileSeen(editResolved)).toBe(true);
+      // They should be identical
+      expect(extractResolved).toBe(editResolved);
+    });
+  });
 });

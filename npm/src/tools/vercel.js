@@ -385,7 +385,7 @@ export const searchTool = (options = {}) => {
 			? searchDelegateDescription
 			: searchDescription,
 		inputSchema: searchSchema,
-		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage }) => {
+		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage, workingDirectory }) => {
 			// Auto-quote mixed-case and underscore terms to prevent unwanted stemming/splitting
 			// Skip when exact=true since that already preserves the literal string
 			if (!exact && searchQuery) {
@@ -399,15 +399,18 @@ export const searchTool = (options = {}) => {
 			// Use parameter maxTokens if provided, otherwise use the default
 			const effectiveMaxTokens = paramMaxTokens || maxTokens;
 
+			// Use workingDirectory (injected by _buildNativeTools at runtime) > cwd from config > fallback
+			const effectiveSearchCwd = workingDirectory || options.cwd || '.';
+
 			// Parse and resolve paths (supports comma-separated and relative paths)
 			let searchPaths;
 			if (path) {
-				searchPaths = parseAndResolvePaths(path, options.cwd);
+				searchPaths = parseAndResolvePaths(path, effectiveSearchCwd);
 			}
 
 			// Default to cwd or '.' if no paths provided
 			if (!searchPaths || searchPaths.length === 0) {
-				searchPaths = [options.cwd || '.'];
+				searchPaths = [effectiveSearchCwd];
 			}
 
 			// Join paths with space for CLI (probe search supports multiple paths)
@@ -416,7 +419,7 @@ export const searchTool = (options = {}) => {
 			const searchOptions = {
 				query: searchQuery,
 				path: searchPath,
-				cwd: options.cwd, // Working directory for resolving relative paths
+				cwd: effectiveSearchCwd, // Working directory for resolving relative paths
 				allowTests: allow_tests ?? true,
 				exact,
 				json: false,
@@ -473,7 +476,7 @@ export const searchTool = (options = {}) => {
 					const result = maybeAnnotate(await runRawSearch());
 					// Track files found in search results for staleness detection
 					if (options.fileTracker && typeof result === 'string') {
-						options.fileTracker.trackFilesFromOutput(result, options.cwd || '.').catch(() => {});
+						options.fileTracker.trackFilesFromOutput(result, effectiveSearchCwd).catch(() => {});
 					}
 					return result;
 				} catch (error) {
@@ -532,7 +535,7 @@ export const searchTool = (options = {}) => {
 					}
 					const fallbackResult = maybeAnnotate(await runRawSearch());
 					if (options.fileTracker && typeof fallbackResult === 'string') {
-						options.fileTracker.trackFilesFromOutput(fallbackResult, options.cwd || '.').catch(() => {});
+						options.fileTracker.trackFilesFromOutput(fallbackResult, effectiveSearchCwd).catch(() => {});
 					}
 					return fallbackResult;
 				}
@@ -614,7 +617,7 @@ export const searchTool = (options = {}) => {
 				try {
 					const fallbackResult2 = maybeAnnotate(await runRawSearch());
 					if (options.fileTracker && typeof fallbackResult2 === 'string') {
-						options.fileTracker.trackFilesFromOutput(fallbackResult2, options.cwd || '.').catch(() => {});
+						options.fileTracker.trackFilesFromOutput(fallbackResult2, effectiveSearchCwd).catch(() => {});
 					}
 					return fallbackResult2;
 				} catch (fallbackError) {
@@ -693,10 +696,10 @@ export const extractTool = (options = {}) => {
 		name: 'extract',
 		description: extractDescription,
 		inputSchema: extractSchema,
-		execute: async ({ targets, input_content, line, end_line, allow_tests, context_lines, format }) => {
+		execute: async ({ targets, input_content, line, end_line, allow_tests, context_lines, format, workingDirectory }) => {
 			try {
-				// Use the cwd from config for working directory
-				const effectiveCwd = options.cwd || '.';
+				// Use workingDirectory (injected by _buildNativeTools at runtime) > cwd from config > fallback
+				const effectiveCwd = workingDirectory || options.cwd || '.';
 
 				if (debug) {
 					if (targets) {
