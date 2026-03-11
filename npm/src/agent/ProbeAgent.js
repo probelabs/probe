@@ -1341,9 +1341,16 @@ export class ProbeAgent {
     // Use fallback manager with retry for each provider
     return await this.fallbackManager.executeWithFallback(
       async (provider, model, config) => {
+        // Wrap fallback model with per-call concurrency limiter if configured.
+        // The original options.model was wrapped in streamTextWithRetryAndFallback,
+        // but fallback replaces it with a new model that needs wrapping too.
+        let fallbackModel = provider(model);
+        if (this.concurrencyLimiter) {
+          fallbackModel = ProbeAgent._wrapModelWithLimiter(fallbackModel, this.concurrencyLimiter, this.debug);
+        }
         const fallbackOptions = {
           ...options,
-          model: provider(model),
+          model: fallbackModel,
           abortSignal: controller.signal
         };
 
@@ -1378,20 +1385,155 @@ export class ProbeAgent {
   }
 
   /**
+   * Wrap a LanguageModelV1 model so each doStream/doGenerate call acquires and
+   * releases a concurrency limiter slot. This gates individual LLM API calls
+   * (seconds each) instead of entire multi-step agent sessions (minutes).
+   *
+   * @param {Object} model - LanguageModelV1 model instance
+   * @param {Object} limiter - Concurrency limiter with acquire/release/getStats
+   * @param {boolean} debug - Enable debug logging
+   * @returns {Object} Wrapped model with per-call concurrency gating
+   * @private
+   */
+  static _wrapModelWithLimiter(model, limiter, debug) {
+    return new Proxy(model, {
+      get(target, prop) {
+        if (prop === 'doStream') {
+          return async function (...args) {
+            await limiter.acquire(null);
+            if (debug) {
+              const stats = limiter.getStats();
+              console.log(`[DEBUG] Acquired AI slot for LLM call (${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize})`);
+            }
+            try {
+              const result = await target.doStream(...args);
+
+              // Wrap the ReadableStream to release the slot when it completes,
+              // errors, or is cancelled — covering all stream termination paths.
+              // Guard against double-release: if cancel() races with an in-flight
+              // pull() that is awaiting originalReader.read(), both paths could
+              // try to release. The flag ensures exactly one release.
+              const originalStream = result.stream;
+              const originalReader = originalStream.getReader();
+              let released = false;
+              const releaseOnce = () => {
+                if (released) return;
+                released = true;
+                limiter.release(null);
+              };
+              const wrappedStream = new ReadableStream({
+                async pull(controller) {
+                  try {
+                    const { done, value } = await originalReader.read();
+                    if (done) {
+                      controller.close();
+                      releaseOnce();
+                      if (debug) {
+                        const stats = limiter.getStats();
+                        console.log(`[DEBUG] Released AI slot after LLM stream complete (${stats.globalActive}/${stats.maxConcurrent})`);
+                      }
+                    } else {
+                      controller.enqueue(value);
+                    }
+                  } catch (err) {
+                    releaseOnce();
+                    if (debug) {
+                      console.log(`[DEBUG] Released AI slot on LLM stream error`);
+                    }
+                    controller.error(err);
+                  }
+                },
+                cancel() {
+                  releaseOnce();
+                  if (debug) {
+                    console.log(`[DEBUG] Released AI slot on LLM stream cancel`);
+                  }
+                  originalReader.cancel();
+                }
+              });
+
+              return { ...result, stream: wrappedStream };
+            } catch (err) {
+              limiter.release(null);
+              if (debug) {
+                console.log(`[DEBUG] Released AI slot on doStream error`);
+              }
+              throw err;
+            }
+          };
+        }
+
+        if (prop === 'doGenerate') {
+          return async function (...args) {
+            await limiter.acquire(null);
+            if (debug) {
+              const stats = limiter.getStats();
+              console.log(`[DEBUG] Acquired AI slot for LLM generate (${stats.globalActive}/${stats.maxConcurrent})`);
+            }
+            try {
+              const result = await target.doGenerate(...args);
+              return result;
+            } finally {
+              limiter.release(null);
+              if (debug) {
+                const stats = limiter.getStats();
+                console.log(`[DEBUG] Released AI slot after LLM generate (${stats.globalActive}/${stats.maxConcurrent})`);
+              }
+            }
+          };
+        }
+
+        const value = target[prop];
+        return typeof value === 'function' ? value.bind(target) : value;
+      }
+    });
+  }
+
+  /**
+   * Wrap an engine stream result so its textStream async generator acquires
+   * and releases a concurrency limiter slot. Acquire happens when iteration
+   * begins; release happens in finally (completion, error, or break).
+   *
+   * @param {Object} result - Engine result with { textStream, usage, ... }
+   * @param {Object} limiter - Concurrency limiter with acquire/release/getStats
+   * @param {boolean} debug - Enable debug logging
+   * @returns {Object} Result with wrapped textStream
+   * @private
+   */
+  static _wrapEngineStreamWithLimiter(result, limiter, debug) {
+    const originalStream = result.textStream;
+    async function* gatedStream() {
+      await limiter.acquire(null);
+      if (debug) {
+        const stats = limiter.getStats();
+        console.log(`[DEBUG] Acquired AI slot for engine stream (${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize})`);
+      }
+      try {
+        yield* originalStream;
+      } finally {
+        limiter.release(null);
+        if (debug) {
+          const stats = limiter.getStats();
+          console.log(`[DEBUG] Released AI slot after engine stream (${stats.globalActive}/${stats.maxConcurrent})`);
+        }
+      }
+    }
+    return { ...result, textStream: gatedStream() };
+  }
+
+  /**
    * Execute streamText with retry and fallback support
    * @param {Object} options - streamText options
    * @returns {Promise<Object>} - streamText result
    * @private
    */
   async streamTextWithRetryAndFallback(options) {
-    // Acquire global concurrency slot if limiter is configured
+    // Wrap the model with per-call concurrency gating if limiter is configured.
+    // This acquires/releases the slot around each individual LLM API call (doStream/doGenerate)
+    // instead of holding it for the entire multi-step agent session.
     const limiter = this.concurrencyLimiter;
-    if (limiter) {
-      await limiter.acquire(null);
-      if (this.debug) {
-        const stats = limiter.getStats();
-        console.log(`[DEBUG] Acquired global AI concurrency slot (${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize})`);
-      }
+    if (limiter && options.model) {
+      options = { ...options, model: ProbeAgent._wrapModelWithLimiter(options.model, limiter, this.debug) };
     }
 
     // Create AbortController for overall operation timeout
@@ -1430,6 +1572,12 @@ export class ProbeAgent {
       if (useClaudeCode || useCodex) {
         try {
           result = await this._tryEngineStreamPath(options, controller, timeoutState);
+          // Gate engine stream with concurrency limiter if configured.
+          // Engine paths bypass the Vercel model wrapper, so we wrap the
+          // textStream async generator with acquire/release instead.
+          if (result && limiter) {
+            result = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, this.debug);
+          }
         } catch (error) {
           if (this.debug) {
             const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
@@ -1444,47 +1592,7 @@ export class ProbeAgent {
         result = await this._executeWithVercelProvider(options, controller);
       }
 
-      // Wrap textStream so limiter slot is held until stream completes.
-      // result.textStream is a read-only getter on DefaultStreamTextResult,
-      // so we wrap the result in a Proxy that intercepts the textStream property.
-      if (limiter && result.textStream) {
-        const originalStream = result.textStream;
-        const debug = this.debug;
-        const wrappedStream = (async function* () {
-          try {
-            for await (const chunk of originalStream) {
-              yield chunk;
-            }
-          } finally {
-            limiter.release(null);
-            if (debug) {
-              const stats = limiter.getStats();
-              console.log(`[DEBUG] Released global AI concurrency slot (${stats.globalActive}/${stats.maxConcurrent}, queue: ${stats.queueSize})`);
-            }
-          }
-        })();
-        return new Proxy(result, {
-          get(target, prop) {
-            if (prop === 'textStream') return wrappedStream;
-            const value = target[prop];
-            return typeof value === 'function' ? value.bind(target) : value;
-          }
-        });
-      } else if (limiter) {
-        // No textStream (shouldn't happen, but release just in case)
-        limiter.release(null);
-      }
-
       return result;
-    } catch (error) {
-      // Release on error if limiter was acquired
-      if (limiter) {
-        limiter.release(null);
-        if (this.debug) {
-          console.log(`[DEBUG] Released global AI concurrency slot on error`);
-        }
-      }
-      throw error;
     } finally {
       // Clean up timeout (for non-engine paths; engine paths clean up in the generator)
       if (timeoutState.timeoutId) {
