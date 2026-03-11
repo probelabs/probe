@@ -479,6 +479,39 @@ describe('Graceful timeout empty-text fallback', () => {
     expect(result).toContain('BM25 is a ranking algorithm');
   });
 
+  test('truncates large tool results instead of skipping them', async () => {
+    const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
+
+    // Create a result larger than 5000 chars (simulating orchestrator sub-agent output)
+    const largeResult = 'A'.repeat(8000) + ' MARKER_END';
+
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => {
+      agent._gracefulTimeoutState.triggered = true;
+      return {
+        text: Promise.resolve(''),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.resolve([
+          {
+            text: '',
+            finishReason: 'tool-calls',
+            toolCalls: [{ toolName: 'delegate' }],
+            toolResults: [{ result: largeResult }],
+          },
+          { text: '', finishReason: 'other', toolCalls: [], toolResults: [] },
+        ]),
+      };
+    });
+
+    const result = await agent.answer('test question');
+    // Should include the truncated result, NOT the generic "try again" message
+    expect(result).toContain('partial information');
+    expect(result).toContain('AAAA'); // Truncated content present
+    expect(result).not.toContain('MARKER_END'); // Truncated at 5000 chars
+    expect(result).not.toContain('try again'); // NOT the generic fallback
+  });
+
   test('uses generic timeout message when no tool results available', async () => {
     const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
 
