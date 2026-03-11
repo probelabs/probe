@@ -3989,47 +3989,55 @@ Double-check your response based on the criteria above. If everything looks good
             finalResult = aiResult.finalText;
           }
 
-          // Graceful timeout fallback: when wind-down produced empty text,
-          // try to collect useful text from the full result or intermediate steps.
-          // Some models (e.g., Gemini) return finishReason:'other' with empty text
-          // when forced from tool-calling to text-only mode mid-task.
-          if (gracefulTimeoutState.triggered && (!finalResult || finalResult === 'I was unable to complete your request due to reaching the maximum number of tool iterations.')) {
-            try {
-              // Try result.text (concatenation of all step texts)
-              const allText = await aiResult.result.text;
-              if (allText && allText.trim()) {
-                finalResult = allText;
-                if (this.debug) {
-                  console.log(`[DEBUG] Graceful timeout: using concatenated step text (${allText.length} chars)`);
-                }
-              } else {
-                // Last resort: collect tool result summaries as partial information
-                const steps = await aiResult.result.steps;
-                const toolSummaries = [];
-                for (const step of (steps || [])) {
-                  if (step.toolResults?.length > 0) {
-                    for (const tr of step.toolResults) {
-                      const resultText = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
-                      if (resultText && resultText.length > 0 && resultText.length < 5000) {
-                        toolSummaries.push(resultText.substring(0, 2000));
+          // Graceful timeout handling: ensure the response clearly indicates
+          // the research was interrupted and may be incomplete.
+          if (gracefulTimeoutState.triggered) {
+            const timeoutNotice = '**Note: This response was generated under a time constraint. The research may be incomplete, and some planned searches or analysis steps were not completed.**\n\n';
+
+            if (!finalResult || finalResult === 'I was unable to complete your request due to reaching the maximum number of tool iterations.') {
+              // Wind-down produced empty text — try to collect useful content.
+              // Some models (e.g., Gemini) return finishReason:'other' with empty text
+              // when forced from tool-calling to text-only mode mid-task.
+              try {
+                // Try result.text (concatenation of all step texts)
+                const allText = await aiResult.result.text;
+                if (allText && allText.trim()) {
+                  finalResult = timeoutNotice + allText;
+                  if (this.debug) {
+                    console.log(`[DEBUG] Graceful timeout: using concatenated step text (${allText.length} chars)`);
+                  }
+                } else {
+                  // Last resort: collect tool result summaries as partial information
+                  const steps = await aiResult.result.steps;
+                  const toolSummaries = [];
+                  for (const step of (steps || [])) {
+                    if (step.toolResults?.length > 0) {
+                      for (const tr of step.toolResults) {
+                        const resultText = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
+                        if (resultText && resultText.length > 0 && resultText.length < 5000) {
+                          toolSummaries.push(resultText.substring(0, 2000));
+                        }
                       }
                     }
                   }
-                }
-                if (toolSummaries.length > 0) {
-                  finalResult = `The operation timed out before a complete answer could be generated. Here is the partial information gathered:\n\n${toolSummaries.join('\n\n---\n\n')}`;
-                  if (this.debug) {
-                    console.log(`[DEBUG] Graceful timeout: built fallback from ${toolSummaries.length} tool results`);
+                  if (toolSummaries.length > 0) {
+                    finalResult = `${timeoutNotice}The operation timed out before a complete answer could be generated. Here is the partial information gathered:\n\n${toolSummaries.join('\n\n---\n\n')}`;
+                    if (this.debug) {
+                      console.log(`[DEBUG] Graceful timeout: built fallback from ${toolSummaries.length} tool results`);
+                    }
+                  } else {
+                    finalResult = 'The operation timed out before enough information could be gathered to provide an answer. Please try again with a simpler query or increase the timeout.';
                   }
-                } else {
-                  finalResult = 'The operation timed out before enough information could be gathered to provide an answer. Please try again with a simpler query or increase the timeout.';
                 }
+              } catch (e) {
+                if (this.debug) {
+                  console.log(`[DEBUG] Graceful timeout fallback error: ${e.message}`);
+                }
+                finalResult = 'The operation timed out before enough information could be gathered to provide an answer. Please try again with a simpler query or increase the timeout.';
               }
-            } catch (e) {
-              if (this.debug) {
-                console.log(`[DEBUG] Graceful timeout fallback error: ${e.message}`);
-              }
-              finalResult = 'The operation timed out before enough information could be gathered to provide an answer. Please try again with a simpler query or increase the timeout.';
+            } else {
+              // Model produced text during wind-down — prepend the timeout notice
+              finalResult = timeoutNotice + finalResult;
             }
           }
 
