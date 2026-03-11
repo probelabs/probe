@@ -1571,23 +1571,15 @@ export class ProbeAgent {
     }
 
     // Set up overall operation timeout (default 5 minutes)
+    // NOTE: For Vercel AI SDK paths, streamText() returns immediately and the
+    // actual tool loop runs asynchronously. The graceful timeout timer is set up
+    // in the run() method where results are actually awaited, not here.
+    // This timer only handles the hard abort for non-graceful mode and engine paths.
     if (this.maxOperationTimeout && this.maxOperationTimeout > 0) {
       const gts = this._gracefulTimeoutState;
       if (this.timeoutBehavior === 'graceful' && gts) {
-        // Graceful mode: soft timeout sets wind-down flag, hard abort is safety net
-        timeoutState.timeoutId = setTimeout(() => {
-          gts.triggered = true;
-          if (this.debug) {
-            console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — entering wind-down mode (${gts.bonusStepsMax} bonus steps)`);
-          }
-          // Safety net: hard abort after 60s if wind-down doesn't complete
-          timeoutState.hardAbortId = setTimeout(() => {
-            controller.abort();
-            if (this.debug) {
-              console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
-            }
-          }, 60000);
-        }, this.maxOperationTimeout);
+        // Graceful mode: timer is managed in run() method.
+        // Only set up the AbortController link (no timer here).
       } else {
         // Hard mode: immediate abort (legacy behavior)
         timeoutState.timeoutId = setTimeout(() => {
@@ -1634,10 +1626,6 @@ export class ProbeAgent {
       if (timeoutState.timeoutId) {
         clearTimeout(timeoutState.timeoutId);
         timeoutState.timeoutId = null;
-      }
-      if (timeoutState.hardAbortId) {
-        clearTimeout(timeoutState.hardAbortId);
-        timeoutState.hardAbortId = null;
       }
     }
   }
@@ -3904,30 +3892,59 @@ Double-check your response based on the criteria above. If everything looks good
           const executeAIRequest = async () => {
             const result = await this.streamTextWithRetryAndFallback(streamOptions);
 
-            // Use only the last step's text as the final answer.
-            // result.text concatenates ALL steps (including intermediate planning text),
-            // but the user should only see the final answer from the last step.
-            const steps = await result.steps;
-            let finalText;
-            if (steps && steps.length > 1) {
-              // Multi-step: use last step's text (the actual answer after tool calls)
-              const lastStepText = steps[steps.length - 1].text;
-              finalText = lastStepText || await result.text;
-            } else {
-              finalText = await result.text;
+            // Set up graceful timeout timer now that streamText is running.
+            // streamText() returns immediately — the actual tool loop runs asynchronously
+            // and completes when we await result.steps/result.text below.
+            let gracefulTimeoutId = null;
+            let hardAbortTimeoutId = null;
+            if (this.timeoutBehavior === 'graceful' && gracefulTimeoutState && this.maxOperationTimeout > 0) {
+              gracefulTimeoutId = setTimeout(() => {
+                gracefulTimeoutState.triggered = true;
+                if (this.debug) {
+                  console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — entering wind-down mode (${gracefulTimeoutState.bonusStepsMax} bonus steps)`);
+                }
+                // Safety net: hard abort after 60s if wind-down doesn't complete
+                hardAbortTimeoutId = setTimeout(() => {
+                  if (this._abortController) {
+                    this._abortController.abort();
+                  }
+                  if (this.debug) {
+                    console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
+                  }
+                }, 60000);
+              }, this.maxOperationTimeout);
             }
 
-            if (this.debug) {
-              console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
-            }
+            try {
+              // Use only the last step's text as the final answer.
+              // result.text concatenates ALL steps (including intermediate planning text),
+              // but the user should only see the final answer from the last step.
+              const steps = await result.steps;
+              let finalText;
+              if (steps && steps.length > 1) {
+                // Multi-step: use last step's text (the actual answer after tool calls)
+                const lastStepText = steps[steps.length - 1].text;
+                finalText = lastStepText || await result.text;
+              } else {
+                finalText = await result.text;
+              }
 
-            // Record final token usage
-            const usage = await result.usage;
-            if (usage) {
-              this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
-            }
+              if (this.debug) {
+                console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
+              }
 
-            return { finalText, result };
+              // Record final token usage
+              const usage = await result.usage;
+              if (usage) {
+                this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+              }
+
+              return { finalText, result };
+            } finally {
+              // Clean up graceful timeout timers
+              if (gracefulTimeoutId) clearTimeout(gracefulTimeoutId);
+              if (hardAbortTimeoutId) clearTimeout(hardAbortTimeoutId);
+            }
           };
 
           let aiResult;
@@ -3970,6 +3987,50 @@ Double-check your response based on the criteria above. If everything looks good
             }
           } else if (aiResult.finalText) {
             finalResult = aiResult.finalText;
+          }
+
+          // Graceful timeout fallback: when wind-down produced empty text,
+          // try to collect useful text from the full result or intermediate steps.
+          // Some models (e.g., Gemini) return finishReason:'other' with empty text
+          // when forced from tool-calling to text-only mode mid-task.
+          if (gracefulTimeoutState.triggered && (!finalResult || finalResult === 'I was unable to complete your request due to reaching the maximum number of tool iterations.')) {
+            try {
+              // Try result.text (concatenation of all step texts)
+              const allText = await aiResult.result.text;
+              if (allText && allText.trim()) {
+                finalResult = allText;
+                if (this.debug) {
+                  console.log(`[DEBUG] Graceful timeout: using concatenated step text (${allText.length} chars)`);
+                }
+              } else {
+                // Last resort: collect tool result summaries as partial information
+                const steps = await aiResult.result.steps;
+                const toolSummaries = [];
+                for (const step of (steps || [])) {
+                  if (step.toolResults?.length > 0) {
+                    for (const tr of step.toolResults) {
+                      const resultText = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
+                      if (resultText && resultText.length > 0 && resultText.length < 5000) {
+                        toolSummaries.push(resultText.substring(0, 2000));
+                      }
+                    }
+                  }
+                }
+                if (toolSummaries.length > 0) {
+                  finalResult = `The operation timed out before a complete answer could be generated. Here is the partial information gathered:\n\n${toolSummaries.join('\n\n---\n\n')}`;
+                  if (this.debug) {
+                    console.log(`[DEBUG] Graceful timeout: built fallback from ${toolSummaries.length} tool results`);
+                  }
+                } else {
+                  finalResult = 'The operation timed out before enough information could be gathered to provide an answer. Please try again with a simpler query or increase the timeout.';
+                }
+              }
+            } catch (e) {
+              if (this.debug) {
+                console.log(`[DEBUG] Graceful timeout fallback error: ${e.message}`);
+              }
+              finalResult = 'The operation timed out before enough information could be gathered to provide an answer. Please try again with a simpler query or increase the timeout.';
+            }
           }
 
           // Update currentMessages from the result for history storage
