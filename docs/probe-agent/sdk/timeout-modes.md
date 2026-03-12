@@ -1,199 +1,279 @@
-# Timeout Modes
+# Timeout Architecture
 
-The ProbeAgent SDK provides three timeout modes that control what happens when `maxOperationTimeout` is reached during an AI operation. Each mode offers different trade-offs between time control and result quality.
+The ProbeAgent SDK has multiple timeout layers that operate at different levels of the execution stack. Understanding how they interact is essential for building reliable agents, especially those using delegates, MCP tools, or bash commands.
 
-## Overview
+## Timeout Layers at a Glance
 
-| Mode | Behavior | Tools during wind-down | Best for |
-|------|----------|----------------------|----------|
-| `graceful` (default) | AI gets bonus steps to write a final answer | Disabled (`toolChoice: 'none'`) | Short tasks, predictable completion |
-| `hard` | Operation aborts immediately | N/A | Strict time budgets, batch processing |
-| `negotiated` | Independent observer LLM evaluates and decides | Available during extension | Long-running tasks with delegates/subagents |
-
-## Quick Start
-
-```javascript
-import { ProbeAgent } from '@probelabs/probe';
-
-const agent = new ProbeAgent({
-  path: '/path/to/project',
-  maxOperationTimeout: 300000,   // 5 minutes
-  timeoutBehavior: 'negotiated', // or 'graceful', 'hard'
-});
+```
+┌─────────────────────────────────────────────────────────┐
+│  maxOperationTimeout (agent level)                      │
+│  Controls: entire answer() call                         │
+│  Default: 300s │ Env: MAX_OPERATION_TIMEOUT             │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  requestTimeout (per LLM call)                    │  │
+│  │  Controls: individual streamText/generateText     │  │
+│  │  Default: 120s │ Env: REQUEST_TIMEOUT             │  │
+│  └───────────────────────────────────────────────────┘  │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Delegate timeout (per delegate tool call)        │  │
+│  │  Controls: subagent execution                     │  │
+│  │  Default: 300s │ Env: DELEGATION_TIMEOUT          │  │
+│  │                                                   │  │
+│  │  ┌─────────────────────────────────────────────┐  │  │
+│  │  │  Subagent's own requestTimeout              │  │  │
+│  │  │  (inherited from parent config)             │  │  │
+│  │  └─────────────────────────────────────────────┘  │  │
+│  └───────────────────────────────────────────────────┘  │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  MCP tool timeout (per MCP server)                │  │
+│  │  Controls: individual MCP tool calls              │  │
+│  │  Default: 30s │ Per-server override available     │  │
+│  └───────────────────────────────────────────────────┘  │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Bash timeout (per command)                       │  │
+│  │  Controls: shell command execution                │  │
+│  │  Default: 120s │ Max: 600s                        │  │
+│  └───────────────────────────────────────────────────┘  │
+│                                                         │
+│  ┌───────────────────────────────────────────────────┐  │
+│  │  Engine activity timeout (stream health)          │  │
+│  │  Controls: gap between stream chunks              │  │
+│  │  Default: 180s │ Env: ENGINE_ACTIVITY_TIMEOUT     │  │
+│  └───────────────────────────────────────────────────┘  │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Mode 1: Graceful (Default)
+**Important:** These timeouts are currently independent. A delegate with a 300s timeout inside a parent with a 300s `maxOperationTimeout` can consume the entire parent budget. See [Known Limitations](#known-limitations) for details.
 
-When the timeout fires, the AI is told to stop calling tools and provide its best answer with what it has. It gets a configurable number of "bonus steps" to write the response.
+## Layer 1: Operation Timeout (`maxOperationTimeout`)
 
-```javascript
-const agent = new ProbeAgent({
-  path: '/path/to/project',
-  maxOperationTimeout: 300000,        // 5 minutes
-  timeoutBehavior: 'graceful',
-  gracefulTimeoutBonusSteps: 4,       // default: 4, range: 1-20
-});
-```
+The top-level timeout that governs the entire `answer()` call — including all tool calls, retries, fallbacks, and LLM requests within it.
 
-**Flow:**
+| Setting | Default | Range | Env Var |
+|---------|---------|-------|---------|
+| `maxOperationTimeout` | 300000 ms (5 min) | 1s – 2hr | `MAX_OPERATION_TIMEOUT` |
 
-1. `maxOperationTimeout` fires
-2. `prepareStep` injects a "Do NOT call any more tools" message with `toolChoice: 'none'`
-3. The AI writes a final text response using findings gathered so far
-4. After bonus steps are exhausted, `stopWhen` forces the loop to end
-5. If the AI produced no text, a fallback message with collected tool results is returned
+When this fires, the behavior depends on `timeoutBehavior`:
 
-**When to use:** Simple queries, tasks that don't involve long-running delegates, situations where you want the AI to always attempt a response.
+### Graceful (default)
 
-## Mode 2: Hard
-
-When the timeout fires, the operation aborts immediately with no wind-down period.
+The AI gets bonus steps to wrap up without calling more tools.
 
 ```javascript
 const agent = new ProbeAgent({
   path: '/path/to/project',
   maxOperationTimeout: 300000,
+  timeoutBehavior: 'graceful',
+  gracefulTimeoutBonusSteps: 4,    // range: 1-20
+});
+```
+
+**Flow:**
+1. Timer fires → `gracefulTimeoutState.triggered = true`
+2. `prepareStep` injects wrap-up message with `toolChoice: 'none'`
+3. AI writes final response using what it has (up to `bonusSteps` steps)
+4. Safety net: hard abort 60s after soft timeout if wind-down stalls
+
+### Hard
+
+Immediate abort, no wind-down.
+
+```javascript
+const agent = new ProbeAgent({
+  maxOperationTimeout: 300000,
   timeoutBehavior: 'hard',
 });
 ```
 
-**Flow:**
+### Negotiated (Observer Pattern)
 
-1. `maxOperationTimeout` fires
-2. The `AbortController` signal fires immediately
-3. The operation throws an error (or returns a timeout message)
-
-**When to use:** Batch processing, strict SLA enforcement, situations where partial results are not useful.
-
-## Mode 3: Negotiated (Observer Pattern)
-
-When the timeout fires, a **separate LLM call** (the "timeout observer") runs independently of the main agent loop. The observer evaluates whether in-flight work is worth continuing and decides to grant more time or trigger a graceful wind-down.
-
-This is the most sophisticated mode and is designed for long-running tasks where the main loop may be blocked by delegates or MCP tools.
+A separate LLM call evaluates whether to extend or abort. Works even when the main loop is blocked by a delegate or MCP tool.
 
 ```javascript
 const agent = new ProbeAgent({
-  path: '/path/to/project',
-  maxOperationTimeout: 300000,            // 5 min initial timeout
+  maxOperationTimeout: 300000,
   timeoutBehavior: 'negotiated',
-  negotiatedTimeoutBudget: 1800000,       // 30 min total extra time
-  negotiatedTimeoutMaxRequests: 3,         // up to 3 extensions
-  negotiatedTimeoutMaxPerRequest: 600000,  // max 10 min per extension
+  negotiatedTimeoutBudget: 1800000,        // 30 min total extra time
+  negotiatedTimeoutMaxRequests: 3,          // up to 3 extensions
+  negotiatedTimeoutMaxPerRequest: 600000,   // max 10 min per extension
 });
 ```
 
-### How the Observer Works
-
-The observer is a separate `generateText` call that runs independently — it is **not** part of the main agent loop. This means it works even when the main loop is blocked waiting for a delegate subagent or a long-running MCP tool.
-
 **Flow:**
-
 ```
-Normal operation
-       │
-       ▼
 maxOperationTimeout fires
        │
        ▼
 Observer LLM call (independent generateText)
-  ├── Sees which tools are running and for how long
-  ├── Evaluates whether work is productive or stuck
+  ├── Sees active tools and their durations ("delegate — running for 3m 45s")
+  ├── Detects stuck/looping agents
   │
-  ├── EXTEND: Grant more time
-  │     ├── Sets new timeout timer
-  │     ├── Queues extension message for main loop
-  │     └── Main loop continues normally (tools available)
-  │
-  └── DECLINE: Trigger wind-down
-        ├── Sets gracefulTimeoutState.triggered = true
-        ├── Aborts in-flight tools via AbortController
-        └── Makes dedicated summary LLM call
-              └── AI reports what it accomplished with full context
+  ├── EXTEND → new timer, main loop continues with tools available
+  └── DECLINE → abort in-flight tools → dedicated summary LLM call
 ```
 
-### In-Flight Tool Tracking
+**Observer details:**
+- Tracks in-flight tools via `toolCall` event emitter with human-readable durations
+- Stuck-loop detection guidance in prompt (repeating tool calls, no progress)
+- On decline: aborts tools, then summary call with full conversation context
+- Summary respects JSON schema (returns valid JSON, no markdown notice)
+- Summary acknowledges task status (completed/incomplete tasks)
+- Summary streams to `onStream` callback
+- `completionPrompt` is skipped after abort summary
 
-The negotiated mode tracks all active tool calls via the `toolCall` event emitter. The observer prompt includes human-readable durations:
+| Setting | Default | Range | Env Var |
+|---------|---------|-------|---------|
+| `negotiatedTimeoutBudget` | 1800000 ms (30 min) | 1min – 2hr | `NEGOTIATED_TIMEOUT_BUDGET` |
+| `negotiatedTimeoutMaxRequests` | 3 | 1 – 10 | `NEGOTIATED_TIMEOUT_MAX_REQUESTS` |
+| `negotiatedTimeoutMaxPerRequest` | 600000 ms (10 min) | 1min – 1hr | `NEGOTIATED_TIMEOUT_MAX_PER_REQUEST` |
 
+## Layer 2: Request Timeout (`requestTimeout`)
+
+Timeout for individual LLM API calls (each `streamText` or `generateText` invocation). Fires when a single request to the AI provider takes too long.
+
+| Setting | Default | Range | Env Var |
+|---------|---------|-------|---------|
+| `requestTimeout` | 120000 ms (2 min) | 1s – 1hr | `REQUEST_TIMEOUT` |
+
+This is independent of `maxOperationTimeout`. A single LLM call can take up to `requestTimeout` ms, and multiple calls can happen within one `answer()` operation. The retry system will re-attempt failed requests up to `retry.maxRetries` times.
+
+## Layer 3: Delegate Timeout
+
+When the agent uses the `delegate` tool to spawn a subagent, the delegate has its own timeout that is **independent of the parent's `maxOperationTimeout`**.
+
+| Setting | Default | Env Var |
+|---------|---------|---------|
+| Delegate operation timeout | 300s (5 min) | `DELEGATION_TIMEOUT` or `DELEGATION_TIMEOUT_MS` or `DELEGATION_TIMEOUT_SECONDS` |
+| Delegation queue timeout | 60s | `DELEGATION_QUEUE_TIMEOUT` |
+
+**What happens when delegate timeout fires:**
+1. Calls `subagent.cancel()` to abort the subagent
+2. Throws `Delegation timed out after ${timeout} seconds`
+3. Releases delegation slot, cleans up resources
+
+**Queue timeout** is separate — it fires if a delegate is waiting for an available execution slot (concurrency limit reached) for too long.
+
+**Abort signal propagation:** The parent's `AbortController` signal is passed to delegates via `parentAbortSignal`. When the parent aborts (e.g., from negotiated timeout decline), delegates receive the signal and cancel. However, the delegate's own timeout does not coordinate with the parent's remaining budget.
+
+## Layer 4: MCP Tool Timeout
+
+MCP (Model Context Protocol) tools have their own timeout system that is managed per-server.
+
+| Setting | Default | Max | Env Var |
+|---------|---------|-----|---------|
+| Global default | 30000 ms (30s) | — | — |
+| Max timeout cap | 1800000 ms (30 min) | — | `MCP_MAX_TIMEOUT` |
+| Per-server override | global default | max cap | `MCP_SERVERS_<NAME>_TIMEOUT` |
+
+**Configuration in MCP config file:**
+```json
+{
+  "mcpServers": {
+    "my-server": {
+      "command": "my-mcp-server",
+      "timeout": 60000
+    }
+  }
+}
 ```
-Currently running tools:
-- delegate({"task":"analyze auth module"}) — running for 3m 45s
-- search({"query":"error handling"}) — running for 12s
-```
 
-### Stuck-Loop Detection
+**Resolution order:**
+1. Per-server `timeout` if specified in config
+2. Global `settings.timeout` if specified
+3. Default 30s
 
-The observer prompt includes guidance to detect and decline extensions for stuck agents:
+**What happens when MCP timeout fires:**
+- Throws `MCP tool call timeout after ${timeout}ms`
+- The error propagates to the agent as a tool error
 
-- Agent is repeating the same tool calls
-- Agent is making no progress toward the goal
-- Tools have been running for an unusually long time
-- The task appears to be in an infinite loop
+MCP servers are **not aware** of the parent agent's `maxOperationTimeout`. An MCP tool call cannot consume more than `MCP_MAX_TIMEOUT` (default 30 min), but within that limit it runs independently.
 
-### Abort Summary
+## Layer 5: Bash Command Timeout
 
-When the observer declines an extension, it:
+When `enableBash: true`, the bash tool has its own per-command timeout.
 
-1. Aborts all in-flight tools via `AbortController`
-2. Makes a dedicated `generateText` call with the full conversation history
-3. The AI provides a detailed summary of what it accomplished and what remains
+| Setting | Default | Range |
+|---------|---------|-------|
+| Command timeout | 120000 ms (2 min) | 1s – 10 min |
 
-The summary call is aware of:
-- **JSON schema requirements** — if a schema is configured, the summary returns valid JSON matching the schema (no markdown notice prepended)
-- **Task status** — if task management is enabled, the summary acknowledges completed and incomplete tasks
-- **Streaming** — the summary text is sent to `onStream` callbacks so streaming consumers see the output
+**What happens when bash timeout fires:**
+1. Sends `SIGTERM` to the process group
+2. If process doesn't exit within 5s, sends `SIGKILL`
+3. Returns error: `Command timed out after ${timeout}ms`
 
-### Extension Message Delivery
+Bash timeouts are **not configurable** via environment variable — they use the value from `bashConfig.timeout` or the per-call `timeout` parameter.
 
-When the observer grants an extension, the message is queued and delivered to the main loop via `prepareStep` on its next step:
+## Layer 6: Engine Activity Timeout
 
-```
-⏰ Granted 5 more minute(s) (reason: delegate still analyzing authentication module).
-Extensions remaining: 2. Budget remaining: 25 min.
-```
+Monitors the health of LLM streaming connections. If no data arrives for too long, the stream is considered stalled.
 
-Tools remain available during extensions — unlike graceful wind-down, there is no `toolChoice: 'none'`.
+| Setting | Default | Range | Env Var |
+|---------|---------|-------|---------|
+| Activity timeout | 180000 ms (3 min) | 5s – 10 min | `ENGINE_ACTIVITY_TIMEOUT` |
 
-### Exhaustion Fallback
+This is a **gap timer** — it resets every time a chunk arrives. It protects against LLM providers that accept the request but stop sending data. This is different from `requestTimeout`, which measures total elapsed time.
 
-When all extensions are used or the budget is exceeded, the negotiated mode falls back to the existing graceful wind-down machinery. The `completionPrompt` (if configured) is skipped after an abort summary to avoid redundant LLM calls.
+## Complete Reference
 
-## Configuration Reference
+### All Timeouts
 
-### Constructor Options
+| Timeout | Layer | Default | Env Var | Configurable via SDK |
+|---------|-------|---------|---------|---------------------|
+| `maxOperationTimeout` | Operation | 300s | `MAX_OPERATION_TIMEOUT` | Yes |
+| `requestTimeout` | Request | 120s | `REQUEST_TIMEOUT` | Yes |
+| `timeoutBehavior` | Operation | `graceful` | `TIMEOUT_BEHAVIOR` | Yes |
+| `gracefulTimeoutBonusSteps` | Operation | 4 | `GRACEFUL_TIMEOUT_BONUS_STEPS` | Yes |
+| `negotiatedTimeoutBudget` | Operation | 30 min | `NEGOTIATED_TIMEOUT_BUDGET` | Yes |
+| `negotiatedTimeoutMaxRequests` | Operation | 3 | `NEGOTIATED_TIMEOUT_MAX_REQUESTS` | Yes |
+| `negotiatedTimeoutMaxPerRequest` | Operation | 10 min | `NEGOTIATED_TIMEOUT_MAX_PER_REQUEST` | Yes |
+| Delegate operation | Delegate | 300s | `DELEGATION_TIMEOUT` | No (env only) |
+| Delegation queue | Delegate | 60s | `DELEGATION_QUEUE_TIMEOUT` | No (env only) |
+| MCP global default | MCP | 30s | — | Via MCP config |
+| MCP max cap | MCP | 30 min | `MCP_MAX_TIMEOUT` | No (env only) |
+| MCP per-server | MCP | global | `MCP_SERVERS_<NAME>_TIMEOUT` | Via MCP config |
+| Bash command | Bash | 120s | — | Via `bashConfig` |
+| Engine activity | Stream | 180s | `ENGINE_ACTIVITY_TIMEOUT` | No (env only) |
+| Graceful hard abort safety | Internal | 60s | — | No (hardcoded) |
+| File search (glob) | Internal | 10s | — | No (hardcoded) |
 
-| Option | Type | Default | Env Var | Description |
-|--------|------|---------|---------|-------------|
-| `requestTimeout` | `number` | `120000` | `REQUEST_TIMEOUT` | Per-request timeout (ms) |
-| `maxOperationTimeout` | `number` | `300000` | `MAX_OPERATION_TIMEOUT` | Overall operation timeout (ms) |
-| `timeoutBehavior` | `string` | `'graceful'` | `TIMEOUT_BEHAVIOR` | `'graceful'`, `'hard'`, or `'negotiated'` |
-| `gracefulTimeoutBonusSteps` | `number` | `4` | `GRACEFUL_TIMEOUT_BONUS_STEPS` | Bonus steps for graceful wind-down (1-20) |
-| `negotiatedTimeoutBudget` | `number` | `1800000` | `NEGOTIATED_TIMEOUT_BUDGET` | Total extension budget in ms (1min-2hr) |
-| `negotiatedTimeoutMaxRequests` | `number` | `3` | `NEGOTIATED_TIMEOUT_MAX_REQUESTS` | Max extension count (1-10) |
-| `negotiatedTimeoutMaxPerRequest` | `number` | `600000` | `NEGOTIATED_TIMEOUT_MAX_PER_REQUEST` | Max ms per extension (1min-1hr) |
-
-### Environment Variables
+### All Environment Variables
 
 ```bash
-# Core timeout
-MAX_OPERATION_TIMEOUT=300000             # Overall timeout in ms
-REQUEST_TIMEOUT=120000                   # Per-request timeout in ms
-
-# Timeout behavior
-TIMEOUT_BEHAVIOR=negotiated              # graceful | hard | negotiated
+# Operation level
+MAX_OPERATION_TIMEOUT=300000               # Overall answer() timeout (ms)
+REQUEST_TIMEOUT=120000                     # Per-LLM-call timeout (ms)
+TIMEOUT_BEHAVIOR=graceful                  # graceful | hard | negotiated
 
 # Graceful mode
-GRACEFUL_TIMEOUT_BONUS_STEPS=4           # Steps for wind-down (1-20)
+GRACEFUL_TIMEOUT_BONUS_STEPS=4             # Wind-down steps (1-20)
 
 # Negotiated mode
-NEGOTIATED_TIMEOUT_BUDGET=1800000        # Total extension budget (ms)
-NEGOTIATED_TIMEOUT_MAX_REQUESTS=3        # Max extensions
-NEGOTIATED_TIMEOUT_MAX_PER_REQUEST=600000 # Max per extension (ms)
+NEGOTIATED_TIMEOUT_BUDGET=1800000          # Total extension budget (ms)
+NEGOTIATED_TIMEOUT_MAX_REQUESTS=3          # Max extension count (1-10)
+NEGOTIATED_TIMEOUT_MAX_PER_REQUEST=600000  # Max per extension (ms)
+
+# Delegate
+DELEGATION_TIMEOUT=300                     # Delegate timeout (seconds)
+DELEGATION_TIMEOUT_MS=300000               # Alternative: milliseconds
+DELEGATION_TIMEOUT_SECONDS=300             # Alternative: seconds
+DELEGATION_QUEUE_TIMEOUT=60000             # Queue wait timeout (ms)
+
+# MCP
+MCP_MAX_TIMEOUT=1800000                    # Max allowed MCP timeout (ms)
+MCP_SERVERS_MYSERVER_TIMEOUT=60000         # Per-server override (ms)
+
+# Engine
+ENGINE_ACTIVITY_TIMEOUT=180000             # Stream chunk gap timeout (ms)
 ```
 
 ## Telemetry
 
-All timeout operations are instrumented with OTEL tracing when a tracer is configured:
+All negotiated timeout operations are instrumented with OTEL tracing:
 
 | Span/Event | Description |
 |------------|-------------|
@@ -202,34 +282,57 @@ All timeout operations are instrumented with OTEL tracing when a tracer is confi
 | `negotiated_timeout.observer_response` | Raw observer decision |
 | `negotiated_timeout.extended` | Extension granted with duration |
 | `negotiated_timeout.declined` | Extension declined with reason |
-| `negotiated_timeout.exhausted` | All extensions used, falling back |
+| `negotiated_timeout.exhausted` | All extensions used |
 | `negotiated_timeout.observer_error` | Observer call failed |
 | `negotiated_timeout.abort_summary_started` | Summary call initiated |
 | `negotiated_timeout.abort_summary_completed` | Summary produced |
 | `negotiated_timeout.abort_summary_error` | Summary call failed |
 
+## Known Limitations
+
+### Timeouts do not coordinate across layers
+
+Each timeout layer operates independently. This means:
+
+- A **delegate with a 300s timeout** inside a parent with a 300s `maxOperationTimeout` can consume the entire parent budget. The delegate doesn't know how much time the parent has left.
+- An **MCP tool with a 30min timeout** could block the parent for its entire duration. The MCP server has no visibility into the parent's budget.
+- The **negotiated timeout observer** can see that a delegate has been running for a long time and decide to abort, but by then most of the budget may already be consumed.
+
+### Practical guidance
+
+For agents using delegates or long-running MCP tools:
+
+1. **Set delegate timeout lower than parent timeout.** If your `maxOperationTimeout` is 5 minutes, set `DELEGATION_TIMEOUT=120` (2 min) so the parent has time to process results or try alternatives.
+
+2. **Use negotiated mode for complex agents.** The observer can detect a stuck delegate and abort it, even if the delegate's own timeout hasn't fired yet.
+
+3. **Set MCP per-server timeouts explicitly.** Don't rely on the 30s default for slow MCP servers, but also don't let them exceed your parent budget.
+
+4. **Leave headroom.** A rule of thumb: set sub-timeouts to at most 60-70% of the parent's budget to leave room for the agent to synthesize results.
+
 ## Examples
 
-### Long-Running Analysis with Negotiated Timeout
+### Long-Running Analysis with Delegates
 
 ```javascript
 const agent = new ProbeAgent({
   path: '/path/to/large/codebase',
   provider: 'google',
   model: 'gemini-2.0-flash',
+  enableDelegate: true,
   timeoutBehavior: 'negotiated',
-  maxOperationTimeout: 60000,             // 1 min initial
-  negotiatedTimeoutMaxRequests: 5,         // up to 5 extensions
-  negotiatedTimeoutMaxPerRequest: 300000,  // 5 min each
-  negotiatedTimeoutBudget: 900000,         // 15 min total extra
-  enableDelegate: true,                    // subagents for parallel work
+  maxOperationTimeout: 60000,              // 1 min initial
+  negotiatedTimeoutMaxRequests: 5,          // up to 5 extensions
+  negotiatedTimeoutMaxPerRequest: 300000,   // 5 min each
+  negotiatedTimeoutBudget: 900000,          // 15 min total extra
 });
+
+// Set delegate timeout lower than parent budget
+// DELEGATION_TIMEOUT=120 (env var, 2 minutes)
 
 const result = await agent.answer(
   'Perform a comprehensive security audit of this codebase'
 );
-// Observer will extend if delegates are doing productive work,
-// or decline if the agent is stuck in a loop
 ```
 
 ### Schema Output with Timeout Safety
@@ -250,26 +353,17 @@ const result = await agent.answer(
       properties: {
         patterns: { type: 'array', items: { type: 'string' } },
         coverage: { type: 'number' },
-        recommendations: { type: 'array', items: { type: 'string' } },
       },
       required: ['patterns'],
     }),
   }
 );
-
-// Even if timeout fires, result will be valid JSON matching the schema
-const data = JSON.parse(result);
+// Even after timeout, result is valid JSON matching the schema
 ```
 
 ### Streaming with Timeout
 
 ```javascript
-const agent = new ProbeAgent({
-  path: '/path/to/project',
-  timeoutBehavior: 'negotiated',
-  maxOperationTimeout: 60000,
-});
-
 const result = await agent.answer(
   'Search for all API endpoints',
   [],
