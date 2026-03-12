@@ -516,6 +516,18 @@ export async function delegate({
 		if (debug) {
 			console.error(`[DELEGATE] Created subagent with session ${sessionId}`);
 			console.error(`[DELEGATE] Subagent config: promptType=${promptType}, enableDelegate=false, maxIterations=${remainingIterations}`);
+			console.error(`[DELEGATE] Timeout inheritance: externalTimeout=${timeout}s, maxOperationTimeout=${Math.max(10000, (timeout * 1000) - 15000)}ms, behavior=${timeoutBehavior || 'graceful'}, bonusSteps=${gracefulTimeoutBonusSteps ?? 2}`);
+		}
+		if (tracer) {
+			tracer.addEvent('delegation.subagent_created', {
+				'delegation.session_id': sessionId,
+				'delegation.parent_session_id': parentSessionId,
+				'delegation.external_timeout_s': timeout,
+				'delegation.internal_timeout_ms': Math.max(10000, (timeout * 1000) - 15000),
+				'delegation.timeout_behavior': timeoutBehavior || 'graceful',
+				'delegation.bonus_steps': gracefulTimeoutBonusSteps ?? 2,
+				'delegation.max_iterations': remainingIterations,
+			});
 		}
 
 		// Set up timeout and parent abort handling.
@@ -546,10 +558,24 @@ export async function delegate({
 					if (debug) {
 						console.error(`[DELEGATE] Parent abort signal received — triggered graceful wind-down on subagent ${sessionId}`);
 					}
+					if (tracer) {
+						tracer.addEvent('delegation.parent_abort_phase1', {
+							'delegation.session_id': sessionId,
+							'delegation.parent_session_id': parentSessionId,
+							'delegation.action': 'graceful_wind_down',
+						});
+					}
 					// Phase 2: hard cancel after 30s if subagent hasn't finished
 					parentAbortHardCancelId = setTimeout(() => {
 						if (debug) {
 							console.error(`[DELEGATE] Graceful wind-down deadline expired — hard cancelling subagent ${sessionId}`);
+						}
+						if (tracer) {
+							tracer.addEvent('delegation.parent_abort_phase2', {
+								'delegation.session_id': sessionId,
+								'delegation.parent_session_id': parentSessionId,
+								'delegation.action': 'hard_cancel',
+							});
 						}
 						subagent.cancel();
 						reject(new Error('Delegation cancelled: parent operation was aborted (graceful wind-down deadline expired)'));

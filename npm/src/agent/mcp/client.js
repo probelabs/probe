@@ -536,6 +536,9 @@ export class MCPClientManager {
       // Look for a graceful_stop tool on this server (qualified name: serverName_graceful_stop)
       const qualifiedName = `${serverName}_graceful_stop`;
       if (this.tools.has(qualifiedName)) {
+        if (this.debug) {
+          console.log(`[DEBUG] MCP callGracefulStopAll: calling graceful_stop on server "${serverName}"`);
+        }
         try {
           // Short timeout — this is a signal, not a long operation
           const timeoutMs = 5000;
@@ -547,11 +550,29 @@ export class MCPClientManager {
             timeoutPromise
           ]);
           results.push({ server: serverName, success: true });
+          if (this.debug) {
+            console.log(`[DEBUG] MCP callGracefulStopAll: server "${serverName}" acknowledged graceful_stop`);
+          }
         } catch (e) {
           results.push({ server: serverName, success: false, error: e.message });
+          if (this.debug) {
+            console.log(`[DEBUG] MCP callGracefulStopAll: server "${serverName}" graceful_stop failed: ${e.message}`);
+          }
         }
       }
     }
+    if (this.debug) {
+      const withStop = results.length;
+      const total = this.clients.size;
+      console.log(`[DEBUG] MCP callGracefulStopAll: ${withStop}/${total} servers had graceful_stop tool`);
+    }
+    // Record telemetry event for the graceful_stop sweep
+    this.recordMcpEvent('graceful_stop.sweep_completed', {
+      servers_total: this.clients.size,
+      servers_with_graceful_stop: results.length,
+      servers_acknowledged: results.filter(r => r.success).length,
+      servers_failed: results.filter(r => !r.success).length,
+    });
     return results;
   }
 
@@ -585,11 +606,32 @@ export class MCPClientManager {
         inputSchema: tool.inputSchema,
         execute: async (args) => {
           const result = await this.callTool(name, args);
-          // Extract text content from MCP response
-          if (result.content && result.content[0]) {
-            return result.content[0].text;
+          if (!result.content || !result.content[0]) {
+            return JSON.stringify(result);
           }
-          return JSON.stringify(result);
+          // Check if response contains image content blocks
+          const hasImage = result.content.some(block => block.type === 'image');
+          if (hasImage) {
+            // Return the full content array so toModelOutput can convert it
+            return { _mcpContent: result.content };
+          }
+          // Text-only: return just the text
+          return result.content[0].text;
+        },
+        // Convert MCP content blocks (including images) to Vercel AI SDK format
+        toModelOutput: ({ output }) => {
+          if (output && typeof output === 'object' && output._mcpContent) {
+            const parts = [];
+            for (const block of output._mcpContent) {
+              if (block.type === 'text') {
+                parts.push({ type: 'text', text: block.text });
+              } else if (block.type === 'image') {
+                parts.push({ type: 'image-data', data: block.data, mediaType: block.mimeType });
+              }
+            }
+            return { type: 'content', value: parts };
+          }
+          return { type: 'text', value: typeof output === 'string' ? output : JSON.stringify(output) };
         }
       };
     }

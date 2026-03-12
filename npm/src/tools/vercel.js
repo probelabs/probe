@@ -956,6 +956,15 @@ export const delegateTool = (options = {}) => {
 					if (debug) {
 						console.error(`[DELEGATE] Capping timeout from ${timeout}s to ${effectiveTimeout}s (remaining parent budget: ${Math.floor(remaining/1000)}s)`);
 					}
+					if (tracer) {
+						tracer.addEvent('delegation.budget_capped', {
+							'delegation.original_timeout_s': timeout,
+							'delegation.effective_timeout_s': effectiveTimeout,
+							'delegation.parent_elapsed_ms': elapsed,
+							'delegation.parent_remaining_ms': remaining,
+							'delegation.parent_session_id': parentSessionId,
+						});
+					}
 				}
 			}
 

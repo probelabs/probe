@@ -432,7 +432,7 @@ export class ProbeAgent {
     })();
 
     if (this.debug) {
-      console.log(`[DEBUG] Timeout behavior: ${this.timeoutBehavior}, bonus steps: ${this.gracefulTimeoutBonusSteps}`);
+      console.log(`[DEBUG] Timeout behavior: ${this.timeoutBehavior}, bonus steps: ${this.gracefulTimeoutBonusSteps}, graceful stop deadline: ${this.gracefulStopDeadline}ms`);
     }
 
     // Retry configuration
@@ -5379,6 +5379,13 @@ Double-check your response based on the criteria above. If everything looks good
       if (this.debug) {
         console.log(`[DEBUG] Graceful wind-down triggered externally for session ${this.sessionId}`);
       }
+      if (this.tracer) {
+        this.tracer.addEvent('graceful_stop.external_trigger', {
+          'session.id': this.sessionId,
+        });
+      }
+    } else if (this.debug) {
+      console.log(`[DEBUG] Graceful wind-down already active for session ${this.sessionId}, skipping`);
     }
   }
 
@@ -5392,20 +5399,34 @@ Double-check your response based on the criteria above. If everything looks good
     if (gracefulTimeoutState.triggered) return; // Already initiated
 
     if (this.debug) {
-      console.log(`[DEBUG] Initiating graceful stop: ${reason}`);
+      console.log(`[DEBUG] Initiating graceful stop: ${reason} (subagents: ${this._activeSubagents.size}, hasMcpBridge: ${!!this.mcpBridge}, deadline: ${this.gracefulStopDeadline}ms)`);
     }
 
     // Mark graceful timeout — prepareStep will pick this up for the parent's wind-down
     gracefulTimeoutState.triggered = true;
 
+    if (this.tracer) {
+      this.tracer.addEvent('graceful_stop.initiated', {
+        'session.id': this.sessionId,
+        'graceful_stop.reason': reason,
+        'graceful_stop.active_subagents': this._activeSubagents.size,
+        'graceful_stop.has_mcp_bridge': !!this.mcpBridge,
+        'graceful_stop.deadline_ms': this.gracefulStopDeadline,
+      });
+    }
+
     // Signal all active subagents to wind down gracefully (not hard-cancel)
+    let subagentsSignalled = 0;
+    let subagentErrors = 0;
     for (const [sid, subagent] of this._activeSubagents) {
       try {
         subagent.triggerGracefulWindDown();
+        subagentsSignalled++;
         if (this.debug) {
           console.log(`[DEBUG] Triggered graceful wind-down on subagent ${sid}`);
         }
       } catch (e) {
+        subagentErrors++;
         if (this.debug) {
           console.log(`[DEBUG] Failed to trigger wind-down on subagent ${sid}: ${e.message}`);
         }
@@ -5413,11 +5434,12 @@ Double-check your response based on the criteria above. If everything looks good
     }
 
     // Call graceful_stop on MCP servers that expose it (fire-and-forget with short timeout)
+    let mcpResults = [];
     if (this.mcpBridge) {
       try {
-        const results = await this.mcpBridge.callGracefulStopAll();
-        if (this.debug && results.length > 0) {
-          console.log(`[DEBUG] MCP graceful_stop results: ${JSON.stringify(results)}`);
+        mcpResults = await this.mcpBridge.callGracefulStopAll();
+        if (this.debug && mcpResults.length > 0) {
+          console.log(`[DEBUG] MCP graceful_stop results: ${JSON.stringify(mcpResults)}`);
         }
       } catch (e) {
         if (this.debug) {
@@ -5426,10 +5448,27 @@ Double-check your response based on the criteria above. If everything looks good
       }
     }
 
+    if (this.tracer) {
+      this.tracer.addEvent('graceful_stop.signals_sent', {
+        'session.id': this.sessionId,
+        'graceful_stop.subagents_signalled': subagentsSignalled,
+        'graceful_stop.subagent_errors': subagentErrors,
+        'graceful_stop.mcp_servers_called': mcpResults.filter(r => r.success).length,
+        'graceful_stop.mcp_servers_failed': mcpResults.filter(r => !r.success).length,
+        'graceful_stop.mcp_servers_total': mcpResults.length,
+      });
+    }
+
     // Safety net: hard abort after deadline if tools haven't finished
     this._gracefulStopHardAbortId = setTimeout(() => {
       if (this.debug) {
         console.log(`[DEBUG] Graceful stop deadline (${this.gracefulStopDeadline}ms) expired — hard aborting`);
+      }
+      if (this.tracer) {
+        this.tracer.addEvent('graceful_stop.deadline_expired', {
+          'session.id': this.sessionId,
+          'graceful_stop.deadline_ms': this.gracefulStopDeadline,
+        });
       }
       if (this._abortController) this._abortController.abort();
     }, this.gracefulStopDeadline);
@@ -5442,6 +5481,16 @@ Double-check your response based on the criteria above. If everything looks good
    */
   _registerSubagent(sessionId, subagent) {
     this._activeSubagents.set(sessionId, subagent);
+    if (this.debug) {
+      console.log(`[DEBUG] Registered subagent ${sessionId} (active: ${this._activeSubagents.size})`);
+    }
+    if (this.tracer) {
+      this.tracer.addEvent('subagent.registered', {
+        'session.id': this.sessionId,
+        'subagent.session_id': sessionId,
+        'subagent.active_count': this._activeSubagents.size,
+      });
+    }
   }
 
   /**
@@ -5450,6 +5499,16 @@ Double-check your response based on the criteria above. If everything looks good
    */
   _unregisterSubagent(sessionId) {
     this._activeSubagents.delete(sessionId);
+    if (this.debug) {
+      console.log(`[DEBUG] Unregistered subagent ${sessionId} (active: ${this._activeSubagents.size})`);
+    }
+    if (this.tracer) {
+      this.tracer.addEvent('subagent.unregistered', {
+        'session.id': this.sessionId,
+        'subagent.session_id': sessionId,
+        'subagent.active_count': this._activeSubagents.size,
+      });
+    }
   }
 
   /**
