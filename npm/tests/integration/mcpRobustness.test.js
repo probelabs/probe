@@ -14,18 +14,26 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
+import { createStandardMockServer } from '../mcp/inProcessMcpServer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 describe('MCP Robustness Tests', () => {
   let tempDir;
+  let mockServers = [];
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'mcp-robustness-test-'));
   });
 
   afterEach(async () => {
+    // Stop any in-process MCP servers
+    for (const server of mockServers) {
+      await server.stop();
+    }
+    mockServers = [];
+
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -474,53 +482,44 @@ describe('MCP Robustness Tests', () => {
     test('should handle ProbeAgent with mock server under load', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';
 
-      // Create configuration for mock server
+      // Create in-process MCP server
+      const mockServer = createStandardMockServer('stress-test-server');
+      await mockServer.start();
+      mockServers.push(mockServer);
+
       const mcpConfig = {
         mcpServers: {
-          'stress-test-server': {
-            command: 'node',
-            args: [join(__dirname, '../mcp/mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          }
+          'stress-test-server': mockServer.getClientConfig()
         }
       };
 
-      const configPath = join(tempDir, 'stress-test-config.json');
-      await writeFile(configPath, JSON.stringify(mcpConfig, null, 2));
-
-      process.env.MCP_CONFIG_PATH = configPath;
-
       const agent = new ProbeAgent({
         enableMcp: true,
+        mcpConfig,
         debug: false,
         path: tempDir
       });
 
-      // Wait for initialization
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Explicitly initialize MCP (normally happens inside run())
+      await agent.initializeMCP();
 
-      if (agent.mcpBridge && agent.mcpBridge.getToolNames().length > 0) {
-        // Test that MCP tools are available via getVercelTools
-        const vercelTools = agent.mcpBridge.getVercelTools();
-        expect(Object.keys(vercelTools).length).toBeGreaterThan(0);
+      // Test that MCP tools are available via getVercelTools
+      const vercelTools = agent.mcpBridge.getVercelTools();
+      expect(Object.keys(vercelTools).length).toBeGreaterThan(0);
 
-        // Verify tools are consistent across multiple calls
-        const toolSnapshots = [];
-        for (let i = 0; i < 10; i++) {
-          toolSnapshots.push(Object.keys(agent.mcpBridge.getVercelTools()));
-        }
-        toolSnapshots.forEach(snapshot => {
-          expect(snapshot).toEqual(toolSnapshots[0]);
-        });
-
-        console.log('Stress test completed successfully');
-      } else {
-        console.warn('Mock server not available for stress testing');
+      // Verify tools are consistent across multiple calls
+      const toolSnapshots = [];
+      for (let i = 0; i < 10; i++) {
+        toolSnapshots.push(Object.keys(agent.mcpBridge.getVercelTools()));
       }
+      toolSnapshots.forEach(snapshot => {
+        expect(snapshot).toEqual(toolSnapshots[0]);
+      });
+
+      console.log('Stress test completed successfully');
 
       await agent.cleanup();
-    }, 20000);
+    }, 10000);
 
     test('should handle multiple ProbeAgent instances with MCP', async () => {
       process.env.ANTHROPIC_API_KEY = 'test-key';

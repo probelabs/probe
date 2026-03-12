@@ -14,18 +14,26 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
+import { createStandardMockServer } from '../mcp/inProcessMcpServer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 describe('MCP Error Handling and Edge Cases', () => {
   let tempDir;
+  let mockServers = [];
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'mcp-error-test-'));
   });
 
   afterEach(async () => {
+    // Stop all in-process mock servers
+    for (const srv of mockServers) {
+      await srv.stop();
+    }
+    mockServers = [];
+
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -191,58 +199,42 @@ describe('MCP Error Handling and Edge Cases', () => {
 
   describe('Tool Execution Errors', () => {
     test('should handle tool execution failures with mock server', async () => {
-      // Create configuration for mock server that has error-generating tools
+      const mockServer = createStandardMockServer('error-test-server');
+      mockServers.push(mockServer);
+      await mockServer.start();
+
       const mcpConfig = {
         mcpServers: {
-          'error-test-server': {
-            command: 'node',
-            args: [join(__dirname, '../mcp/mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          }
+          'error-test-server': mockServer.getClientConfig()
         }
       };
 
-      const configPath = join(tempDir, 'error-test-config.json');
-      await writeFile(configPath, JSON.stringify(mcpConfig, null, 2));
-
-      process.env.MCP_CONFIG_PATH = configPath;
-
       const bridge = new MCPXmlBridge({ debug: false });
-      await bridge.initialize();
+      await bridge.initialize(mcpConfig);
 
-      // Wait for initialization
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Find the error_test tool (prefixed with server name)
+      const errorToolName = bridge.getToolNames().find(name => name.includes('error_test'));
+      expect(errorToolName).toBeDefined();
 
-      if (bridge.getToolNames().length > 0) {
-        // Find the error_test tool (prefixed with server name)
-        const errorToolName = bridge.getToolNames().find(name => name.includes('error_test'));
-        if (errorToolName) {
-          const vercelTools = bridge.getVercelTools();
-          const errorTool = vercelTools[errorToolName];
+      const vercelTools = bridge.getVercelTools();
+      const errorTool = vercelTools[errorToolName];
 
-          // Test error tool that generates validation errors
-          try {
-            await errorTool.execute({ error_type: 'validation', message: 'Test validation error' });
-          } catch (error) {
-            expect(error.message || String(error)).toContain('Test validation error');
-          }
+      // Test error tool that generates validation errors
+      try {
+        await errorTool.execute({ error_type: 'validation', message: 'Test validation error' });
+      } catch (error) {
+        expect(error.message || String(error)).toContain('Test validation error');
+      }
 
-          // Test error tool that generates runtime errors
-          try {
-            await errorTool.execute({ error_type: 'runtime', message: 'Test runtime error' });
-          } catch (error) {
-            expect(error.message || String(error)).toContain('Test runtime error');
-          }
-        } else {
-          console.warn('Error test tool not found in mock server');
-        }
-      } else {
-        console.warn('Mock server not available for error testing');
+      // Test error tool that generates runtime errors
+      try {
+        await errorTool.execute({ error_type: 'runtime', message: 'Test runtime error' });
+      } catch (error) {
+        expect(error.message || String(error)).toContain('Test runtime error');
       }
 
       await bridge.cleanup();
-    }, 15000);
+    });
 
     test('should handle invalid tool parameters', async () => {
       const bridge = new MCPXmlBridge({ debug: false });
@@ -268,55 +260,41 @@ describe('MCP Error Handling and Edge Cases', () => {
     });
 
     test('should handle tool timeouts', async () => {
-      // Create configuration for mock server with slow operations
+      const mockServer = createStandardMockServer('timeout-test-server');
+      mockServers.push(mockServer);
+      await mockServer.start();
+
       const mcpConfig = {
         mcpServers: {
-          'timeout-test-server': {
-            command: 'node',
-            args: [join(__dirname, '../mcp/mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          }
+          'timeout-test-server': mockServer.getClientConfig()
         }
       };
 
-      const configPath = join(tempDir, 'timeout-test-config.json');
-      await writeFile(configPath, JSON.stringify(mcpConfig, null, 2));
-
-      process.env.MCP_CONFIG_PATH = configPath;
-
       const bridge = new MCPXmlBridge({ debug: false });
-      await bridge.initialize();
+      await bridge.initialize(mcpConfig);
 
-      // Wait for initialization
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Find a slow operation tool
+      const slowToolName = bridge.getToolNames().find(name => name.includes('slow_operation'));
+      expect(slowToolName).toBeDefined();
 
-      if (bridge.getToolNames().length > 0) {
-        // Find a slow operation tool
-        const slowToolName = bridge.getToolNames().find(name => name.includes('slow_operation'));
-        if (slowToolName) {
-          const vercelTools = bridge.getVercelTools();
-          const slowTool = vercelTools[slowToolName];
+      const vercelTools = bridge.getVercelTools();
+      const slowTool = vercelTools[slowToolName];
 
-          const start = Date.now();
-          try {
-            const result = await slowTool.execute({ delay_ms: 500, result: 'completed successfully' });
-            const elapsed = Date.now() - start;
-            expect(elapsed).toBeGreaterThanOrEqual(500);
-            // Result may be string or object depending on tool implementation
-            const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-            expect(resultStr).toContain('completed successfully');
-          } catch (error) {
-            // Tool may throw on timeout, which is acceptable behavior
-            console.warn('Slow tool threw error (may be expected):', error.message);
-          }
-        }
-      } else {
-        console.warn('Mock server not available for timeout testing');
+      const start = Date.now();
+      try {
+        const result = await slowTool.execute({ delay_ms: 500, result: 'completed successfully' });
+        const elapsed = Date.now() - start;
+        expect(elapsed).toBeGreaterThanOrEqual(500);
+        // Result may be string or object depending on tool implementation
+        const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+        expect(resultStr).toContain('completed successfully');
+      } catch (error) {
+        // Tool may throw on timeout, which is acceptable behavior
+        console.warn('Slow tool threw error (may be expected):', error.message);
       }
 
       await bridge.cleanup();
-    }, 20000);
+    });
   });
 
   describe('ProbeAgent Integration Error Handling', () => {
@@ -408,14 +386,13 @@ describe('MCP Error Handling and Edge Cases', () => {
 
     test('should handle partial MCP failures', async () => {
       // Test scenario where some servers connect and others fail
+      const mockServer = createStandardMockServer('working-server');
+      mockServers.push(mockServer);
+      await mockServer.start();
+
       const mcpConfig = {
         mcpServers: {
-          'working-server': {
-            command: 'node',
-            args: [join(__dirname, '../mcp/mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          },
+          'working-server': mockServer.getClientConfig(),
           'failing-server': {
             command: 'nonexistent-command',
             transport: 'stdio',
@@ -424,21 +401,15 @@ describe('MCP Error Handling and Edge Cases', () => {
         }
       };
 
-      const configPath = join(tempDir, 'partial-config.json');
-      await writeFile(configPath, JSON.stringify(mcpConfig, null, 2));
-
-      process.env.MCP_CONFIG_PATH = configPath;
-
       const manager = new MCPClientManager({ debug: false });
-      const result = await manager.initialize();
+      const result = await manager.initialize(mcpConfig);
 
-      // Should have attempted 2 connections, with possibly 1 success
+      // Should have attempted 2 connections, with 1 success (in-process) and 1 failure
       expect(result.total).toBe(2);
-      // Connected count depends on whether mock server actually starts
-      expect(result.connected).toBeLessThanOrEqual(1);
+      expect(result.connected).toBe(1);
 
       await manager.disconnect();
-    }, 15000);
+    });
   });
 
   describe('Memory and Resource Management', () => {

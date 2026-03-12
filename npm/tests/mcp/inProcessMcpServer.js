@@ -213,3 +213,217 @@ export function createAgentMcpServer(name = 'agent-server') {
   server.getState = () => state;
   return server;
 }
+
+/**
+ * Create a standard mock MCP server with all 7 tools from mockMcpServer.js.
+ * Drop-in replacement for the stdio-based mock server.
+ *
+ * Tools: foobar, calculator, echo, filesystem, weather, error_test, slow_operation
+ *
+ * @param {string} [name='mock-test'] - Server name
+ * @returns {InProcessMcpServer}
+ */
+export function createStandardMockServer(name = 'mock-test') {
+  const dataStore = new Map();
+  dataStore.set('test_key', 'test_value');
+  dataStore.set('count', '42');
+
+  const server = new InProcessMcpServer(name);
+
+  // 1. foobar — key-value store
+  server.addTool(
+    {
+      name: 'foobar',
+      description: 'A simple key-value store tool for testing basic MCP functionality',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['get', 'set', 'list'], default: 'get' },
+          key: { type: 'string' },
+          value: { type: 'string' },
+        },
+      },
+    },
+    async (args) => {
+      const action = args.action || 'get';
+      switch (action) {
+        case 'get':
+          if (!args.key) throw new Error('Key is required for get operation');
+          const val = dataStore.get(args.key);
+          return val !== undefined ? `Value for key "${args.key}": ${val}` : `Key "${args.key}" not found`;
+        case 'set':
+          if (!args.key || args.value === undefined) throw new Error('Both key and value are required for set operation');
+          dataStore.set(args.key, args.value);
+          return `Successfully set "${args.key}" = "${args.value}"`;
+        case 'list':
+          const keys = Array.from(dataStore.keys());
+          return keys.length > 0 ? `Stored keys: ${keys.join(', ')}` : 'No keys stored';
+        default:
+          throw new Error(`Unknown action: ${action}`);
+      }
+    }
+  );
+
+  // 2. calculator
+  server.addTool(
+    {
+      name: 'calculator',
+      description: 'Performs basic mathematical operations',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          operation: { type: 'string', enum: ['add', 'subtract', 'multiply', 'divide'] },
+          a: { type: 'number' },
+          b: { type: 'number' },
+        },
+        required: ['operation', 'a', 'b'],
+      },
+    },
+    async (args) => {
+      const { operation, a, b } = args;
+      let result;
+      switch (operation) {
+        case 'add': result = a + b; break;
+        case 'subtract': result = a - b; break;
+        case 'multiply': result = a * b; break;
+        case 'divide':
+          if (b === 0) throw new Error('Division by zero is not allowed');
+          result = a / b; break;
+        default: throw new Error(`Unknown operation: ${operation}`);
+      }
+      return `${a} ${operation} ${b} = ${result}`;
+    }
+  );
+
+  // 3. echo
+  server.addTool(
+    {
+      name: 'echo',
+      description: 'Echoes back the provided message',
+      inputSchema: {
+        type: 'object',
+        properties: { message: { type: 'string' } },
+        required: ['message'],
+      },
+    },
+    async (args) => `Echo: ${args.message}`
+  );
+
+  // 4. filesystem
+  const mockFiles = {
+    '/test.txt': 'This is test content',
+    '/config.json': '{"setting": "value"}',
+    '/empty.txt': '',
+  };
+  server.addTool(
+    {
+      name: 'filesystem',
+      description: 'Mock filesystem operations for testing',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['read', 'write', 'list'] },
+          path: { type: 'string' },
+          content: { type: 'string' },
+        },
+        required: ['action', 'path'],
+      },
+    },
+    async (args) => {
+      switch (args.action) {
+        case 'read':
+          if (mockFiles[args.path] !== undefined) return `File content of ${args.path}:\n${mockFiles[args.path]}`;
+          throw new Error(`File not found: ${args.path}`);
+        case 'write':
+          if (args.content === undefined) throw new Error('Content is required for write operation');
+          mockFiles[args.path] = args.content;
+          return `Successfully wrote ${args.content.length} characters to ${args.path}`;
+        case 'list':
+          return `Files in mock filesystem:\n${Object.keys(mockFiles).join('\n')}`;
+        default:
+          throw new Error(`Unknown filesystem action: ${args.action}`);
+      }
+    }
+  );
+
+  // 5. weather
+  server.addTool(
+    {
+      name: 'weather',
+      description: 'Mock weather service for testing external API simulation',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          location: { type: 'string' },
+          units: { type: 'string', enum: ['celsius', 'fahrenheit'], default: 'celsius' },
+        },
+        required: ['location'],
+      },
+    },
+    async (args) => {
+      const weatherData = {
+        'new york': { celsius: 15, fahrenheit: 59, condition: 'Cloudy' },
+        'london': { celsius: 12, fahrenheit: 54, condition: 'Rainy' },
+        'tokyo': { celsius: 22, fahrenheit: 72, condition: 'Sunny' },
+        'default': { celsius: 20, fahrenheit: 68, condition: 'Clear' },
+      };
+      const units = args.units || 'celsius';
+      const key = args.location.toLowerCase();
+      const w = weatherData[key] || weatherData.default;
+      return `Weather in ${args.location}: ${w[units]}°${units === 'celsius' ? 'C' : 'F'}, ${w.condition}`;
+    }
+  );
+
+  // 6. error_test
+  server.addTool(
+    {
+      name: 'error_test',
+      description: 'Tool that generates various types of errors for testing error handling',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          error_type: { type: 'string', enum: ['validation', 'runtime', 'timeout'], default: 'runtime' },
+          message: { type: 'string' },
+        },
+      },
+    },
+    async (args) => {
+      const errorType = args.error_type || 'runtime';
+      switch (errorType) {
+        case 'validation':
+          throw new Error(args.message || 'This is a validation error for testing');
+        case 'runtime':
+          throw new Error(args.message || 'This is a runtime error for testing');
+        case 'timeout':
+          await new Promise(resolve => setTimeout(resolve, 30000));
+          return 'This should never be reached due to timeout';
+        default:
+          throw new Error(`Unknown error type: ${errorType}`);
+      }
+    }
+  );
+
+  // 7. slow_operation
+  server.addTool(
+    {
+      name: 'slow_operation',
+      description: 'Tool that simulates slow operations for testing timeouts',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          delay_ms: { type: 'number', minimum: 0, maximum: 10000, default: 1000 },
+          result: { type: 'string', default: 'completed' },
+        },
+      },
+    },
+    async (args) => {
+      const delay = args.delay_ms ?? 1000;
+      const result = args.result || 'completed';
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return `Slow operation ${result} after ${delay}ms`;
+    }
+  );
+
+  server.getDataStore = () => dataStore;
+  return server;
+}

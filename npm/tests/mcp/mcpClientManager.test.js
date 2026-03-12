@@ -5,14 +5,11 @@
 import { jest } from '@jest/globals';
 import { MCPClientManager, createTransport, isMethodAllowed } from '../../src/agent/mcp/client.js';
 import { validateTimeout, parseEnabledServers, DEFAULT_TIMEOUT, MAX_TIMEOUT } from '../../src/agent/mcp/config.js';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+import { createStandardMockServer } from './inProcessMcpServer.js';
 
 describe('MCPClientManager', () => {
   let manager;
+  let mockServer;
 
   beforeEach(() => {
     manager = new MCPClientManager({ debug: false });
@@ -21,6 +18,10 @@ describe('MCPClientManager', () => {
   afterEach(async () => {
     if (manager) {
       await manager.disconnect();
+    }
+    if (mockServer) {
+      await mockServer.stop();
+      mockServer = null;
     }
   });
 
@@ -146,22 +147,18 @@ describe('MCPClientManager', () => {
     });
 
     test('should initialize with mock server configuration', async () => {
+      mockServer = createStandardMockServer('mock-server');
+      await mockServer.start();
+
       const config = {
         mcpServers: {
-          'mock-server': {
-            command: 'node',
-            args: [join(__dirname, 'mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          }
+          'mock-server': mockServer.getClientConfig()
         }
       };
 
-      // This will attempt to connect but likely fail without actual server
-      // We're testing the configuration parsing and setup
       const result = await manager.initialize(config);
       expect(result.total).toBe(1);
-      // Connected might be 0 if server isn't actually running, which is expected in unit tests
+      expect(result.connected).toBe(1);
     });
   });
 
@@ -184,45 +181,39 @@ describe('MCPClientManager', () => {
 
   describe('Mock Server Integration', () => {
     test('should connect to mock server and load tools', async () => {
+      mockServer = createStandardMockServer('mock-test');
+      await mockServer.start();
+
       const config = {
         mcpServers: {
-          'mock-test': {
-            command: 'node',
-            args: [join(__dirname, 'mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          }
+          'mock-test': mockServer.getClientConfig()
         }
       };
 
-      // Start the manager
       const result = await manager.initialize(config);
 
-      if (result.connected > 0) {
-        // If connection succeeded, verify tools
-        const tools = manager.getTools();
-        expect(Object.keys(tools).length).toBeGreaterThan(0);
+      expect(result.connected).toBeGreaterThan(0);
 
-        // Check for expected mock tools
-        const toolNames = Object.keys(tools);
-        expect(toolNames.some(name => name.includes('foobar'))).toBe(true);
-        expect(toolNames.some(name => name.includes('calculator'))).toBe(true);
-        expect(toolNames.some(name => name.includes('echo'))).toBe(true);
+      // Verify tools
+      const tools = manager.getTools();
+      expect(Object.keys(tools).length).toBeGreaterThan(0);
 
-        // Test Vercel tools format
-        const vercelTools = manager.getVercelTools();
-        expect(Object.keys(vercelTools).length).toBeGreaterThan(0);
+      // Check for expected mock tools
+      const toolNames = Object.keys(tools);
+      expect(toolNames.some(name => name.includes('foobar'))).toBe(true);
+      expect(toolNames.some(name => name.includes('calculator'))).toBe(true);
+      expect(toolNames.some(name => name.includes('echo'))).toBe(true);
 
-        for (const [name, tool] of Object.entries(vercelTools)) {
-          expect(tool).toHaveProperty('description');
-          expect(tool).toHaveProperty('inputSchema');
-          expect(typeof tool.execute).toBe('function');
-        }
-      } else {
-        // If connection failed (e.g., no actual server running), that's also acceptable for unit tests
-        console.warn('Mock server connection failed - this is expected in unit test environment');
+      // Test Vercel tools format
+      const vercelTools = manager.getVercelTools();
+      expect(Object.keys(vercelTools).length).toBeGreaterThan(0);
+
+      for (const [name, tool] of Object.entries(vercelTools)) {
+        expect(tool).toHaveProperty('description');
+        expect(tool).toHaveProperty('inputSchema');
+        expect(typeof tool.execute).toBe('function');
       }
-    }, 10000); // Longer timeout for connection attempts
+    });
   });
 
   describe('Cleanup', () => {
@@ -692,6 +683,7 @@ describe('isMethodAllowed Function', () => {
 
 describe('Method Filtering Integration', () => {
   let manager;
+  let mockServer;
 
   beforeEach(() => {
     manager = new MCPClientManager({ debug: false });
@@ -701,192 +693,181 @@ describe('Method Filtering Integration', () => {
     if (manager) {
       await manager.disconnect();
     }
+    if (mockServer) {
+      await mockServer.stop();
+      mockServer = null;
+    }
   });
 
   test('should filter tools during server connection with allowedMethods', async () => {
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true,
+        'mock-test': mockServer.getClientConfig({
           allowedMethods: ['foobar', 'echo'] // Only allow these two
-        }
+        })
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      const tools = manager.getTools();
-      const toolNames = Object.keys(tools);
+    expect(result.connected).toBeGreaterThan(0);
+    const tools = manager.getTools();
+    const toolNames = Object.keys(tools);
 
-      // Should have foobar and echo, but not calculator
-      expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
-      expect(toolNames.some(n => n.includes('echo'))).toBe(true);
-      expect(toolNames.some(n => n.includes('calculator'))).toBe(false);
-    } else {
-      console.warn('Mock server connection failed - skipping integration assertions');
-    }
-  }, 10000);
+    // Should have foobar and echo, but not calculator
+    expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
+    expect(toolNames.some(n => n.includes('echo'))).toBe(true);
+    expect(toolNames.some(n => n.includes('calculator'))).toBe(false);
+  });
 
   test('should filter tools during server connection with blockedMethods', async () => {
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true,
+        'mock-test': mockServer.getClientConfig({
           blockedMethods: ['calculator'] // Block calculator
-        }
+        })
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      const tools = manager.getTools();
-      const toolNames = Object.keys(tools);
+    expect(result.connected).toBeGreaterThan(0);
+    const tools = manager.getTools();
+    const toolNames = Object.keys(tools);
 
-      // Should have foobar and echo, but not calculator
-      expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
-      expect(toolNames.some(n => n.includes('echo'))).toBe(true);
-      expect(toolNames.some(n => n.includes('calculator'))).toBe(false);
-    } else {
-      console.warn('Mock server connection failed - skipping integration assertions');
-    }
-  }, 10000);
+    // Should have foobar and echo, but not calculator
+    expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
+    expect(toolNames.some(n => n.includes('echo'))).toBe(true);
+    expect(toolNames.some(n => n.includes('calculator'))).toBe(false);
+  });
 
   test('should register all tools when no method filter specified', async () => {
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true
-          // No allowedMethods or blockedMethods
-        }
+        'mock-test': mockServer.getClientConfig()
+        // No allowedMethods or blockedMethods
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      const tools = manager.getTools();
-      const toolNames = Object.keys(tools);
+    expect(result.connected).toBeGreaterThan(0);
+    const tools = manager.getTools();
+    const toolNames = Object.keys(tools);
 
-      // Should have all tools: foobar, echo, and calculator
-      expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
-      expect(toolNames.some(n => n.includes('echo'))).toBe(true);
-      expect(toolNames.some(n => n.includes('calculator'))).toBe(true);
-    } else {
-      console.warn('Mock server connection failed - skipping integration assertions');
-    }
-  }, 10000);
+    // Should have all tools: foobar, echo, and calculator
+    expect(toolNames.some(n => n.includes('foobar'))).toBe(true);
+    expect(toolNames.some(n => n.includes('echo'))).toBe(true);
+    expect(toolNames.some(n => n.includes('calculator'))).toBe(true);
+  });
 
   test('should warn about unmatched allowedMethods patterns', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true,
+        'mock-test': mockServer.getClientConfig({
           allowedMethods: ['foobar', 'nonexistent_method', 'another_missing']
-        }
+        })
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      // Check that warning was logged about unmatched patterns
-      const warnCalls = consoleSpy.mock.calls.filter(call =>
-        call[0].includes('[MCP WARN]') && call[0].includes('did not match')
-      );
-      expect(warnCalls.length).toBeGreaterThan(0);
+    expect(result.connected).toBeGreaterThan(0);
 
-      // Check that available methods were listed
-      const availableCalls = consoleSpy.mock.calls.filter(call =>
-        call[0].includes('[MCP WARN]') && call[0].includes('Available methods')
-      );
-      expect(availableCalls.length).toBeGreaterThan(0);
-    }
+    // Check that warning was logged about unmatched patterns
+    const warnCalls = consoleSpy.mock.calls.filter(call =>
+      call[0].includes('[MCP WARN]') && call[0].includes('did not match')
+    );
+    expect(warnCalls.length).toBeGreaterThan(0);
+
+    // Check that available methods were listed
+    const availableCalls = consoleSpy.mock.calls.filter(call =>
+      call[0].includes('[MCP WARN]') && call[0].includes('Available methods')
+    );
+    expect(availableCalls.length).toBeGreaterThan(0);
 
     consoleSpy.mockRestore();
-  }, 10000);
+  });
 
   test('should warn about unmatched blockedMethods patterns', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true,
+        'mock-test': mockServer.getClientConfig({
           blockedMethods: ['nonexistent_method', 'missing_*']
-        }
+        })
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      // Check that warning was logged about unmatched patterns
-      const warnCalls = consoleSpy.mock.calls.filter(call =>
-        call[0].includes('[MCP WARN]') && call[0].includes('did not match')
-      );
-      expect(warnCalls.length).toBeGreaterThan(0);
+    expect(result.connected).toBeGreaterThan(0);
 
-      // Check that available methods were listed
-      const availableCalls = consoleSpy.mock.calls.filter(call =>
-        call[0].includes('[MCP WARN]') && call[0].includes('Available methods')
-      );
-      expect(availableCalls.length).toBeGreaterThan(0);
-    }
+    // Check that warning was logged about unmatched patterns
+    const warnCalls = consoleSpy.mock.calls.filter(call =>
+      call[0].includes('[MCP WARN]') && call[0].includes('did not match')
+    );
+    expect(warnCalls.length).toBeGreaterThan(0);
+
+    // Check that available methods were listed
+    const availableCalls = consoleSpy.mock.calls.filter(call =>
+      call[0].includes('[MCP WARN]') && call[0].includes('Available methods')
+    );
+    expect(availableCalls.length).toBeGreaterThan(0);
 
     consoleSpy.mockRestore();
-  }, 10000);
+  });
 
   test('should not warn when all patterns match', async () => {
     const consoleSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true,
+        'mock-test': mockServer.getClientConfig({
           allowedMethods: ['foobar', 'echo'] // These exist in mock server
-        }
+        })
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      // Check that NO warning was logged about unmatched patterns
-      const warnCalls = consoleSpy.mock.calls.filter(call =>
-        call[0].includes('[MCP WARN]') && call[0].includes('did not match')
-      );
-      expect(warnCalls.length).toBe(0);
-    }
+    expect(result.connected).toBeGreaterThan(0);
+
+    // Check that NO warning was logged about unmatched patterns
+    const warnCalls = consoleSpy.mock.calls.filter(call =>
+      call[0].includes('[MCP WARN]') && call[0].includes('did not match')
+    );
+    expect(warnCalls.length).toBe(0);
 
     consoleSpy.mockRestore();
-  }, 10000);
+  });
 });
 
 describe('MCP Telemetry', () => {
   let manager;
   let mockTracer;
+  let mockServer;
 
   beforeEach(() => {
     // Create mock tracer that records all events
@@ -902,6 +883,10 @@ describe('MCP Telemetry', () => {
   afterEach(async () => {
     if (manager) {
       await manager.disconnect();
+    }
+    if (mockServer) {
+      await mockServer.stop();
+      mockServer = null;
     }
   });
 
@@ -931,14 +916,12 @@ describe('MCP Telemetry', () => {
   });
 
   test('should record events during server connection attempt', async () => {
+    mockServer = createStandardMockServer('test-server');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'test-server': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true
-        }
+        'test-server': mockServer.getClientConfig()
       }
     };
 
@@ -949,94 +932,86 @@ describe('MCP Telemetry', () => {
       'server.connecting',
       expect.objectContaining({
         serverName: 'test-server',
-        transport: 'stdio'
+        transport: 'in-memory'
       })
     );
   });
 
   test('should record tools.discovered event on successful connection', async () => {
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true
-        }
+        'mock-test': mockServer.getClientConfig()
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
-        'tools.discovered',
-        expect.objectContaining({
-          serverName: 'mock-test',
-          toolCount: expect.any(Number)
-        })
-      );
-    }
-  }, 10000);
+    expect(result.connected).toBeGreaterThan(0);
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'tools.discovered',
+      expect.objectContaining({
+        serverName: 'mock-test',
+        toolCount: expect.any(Number)
+      })
+    );
+  });
 
   test('should record tools.filtered event when method filtering is used', async () => {
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true,
+        'mock-test': mockServer.getClientConfig({
           allowedMethods: ['foobar'] // Filter to only one tool
-        }
+        })
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      // tools.filtered is only recorded when filteredCount > 0
-      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
-        'tools.filtered',
-        expect.objectContaining({
-          serverName: 'mock-test',
-          filteredCount: expect.any(Number),
-          filteredTools: expect.any(Array),
-          allowedMethods: ['foobar'],
-          blockedMethods: []
-        })
-      );
-    }
-  }, 10000);
+    expect(result.connected).toBeGreaterThan(0);
+    // tools.filtered is only recorded when filteredCount > 0
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'tools.filtered',
+      expect.objectContaining({
+        serverName: 'mock-test',
+        filteredCount: expect.any(Number),
+        filteredTools: expect.any(Array),
+        allowedMethods: ['foobar'],
+        blockedMethods: []
+      })
+    );
+  });
 
   test('should record server.connected event on successful connection', async () => {
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true
-        }
+        'mock-test': mockServer.getClientConfig()
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
-        'server.connected',
-        expect.objectContaining({
-          serverName: 'mock-test',
-          transport: 'stdio',
-          totalToolCount: expect.any(Number),
-          registeredCount: expect.any(Number),
-          filteredCount: expect.any(Number),
-          registeredTools: expect.any(Array)
-        })
-      );
-    }
-  }, 10000);
+    expect(result.connected).toBeGreaterThan(0);
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'server.connected',
+      expect.objectContaining({
+        serverName: 'mock-test',
+        transport: 'in-memory',
+        totalToolCount: expect.any(Number),
+        registeredCount: expect.any(Number),
+        filteredCount: expect.any(Number),
+        registeredTools: expect.any(Array)
+      })
+    );
+  });
 
   test('should record server.connection_failed event on failed connection', async () => {
     const config = {
@@ -1062,42 +1037,40 @@ describe('MCP Telemetry', () => {
   }, 10000);
 
   test('should record disconnection events', async () => {
+    mockServer = createStandardMockServer('mock-test');
+    await mockServer.start();
+
     const config = {
       mcpServers: {
-        'mock-test': {
-          command: 'node',
-          args: [join(__dirname, 'mockMcpServer.js')],
-          transport: 'stdio',
-          enabled: true
-        }
+        'mock-test': mockServer.getClientConfig()
       }
     };
 
     const result = await manager.initialize(config);
 
-    if (result.connected > 0) {
-      // Clear previous events to focus on disconnection
-      mockTracer.events = [];
-      mockTracer.recordMcpEvent.mockClear();
+    expect(result.connected).toBeGreaterThan(0);
 
-      await manager.disconnect();
+    // Clear previous events to focus on disconnection
+    mockTracer.events = [];
+    mockTracer.recordMcpEvent.mockClear();
 
-      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
-        'disconnection.started',
-        expect.objectContaining({
-          serverCount: 1
-        })
-      );
+    await manager.disconnect();
 
-      expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
-        'disconnection.completed',
-        expect.objectContaining({
-          serverCount: expect.any(Number),
-          serverNames: expect.any(Array)
-        })
-      );
-    }
-  }, 10000);
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'disconnection.started',
+      expect.objectContaining({
+        serverCount: 1
+      })
+    );
+
+    expect(mockTracer.recordMcpEvent).toHaveBeenCalledWith(
+      'disconnection.completed',
+      expect.objectContaining({
+        serverCount: expect.any(Number),
+        serverNames: expect.any(Array)
+      })
+    );
+  });
 
   test('should work without tracer (null tracer)', async () => {
     const managerWithoutTracer = new MCPClientManager({ debug: false });
