@@ -4015,7 +4015,7 @@ Double-check your response based on the criteria above. If everything looks good
                       for (const tr of step.toolResults) {
                         const resultText = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
                         if (resultText && resultText.length > 0) {
-                          toolSummaries.push(resultText.substring(0, 5000));
+                          toolSummaries.push(resultText);
                         }
                       }
                     }

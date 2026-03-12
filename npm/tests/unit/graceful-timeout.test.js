@@ -479,7 +479,7 @@ describe('Graceful timeout empty-text fallback', () => {
     expect(result).toContain('BM25 is a ranking algorithm');
   });
 
-  test('truncates large tool results instead of skipping them', async () => {
+  test('includes full large tool results without truncation', async () => {
     const agent = createMockedAgent({ maxOperationTimeout: 100, gracefulTimeoutBonusSteps: 2 });
 
     // Create a result larger than 5000 chars (simulating orchestrator sub-agent output)
@@ -505,10 +505,10 @@ describe('Graceful timeout empty-text fallback', () => {
     });
 
     const result = await agent.answer('test question');
-    // Should include the truncated result, NOT the generic "try again" message
+    // Should include the FULL result — no truncation since this is the SDK return value
     expect(result).toContain('partial information');
-    expect(result).toContain('AAAA'); // Truncated content present
-    expect(result).not.toContain('MARKER_END'); // Truncated at 5000 chars
+    expect(result).toContain('AAAA'); // Content present
+    expect(result).toContain('MARKER_END'); // Full content preserved, not truncated
     expect(result).not.toContain('try again'); // NOT the generic fallback
   });
 
