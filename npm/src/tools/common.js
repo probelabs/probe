@@ -189,8 +189,73 @@ export function areBothStuckResponses(response1, response2) {
 
 
 /**
+ * Parse a shell-like string into tokens, respecting quoted substrings.
+ * Supports double quotes, single quotes, and escaped characters within quotes.
+ * Splits on commas and/or whitespace outside of quotes.
+ *
+ * @param {string} input - The string to tokenize
+ * @returns {string[]} Array of tokens with quotes stripped
+ *
+ * @example
+ * splitQuotedString('"path with spaces/file.md" other.rs')
+ * // Returns: ["path with spaces/file.md", "other.rs"]
+ */
+export function splitQuotedString(input) {
+	const tokens = [];
+	let current = '';
+	let inQuote = null; // null, '"', or "'"
+	let i = 0;
+
+	while (i < input.length) {
+		const ch = input[i];
+
+		if (inQuote) {
+			if (ch === '\\' && i + 1 < input.length) {
+				// Escaped character inside quotes — keep the literal character
+				current += input[i + 1];
+				i += 2;
+				continue;
+			}
+			if (ch === inQuote) {
+				// Closing quote
+				inQuote = null;
+				i++;
+				continue;
+			}
+			current += ch;
+			i++;
+		} else {
+			if (ch === '"' || ch === "'") {
+				inQuote = ch;
+				i++;
+				continue;
+			}
+			if (/[\s,]/.test(ch)) {
+				// Delimiter outside quotes
+				if (current.length > 0) {
+					tokens.push(current);
+					current = '';
+				}
+				i++;
+				continue;
+			}
+			current += ch;
+			i++;
+		}
+	}
+
+	if (current.length > 0) {
+		tokens.push(current);
+	}
+
+	return tokens;
+}
+
+/**
  * Parse targets string into array of file specifications
- * Handles both space-separated and comma-separated targets for extract tool
+ * Handles both space-separated and comma-separated targets for extract tool.
+ * Quoted strings (single or double) are preserved as single targets,
+ * allowing file paths with spaces.
  *
  * @param {string} targets - Space or comma-separated file targets (e.g., "file1.rs:10-20, file2.rs#symbol")
  * @returns {string[]} Array of individual file specifications
@@ -204,16 +269,15 @@ export function areBothStuckResponses(response1, response2) {
  * // Returns: ["file1.rs:10-20", "file2.rs:30-40"]
  *
  * @example
- * parseTargets("session.rs#AuthService.login auth.rs:2-100 config.rs#DatabaseConfig")
- * // Returns: ["session.rs#AuthService.login", "auth.rs:2-100", "config.rs#DatabaseConfig"]
+ * parseTargets('"Customers/First American/Meeting Notes.md" other.rs')
+ * // Returns: ["Customers/First American/Meeting Notes.md", "other.rs"]
  */
 export function parseTargets(targets) {
 	if (!targets || typeof targets !== 'string') {
 		return [];
 	}
 
-	// Split on any whitespace or comma (with optional surrounding whitespace) and filter out empty strings
-	return targets.split(/[\s,]+/).filter(f => f.length > 0);
+	return splitQuotedString(targets);
 }
 
 /**
@@ -227,7 +291,19 @@ export function parseTargets(targets) {
 export function parseAndResolvePaths(pathStr, cwd) {
 	if (!pathStr) return [];
 
-	// Split on comma and trim whitespace
+	// If the input contains quotes, use the quote-aware tokenizer which
+	// preserves quoted strings with spaces as single tokens.
+	if (/["']/.test(pathStr)) {
+		const paths = splitQuotedString(pathStr);
+		return paths.map(p => {
+			if (isAbsolute(p)) return p;
+			return cwd ? resolve(cwd, p) : p;
+		});
+	}
+
+	// No quotes: use comma-split + space-split heuristic (original behavior).
+	// Split on comma first, then auto-fix space-separated paths if each part
+	// looks like a file path.
 	let paths = pathStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
 
 	// Auto-fix: model sometimes passes space-separated file paths as one string
@@ -242,10 +318,7 @@ export function parseAndResolvePaths(pathStr, cwd) {
 
 	// Resolve relative paths against cwd
 	return paths.map(p => {
-		if (isAbsolute(p)) {
-			return p;
-		}
-		// Resolve relative path against cwd
+		if (isAbsolute(p)) return p;
 		return cwd ? resolve(cwd, p) : p;
 	});
 }
