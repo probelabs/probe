@@ -61,6 +61,30 @@ export interface ProbeAgentOptions {
   skillDirs?: string[];
   /** Custom prompt to run after attempt_completion for validation/review (runs before mermaid/JSON validation) */
   completionPrompt?: string;
+  /** Enable task management system for tracking multi-step progress */
+  enableTasks?: boolean;
+  /** Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests. */
+  requestTimeout?: number;
+  /** Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). */
+  maxOperationTimeout?: number;
+  /** Timeout behavior: 'graceful' winds down with bonus steps, 'hard' aborts immediately, 'negotiated' uses a timeout observer (separate LLM call) to decide extensions (default: 'graceful'). Env var: TIMEOUT_BEHAVIOR */
+  timeoutBehavior?: 'graceful' | 'hard' | 'negotiated';
+  /** Number of bonus steps during graceful timeout wind-down (default: 4, range: 1-20). Env var: GRACEFUL_TIMEOUT_BONUS_STEPS */
+  gracefulTimeoutBonusSteps?: number;
+  /** Total extra time budget in ms for negotiated timeout (default: 1800000 = 30 min). Env var: NEGOTIATED_TIMEOUT_BUDGET */
+  negotiatedTimeoutBudget?: number;
+  /** Max time extension requests for negotiated timeout (default: 3, range: 1-10). Env var: NEGOTIATED_TIMEOUT_MAX_REQUESTS */
+  negotiatedTimeoutMaxRequests?: number;
+  /** Max ms per extension request for negotiated timeout (default: 600000 = 10 min). Env var: NEGOTIATED_TIMEOUT_MAX_PER_REQUEST */
+  negotiatedTimeoutMaxPerRequest?: number;
+  /** Retry configuration for handling transient API failures */
+  retry?: any;
+  /** Fallback configuration for multi-provider support */
+  fallback?: any;
+  /** Enable the delegate tool for task distribution to subagents */
+  enableDelegate?: boolean;
+  /** Enable bash tool for command execution */
+  enableBash?: boolean;
 }
 
 /**

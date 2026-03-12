@@ -45,7 +45,7 @@ import { createExecutePlanTool, createCleanupExecutePlanTool } from './tools/exe
 import { bashTool } from './tools/bash.js';
 import { editTool, createTool, multiEditTool } from './tools/edit.js';
 import { FileTracker } from './tools/fileTracker.js';
-import { ProbeAgent } from './agent/ProbeAgent.js';
+import { ProbeAgent, ENGINE_ACTIVITY_TIMEOUT_DEFAULT, ENGINE_ACTIVITY_TIMEOUT_MIN, ENGINE_ACTIVITY_TIMEOUT_MAX } from './agent/ProbeAgent.js';
 import { SimpleTelemetry, SimpleAppTracer, initializeSimpleTelemetryFromOptions } from './agent/simpleTelemetry.js';
 import { listFilesToolInstance, searchFilesToolInstance } from './agent/probeTool.js';
 import { StorageAdapter, InMemoryStorageAdapter } from './agent/storage/index.js';
@@ -68,8 +68,12 @@ export {
 	listFilesByLevel,
 	tools,
 	DEFAULT_SYSTEM_MESSAGE,
-	// Export AI Agent (NEW!)
+	// Export AI Agent
 	ProbeAgent,
+	// Export timeout constants
+	ENGINE_ACTIVITY_TIMEOUT_DEFAULT,
+	ENGINE_ACTIVITY_TIMEOUT_MIN,
+	ENGINE_ACTIVITY_TIMEOUT_MAX,
 	// Export storage adapters
 	StorageAdapter,
 	InMemoryStorageAdapter,

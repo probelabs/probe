@@ -140,6 +140,68 @@ export MODEL_NAME=claude-sonnet-4-6
 - **Session management** - Maintain conversation context across calls
 - **Token tracking** - Monitor usage and costs
 - **Configurable personas** - Engineer, architect, code-review, and more
+- **Smart timeout handling** - Three timeout modes (graceful, hard, negotiated) with configurable behavior
+
+### Timeout Modes
+
+ProbeAgent supports three timeout behaviors for controlling what happens when `maxOperationTimeout` is reached:
+
+```javascript
+import { ProbeAgent } from '@probelabs/probe';
+
+// Graceful (default) — AI gets bonus steps to wrap up
+const agent = new ProbeAgent({
+  path: '/path/to/project',
+  maxOperationTimeout: 300000,     // 5 minutes
+  timeoutBehavior: 'graceful',
+  gracefulTimeoutBonusSteps: 4,    // 4 extra steps to finish
+});
+
+// Hard — immediate abort, no wrap-up
+const hardAgent = new ProbeAgent({
+  path: '/path/to/project',
+  maxOperationTimeout: 300000,
+  timeoutBehavior: 'hard',
+});
+
+// Negotiated — independent observer LLM decides whether to extend
+const negotiatedAgent = new ProbeAgent({
+  path: '/path/to/project',
+  maxOperationTimeout: 300000,
+  timeoutBehavior: 'negotiated',
+  negotiatedTimeoutBudget: 1800000,       // 30 min total extra time
+  negotiatedTimeoutMaxRequests: 3,         // up to 3 extensions
+  negotiatedTimeoutMaxPerRequest: 600000,  // 10 min per extension
+});
+```
+
+**How each mode works:**
+
+| Mode | When timeout fires | Tools during wind-down | Best for |
+|------|-------------------|----------------------|----------|
+| `graceful` | AI gets bonus steps with `toolChoice: 'none'` to write a final answer | Disabled | Short tasks, predictable completion |
+| `hard` | Operation aborts immediately | N/A | Strict time budgets, batch processing |
+| `negotiated` | Independent observer LLM evaluates in-flight tools and decides to extend or abort | Available during extension, disabled on decline | Long-running tasks with delegates/subagents |
+
+**Negotiated timeout details:**
+
+The negotiated mode uses a "timeout observer" pattern — a separate `generateText` LLM call that runs independently of the main agent loop. This works even when the main loop is blocked by a long-running delegate or MCP tool. The observer:
+
+1. Sees which tools are currently running and for how long
+2. Detects stuck or looping agents
+3. Decides to grant more time (with a reason) or decline
+4. On decline: aborts in-flight tools, then makes a dedicated summary LLM call so the AI reports what it accomplished
+
+**Environment variables:**
+
+```bash
+TIMEOUT_BEHAVIOR=negotiated              # graceful | hard | negotiated
+MAX_OPERATION_TIMEOUT=300000             # ms, overall timeout
+GRACEFUL_TIMEOUT_BONUS_STEPS=4           # steps for graceful wind-down
+NEGOTIATED_TIMEOUT_BUDGET=1800000        # ms, total extension budget
+NEGOTIATED_TIMEOUT_MAX_REQUESTS=3        # max extension count
+NEGOTIATED_TIMEOUT_MAX_PER_REQUEST=600000 # ms, max per extension
+```
 
 ### Agent Skills (repo-local)
 
