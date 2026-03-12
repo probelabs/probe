@@ -144,6 +144,8 @@ export MODEL_NAME=claude-sonnet-4-6
 
 ### Timeout Modes
 
+> See [docs/TIMEOUT_MODES.md](./docs/TIMEOUT_MODES.md) for full details, telemetry events, and advanced examples.
+
 ProbeAgent supports three timeout behaviors for controlling what happens when `maxOperationTimeout` is reached:
 
 ```javascript
