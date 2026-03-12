@@ -397,7 +397,11 @@ export async function delegate({
 	mcpConfigPath = null,
 	delegationManager = null,  // Optional per-instance manager, falls back to default singleton
 	concurrencyLimiter = null,  // Optional global AI concurrency limiter
-	parentAbortSignal = null   // Optional AbortSignal from parent to cancel this delegation
+	parentAbortSignal = null,  // Optional AbortSignal from parent to cancel this delegation
+	// Timeout settings inherited from parent agent
+	timeoutBehavior = undefined,
+	requestTimeout = undefined,
+	gracefulTimeoutBonusSteps = undefined,
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -489,7 +493,16 @@ export async function delegate({
 			enableMcp,   // Inherit from parent (subagent creates own MCPXmlBridge)
 			mcpConfig,   // Inherit from parent
 			mcpConfigPath, // Inherit from parent
-			concurrencyLimiter // Inherit global AI concurrency limiter
+			concurrencyLimiter, // Inherit global AI concurrency limiter
+			// Inherit timeout behavior from parent — subagent gets its own graceful wind-down
+			// so it can produce partial results instead of being hard-killed by the external timer.
+			// The external delegate timeout (capped to parent's remaining budget) is the hard limit;
+			// maxOperationTimeout on the subagent is set slightly shorter so its own wind-down
+			// fires before the external kill.
+			maxOperationTimeout: Math.max(10000, (timeout * 1000) - 15000), // 15s before external kill
+			timeoutBehavior: timeoutBehavior || 'graceful',
+			requestTimeout,
+			gracefulTimeoutBonusSteps: gracefulTimeoutBonusSteps ?? 2, // fewer steps for subagents
 		});
 
 		if (debug) {

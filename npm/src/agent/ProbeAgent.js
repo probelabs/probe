@@ -863,6 +863,15 @@ export class ProbeAgent {
       searchDelegateModel: this.searchDelegateModel,
       delegationManager: this.delegationManager,  // Per-instance delegation limits
       parentAbortSignal: this._abortController.signal,  // Propagate cancellation to delegations
+      // Timeout settings for delegate subagents to inherit
+      timeoutBehavior: this.timeoutBehavior,
+      maxOperationTimeout: this.maxOperationTimeout,
+      requestTimeout: this.requestTimeout,
+      gracefulTimeoutBonusSteps: this.gracefulTimeoutBonusSteps,
+      negotiatedTimeoutBudget: this.negotiatedTimeoutBudget,
+      negotiatedTimeoutMaxRequests: this.negotiatedTimeoutMaxRequests,
+      negotiatedTimeoutMaxPerRequest: this.negotiatedTimeoutMaxPerRequest,
+      parentOperationStartTime: this._operationStartTime,  // For remaining budget calculation
       outputBuffer: this._outputBuffer,
       concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
       isToolAllowed,
@@ -3288,6 +3297,9 @@ Follow these instructions carefully:
     } else {
       options = schemaOrOptions || {};
     }
+
+    // Track operation start time for delegate budget calculation
+    this._operationStartTime = Date.now();
 
     try {
       // Track initial history length for storage

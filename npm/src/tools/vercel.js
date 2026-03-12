@@ -862,7 +862,11 @@ export const extractTool = (options = {}) => {
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null,
+		// Timeout settings inherited from parent agent
+		timeoutBehavior, maxOperationTimeout, requestTimeout, gracefulTimeoutBonusSteps,
+		negotiatedTimeoutBudget, negotiatedTimeoutMaxRequests, negotiatedTimeoutMaxPerRequest,
+		parentOperationStartTime } = options;
 
 	return tool({
 		name: 'delegate',
@@ -941,9 +945,23 @@ export const delegateTool = (options = {}) => {
 			}
 
 			// Execute delegation - let errors propagate naturally
+			// Cap delegate timeout to remaining parent budget (with 10% headroom)
+			let effectiveTimeout = timeout;
+			if (parentOperationStartTime && maxOperationTimeout) {
+				const elapsed = Date.now() - parentOperationStartTime;
+				const remaining = maxOperationTimeout - elapsed;
+				const budgetCap = Math.max(30, Math.floor(remaining * 0.9 / 1000)); // seconds, min 30s
+				if (budgetCap < effectiveTimeout) {
+					effectiveTimeout = budgetCap;
+					if (debug) {
+						console.error(`[DELEGATE] Capping timeout from ${timeout}s to ${effectiveTimeout}s (remaining parent budget: ${Math.floor(remaining/1000)}s)`);
+					}
+				}
+			}
+
 			const result = await delegate({
 				task,
-				timeout,
+				timeout: effectiveTimeout,
 				debug,
 				currentIteration: currentIteration || 0,
 				maxIterations: maxIterations || 30,
@@ -961,7 +979,11 @@ export const delegateTool = (options = {}) => {
 				mcpConfig,
 				mcpConfigPath,
 				delegationManager,  // Per-instance delegation limits
-				parentAbortSignal
+				parentAbortSignal,
+				// Inherit timeout settings for subagent
+				timeoutBehavior,
+				requestTimeout,
+				gracefulTimeoutBonusSteps,
 			});
 
 			return result;
