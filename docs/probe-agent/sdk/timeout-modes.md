@@ -20,10 +20,13 @@ The ProbeAgent SDK has multiple timeout layers that operate at different levels 
 │  │  Delegate timeout (per delegate tool call)        │  │
 │  │  Controls: subagent execution                     │  │
 │  │  Default: 300s │ Env: DELEGATION_TIMEOUT          │  │
+│  │  Budget-aware: capped to parent's remaining time  │  │
 │  │                                                   │  │
 │  │  ┌─────────────────────────────────────────────┐  │  │
-│  │  │  Subagent's own requestTimeout              │  │  │
+│  │  │  Subagent's own timeouts                    │  │  │
 │  │  │  (inherited from parent config)             │  │  │
+│  │  │  timeoutBehavior, requestTimeout,           │  │  │
+│  │  │  gracefulTimeoutBonusSteps                  │  │  │
 │  │  └─────────────────────────────────────────────┘  │  │
 │  └───────────────────────────────────────────────────┘  │
 │                                                         │
@@ -31,6 +34,7 @@ The ProbeAgent SDK has multiple timeout layers that operate at different levels 
 │  │  MCP tool timeout (per MCP server)                │  │
 │  │  Controls: individual MCP tool calls              │  │
 │  │  Default: 30s │ Per-server override available     │  │
+│  │  graceful_stop: optional cooperative shutdown     │  │
 │  └───────────────────────────────────────────────────┘  │
 │                                                         │
 │  ┌───────────────────────────────────────────────────┐  │
@@ -47,8 +51,6 @@ The ProbeAgent SDK has multiple timeout layers that operate at different levels 
 │                                                         │
 └─────────────────────────────────────────────────────────┘
 ```
-
-**Important:** These timeouts are currently independent. A delegate with a 300s timeout inside a parent with a 300s `maxOperationTimeout` can consume the entire parent budget. See [Known Limitations](#known-limitations) for details.
 
 ## Layer 1: Operation Timeout (`maxOperationTimeout`)
 
@@ -101,6 +103,7 @@ const agent = new ProbeAgent({
   negotiatedTimeoutBudget: 1800000,        // 30 min total extra time
   negotiatedTimeoutMaxRequests: 3,          // up to 3 extensions
   negotiatedTimeoutMaxPerRequest: 600000,   // max 10 min per extension
+  gracefulStopDeadline: 45000,             // 45s for subagents to wind down
 });
 ```
 
@@ -114,13 +117,19 @@ Observer LLM call (independent generateText)
   ├── Detects stuck/looping agents
   │
   ├── EXTEND → new timer, main loop continues with tools available
-  └── DECLINE → abort in-flight tools → dedicated summary LLM call
+  └── DECLINE → two-phase graceful stop
+                   │
+                   ├── 1. Signal delegates: triggerGracefulWindDown()
+                   ├── 2. Signal MCP servers: call graceful_stop tool
+                   ├── 3. Wait for tools to finish (up to gracefulStopDeadline)
+                   ├── 4. Hard abort if deadline expires
+                   └── 5. Parent wind-down with collected results
 ```
 
 **Observer details:**
 - Tracks in-flight tools via `toolCall` event emitter with human-readable durations
 - Stuck-loop detection guidance in prompt (repeating tool calls, no progress)
-- On decline: aborts tools, then summary call with full conversation context
+- On decline: **two-phase graceful stop** instead of immediate abort (see below)
 - Summary respects JSON schema (returns valid JSON, no markdown notice)
 - Summary acknowledges task status (completed/incomplete tasks)
 - Summary streams to `onStream` callback
@@ -131,6 +140,29 @@ Observer LLM call (independent generateText)
 | `negotiatedTimeoutBudget` | 1800000 ms (30 min) | 1min – 2hr | `NEGOTIATED_TIMEOUT_BUDGET` |
 | `negotiatedTimeoutMaxRequests` | 3 | 1 – 10 | `NEGOTIATED_TIMEOUT_MAX_REQUESTS` |
 | `negotiatedTimeoutMaxPerRequest` | 600000 ms (10 min) | 1min – 1hr | `NEGOTIATED_TIMEOUT_MAX_PER_REQUEST` |
+| `gracefulStopDeadline` | 45000 ms (45s) | 5s – 5min | `GRACEFUL_STOP_DEADLINE` |
+
+## Two-Phase Graceful Stop
+
+When the negotiated timeout observer declines an extension (or budget is exhausted), the system uses a two-phase shutdown to avoid losing work from running subagents and MCP tools.
+
+### Phase 1: Signal wind-down
+
+Instead of immediately aborting, the system signals all active work to finish:
+
+- **Delegates (subagents):** `triggerGracefulWindDown()` is called, which sets the subagent's graceful timeout flag. The subagent finishes its current tool call, then enters wind-down mode (`toolChoice: 'none'`) to produce a summary of its work. This summary returns to the parent as a normal tool result.
+
+- **MCP servers:** If a connected MCP server exposes a `graceful_stop` tool, the system calls it. Agent-type MCP servers can use this signal to wrap up long-running operations and return partial results. Servers without `graceful_stop` are unaffected.
+
+### Phase 2: Hard abort deadline
+
+A safety timer (`gracefulStopDeadline`, default 45s) starts. If the active tools haven't completed by the deadline, the system falls back to a hard abort via `AbortController.abort()`.
+
+### Why two phases?
+
+Without two-phase stop, a delegate that has been working for 3 minutes — searching, analyzing, collecting results — would be killed instantly and all its work would be lost. The parent's abort summary LLM call wouldn't have access to those results.
+
+With two-phase stop, the delegate gets time to summarize its findings. The parent then has that context for its own wind-down, producing a much better final response.
 
 ## Layer 2: Request Timeout (`requestTimeout`)
 
@@ -144,21 +176,50 @@ This is independent of `maxOperationTimeout`. A single LLM call can take up to `
 
 ## Layer 3: Delegate Timeout
 
-When the agent uses the `delegate` tool to spawn a subagent, the delegate has its own timeout that is **independent of the parent's `maxOperationTimeout`**.
+When the agent uses the `delegate` tool to spawn a subagent, the delegate has its own timeout.
 
 | Setting | Default | Env Var |
 |---------|---------|---------|
 | Delegate operation timeout | 300s (5 min) | `DELEGATION_TIMEOUT` or `DELEGATION_TIMEOUT_MS` or `DELEGATION_TIMEOUT_SECONDS` |
 | Delegation queue timeout | 60s | `DELEGATION_QUEUE_TIMEOUT` |
 
-**What happens when delegate timeout fires:**
+### Budget-Aware Timeout
+
+The delegate timeout is automatically **capped to the parent's remaining budget** (with 10% headroom). If the parent has 2 minutes of budget left, a delegate configured for 5 minutes will be capped to ~1.8 minutes.
+
+```
+effectiveTimeout = min(configuredTimeout, remainingParentBudget × 0.9)
+```
+
+This prevents delegates from consuming the parent's entire remaining time.
+
+### Timeout Inheritance
+
+Subagents inherit timeout settings from the parent agent:
+
+| Setting | Inherited? | Notes |
+|---------|-----------|-------|
+| `timeoutBehavior` | Yes | Subagent gets `'graceful'` by default |
+| `requestTimeout` | Yes | Same per-LLM-call timeout |
+| `gracefulTimeoutBonusSteps` | Yes | Reduced to 2 for subagents (vs 4 for parent) |
+| `maxOperationTimeout` | Computed | Set to `(externalTimeout - 15s)` so subagent winds down before external kill |
+
+The subagent's own `maxOperationTimeout` is set 15 seconds shorter than its external deadline. This ensures the subagent's internal wind-down fires before the parent's external timeout kills it, giving the subagent time to produce a summary.
+
+### What happens when delegate timeout fires
+
 1. Calls `subagent.cancel()` to abort the subagent
 2. Throws `Delegation timed out after ${timeout} seconds`
 3. Releases delegation slot, cleans up resources
 
-**Queue timeout** is separate — it fires if a delegate is waiting for an available execution slot (concurrency limit reached) for too long.
+### What happens when parent abort signal fires (two-phase)
 
-**Abort signal propagation:** The parent's `AbortController` signal is passed to delegates via `parentAbortSignal`. When the parent aborts (e.g., from negotiated timeout decline), delegates receive the signal and cancel. However, the delegate's own timeout does not coordinate with the parent's remaining budget.
+1. Calls `subagent.triggerGracefulWindDown()` — sets graceful timeout flag, does NOT abort
+2. Subagent finishes current step, enters wind-down mode
+3. Subagent returns its summary as a normal response
+4. If subagent doesn't finish within 30s, hard cancel kicks in
+
+**Queue timeout** is separate — it fires if a delegate is waiting for an available execution slot (concurrency limit reached) for too long.
 
 ## Layer 4: MCP Tool Timeout
 
@@ -191,7 +252,49 @@ MCP (Model Context Protocol) tools have their own timeout system that is managed
 - Throws `MCP tool call timeout after ${timeout}ms`
 - The error propagates to the agent as a tool error
 
-MCP servers are **not aware** of the parent agent's `maxOperationTimeout`. An MCP tool call cannot consume more than `MCP_MAX_TIMEOUT` (default 30 min), but within that limit it runs independently.
+### MCP `graceful_stop` Convention
+
+Agent-type MCP servers can expose a `graceful_stop` tool to support cooperative shutdown. When the parent agent's negotiated timeout triggers a graceful stop, it will:
+
+1. Check if each connected MCP server has a `graceful_stop` tool
+2. Call it on servers that do (with a 5s timeout)
+3. Well-behaved servers can use this signal to wrap up long-running operations and return partial results
+
+**Implementing `graceful_stop` in your MCP server:**
+
+```javascript
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+
+const server = new Server({ name: 'my-agent', version: '1.0.0' },
+  { capabilities: { tools: {} } });
+
+let stopRequested = false;
+
+// Register graceful_stop
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.name === 'graceful_stop') {
+    stopRequested = true;
+    return { content: [{ type: 'text', text: 'Stop acknowledged' }] };
+  }
+
+  if (request.params.name === 'analyze') {
+    // Long-running operation — check stopRequested between steps
+    for (const chunk of chunks) {
+      if (stopRequested) {
+        return { content: [{ type: 'text', text: partialResults }] };
+      }
+      await processChunk(chunk);
+    }
+  }
+});
+```
+
+This convention is:
+- **Fully MCP-compliant** — `graceful_stop` is a regular tool call
+- **Backwards-compatible** — servers without it are unaffected
+- **Protocol-level** — no custom extensions needed
+
+Note: MCP's built-in `notifications/cancelled` is fire-and-forget with no response. It tells the server "stop" but can't get partial results back. The `graceful_stop` tool works within the standard request/response model, allowing the server to return data.
 
 ## Layer 5: Bash Command Timeout
 
@@ -218,6 +321,21 @@ Monitors the health of LLM streaming connections. If no data arrives for too lon
 
 This is a **gap timer** — it resets every time a chunk arrives. It protects against LLM providers that accept the request but stop sending data. This is different from `requestTimeout`, which measures total elapsed time.
 
+## How Timeouts Coordinate
+
+Timeout layers are categorized into two types:
+
+**Safety-net timeouts** (bash, MCP per-call, engine activity) prevent individual operations from hanging indefinitely. These don't need to coordinate with the parent budget — they're bounded and short-lived.
+
+**Budget timeouts** (operation, delegate) control how long an agent can work. These now coordinate:
+
+- Delegate timeout is **capped to the parent's remaining budget** (×0.9 headroom)
+- Subagent's internal `maxOperationTimeout` is set **15s shorter** than external deadline
+- Subagents **inherit** `timeoutBehavior`, `requestTimeout`, and `gracefulTimeoutBonusSteps`
+- Two-phase graceful stop **signals** subagents to wind down instead of killing them
+
+**MCP timeouts** sit in between — the per-call timeout is a safety net, but for agent-type MCP servers doing extended work, the `graceful_stop` convention provides cooperative shutdown.
+
 ## Complete Reference
 
 ### All Timeouts
@@ -231,6 +349,7 @@ This is a **gap timer** — it resets every time a chunk arrives. It protects ag
 | `negotiatedTimeoutBudget` | Operation | 30 min | `NEGOTIATED_TIMEOUT_BUDGET` | Yes |
 | `negotiatedTimeoutMaxRequests` | Operation | 3 | `NEGOTIATED_TIMEOUT_MAX_REQUESTS` | Yes |
 | `negotiatedTimeoutMaxPerRequest` | Operation | 10 min | `NEGOTIATED_TIMEOUT_MAX_PER_REQUEST` | Yes |
+| `gracefulStopDeadline` | Operation | 45s | `GRACEFUL_STOP_DEADLINE` | Yes |
 | Delegate operation | Delegate | 300s | `DELEGATION_TIMEOUT` | No (env only) |
 | Delegation queue | Delegate | 60s | `DELEGATION_QUEUE_TIMEOUT` | No (env only) |
 | MCP global default | MCP | 30s | — | Via MCP config |
@@ -239,6 +358,7 @@ This is a **gap timer** — it resets every time a chunk arrives. It protects ag
 | Bash command | Bash | 120s | — | Via `bashConfig` |
 | Engine activity | Stream | 180s | `ENGINE_ACTIVITY_TIMEOUT` | No (env only) |
 | Graceful hard abort safety | Internal | 60s | — | No (hardcoded) |
+| Graceful stop hard abort | Internal | 45s | `GRACEFUL_STOP_DEADLINE` | Yes |
 | File search (glob) | Internal | 10s | — | No (hardcoded) |
 
 ### All Environment Variables
@@ -256,6 +376,7 @@ GRACEFUL_TIMEOUT_BONUS_STEPS=4             # Wind-down steps (1-20)
 NEGOTIATED_TIMEOUT_BUDGET=1800000          # Total extension budget (ms)
 NEGOTIATED_TIMEOUT_MAX_REQUESTS=3          # Max extension count (1-10)
 NEGOTIATED_TIMEOUT_MAX_PER_REQUEST=600000  # Max per extension (ms)
+GRACEFUL_STOP_DEADLINE=45000               # Wind-down deadline for subagents (ms)
 
 # Delegate
 DELEGATION_TIMEOUT=300                     # Delegate timeout (seconds)
@@ -288,28 +409,6 @@ All negotiated timeout operations are instrumented with OTEL tracing:
 | `negotiated_timeout.abort_summary_completed` | Summary produced |
 | `negotiated_timeout.abort_summary_error` | Summary call failed |
 
-## Known Limitations
-
-### Timeouts do not coordinate across layers
-
-Each timeout layer operates independently. This means:
-
-- A **delegate with a 300s timeout** inside a parent with a 300s `maxOperationTimeout` can consume the entire parent budget. The delegate doesn't know how much time the parent has left.
-- An **MCP tool with a 30min timeout** could block the parent for its entire duration. The MCP server has no visibility into the parent's budget.
-- The **negotiated timeout observer** can see that a delegate has been running for a long time and decide to abort, but by then most of the budget may already be consumed.
-
-### Practical guidance
-
-For agents using delegates or long-running MCP tools:
-
-1. **Set delegate timeout lower than parent timeout.** If your `maxOperationTimeout` is 5 minutes, set `DELEGATION_TIMEOUT=120` (2 min) so the parent has time to process results or try alternatives.
-
-2. **Use negotiated mode for complex agents.** The observer can detect a stuck delegate and abort it, even if the delegate's own timeout hasn't fired yet.
-
-3. **Set MCP per-server timeouts explicitly.** Don't rely on the 30s default for slow MCP servers, but also don't let them exceed your parent budget.
-
-4. **Leave headroom.** A rule of thumb: set sub-timeouts to at most 60-70% of the parent's budget to leave room for the agent to synthesize results.
-
 ## Examples
 
 ### Long-Running Analysis with Delegates
@@ -325,14 +424,40 @@ const agent = new ProbeAgent({
   negotiatedTimeoutMaxRequests: 5,          // up to 5 extensions
   negotiatedTimeoutMaxPerRequest: 300000,   // 5 min each
   negotiatedTimeoutBudget: 900000,          // 15 min total extra
+  gracefulStopDeadline: 60000,             // 60s for delegates to wind down
 });
 
-// Set delegate timeout lower than parent budget
-// DELEGATION_TIMEOUT=120 (env var, 2 minutes)
+// Delegate timeout is automatically capped to remaining parent budget
+// No need to set DELEGATION_TIMEOUT manually
 
 const result = await agent.answer(
   'Perform a comprehensive security audit of this codebase'
 );
+```
+
+### Multi-Agent MCP Collaboration
+
+```javascript
+const agent = new ProbeAgent({
+  path: '/path/to/project',
+  timeoutBehavior: 'negotiated',
+  maxOperationTimeout: 120000,
+  enableMcp: true,
+  mcpConfig: {
+    mcpServers: {
+      'code-reviewer': {
+        command: 'node',
+        args: ['code-review-agent.js'],
+        timeout: 90000,  // 90s per-call timeout
+      },
+    },
+  },
+});
+
+// If the code-reviewer MCP server exposes a graceful_stop tool,
+// it will be called when the parent agent's timeout triggers,
+// allowing the reviewer to return partial results instead of
+// being killed mid-review.
 ```
 
 ### Schema Output with Timeout Safety

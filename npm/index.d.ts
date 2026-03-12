@@ -77,6 +77,8 @@ export interface ProbeAgentOptions {
   negotiatedTimeoutMaxRequests?: number;
   /** Max ms per extension request for negotiated timeout (default: 600000 = 10 min). Env var: NEGOTIATED_TIMEOUT_MAX_PER_REQUEST */
   negotiatedTimeoutMaxPerRequest?: number;
+  /** How long to wait for subagents/MCP to wind down after observer declines (default: 45000 = 45s). Env var: GRACEFUL_STOP_DEADLINE */
+  gracefulStopDeadline?: number;
   /** Retry configuration for handling transient API failures */
   retry?: any;
   /** Fallback configuration for multi-provider support */
