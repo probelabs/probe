@@ -31,7 +31,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
-import { streamText, tool, stepCountIs, jsonSchema, Output } from 'ai';
+import { streamText, generateText, tool, stepCountIs, jsonSchema, Output } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
@@ -391,10 +391,12 @@ export class ProbeAgent {
       console.log(`[DEBUG] Max operation timeout: ${this.maxOperationTimeout}ms`);
     }
 
-    // Timeout behavior: 'graceful' (default) winds down with bonus steps, 'hard' aborts immediately
+    // Timeout behavior: 'graceful' (default) winds down with bonus steps, 'hard' aborts immediately,
+    // 'negotiated' lets the AI request more time via request_more_time tool
     this.timeoutBehavior = options.timeoutBehavior ?? (() => {
       const val = process.env.TIMEOUT_BEHAVIOR;
       if (val === 'hard') return 'hard';
+      if (val === 'negotiated') return 'negotiated';
       return 'graceful';
     })();
 
@@ -402,6 +404,24 @@ export class ProbeAgent {
     this.gracefulTimeoutBonusSteps = options.gracefulTimeoutBonusSteps ?? (() => {
       const parsed = parseInt(process.env.GRACEFUL_TIMEOUT_BONUS_STEPS, 10);
       return (isNaN(parsed) || parsed < 1 || parsed > 20) ? 4 : parsed;
+    })();
+
+    // Negotiated timeout: total extra time budget in ms (default 30 min)
+    this.negotiatedTimeoutBudget = options.negotiatedTimeoutBudget ?? (() => {
+      const parsed = parseInt(process.env.NEGOTIATED_TIMEOUT_BUDGET, 10);
+      return (isNaN(parsed) || parsed < 60000 || parsed > 7200000) ? 1800000 : parsed;
+    })();
+
+    // Negotiated timeout: max extension requests (default 3)
+    this.negotiatedTimeoutMaxRequests = options.negotiatedTimeoutMaxRequests ?? (() => {
+      const parsed = parseInt(process.env.NEGOTIATED_TIMEOUT_MAX_REQUESTS, 10);
+      return (isNaN(parsed) || parsed < 1 || parsed > 10) ? 3 : parsed;
+    })();
+
+    // Negotiated timeout: max ms per extension request (default 10 min)
+    this.negotiatedTimeoutMaxPerRequest = options.negotiatedTimeoutMaxPerRequest ?? (() => {
+      const parsed = parseInt(process.env.NEGOTIATED_TIMEOUT_MAX_PER_REQUEST, 10);
+      return (isNaN(parsed) || parsed < 60000 || parsed > 3600000) ? 600000 : parsed;
     })();
 
     if (this.debug) {
@@ -1577,8 +1597,8 @@ export class ProbeAgent {
     // This timer only handles the hard abort for non-graceful mode and engine paths.
     if (this.maxOperationTimeout && this.maxOperationTimeout > 0) {
       const gts = this._gracefulTimeoutState;
-      if (this.timeoutBehavior === 'graceful' && gts) {
-        // Graceful mode: timer is managed in run() method.
+      if ((this.timeoutBehavior === 'graceful' || this.timeoutBehavior === 'negotiated') && gts) {
+        // Graceful/negotiated mode: timer is managed in run() method.
         // Only set up the AbortController link (no timer here).
       } else {
         // Hard mode: immediate abort (legacy behavior)
@@ -3393,6 +3413,7 @@ Follow these instructions carefully:
 
       let currentIteration = 0;
       let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
+      let abortSummaryTaken = false; // Set when negotiated timeout abort summary runs — skip completionPrompt
 
       // Adjust max iterations if schema is provided
       // +1 for schema formatting
@@ -3589,6 +3610,279 @@ Follow these instructions carefully:
       };
       this._gracefulTimeoutState = gracefulTimeoutState;
 
+      // Negotiated timeout state — used when timeoutBehavior === 'negotiated'
+      // The "timeout observer" pattern: when timeout fires, a separate LLM call
+      // decides whether to extend — this works even when the main loop is blocked
+      // by a long-running delegate or MCP tool.
+      const negotiatedTimeoutState = {
+        extensionsUsed: 0,
+        totalExtraTimeMs: 0,
+        softTimeoutId: null,
+        hardAbortTimeoutId: null,
+        maxRequests: this.negotiatedTimeoutMaxRequests,
+        maxPerRequestMs: this.negotiatedTimeoutMaxPerRequest,
+        budgetMs: this.negotiatedTimeoutBudget,
+        observerRunning: false,   // true while observer LLM call is in flight
+        extensionMessage: null,   // message to show in prepareStep after extension granted
+        startTime: Date.now(),
+      };
+
+      this._negotiatedTimeoutState = negotiatedTimeoutState;
+
+      // Track in-flight tools via event emitter
+      const activeTools = new Map(); // toolCallId → { name, args, startedAt }
+      this._activeTools = activeTools;
+
+      const onToolCall = (event) => {
+        // Use a composite key: name + truncated args for dedup
+        const key = event.toolCallId || `${event.name}:${JSON.stringify(event.args || {}).slice(0, 100)}`;
+        if (event.status === 'started') {
+          activeTools.set(key, {
+            name: event.name,
+            args: event.args,
+            startedAt: event.timestamp || new Date().toISOString(),
+          });
+        } else if (event.status === 'completed' || event.status === 'error') {
+          activeTools.delete(key);
+        }
+      };
+      this.events.on('toolCall', onToolCall);
+
+      // Timeout observer: separate LLM call that decides whether to extend.
+      // Runs independently of the main agent loop — works even when blocked by delegates.
+      const runTimeoutObserver = async () => {
+        if (negotiatedTimeoutState.observerRunning) return;
+        negotiatedTimeoutState.observerRunning = true;
+
+        const remainingRequests = negotiatedTimeoutState.maxRequests - negotiatedTimeoutState.extensionsUsed;
+        const remainingBudgetMs = negotiatedTimeoutState.budgetMs - negotiatedTimeoutState.totalExtraTimeMs;
+        const maxPerReqMin = Math.round(negotiatedTimeoutState.maxPerRequestMs / 60000);
+        const elapsedMin = Math.round((Date.now() - negotiatedTimeoutState.startTime) / 60000);
+
+        // Check if extensions/budget exhausted — go straight to graceful wind-down
+        if (remainingRequests <= 0 || remainingBudgetMs <= 0) {
+          if (this.debug) {
+            console.log(`[DEBUG] Timeout observer: no extensions/budget remaining — aborting in-flight tools and triggering graceful wind-down`);
+          }
+          if (this.tracer) {
+            this.tracer.addEvent('negotiated_timeout.observer_exhausted', {
+              extensions_used: negotiatedTimeoutState.extensionsUsed,
+              max_requests: negotiatedTimeoutState.maxRequests,
+              total_extra_time_ms: negotiatedTimeoutState.totalExtraTimeMs,
+              budget_ms: negotiatedTimeoutState.budgetMs,
+              elapsed_min: elapsedMin,
+              active_tools: Array.from(activeTools.values()).map(t => t.name),
+            });
+          }
+          gracefulTimeoutState.triggered = true;
+          // Abort in-flight tools so the main loop unblocks and prepareStep can fire
+          if (this._abortController) this._abortController.abort();
+          negotiatedTimeoutState.observerRunning = false;
+          return;
+        }
+
+        // Build context for the observer
+        const activeToolsList = Array.from(activeTools.values());
+        const now = Date.now();
+        const formatDuration = (ms) => {
+          const totalSec = Math.round(ms / 1000);
+          if (totalSec < 60) return `${totalSec}s`;
+          const min = Math.floor(totalSec / 60);
+          const sec = totalSec % 60;
+          if (min < 60) return `${min}m ${sec}s`;
+          const hr = Math.floor(min / 60);
+          const remainMin = min % 60;
+          return `${hr}h ${remainMin}m`;
+        };
+        const activeToolsDesc = activeToolsList.length > 0
+          ? activeToolsList.map(t => {
+            const runningForMs = now - new Date(t.startedAt).getTime();
+            return `- ${t.name}(${JSON.stringify(t.args || {}).slice(0, 200)}) — running for ${formatDuration(runningForMs)}`;
+          }).join('\n')
+          : '(none currently running)';
+
+        // Summarize recent history (last few exchanges, capped)
+        const recentHistory = this.history.slice(-6).map(msg => {
+          const content = typeof msg.content === 'string'
+            ? msg.content.slice(0, 300)
+            : JSON.stringify(msg.content).slice(0, 300);
+          return `[${msg.role}]: ${content}`;
+        }).join('\n');
+
+        const observerPrompt = `You are a timeout observer for an AI coding agent. The agent has been working for ${elapsedMin} minute(s) and has reached its time limit.
+
+## Recent Conversation
+${recentHistory || '(no history yet)'}
+
+## Currently Running Tools
+${activeToolsDesc}
+
+## Budget
+- Extensions used: ${negotiatedTimeoutState.extensionsUsed}/${negotiatedTimeoutState.maxRequests}
+- Time budget remaining: ${Math.round(remainingBudgetMs / 60000)} minutes
+- Max per extension: ${maxPerReqMin} minutes
+
+Decide whether the agent should get more time. EXTEND if:
+- Tools are actively running (especially delegates or complex analysis) — they need time to finish
+- The agent is making clear progress on a complex task
+- New information is being gathered that will improve the final answer
+
+DO NOT EXTEND if:
+- The agent appears stuck in a loop (repeating the same tool calls or getting the same errors)
+- The conversation shows the agent retrying failed operations without changing approach
+- The agent has enough information to answer but keeps searching for more
+- Tool calls are returning empty or error results repeatedly
+- The agent is doing redundant work (searching for things it already found)
+
+A stuck agent will not recover with more time — it will just burn the budget. Better to force it to answer with what it has.
+
+Respond with ONLY valid JSON (no markdown, no explanation):
+{"extend": true, "minutes": <1-${maxPerReqMin}>, "reason": "your reason here"}
+or
+{"extend": false, "reason": "your reason here"}`;
+
+        const observerFn = async () => {
+          const modelInstance = this.provider ? this.provider(this.model) : this.model;
+
+          if (this.debug) {
+            console.log(`[DEBUG] Timeout observer: making LLM call (${activeToolsList.length} active tools, ${elapsedMin} min elapsed)`);
+          }
+
+          if (this.tracer) {
+            this.tracer.addEvent('negotiated_timeout.observer_invoked', {
+              elapsed_min: elapsedMin,
+              active_tools: activeToolsList.map(t => t.name),
+              active_tools_detail: activeToolsList.map(t => ({
+                name: t.name,
+                running_for_ms: now - new Date(t.startedAt).getTime(),
+                args_preview: JSON.stringify(t.args || {}).slice(0, 100),
+              })),
+              active_tools_count: activeToolsList.length,
+              extensions_used: negotiatedTimeoutState.extensionsUsed,
+              remaining_requests: remainingRequests,
+              remaining_budget_ms: remainingBudgetMs,
+              history_length: this.history.length,
+            });
+          }
+
+          const observerResult = await generateText({
+            model: modelInstance,
+            messages: [{ role: 'user', content: observerPrompt }],
+            maxTokens: 500,
+          });
+
+          const responseText = observerResult.text.trim();
+
+          if (this.tracer) {
+            this.tracer.addEvent('negotiated_timeout.observer_response', {
+              response_text: responseText,
+              usage_prompt_tokens: observerResult.usage?.promptTokens,
+              usage_completion_tokens: observerResult.usage?.completionTokens,
+            });
+          }
+
+          // Parse JSON response — handle potential markdown wrapping
+          const jsonStr = responseText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
+          const decision = JSON.parse(jsonStr);
+
+          if (decision.extend && decision.minutes > 0) {
+            const requestedMs = Math.min(decision.minutes, maxPerReqMin) * 60000;
+            const grantedMs = Math.min(requestedMs, remainingBudgetMs, negotiatedTimeoutState.maxPerRequestMs);
+            const grantedMin = Math.round(grantedMs / 60000 * 10) / 10;
+
+            // Update state
+            negotiatedTimeoutState.extensionsUsed++;
+            negotiatedTimeoutState.totalExtraTimeMs += grantedMs;
+
+            // Set message for prepareStep to show when main loop unblocks
+            negotiatedTimeoutState.extensionMessage =
+              `⏰ Time limit was reached. The timeout observer granted ${grantedMin} more minute(s) ` +
+              `(reason: ${decision.reason || 'work in progress'}). ` +
+              `Extensions remaining: ${negotiatedTimeoutState.maxRequests - negotiatedTimeoutState.extensionsUsed}. ` +
+              `Continue your work efficiently.`;
+
+            // Schedule next observer call
+            negotiatedTimeoutState.softTimeoutId = setTimeout(() => {
+              runTimeoutObserver();
+            }, grantedMs);
+
+            if (this.debug) {
+              console.log(`[DEBUG] Timeout observer: granted ${grantedMin} min (reason: ${decision.reason}). Extensions: ${negotiatedTimeoutState.extensionsUsed}/${negotiatedTimeoutState.maxRequests}`);
+            }
+
+            if (this.tracer) {
+              this.tracer.addEvent('negotiated_timeout.observer_extended', {
+                decision_reason: decision.reason,
+                requested_minutes: decision.minutes,
+                granted_ms: grantedMs,
+                granted_min: grantedMin,
+                extensions_used: negotiatedTimeoutState.extensionsUsed,
+                max_requests: negotiatedTimeoutState.maxRequests,
+                total_extra_time_ms: negotiatedTimeoutState.totalExtraTimeMs,
+                budget_remaining_ms: remainingBudgetMs - grantedMs,
+                active_tools: activeToolsList.map(t => t.name),
+                active_tools_count: activeToolsList.length,
+              });
+            }
+          } else {
+            // Observer decided not to extend — abort in-flight tools and trigger graceful wind-down
+            if (this.debug) {
+              console.log(`[DEBUG] Timeout observer: declined extension (reason: ${decision.reason}). Aborting in-flight tools and entering graceful wind-down.`);
+            }
+            gracefulTimeoutState.triggered = true;
+            // Abort in-flight tools so the main loop unblocks and prepareStep can
+            // deliver the wind-down message ("answer now with what you have")
+            if (this._abortController) this._abortController.abort();
+
+            if (this.tracer) {
+              this.tracer.addEvent('negotiated_timeout.observer_declined', {
+                decision_reason: decision.reason,
+                extensions_used: negotiatedTimeoutState.extensionsUsed,
+                total_extra_time_ms: negotiatedTimeoutState.totalExtraTimeMs,
+                elapsed_min: elapsedMin,
+                active_tools: activeToolsList.map(t => t.name),
+                aborted: true,
+              });
+            }
+          }
+        };
+
+        try {
+          if (this.tracer) {
+            await this.tracer.withSpan('negotiated_timeout.observer', observerFn, {
+              'timeout.elapsed_min': elapsedMin,
+              'timeout.extensions_used': negotiatedTimeoutState.extensionsUsed,
+              'timeout.active_tools_count': activeToolsList.length,
+              'timeout.remaining_budget_ms': remainingBudgetMs,
+            });
+          } else {
+            await observerFn();
+          }
+        } catch (err) {
+          // Observer call failed — abort in-flight tools and fall back to graceful wind-down
+          if (this.debug) {
+            console.log(`[DEBUG] Timeout observer: LLM call failed (${err.message}). Aborting in-flight tools and falling back to graceful wind-down.`);
+          }
+          gracefulTimeoutState.triggered = true;
+          if (this._abortController) this._abortController.abort();
+
+          if (this.tracer) {
+            this.tracer.addEvent('negotiated_timeout.observer_error', {
+              error_message: err.message,
+              error_name: err.name,
+              extensions_used: negotiatedTimeoutState.extensionsUsed,
+              elapsed_min: elapsedMin,
+              aborted: true,
+            });
+          }
+        } finally {
+          negotiatedTimeoutState.observerRunning = false;
+        }
+      };
+
+      // Store observer function on state for testability
+      negotiatedTimeoutState.runObserver = runTimeoutObserver;
+
       // Context compaction retry loop
       let compactionAttempted = false;
       while (true) {
@@ -3670,6 +3964,17 @@ Follow these instructions carefully:
               return false;
             },
             prepareStep: ({ steps, stepNumber }) => {
+              // Negotiated timeout: if the observer granted an extension while the main
+              // loop was blocked (e.g. during a delegate call), inform the AI
+              if (negotiatedTimeoutState.extensionMessage && !gracefulTimeoutState.triggered) {
+                const msg = negotiatedTimeoutState.extensionMessage;
+                negotiatedTimeoutState.extensionMessage = null; // show once
+                if (this.debug) {
+                  console.log(`[DEBUG] prepareStep: delivering timeout observer extension message`);
+                }
+                return { userMessage: msg };
+              }
+
               // Graceful timeout wind-down: force text-only response with wrap-up reminder
               if (gracefulTimeoutState.triggered) {
                 gracefulTimeoutState.bonusStepsUsed++;
@@ -3892,7 +4197,7 @@ Double-check your response based on the criteria above. If everything looks good
           const executeAIRequest = async () => {
             const result = await this.streamTextWithRetryAndFallback(streamOptions);
 
-            // Set up graceful timeout timer now that streamText is running.
+            // Set up timeout timer now that streamText is running.
             // streamText() returns immediately — the actual tool loop runs asynchronously
             // and completes when we await result.steps/result.text below.
             let gracefulTimeoutId = null;
@@ -3912,6 +4217,16 @@ Double-check your response based on the criteria above. If everything looks good
                     console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
                   }
                 }, 60000);
+              }, this.maxOperationTimeout);
+            }
+
+            // Negotiated timeout: run the timeout observer (separate LLM call)
+            if (this.timeoutBehavior === 'negotiated' && this.maxOperationTimeout > 0) {
+              negotiatedTimeoutState.softTimeoutId = setTimeout(() => {
+                if (this.debug) {
+                  console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — invoking timeout observer`);
+                }
+                runTimeoutObserver();
               }, this.maxOperationTimeout);
             }
 
@@ -3944,6 +4259,10 @@ Double-check your response based on the criteria above. If everything looks good
               // Clean up graceful timeout timers
               if (gracefulTimeoutId) clearTimeout(gracefulTimeoutId);
               if (hardAbortTimeoutId) clearTimeout(hardAbortTimeoutId);
+              // Clean up negotiated timeout timer
+              if (negotiatedTimeoutState.softTimeoutId) clearTimeout(negotiatedTimeoutState.softTimeoutId);
+              // Remove in-flight tool tracker
+              this.events.removeListener('toolCall', onToolCall);
             }
           };
 
@@ -4056,7 +4375,7 @@ Double-check your response based on the criteria above. If everything looks good
           // If the model answered without tool calls (or its final step had none),
           // stopWhen never gets a chance to force continuation. In that case, run
           // a second streamText pass with the completion prompt injected.
-          if (this.completionPrompt && !options._completionPromptProcessed && !completionPromptInjected && finalResult) {
+          if (this.completionPrompt && !options._completionPromptProcessed && !completionPromptInjected && !abortSummaryTaken && finalResult) {
             completionPromptInjected = true;
             preCompletionResult = finalResult;
 
@@ -4142,6 +4461,146 @@ Double-check your response based on the criteria above. If everything looks good
           break; // Success
 
         } catch (error) {
+          // Negotiated timeout observer aborted in-flight tools to trigger wind-down.
+          // Give the AI a dedicated summary call with full conversation context so it
+          // can explain what it accomplished and what remains incomplete.
+          if (gracefulTimeoutState.triggered && error?.name === 'AbortError') {
+            if (this.debug) {
+              console.log(`[DEBUG] Negotiated timeout: abort caught — making summary LLM call with conversation context`);
+            }
+
+            if (this.tracer) {
+              this.tracer.addEvent('negotiated_timeout.abort_summary_started', {
+                conversation_messages: currentMessages.length,
+                has_schema: !!options.schema,
+                has_tasks: !!(this.enableTasks && this.taskManager),
+              });
+            }
+
+            try {
+              // Build task status context if tasks are active
+              let taskContext = '';
+              if (this.enableTasks && this.taskManager) {
+                const taskSummary = this.taskManager.getTaskSummary?.();
+                if (taskSummary) {
+                  taskContext = `\n\n## Task Status\n${taskSummary}\n\nAcknowledge which tasks were completed and which were not.`;
+                }
+              }
+
+              // Build schema instructions if a schema is required
+              let schemaContext = '';
+              if (options.schema) {
+                try {
+                  const parsedSchema = typeof options.schema === 'string' ? JSON.parse(options.schema) : options.schema;
+                  schemaContext = `\n\nIMPORTANT: Your response MUST be valid JSON matching this schema:\n${JSON.stringify(parsedSchema, null, 2)}\n\n` +
+                    `Respond with ONLY valid JSON — no markdown, no explanation, no text outside the JSON object. ` +
+                    `Include all findings and partial results within the JSON structure. ` +
+                    `If fields cannot be fully populated due to the interruption, use partial data or null values as appropriate.`;
+                } catch {}
+              }
+
+              const summaryPrompt = `Your operation was interrupted by a timeout observer because the time limit was reached. ` +
+                `Some of your tool calls were cancelled mid-execution.\n\n` +
+                `Please provide a DETAILED summary of:\n` +
+                `1. What you were asked to do (the original task)\n` +
+                `2. What you accomplished — include ALL findings, code snippets, data, and conclusions you gathered\n` +
+                `3. What was still in progress or not yet started\n` +
+                `4. Any partial results or recommendations you can offer based on what you found so far` +
+                `${taskContext}${schemaContext}\n\n` +
+                `Be thorough — this is the user's only response. Include all useful information you collected.`;
+
+              const summaryMessages = [
+                ...currentMessages,
+                { role: 'user', content: summaryPrompt },
+              ];
+
+              const modelInstance = this.provider ? this.provider(this.model) : this.model;
+
+              const summaryFn = async () => {
+                const summaryResult = await generateText({
+                  model: modelInstance,
+                  messages: this.prepareMessagesWithImages(summaryMessages),
+                  maxTokens: 4000,
+                });
+
+                if (this.tracer) {
+                  this.tracer.addEvent('negotiated_timeout.abort_summary_completed', {
+                    summary_length: summaryResult.text?.length || 0,
+                    usage_prompt_tokens: summaryResult.usage?.promptTokens,
+                    usage_completion_tokens: summaryResult.usage?.completionTokens,
+                  });
+                }
+
+                // Record token usage for the summary call
+                if (summaryResult.usage) {
+                  this.tokenCounter.recordUsage(summaryResult.usage);
+                }
+
+                return summaryResult.text;
+              };
+
+              let summaryText;
+              if (this.tracer) {
+                summaryText = await this.tracer.withSpan('negotiated_timeout.abort_summary', summaryFn, {
+                  'summary.conversation_messages': currentMessages.length,
+                });
+              } else {
+                summaryText = await summaryFn();
+              }
+
+              if (options.schema) {
+                // Schema mode: use the summary text as-is (it should already be JSON).
+                // Don't prepend a notice — it would break the JSON structure.
+                // The schema validation pipeline downstream will validate/fix it.
+                finalResult = summaryText || '{}';
+              } else {
+                const timeoutNotice = '**Note: This response was generated under a time constraint. The timeout observer interrupted the operation because the time budget was exhausted.**\n\n';
+                finalResult = timeoutNotice + (summaryText || 'The operation was interrupted before a response could be generated.');
+              }
+
+              // Stream the abort summary to onStream callback so callers see the output
+              if (options.onStream && finalResult) {
+                options.onStream(finalResult);
+              }
+
+              if (this.debug) {
+                console.log(`[DEBUG] Negotiated timeout: summary produced ${summaryText?.length || 0} chars`);
+              }
+            } catch (summaryErr) {
+              if (this.debug) {
+                console.log(`[DEBUG] Negotiated timeout: summary call failed (${summaryErr.message}), falling back to partial text`);
+              }
+              if (this.tracer) {
+                this.tracer.addEvent('negotiated_timeout.abort_summary_error', {
+                  error_message: summaryErr.message,
+                });
+              }
+
+              // Fallback: collect whatever text is in conversation history
+              const partialTexts = currentMessages
+                .filter(m => m.role === 'assistant' && typeof m.content === 'string' && m.content.trim())
+                .map(m => m.content);
+
+              if (options.schema) {
+                // Schema mode: try to pass through the last assistant message (may contain JSON)
+                finalResult = partialTexts.length > 0 ? partialTexts[partialTexts.length - 1] : '{}';
+              } else {
+                const timeoutNotice = '**Note: This response was generated under a time constraint. The operation was interrupted and some work was not completed.**\n\n';
+                finalResult = partialTexts.length > 0
+                  ? timeoutNotice + partialTexts[partialTexts.length - 1]
+                  : timeoutNotice + 'The operation was interrupted before enough information could be gathered. Please try again with a simpler query or increase the timeout.';
+              }
+
+              // Stream the fallback result
+              if (options.onStream && finalResult) {
+                options.onStream(finalResult);
+              }
+            }
+
+            abortSummaryTaken = true;
+            break; // Exit the compaction retry loop with the summary
+          }
+
           // Handle context-limit error: compact messages and retry (once)
           if (!compactionAttempted && handleContextLimitError) {
             const compactionResult = handleContextLimitError(error, currentMessages, {
