@@ -214,6 +214,7 @@ export class ProbeAgent {
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this._abortController = new AbortController();
+    this._activeSubagents = new Map(); // sessionId → subagent ProbeAgent instance
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
     this.searchDelegate = options.searchDelegate !== undefined ? !!options.searchDelegate : true;
@@ -422,6 +423,12 @@ export class ProbeAgent {
     this.negotiatedTimeoutMaxPerRequest = options.negotiatedTimeoutMaxPerRequest ?? (() => {
       const parsed = parseInt(process.env.NEGOTIATED_TIMEOUT_MAX_PER_REQUEST, 10);
       return (isNaN(parsed) || parsed < 60000 || parsed > 3600000) ? 600000 : parsed;
+    })();
+
+    // Graceful stop deadline: how long to wait for subagents/MCP after observer declines (default 45s)
+    this.gracefulStopDeadline = options.gracefulStopDeadline ?? (() => {
+      const parsed = parseInt(process.env.GRACEFUL_STOP_DEADLINE, 10);
+      return (isNaN(parsed) || parsed < 5000 || parsed > 300000) ? 45000 : parsed;
     })();
 
     if (this.debug) {
@@ -872,6 +879,8 @@ export class ProbeAgent {
       negotiatedTimeoutMaxRequests: this.negotiatedTimeoutMaxRequests,
       negotiatedTimeoutMaxPerRequest: this.negotiatedTimeoutMaxPerRequest,
       parentOperationStartTime: this._operationStartTime,  // For remaining budget calculation
+      onSubagentCreated: (sid, subagent) => this._registerSubagent(sid, subagent),
+      onSubagentCompleted: (sid) => this._unregisterSubagent(sid),
       outputBuffer: this._outputBuffer,
       concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
       isToolAllowed,
@@ -3686,9 +3695,8 @@ Follow these instructions carefully:
               active_tools: Array.from(activeTools.values()).map(t => t.name),
             });
           }
-          gracefulTimeoutState.triggered = true;
-          // Abort in-flight tools so the main loop unblocks and prepareStep can fire
-          if (this._abortController) this._abortController.abort();
+          // Two-phase graceful stop: signal subagents/MCP to wind down, hard abort after deadline
+          await this._initiateGracefulStop(gracefulTimeoutState, 'budget/extensions exhausted');
           negotiatedTimeoutState.observerRunning = false;
           return;
         }
@@ -3837,14 +3845,10 @@ or
               });
             }
           } else {
-            // Observer decided not to extend — abort in-flight tools and trigger graceful wind-down
+            // Observer decided not to extend — two-phase graceful stop
             if (this.debug) {
-              console.log(`[DEBUG] Timeout observer: declined extension (reason: ${decision.reason}). Aborting in-flight tools and entering graceful wind-down.`);
+              console.log(`[DEBUG] Timeout observer: declined extension (reason: ${decision.reason}). Initiating graceful stop.`);
             }
-            gracefulTimeoutState.triggered = true;
-            // Abort in-flight tools so the main loop unblocks and prepareStep can
-            // deliver the wind-down message ("answer now with what you have")
-            if (this._abortController) this._abortController.abort();
 
             if (this.tracer) {
               this.tracer.addEvent('negotiated_timeout.observer_declined', {
@@ -3853,9 +3857,10 @@ or
                 total_extra_time_ms: negotiatedTimeoutState.totalExtraTimeMs,
                 elapsed_min: elapsedMin,
                 active_tools: activeToolsList.map(t => t.name),
-                aborted: true,
               });
             }
+
+            await this._initiateGracefulStop(gracefulTimeoutState, `observer declined: ${decision.reason}`);
           }
         };
 
@@ -3871,12 +3876,10 @@ or
             await observerFn();
           }
         } catch (err) {
-          // Observer call failed — abort in-flight tools and fall back to graceful wind-down
+          // Observer call failed — fall back to graceful stop
           if (this.debug) {
-            console.log(`[DEBUG] Timeout observer: LLM call failed (${err.message}). Aborting in-flight tools and falling back to graceful wind-down.`);
+            console.log(`[DEBUG] Timeout observer: LLM call failed (${err.message}). Initiating graceful stop.`);
           }
-          gracefulTimeoutState.triggered = true;
-          if (this._abortController) this._abortController.abort();
 
           if (this.tracer) {
             this.tracer.addEvent('negotiated_timeout.observer_error', {
@@ -3884,9 +3887,10 @@ or
               error_name: err.name,
               extensions_used: negotiatedTimeoutState.extensionsUsed,
               elapsed_min: elapsedMin,
-              aborted: true,
             });
           }
+
+          await this._initiateGracefulStop(gracefulTimeoutState, `observer error: ${err.message}`);
         } finally {
           negotiatedTimeoutState.observerRunning = false;
         }
@@ -4273,6 +4277,11 @@ Double-check your response based on the criteria above. If everything looks good
               if (hardAbortTimeoutId) clearTimeout(hardAbortTimeoutId);
               // Clean up negotiated timeout timer
               if (negotiatedTimeoutState.softTimeoutId) clearTimeout(negotiatedTimeoutState.softTimeoutId);
+              // Clean up graceful stop hard abort timer
+              if (this._gracefulStopHardAbortId) {
+                clearTimeout(this._gracefulStopHardAbortId);
+                this._gracefulStopHardAbortId = null;
+              }
               // Remove in-flight tool tracker
               this.events.removeListener('toolCall', onToolCall);
             }
@@ -5357,6 +5366,90 @@ Double-check your response based on the criteria above. If everything looks good
     if (this.debug) {
       console.log(`[DEBUG] Agent cancelled for session ${this.sessionId}`);
     }
+  }
+
+  /**
+   * Trigger graceful wind-down from outside (e.g., parent agent).
+   * Unlike cancel(), this does NOT abort — it sets the graceful timeout flag
+   * so the agent finishes its current step and then winds down naturally.
+   */
+  triggerGracefulWindDown() {
+    if (this._gracefulTimeoutState && !this._gracefulTimeoutState.triggered) {
+      this._gracefulTimeoutState.triggered = true;
+      if (this.debug) {
+        console.log(`[DEBUG] Graceful wind-down triggered externally for session ${this.sessionId}`);
+      }
+    }
+  }
+
+  /**
+   * Initiate two-phase graceful stop: signal subagents and MCP servers to wind down,
+   * then hard-abort after a deadline if they haven't finished.
+   * @param {Object} gracefulTimeoutState - The graceful timeout state object from run()
+   * @param {string} reason - Why the graceful stop was initiated
+   */
+  async _initiateGracefulStop(gracefulTimeoutState, reason) {
+    if (gracefulTimeoutState.triggered) return; // Already initiated
+
+    if (this.debug) {
+      console.log(`[DEBUG] Initiating graceful stop: ${reason}`);
+    }
+
+    // Mark graceful timeout — prepareStep will pick this up for the parent's wind-down
+    gracefulTimeoutState.triggered = true;
+
+    // Signal all active subagents to wind down gracefully (not hard-cancel)
+    for (const [sid, subagent] of this._activeSubagents) {
+      try {
+        subagent.triggerGracefulWindDown();
+        if (this.debug) {
+          console.log(`[DEBUG] Triggered graceful wind-down on subagent ${sid}`);
+        }
+      } catch (e) {
+        if (this.debug) {
+          console.log(`[DEBUG] Failed to trigger wind-down on subagent ${sid}: ${e.message}`);
+        }
+      }
+    }
+
+    // Call graceful_stop on MCP servers that expose it (fire-and-forget with short timeout)
+    if (this.mcpBridge) {
+      try {
+        const results = await this.mcpBridge.callGracefulStopAll();
+        if (this.debug && results.length > 0) {
+          console.log(`[DEBUG] MCP graceful_stop results: ${JSON.stringify(results)}`);
+        }
+      } catch (e) {
+        if (this.debug) {
+          console.log(`[DEBUG] MCP graceful_stop failed: ${e.message}`);
+        }
+      }
+    }
+
+    // Safety net: hard abort after deadline if tools haven't finished
+    this._gracefulStopHardAbortId = setTimeout(() => {
+      if (this.debug) {
+        console.log(`[DEBUG] Graceful stop deadline (${this.gracefulStopDeadline}ms) expired — hard aborting`);
+      }
+      if (this._abortController) this._abortController.abort();
+    }, this.gracefulStopDeadline);
+  }
+
+  /**
+   * Register an active subagent for graceful stop coordination.
+   * @param {string} sessionId
+   * @param {ProbeAgent} subagent
+   */
+  _registerSubagent(sessionId, subagent) {
+    this._activeSubagents.set(sessionId, subagent);
+  }
+
+  /**
+   * Unregister a completed subagent.
+   * @param {string} sessionId
+   */
+  _unregisterSubagent(sessionId) {
+    this._activeSubagents.delete(sessionId);
   }
 
   /**

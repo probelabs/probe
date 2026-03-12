@@ -146,6 +146,17 @@ export class MCPXmlBridge {
   }
 
   /**
+   * Call graceful_stop on all MCP servers that expose it.
+   * @returns {Promise<Array>}
+   */
+  async callGracefulStopAll() {
+    if (this.mcpManager) {
+      return this.mcpManager.callGracefulStopAll();
+    }
+    return [];
+  }
+
+  /**
    * Clean up MCP connections
    */
   async cleanup() {

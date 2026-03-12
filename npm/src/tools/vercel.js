@@ -866,7 +866,7 @@ export const delegateTool = (options = {}) => {
 		// Timeout settings inherited from parent agent
 		timeoutBehavior, maxOperationTimeout, requestTimeout, gracefulTimeoutBonusSteps,
 		negotiatedTimeoutBudget, negotiatedTimeoutMaxRequests, negotiatedTimeoutMaxPerRequest,
-		parentOperationStartTime } = options;
+		parentOperationStartTime, onSubagentCreated, onSubagentCompleted } = options;
 
 	return tool({
 		name: 'delegate',
@@ -984,6 +984,9 @@ export const delegateTool = (options = {}) => {
 				timeoutBehavior,
 				requestTimeout,
 				gracefulTimeoutBonusSteps,
+				// Subagent lifecycle callbacks for graceful stop coordination
+				onSubagentCreated,
+				onSubagentCompleted,
 			});
 
 			return result;

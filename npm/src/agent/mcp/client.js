@@ -58,6 +58,11 @@ export function isMethodAllowed(methodName, allowedMethods, blockedMethods) {
 export function createTransport(serverConfig) {
   const { transport, command, args, url, env } = serverConfig;
 
+  // Allow pre-created transport instances (e.g., InMemoryTransport for testing)
+  if (serverConfig.transportInstance) {
+    return serverConfig.transportInstance;
+  }
+
   switch (transport) {
     case 'stdio':
       return new StdioClientTransport({
@@ -518,6 +523,36 @@ export class MCPClientManager {
 
       throw error;
     }
+  }
+
+  /**
+   * Call graceful_stop on all MCP servers that expose it.
+   * This signals agent-type MCP servers to wrap up their work.
+   * @returns {Promise<Array<{server: string, success: boolean, error?: string}>>}
+   */
+  async callGracefulStopAll() {
+    const results = [];
+    for (const [serverName, clientInfo] of this.clients) {
+      // Look for a graceful_stop tool on this server (qualified name: serverName_graceful_stop)
+      const qualifiedName = `${serverName}_graceful_stop`;
+      if (this.tools.has(qualifiedName)) {
+        try {
+          // Short timeout — this is a signal, not a long operation
+          const timeoutMs = 5000;
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('graceful_stop timeout')), timeoutMs)
+          );
+          await Promise.race([
+            clientInfo.client.callTool({ name: 'graceful_stop', arguments: {} }, undefined, { timeout: timeoutMs }),
+            timeoutPromise
+          ]);
+          results.push({ server: serverName, success: true });
+        } catch (e) {
+          results.push({ server: serverName, success: false, error: e.message });
+        }
+      }
+    }
+    return results;
   }
 
   /**

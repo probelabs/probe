@@ -402,6 +402,9 @@ export async function delegate({
 	timeoutBehavior = undefined,
 	requestTimeout = undefined,
 	gracefulTimeoutBonusSteps = undefined,
+	// Subagent lifecycle callbacks for graceful stop coordination
+	onSubagentCreated = null,
+	onSubagentCompleted = null,
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -505,6 +508,11 @@ export async function delegate({
 			gracefulTimeoutBonusSteps: gracefulTimeoutBonusSteps ?? 2, // fewer steps for subagents
 		});
 
+		// Register subagent with parent for graceful stop coordination
+		if (onSubagentCreated) {
+			onSubagentCreated(sessionId, subagent);
+		}
+
 		if (debug) {
 			console.error(`[DELEGATE] Created subagent with session ${sessionId}`);
 			console.error(`[DELEGATE] Subagent config: promptType=${promptType}, enableDelegate=false, maxIterations=${remainingIterations}`);
@@ -520,8 +528,11 @@ export async function delegate({
 			}, timeout * 1000);
 		});
 
-		// Listen for parent abort signal
+		// Listen for parent abort signal — use two-phase shutdown:
+		// Phase 1: Trigger graceful wind-down so subagent can summarize its work
+		// Phase 2: Hard cancel after deadline if subagent hasn't finished
 		let parentAbortHandler;
+		let parentAbortHardCancelId = null;
 		const parentAbortPromise = new Promise((_, reject) => {
 			if (parentAbortSignal) {
 				if (parentAbortSignal.aborted) {
@@ -530,8 +541,19 @@ export async function delegate({
 					return;
 				}
 				parentAbortHandler = () => {
-					subagent.cancel();
-					reject(new Error('Delegation cancelled: parent operation was aborted'));
+					// Phase 1: graceful wind-down — let subagent finish its current step
+					subagent.triggerGracefulWindDown();
+					if (debug) {
+						console.error(`[DELEGATE] Parent abort signal received — triggered graceful wind-down on subagent ${sessionId}`);
+					}
+					// Phase 2: hard cancel after 30s if subagent hasn't finished
+					parentAbortHardCancelId = setTimeout(() => {
+						if (debug) {
+							console.error(`[DELEGATE] Graceful wind-down deadline expired — hard cancelling subagent ${sessionId}`);
+						}
+						subagent.cancel();
+						reject(new Error('Delegation cancelled: parent operation was aborted (graceful wind-down deadline expired)'));
+					}, 30000);
 				};
 				parentAbortSignal.addEventListener('abort', parentAbortHandler, { once: true });
 			}
@@ -546,9 +568,17 @@ export async function delegate({
 		try {
 			response = await Promise.race(racers);
 		} finally {
-			// Clean up parent abort listener to prevent memory leaks
+			// Clean up parent abort listener and hard cancel timer to prevent memory leaks
 			if (parentAbortHandler && parentAbortSignal) {
 				parentAbortSignal.removeEventListener('abort', parentAbortHandler);
+			}
+			if (parentAbortHardCancelId) {
+				clearTimeout(parentAbortHardCancelId);
+				parentAbortHardCancelId = null;
+			}
+			// Unregister subagent from parent
+			if (onSubagentCompleted) {
+				onSubagentCompleted(sessionId);
 			}
 		}
 

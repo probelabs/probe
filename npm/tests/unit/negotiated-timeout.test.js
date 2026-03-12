@@ -275,13 +275,13 @@ describe('Negotiated timeout state initialization', () => {
 // ---- 5. Observer: exhaustion triggers graceful wind-down --------------------
 
 describe('Observer exhaustion handling', () => {
-  test('triggers graceful wind-down and aborts when requests exhausted', async () => {
+  test('triggers graceful wind-down when requests exhausted (two-phase stop)', async () => {
     const { agent, negotiatedTimeoutState, gracefulTimeoutState } = await extractCallbacks({
       timeoutBehavior: 'negotiated',
       negotiatedTimeoutMaxRequests: 2,
     });
 
-    // Set up a mock abort controller to verify abort is called
+    // Set up a mock abort controller — abort is NOT called immediately (two-phase stop)
     agent._abortController = { abort: jest.fn(), signal: { aborted: false } };
 
     // Simulate all extensions used
@@ -290,11 +290,14 @@ describe('Observer exhaustion handling', () => {
     await negotiatedTimeoutState.runObserver();
 
     expect(gracefulTimeoutState.triggered).toBe(true);
-    expect(agent._abortController.abort).toHaveBeenCalled();
+    // Two-phase: abort is deferred to the deadline timer, not called immediately
+    expect(agent._abortController.abort).not.toHaveBeenCalled();
     expect(negotiatedTimeoutState.observerRunning).toBe(false);
+    // Clean up deadline timer
+    if (agent._gracefulStopHardAbortId) clearTimeout(agent._gracefulStopHardAbortId);
   });
 
-  test('triggers graceful wind-down and aborts when budget exhausted', async () => {
+  test('triggers graceful wind-down when budget exhausted (two-phase stop)', async () => {
     const { agent, negotiatedTimeoutState, gracefulTimeoutState } = await extractCallbacks({
       timeoutBehavior: 'negotiated',
       negotiatedTimeoutBudget: 600000,
@@ -308,8 +311,11 @@ describe('Observer exhaustion handling', () => {
     await negotiatedTimeoutState.runObserver();
 
     expect(gracefulTimeoutState.triggered).toBe(true);
-    expect(agent._abortController.abort).toHaveBeenCalled();
+    // Two-phase: abort is deferred to the deadline timer
+    expect(agent._abortController.abort).not.toHaveBeenCalled();
     expect(negotiatedTimeoutState.observerRunning).toBe(false);
+    // Clean up deadline timer
+    if (agent._gracefulStopHardAbortId) clearTimeout(agent._gracefulStopHardAbortId);
   });
 });
 
@@ -368,21 +374,24 @@ describe('Observer LLM decision handling', () => {
     expect(gracefulTimeoutState.triggered).toBe(true);
   });
 
-  test('falls back to graceful wind-down and aborts on observer error', async () => {
+  test('falls back to graceful stop on observer error (two-phase)', async () => {
     const { agent, negotiatedTimeoutState, gracefulTimeoutState } = await extractCallbacks({
       timeoutBehavior: 'negotiated',
     });
 
     agent._abortController = { abort: jest.fn(), signal: { aborted: false } };
 
-    // The observer catches errors and falls back to graceful
+    // The observer catches errors and falls back to graceful stop
     // Simulate by calling runObserver with no provider set (will fail)
     await negotiatedTimeoutState.runObserver();
 
-    // With no real model, generateText will throw — observer falls back to graceful
+    // With no real model, generateText will throw — observer falls back to graceful stop
     expect(gracefulTimeoutState.triggered).toBe(true);
-    expect(agent._abortController.abort).toHaveBeenCalled();
+    // Two-phase: abort is deferred to the deadline timer
+    expect(agent._abortController.abort).not.toHaveBeenCalled();
     expect(negotiatedTimeoutState.observerRunning).toBe(false);
+    // Clean up deadline timer
+    if (agent._gracefulStopHardAbortId) clearTimeout(agent._gracefulStopHardAbortId);
   });
 
   test('observer does not run concurrently', async () => {
@@ -570,5 +579,135 @@ describe('Negotiated Timeout Backward Compatibility', () => {
     expect(agent.negotiatedTimeoutBudget).toBe(1800000);
     expect(agent.negotiatedTimeoutMaxRequests).toBe(3);
     expect(agent.negotiatedTimeoutMaxPerRequest).toBe(600000);
+  });
+});
+
+// ---- 10. Two-phase graceful stop -------------------------------------------
+
+describe('Two-phase Graceful Stop', () => {
+  test('triggerGracefulWindDown sets state without aborting', async () => {
+    const { agent, gracefulTimeoutState } = await extractCallbacks({
+      timeoutBehavior: 'negotiated',
+    });
+
+    agent._abortController = { abort: jest.fn(), signal: { aborted: false } };
+
+    agent.triggerGracefulWindDown();
+
+    expect(gracefulTimeoutState.triggered).toBe(true);
+    expect(agent._abortController.abort).not.toHaveBeenCalled();
+  });
+
+  test('triggerGracefulWindDown is idempotent', async () => {
+    const { agent, gracefulTimeoutState } = await extractCallbacks({
+      timeoutBehavior: 'negotiated',
+    });
+
+    agent.triggerGracefulWindDown();
+    agent.triggerGracefulWindDown(); // Should not throw
+
+    expect(gracefulTimeoutState.triggered).toBe(true);
+  });
+
+  test('_activeSubagents tracks registered subagents', () => {
+    const agent = createAgent({ timeoutBehavior: 'negotiated' });
+    const mockSubagent = { triggerGracefulWindDown: jest.fn() };
+
+    agent._registerSubagent('sub-1', mockSubagent);
+    expect(agent._activeSubagents.size).toBe(1);
+    expect(agent._activeSubagents.get('sub-1')).toBe(mockSubagent);
+
+    agent._unregisterSubagent('sub-1');
+    expect(agent._activeSubagents.size).toBe(0);
+  });
+
+  test('_initiateGracefulStop signals all active subagents', async () => {
+    const { agent, gracefulTimeoutState } = await extractCallbacks({
+      timeoutBehavior: 'negotiated',
+    });
+
+    const sub1 = { triggerGracefulWindDown: jest.fn() };
+    const sub2 = { triggerGracefulWindDown: jest.fn() };
+    agent._registerSubagent('s1', sub1);
+    agent._registerSubagent('s2', sub2);
+
+    await agent._initiateGracefulStop(gracefulTimeoutState, 'test');
+
+    expect(sub1.triggerGracefulWindDown).toHaveBeenCalled();
+    expect(sub2.triggerGracefulWindDown).toHaveBeenCalled();
+    expect(gracefulTimeoutState.triggered).toBe(true);
+
+    // Clean up
+    if (agent._gracefulStopHardAbortId) clearTimeout(agent._gracefulStopHardAbortId);
+  });
+
+  test('_initiateGracefulStop sets hard abort deadline', async () => {
+    jest.useFakeTimers();
+    try {
+      const { agent, gracefulTimeoutState } = await extractCallbacks({
+        timeoutBehavior: 'negotiated',
+        gracefulStopDeadline: 5000,
+      });
+
+      agent._abortController = { abort: jest.fn(), signal: { aborted: false } };
+
+      await agent._initiateGracefulStop(gracefulTimeoutState, 'test');
+
+      expect(agent._abortController.abort).not.toHaveBeenCalled();
+
+      // Advance past deadline
+      jest.advanceTimersByTime(5001);
+
+      expect(agent._abortController.abort).toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  test('_initiateGracefulStop is idempotent', async () => {
+    const { agent, gracefulTimeoutState } = await extractCallbacks({
+      timeoutBehavior: 'negotiated',
+    });
+
+    const sub = { triggerGracefulWindDown: jest.fn() };
+    agent._registerSubagent('s1', sub);
+
+    await agent._initiateGracefulStop(gracefulTimeoutState, 'first call');
+    await agent._initiateGracefulStop(gracefulTimeoutState, 'second call');
+
+    // triggerGracefulWindDown should only be called once (second call is a no-op)
+    expect(sub.triggerGracefulWindDown).toHaveBeenCalledTimes(1);
+
+    if (agent._gracefulStopHardAbortId) clearTimeout(agent._gracefulStopHardAbortId);
+  });
+
+  test('gracefulStopDeadline defaults to 45s', () => {
+    const agent = createAgent({ timeoutBehavior: 'negotiated' });
+    expect(agent.gracefulStopDeadline).toBe(45000);
+  });
+
+  test('gracefulStopDeadline can be configured', () => {
+    const agent = createAgent({
+      timeoutBehavior: 'negotiated',
+      gracefulStopDeadline: 10000,
+    });
+    expect(agent.gracefulStopDeadline).toBe(10000);
+  });
+
+  test('_initiateGracefulStop handles subagent errors gracefully', async () => {
+    const { agent, gracefulTimeoutState } = await extractCallbacks({
+      timeoutBehavior: 'negotiated',
+    });
+
+    const badSubagent = {
+      triggerGracefulWindDown: jest.fn(() => { throw new Error('subagent error'); }),
+    };
+    agent._registerSubagent('bad', badSubagent);
+
+    // Should not throw
+    await agent._initiateGracefulStop(gracefulTimeoutState, 'test');
+
+    expect(gracefulTimeoutState.triggered).toBe(true);
+    if (agent._gracefulStopHardAbortId) clearTimeout(agent._gracefulStopHardAbortId);
   });
 });
