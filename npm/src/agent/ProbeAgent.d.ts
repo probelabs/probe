@@ -106,10 +106,16 @@ export interface ProbeAgentOptions {
   requestTimeout?: number;
   /** Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback. */
   maxOperationTimeout?: number;
-  /** Timeout behavior: 'graceful' winds down with bonus steps giving the agent a chance to respond, 'hard' aborts immediately (default: 'graceful'). Env var: TIMEOUT_BEHAVIOR */
-  timeoutBehavior?: 'graceful' | 'hard';
+  /** Timeout behavior: 'graceful' winds down with bonus steps, 'hard' aborts immediately, 'negotiated' uses a timeout observer (separate LLM call) to decide extensions (default: 'graceful'). Env var: TIMEOUT_BEHAVIOR */
+  timeoutBehavior?: 'graceful' | 'hard' | 'negotiated';
   /** Number of bonus steps during graceful timeout wind-down (default: 4, range: 1-20). Env var: GRACEFUL_TIMEOUT_BONUS_STEPS */
   gracefulTimeoutBonusSteps?: number;
+  /** Total extra time budget in ms for negotiated timeout (default: 1800000 = 30 min). Env var: NEGOTIATED_TIMEOUT_BUDGET */
+  negotiatedTimeoutBudget?: number;
+  /** Max time extension requests for negotiated timeout (default: 3, range: 1-10). Env var: NEGOTIATED_TIMEOUT_MAX_REQUESTS */
+  negotiatedTimeoutMaxRequests?: number;
+  /** Max ms per extension request for negotiated timeout (default: 600000 = 10 min). Env var: NEGOTIATED_TIMEOUT_MAX_PER_REQUEST */
+  negotiatedTimeoutMaxPerRequest?: number;
 }
 
 /**

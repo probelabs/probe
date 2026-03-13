@@ -8,18 +8,25 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
+import { createStandardMockServer } from '../mcp/inProcessMcpServer.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 describe('ProbeAgent MCP Integration', () => {
   let tempDir;
+  let mockServers = [];
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'probe-agent-mcp-test-'));
+    mockServers = [];
   });
 
   afterEach(async () => {
+    // Stop any in-process MCP servers
+    for (const server of mockServers) {
+      await server.stop();
+    }
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true });
     }
@@ -93,45 +100,29 @@ describe('ProbeAgent MCP Integration', () => {
 
   describe('MCP Configuration', () => {
     test('should initialize MCP with mock server configuration', async () => {
-      // Create MCP configuration file
-      const mcpConfig = {
-        mcpServers: {
-          'mock-test': {
-            command: 'node',
-            args: [join(__dirname, '../mcp/mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          }
-        }
-      };
-
-      const configPath = join(tempDir, 'mcp-config.json');
-      await writeFile(configPath, JSON.stringify(mcpConfig, null, 2));
-
-      process.env.MCP_CONFIG_PATH = configPath;
+      const mockServer = createStandardMockServer('mock-test');
+      mockServers.push(mockServer);
+      await mockServer.start();
 
       const agent = new ProbeAgent({
         enableMcp: true,
+        mcpConfig: { mcpServers: { 'mock-test': mockServer.getClientConfig() } },
         debug: false,
         path: tempDir
       });
 
-      // Wait a bit for MCP initialization
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Explicitly initialize MCP (normally happens inside run())
+      await agent.initializeMCP();
 
       // Check if MCP bridge was initialized
-      if (agent.mcpBridge) {
-        const toolNames = agent.mcpBridge.getToolNames();
-        console.log('Available MCP tools:', toolNames);
+      expect(agent.mcpBridge).not.toBeNull();
+      const toolNames = agent.mcpBridge.getToolNames();
+      console.log('Available MCP tools:', toolNames);
 
-        // If connection succeeded, verify we have expected tools
-        if (toolNames.length > 0) {
-          expect(toolNames.some(name => name.includes('foobar'))).toBe(true);
-        }
-      }
+      expect(toolNames.some(name => name.includes('foobar'))).toBe(true);
 
       await agent.cleanup();
-    }, 15000); // Longer timeout for server startup
+    }, 5000);
 
     test('should handle MCP initialization failure gracefully', async () => {
       // Create invalid MCP configuration
@@ -400,57 +391,42 @@ describe('ProbeAgent MCP Integration', () => {
 
   describe('Real Mock Server Integration', () => {
     test('should connect to and use mock MCP server', async () => {
-      // Only run this test if we can actually start the mock server
-      const mcpConfig = {
-        mcpServers: {
-          'mock-integration': {
-            command: 'node',
-            args: [join(__dirname, '../mcp/mockMcpServer.js')],
-            transport: 'stdio',
-            enabled: true
-          }
-        }
-      };
+      const mockServer = createStandardMockServer('mock-integration');
+      mockServers.push(mockServer);
+      await mockServer.start();
 
-      const configPath = join(tempDir, 'integration-config.json');
-      await writeFile(configPath, JSON.stringify(mcpConfig, null, 2));
-
-      process.env.MCP_CONFIG_PATH = configPath;
       process.env.ANTHROPIC_API_KEY = 'test-key'; // Required for ProbeAgent
 
       const agent = new ProbeAgent({
         enableMcp: true,
+        mcpConfig: { mcpServers: { 'mock-integration': mockServer.getClientConfig() } },
         debug: true,
         path: tempDir
       });
 
-      // Wait for MCP initialization
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      // Explicitly initialize MCP (normally happens inside run())
+      await agent.initializeMCP();
 
-      if (agent.mcpBridge && agent.mcpBridge.getToolNames().length > 0) {
-        const toolNames = agent.mcpBridge.getToolNames();
-        console.log('Successfully connected to mock server with tools:', toolNames);
+      const toolNames = agent.mcpBridge.getToolNames();
+      console.log('Successfully connected to mock server with tools:', toolNames);
 
-        // Verify expected tools are available
-        expect(toolNames.some(name => name.includes('foobar'))).toBe(true);
-        expect(toolNames.some(name => name.includes('calculator'))).toBe(true);
-        expect(toolNames.some(name => name.includes('echo'))).toBe(true);
+      // Verify expected tools are available
+      expect(toolNames.some(name => name.includes('foobar'))).toBe(true);
+      expect(toolNames.some(name => name.includes('calculator'))).toBe(true);
+      expect(toolNames.some(name => name.includes('echo'))).toBe(true);
 
-        // Verify MCP tools are available via getVercelTools (native tool calling)
-        const vercelTools = agent.mcpBridge.getVercelTools();
-        const vercelToolNames = Object.keys(vercelTools);
-        expect(vercelToolNames.some(name => name.includes('foobar'))).toBe(true);
-        expect(vercelToolNames.some(name => name.includes('calculator'))).toBe(true);
+      // Verify MCP tools are available via getVercelTools (native tool calling)
+      const vercelTools = agent.mcpBridge.getVercelTools();
+      const vercelToolNames = Object.keys(vercelTools);
+      expect(vercelToolNames.some(name => name.includes('foobar'))).toBe(true);
+      expect(vercelToolNames.some(name => name.includes('calculator'))).toBe(true);
 
-        // Verify MCP tools are included in _buildNativeTools
-        const nativeTools = agent._buildNativeTools({});
-        expect(Object.keys(nativeTools).some(name => name.includes('foobar'))).toBe(true);
-        expect(Object.keys(nativeTools).some(name => name.includes('calculator'))).toBe(true);
-      } else {
-        console.warn('Mock server connection failed - this may be expected in CI environment');
-      }
+      // Verify MCP tools are included in _buildNativeTools
+      const nativeTools = agent._buildNativeTools({});
+      expect(Object.keys(nativeTools).some(name => name.includes('foobar'))).toBe(true);
+      expect(Object.keys(nativeTools).some(name => name.includes('calculator'))).toBe(true);
 
       await agent.cleanup();
-    }, 20000); // Extended timeout for server startup
+    }, 5000);
   });
 });

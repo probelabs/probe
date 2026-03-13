@@ -397,7 +397,14 @@ export async function delegate({
 	mcpConfigPath = null,
 	delegationManager = null,  // Optional per-instance manager, falls back to default singleton
 	concurrencyLimiter = null,  // Optional global AI concurrency limiter
-	parentAbortSignal = null   // Optional AbortSignal from parent to cancel this delegation
+	parentAbortSignal = null,  // Optional AbortSignal from parent to cancel this delegation
+	// Timeout settings inherited from parent agent
+	timeoutBehavior = undefined,
+	requestTimeout = undefined,
+	gracefulTimeoutBonusSteps = undefined,
+	// Subagent lifecycle callbacks for graceful stop coordination
+	onSubagentCreated = null,
+	onSubagentCompleted = null,
 }) {
 	if (!task || typeof task !== 'string') {
 		throw new Error('Task parameter is required and must be a string');
@@ -489,12 +496,38 @@ export async function delegate({
 			enableMcp,   // Inherit from parent (subagent creates own MCPXmlBridge)
 			mcpConfig,   // Inherit from parent
 			mcpConfigPath, // Inherit from parent
-			concurrencyLimiter // Inherit global AI concurrency limiter
+			concurrencyLimiter, // Inherit global AI concurrency limiter
+			// Inherit timeout behavior from parent — subagent gets its own graceful wind-down
+			// so it can produce partial results instead of being hard-killed by the external timer.
+			// The external delegate timeout (capped to parent's remaining budget) is the hard limit;
+			// maxOperationTimeout on the subagent is set slightly shorter so its own wind-down
+			// fires before the external kill.
+			maxOperationTimeout: Math.max(10000, (timeout * 1000) - 15000), // 15s before external kill
+			timeoutBehavior: timeoutBehavior || 'graceful',
+			requestTimeout,
+			gracefulTimeoutBonusSteps: gracefulTimeoutBonusSteps ?? 2, // fewer steps for subagents
 		});
+
+		// Register subagent with parent for graceful stop coordination
+		if (onSubagentCreated) {
+			onSubagentCreated(sessionId, subagent);
+		}
 
 		if (debug) {
 			console.error(`[DELEGATE] Created subagent with session ${sessionId}`);
 			console.error(`[DELEGATE] Subagent config: promptType=${promptType}, enableDelegate=false, maxIterations=${remainingIterations}`);
+			console.error(`[DELEGATE] Timeout inheritance: externalTimeout=${timeout}s, maxOperationTimeout=${Math.max(10000, (timeout * 1000) - 15000)}ms, behavior=${timeoutBehavior || 'graceful'}, bonusSteps=${gracefulTimeoutBonusSteps ?? 2}`);
+		}
+		if (tracer) {
+			tracer.addEvent('delegation.subagent_created', {
+				'delegation.session_id': sessionId,
+				'delegation.parent_session_id': parentSessionId,
+				'delegation.external_timeout_s': timeout,
+				'delegation.internal_timeout_ms': Math.max(10000, (timeout * 1000) - 15000),
+				'delegation.timeout_behavior': timeoutBehavior || 'graceful',
+				'delegation.bonus_steps': gracefulTimeoutBonusSteps ?? 2,
+				'delegation.max_iterations': remainingIterations,
+			});
 		}
 
 		// Set up timeout and parent abort handling.
@@ -507,8 +540,11 @@ export async function delegate({
 			}, timeout * 1000);
 		});
 
-		// Listen for parent abort signal
+		// Listen for parent abort signal — use two-phase shutdown:
+		// Phase 1: Trigger graceful wind-down so subagent can summarize its work
+		// Phase 2: Hard cancel after deadline if subagent hasn't finished
 		let parentAbortHandler;
+		let parentAbortHardCancelId = null;
 		const parentAbortPromise = new Promise((_, reject) => {
 			if (parentAbortSignal) {
 				if (parentAbortSignal.aborted) {
@@ -517,8 +553,33 @@ export async function delegate({
 					return;
 				}
 				parentAbortHandler = () => {
-					subagent.cancel();
-					reject(new Error('Delegation cancelled: parent operation was aborted'));
+					// Phase 1: graceful wind-down — let subagent finish its current step
+					subagent.triggerGracefulWindDown();
+					if (debug) {
+						console.error(`[DELEGATE] Parent abort signal received — triggered graceful wind-down on subagent ${sessionId}`);
+					}
+					if (tracer) {
+						tracer.addEvent('delegation.parent_abort_phase1', {
+							'delegation.session_id': sessionId,
+							'delegation.parent_session_id': parentSessionId,
+							'delegation.action': 'graceful_wind_down',
+						});
+					}
+					// Phase 2: hard cancel after 30s if subagent hasn't finished
+					parentAbortHardCancelId = setTimeout(() => {
+						if (debug) {
+							console.error(`[DELEGATE] Graceful wind-down deadline expired — hard cancelling subagent ${sessionId}`);
+						}
+						if (tracer) {
+							tracer.addEvent('delegation.parent_abort_phase2', {
+								'delegation.session_id': sessionId,
+								'delegation.parent_session_id': parentSessionId,
+								'delegation.action': 'hard_cancel',
+							});
+						}
+						subagent.cancel();
+						reject(new Error('Delegation cancelled: parent operation was aborted (graceful wind-down deadline expired)'));
+					}, 30000);
 				};
 				parentAbortSignal.addEventListener('abort', parentAbortHandler, { once: true });
 			}
@@ -533,9 +594,17 @@ export async function delegate({
 		try {
 			response = await Promise.race(racers);
 		} finally {
-			// Clean up parent abort listener to prevent memory leaks
+			// Clean up parent abort listener and hard cancel timer to prevent memory leaks
 			if (parentAbortHandler && parentAbortSignal) {
 				parentAbortSignal.removeEventListener('abort', parentAbortHandler);
+			}
+			if (parentAbortHardCancelId) {
+				clearTimeout(parentAbortHardCancelId);
+				parentAbortHardCancelId = null;
+			}
+			// Unregister subagent from parent
+			if (onSubagentCompleted) {
+				onSubagentCompleted(sessionId);
 			}
 		}
 

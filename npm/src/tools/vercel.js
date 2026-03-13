@@ -254,6 +254,10 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- Use exact=true when searching for a KNOWN symbol name (function, type, variable, struct).',
 		'- exact=true matches the literal string only — no stemming, no splitting.',
 		'- This is ideal for precise lookups: exact=true "ForwardMessage", exact=true "SessionLimiter", exact=true "ThrottleRetryLimit".',
+		'- IMPORTANT: Use exact=true when searching for strings containing punctuation, quotes, or empty values.',
+		'  Default BM25 search strips punctuation and treats quoted empty strings as noise.',
+		'  Example: searching for \'description: ""\' with exact=false will NOT find empty description fields — it just matches "description".',
+		'  Use exact=true for literal patterns like \'description: ""\', \'value: \\\'\\\'\', or any YAML/config field with specific punctuation.',
 		'- Do NOT use exact=true for exploratory/conceptual queries — use the default for those.',
 		'',
 		'Combining searches with OR:',
@@ -313,7 +317,13 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'WHEN TO STOP:',
 		'- After you have explored the main concept AND related subsystems.',
 		'- Once you have 5-15 targets covering different aspects of the query.',
-		'- If you get a "DUPLICATE SEARCH BLOCKED" message, move on.',
+		'- If you get a "DUPLICATE SEARCH BLOCKED" message, do NOT rephrase the same query — try a FUNDAMENTALLY different approach:',
+		'  * Switch between exact=true and exact=false',
+		'  * Search for a broader term and filter results manually',
+		'  * Use listFiles to browse the directory structure directly',
+		'  * Look for related/surrounding patterns instead of the exact string',
+		'- If 2-3 genuinely different search approaches fail, STOP and report what you tried and why it failed.',
+		'  Do NOT keep trying variations of the same failing concept.',
 		'',
 		'Strategy:',
 		'1. Analyze the query — identify key concepts, then brainstorm SYNONYMS and alternative terms for each.',
@@ -371,10 +381,10 @@ export const searchTool = (options = {}) => {
 		return result;
 	};
 
-	// Track previous non-paginated searches to detect and block duplicates
-	const previousSearches = new Set();
-	// Track how many times a duplicate search has been blocked (for escalating messages)
-	let consecutiveDupBlocks = 0;
+	// Track previous non-paginated searches: key → { hadResults: boolean }
+	const previousSearches = new Map();
+	// Track per-key consecutive block counts (not global, to avoid cross-query pollution)
+	const dupBlockCounts = new Map();
 	// Track pagination counts per query to cap runaway pagination
 	const paginationCounts = new Map();
 	const MAX_PAGES_PER_QUERY = 3;
@@ -444,22 +454,28 @@ export const searchTool = (options = {}) => {
 			if (!searchDelegate) {
 				// Block duplicate non-paginated searches (models sometimes repeat the exact same call)
 				// Allow pagination: only nextPage=true is a legitimate repeat of the same query
-				// Use query+exact as the key (ignore path) to prevent path-hopping evasion
-				// where model searches same term on different subpaths hoping for different results
-				const searchKey = `${searchQuery}::${exact || false}`;
+				// Include path in dedup key so same query across different repos is allowed (#520)
+				const searchKey = `${searchPath}::${searchQuery}::${exact || false}`;
 				if (!nextPage) {
 					if (previousSearches.has(searchKey)) {
-						consecutiveDupBlocks++;
+						const blockCount = (dupBlockCounts.get(searchKey) || 0) + 1;
+						dupBlockCounts.set(searchKey, blockCount);
 						if (debug) {
-							console.error(`[DEDUP] Blocked duplicate search (${consecutiveDupBlocks}x): "${searchQuery}" (path: "${searchPath}")`);
+							console.error(`[DEDUP] Blocked duplicate search (${blockCount}x): "${searchQuery}" (path: "${searchPath}")`);
 						}
-						if (consecutiveDupBlocks >= 3) {
-							return 'STOP. You have been blocked ' + consecutiveDupBlocks + ' times for repeating searches. You MUST output your final JSON answer NOW with whatever targets you have found. Do NOT call any more tools.';
+						if (blockCount >= 3) {
+							return 'STOP. You have been blocked ' + blockCount + ' times for repeating the same search. You MUST provide your final answer NOW with whatever information you have. Do NOT call any more tools.';
 						}
-						return 'DUPLICATE SEARCH BLOCKED (' + consecutiveDupBlocks + 'x). You already searched for this. Do NOT repeat — probe searches recursively across all paths. Either: (1) use extract on results you already found, (2) try a COMPLETELY different keyword, or (3) output your final answer NOW.';
+						const prev = previousSearches.get(searchKey);
+						if (prev.hadResults) {
+							return `DUPLICATE SEARCH BLOCKED (${blockCount}x). You already searched for "${searchQuery}" in this path and found results. Do NOT repeat. Use extract to examine the files you already found, try a COMPLETELY different keyword, or provide your final answer.`;
+						}
+						const exactHint = exact
+							? 'You used exact=true. Try a broader search with exact=false, or use listFiles to browse the directory structure.'
+							: 'Try exact=true if you need literal/punctuation matching (e.g. \'description: ""\'), or use listFiles to explore directories, or search for a broader/related term and filter manually.';
+						return `DUPLICATE SEARCH BLOCKED (${blockCount}x). You already searched for "${searchQuery}" in this path and got NO results. This term does not appear in the codebase. Do NOT repeat or rephrase — try a FUNDAMENTALLY different approach: ${exactHint} If multiple approaches have failed, provide your final answer with what you know.`;
 					}
-					previousSearches.add(searchKey);
-					consecutiveDupBlocks = 0; // Reset on successful new search
+					previousSearches.set(searchKey, { hadResults: false });
 					paginationCounts.set(searchKey, 0);
 				} else {
 					// Cap pagination to prevent runaway page-through of broad queries
@@ -474,6 +490,16 @@ export const searchTool = (options = {}) => {
 				}
 				try {
 					const result = maybeAnnotate(await runRawSearch());
+					// Track whether this search had results for better dedup messages
+					if (typeof result === 'string' && result.includes('No results found')) {
+						// Append contextual hint for ticket/issue ID queries
+						if (/^[A-Z]+-\d+$/.test(searchQuery.trim()) || /^[A-Z]+-\d+$/.test(searchQuery.replace(/"/g, '').trim())) {
+							return result + '\n\n⚠️ Your query looks like a ticket/issue ID (e.g., JIRA-1234). Ticket IDs are rarely present in source code. Search for the technical concepts described in the ticket instead (e.g., function names, error messages, variable names).';
+						}
+					} else if (typeof result === 'string') {
+						const entry = previousSearches.get(searchKey);
+						if (entry) entry.hadResults = true;
+					}
 					// Track files found in search results for staleness detection
 					if (options.fileTracker && typeof result === 'string') {
 						options.fileTracker.trackFilesFromOutput(result, effectiveSearchCwd).catch(() => {});
@@ -862,7 +888,11 @@ export const extractTool = (options = {}) => {
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null } = options;
+	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null,
+		// Timeout settings inherited from parent agent
+		timeoutBehavior, maxOperationTimeout, requestTimeout, gracefulTimeoutBonusSteps,
+		negotiatedTimeoutBudget, negotiatedTimeoutMaxRequests, negotiatedTimeoutMaxPerRequest,
+		parentOperationStartTime, onSubagentCreated, onSubagentCompleted } = options;
 
 	return tool({
 		name: 'delegate',
@@ -941,9 +971,32 @@ export const delegateTool = (options = {}) => {
 			}
 
 			// Execute delegation - let errors propagate naturally
+			// Cap delegate timeout to remaining parent budget (with 10% headroom)
+			let effectiveTimeout = timeout;
+			if (parentOperationStartTime && maxOperationTimeout) {
+				const elapsed = Date.now() - parentOperationStartTime;
+				const remaining = maxOperationTimeout - elapsed;
+				const budgetCap = Math.max(30, Math.floor(remaining * 0.9 / 1000)); // seconds, min 30s
+				if (budgetCap < effectiveTimeout) {
+					effectiveTimeout = budgetCap;
+					if (debug) {
+						console.error(`[DELEGATE] Capping timeout from ${timeout}s to ${effectiveTimeout}s (remaining parent budget: ${Math.floor(remaining/1000)}s)`);
+					}
+					if (tracer) {
+						tracer.addEvent('delegation.budget_capped', {
+							'delegation.original_timeout_s': timeout,
+							'delegation.effective_timeout_s': effectiveTimeout,
+							'delegation.parent_elapsed_ms': elapsed,
+							'delegation.parent_remaining_ms': remaining,
+							'delegation.parent_session_id': parentSessionId,
+						});
+					}
+				}
+			}
+
 			const result = await delegate({
 				task,
-				timeout,
+				timeout: effectiveTimeout,
 				debug,
 				currentIteration: currentIteration || 0,
 				maxIterations: maxIterations || 30,
@@ -961,7 +1014,14 @@ export const delegateTool = (options = {}) => {
 				mcpConfig,
 				mcpConfigPath,
 				delegationManager,  // Per-instance delegation limits
-				parentAbortSignal
+				parentAbortSignal,
+				// Inherit timeout settings for subagent
+				timeoutBehavior,
+				requestTimeout,
+				gracefulTimeoutBonusSteps,
+				// Subagent lifecycle callbacks for graceful stop coordination
+				onSubagentCreated,
+				onSubagentCompleted,
 			});
 
 			return result;

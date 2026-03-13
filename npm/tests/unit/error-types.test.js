@@ -181,7 +181,7 @@ describe('categorizeError', () => {
     const result = categorizeError(error);
 
     expect(result).toBeInstanceOf(PathError);
-    expect(result.suggestion).toContain('verify the path');
+    expect(result.suggestion).toContain('does not exist');
   });
 
   test('should categorize "not a directory" as PathError', () => {
@@ -386,7 +386,7 @@ describe('Integration scenarios', () => {
 
     expect(xml).toContain('type="path_error"');
     expect(xml).toContain('recoverable="true"');
-    expect(xml).toContain('verify the path');
+    expect(xml).toContain('does not exist');
   });
 
   test('should handle search timeout scenario', () => {

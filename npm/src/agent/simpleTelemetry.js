@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, createWriteStream } from 'fs';
 import { dirname } from 'path';
+import { patchConsole } from './otelLogBridge.js';
 
 /**
  * Simple telemetry implementation for probe-agent
@@ -511,6 +512,13 @@ export function initializeSimpleTelemetryFromOptions(options) {
     enableConsole: options.traceConsole,
     filePath: options.traceFile || './traces.jsonl'
   });
+
+  // Patch console methods to append trace context and emit OTEL log records.
+  // This bridges ALL console.log/info/warn/error calls to the OTEL Logs pipeline
+  // automatically — no code changes needed at existing call sites.
+  // Safe to call multiple times (idempotent). No-op if @opentelemetry/api-logs
+  // is not installed.
+  patchConsole();
 
   return telemetry;
 }

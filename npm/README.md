@@ -140,6 +140,13 @@ export MODEL_NAME=claude-sonnet-4-6
 - **Session management** - Maintain conversation context across calls
 - **Token tracking** - Monitor usage and costs
 - **Configurable personas** - Engineer, architect, code-review, and more
+- **Smart timeout handling** - Three timeout modes (graceful, hard, negotiated) with two-phase graceful stop for delegates and MCP servers
+
+### Timeout Modes
+
+ProbeAgent supports three timeout behaviors (`graceful`, `hard`, `negotiated`) for controlling what happens when `maxOperationTimeout` is reached. The `negotiated` mode uses an independent observer LLM call that works even when the main loop is blocked by delegates. Delegates inherit timeout settings from the parent and are budget-aware — their timeout is capped to the parent's remaining budget. MCP servers that expose a `graceful_stop` tool get cooperative shutdown signals.
+
+See [Timeout Architecture](../docs/probe-agent/sdk/timeout-modes.md) for the full reference.
 
 ### Agent Skills (repo-local)
 

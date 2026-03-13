@@ -12,9 +12,11 @@ const __dirname = dirname(__filename);
 // Mock ProbeAgent
 const mockAnswer = jest.fn();
 const mockCancel = jest.fn();
+const mockTriggerGracefulWindDown = jest.fn();
 const MockProbeAgent = jest.fn().mockImplementation(() => ({
   answer: mockAnswer,
-  cancel: mockCancel
+  cancel: mockCancel,
+  triggerGracefulWindDown: mockTriggerGracefulWindDown
 }));
 
 // Use absolute path for mocking
@@ -579,23 +581,23 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       expect(MockProbeAgent).not.toHaveBeenCalled();
     });
 
-    it('should cancel subagent when parent signal aborts during execution', async () => {
+    it('should trigger graceful wind-down when parent signal aborts during execution', async () => {
       const controller = new AbortController();
 
-      // Make subagent take a while
+      // Make subagent take a while but complete before the 30s hard cancel deadline
       mockAnswer.mockImplementation(() =>
-        new Promise(resolve => setTimeout(() => resolve('Late'), 500))
+        new Promise(resolve => setTimeout(() => resolve('Partial results'), 500))
       );
 
-      // Abort after 50ms
+      // Abort after 50ms — triggers graceful wind-down, not hard cancel
       setTimeout(() => controller.abort(), 50);
 
-      await expect(
-        delegate({ task: 'Test task', parentAbortSignal: controller.signal })
-      ).rejects.toThrow(/parent operation was aborted/);
+      // With two-phase shutdown, the delegate completes gracefully
+      const result = await delegate({ task: 'Test task', parentAbortSignal: controller.signal });
+      expect(result).toBe('Partial results');
 
-      // Subagent.cancel() should have been called
-      expect(mockCancel).toHaveBeenCalled();
+      // triggerGracefulWindDown should have been called (not cancel)
+      expect(mockTriggerGracefulWindDown).toHaveBeenCalled();
     });
 
     it('should cancel subagent on timeout', async () => {
