@@ -254,6 +254,10 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- Use exact=true when searching for a KNOWN symbol name (function, type, variable, struct).',
 		'- exact=true matches the literal string only — no stemming, no splitting.',
 		'- This is ideal for precise lookups: exact=true "ForwardMessage", exact=true "SessionLimiter", exact=true "ThrottleRetryLimit".',
+		'- IMPORTANT: Use exact=true when searching for strings containing punctuation, quotes, or empty values.',
+		'  Default BM25 search strips punctuation and treats quoted empty strings as noise.',
+		'  Example: searching for \'description: ""\' with exact=false will NOT find empty description fields — it just matches "description".',
+		'  Use exact=true for literal patterns like \'description: ""\', \'value: \\\'\\\'\', or any YAML/config field with specific punctuation.',
 		'- Do NOT use exact=true for exploratory/conceptual queries — use the default for those.',
 		'',
 		'Combining searches with OR:',
@@ -313,7 +317,13 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'WHEN TO STOP:',
 		'- After you have explored the main concept AND related subsystems.',
 		'- Once you have 5-15 targets covering different aspects of the query.',
-		'- If you get a "DUPLICATE SEARCH BLOCKED" message, move on.',
+		'- If you get a "DUPLICATE SEARCH BLOCKED" message, do NOT rephrase the same query — try a FUNDAMENTALLY different approach:',
+		'  * Switch between exact=true and exact=false',
+		'  * Search for a broader term and filter results manually',
+		'  * Use listFiles to browse the directory structure directly',
+		'  * Look for related/surrounding patterns instead of the exact string',
+		'- If 2-3 genuinely different search approaches fail, STOP and report what you tried and why it failed.',
+		'  Do NOT keep trying variations of the same failing concept.',
 		'',
 		'Strategy:',
 		'1. Analyze the query — identify key concepts, then brainstorm SYNONYMS and alternative terms for each.',
@@ -460,7 +470,10 @@ export const searchTool = (options = {}) => {
 						if (prev.hadResults) {
 							return `DUPLICATE SEARCH BLOCKED (${blockCount}x). You already searched for "${searchQuery}" in this path and found results. Do NOT repeat. Use extract to examine the files you already found, try a COMPLETELY different keyword, or provide your final answer.`;
 						}
-						return `DUPLICATE SEARCH BLOCKED (${blockCount}x). You already searched for "${searchQuery}" in this path and got NO results. This term does not appear in the codebase at this path. Do NOT repeat. Try COMPLETELY different keywords, use listFiles to explore the directory structure, or provide your final answer.`;
+						const exactHint = exact
+							? 'You used exact=true. Try a broader search with exact=false, or use listFiles to browse the directory structure.'
+							: 'Try exact=true if you need literal/punctuation matching (e.g. \'description: ""\'), or use listFiles to explore directories, or search for a broader/related term and filter manually.';
+						return `DUPLICATE SEARCH BLOCKED (${blockCount}x). You already searched for "${searchQuery}" in this path and got NO results. This term does not appear in the codebase. Do NOT repeat or rephrase — try a FUNDAMENTALLY different approach: ${exactHint} If multiple approaches have failed, provide your final answer with what you know.`;
 					}
 					previousSearches.set(searchKey, { hadResults: false });
 					paginationCounts.set(searchKey, 0);

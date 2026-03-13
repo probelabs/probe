@@ -3433,7 +3433,10 @@ Follow these instructions carefully:
       }
 
       let currentIteration = 0;
-      let finalResult = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
+      let finalResult = null; // Will be set to a descriptive failure message if max iterations reached
+      const DEFAULT_MAX_ITER_MSG = 'I was unable to complete your request due to reaching the maximum number of tool iterations.';
+      // Track all tool calls across iterations for failure diagnostics
+      const _toolCallLog = []; // { name, args (truncated) }
       let abortSummaryTaken = false; // Set when negotiated timeout abort summary runs — skip completionPrompt
 
       // Adjust max iterations if schema is provided
@@ -4020,10 +4023,19 @@ or
                 return { toolChoice: 'none' };
               }
 
-              // Last-iteration warning
+              // Last-iteration warning — force text-only and tell the AI to summarize
               if (stepNumber === maxIterations - 1) {
+                // Build a brief summary of tools used so the model can reference them in its answer
+                const searchesTried = _toolCallLog
+                  .filter(tc => tc.name === 'search')
+                  .map(tc => `"${tc.args.query || ''}"${tc.args.exact ? ' (exact)' : ''}`)
+                  .filter((v, i, a) => a.indexOf(v) === i); // unique
+                const searchSummary = searchesTried.length > 0
+                  ? `\nSearches attempted: ${searchesTried.join(', ')}`
+                  : '';
                 return {
                   toolChoice: 'none',
+                  userMessage: `⚠️ LAST ITERATION — you are out of tool calls. Provide your BEST answer NOW with the information gathered so far. If you could not find what was requested, explain exactly what you searched for and why it did not work, so the caller can try a different approach.${searchSummary}`
                 };
               }
 
@@ -4117,6 +4129,13 @@ Double-check your response based on the criteria above. If everything looks good
               const { toolResults, toolCalls, text, reasoningText, finishReason, usage } = stepResult;
               currentIteration++;
               toolContext.currentIteration = currentIteration;
+
+              // Track tool calls for failure diagnostics
+              if (toolCalls?.length > 0) {
+                for (const tc of toolCalls) {
+                  _toolCallLog.push({ name: tc.toolName, args: tc.args || {} });
+                }
+              }
 
               // Record telemetry — include model's reasoning and tool call details
               if (this.tracer) {
@@ -4334,7 +4353,7 @@ Double-check your response based on the criteria above. If everything looks good
           if (gracefulTimeoutState.triggered) {
             const timeoutNotice = '**Note: This response was generated under a time constraint. The research may be incomplete, and some planned searches or analysis steps were not completed.**\n\n';
 
-            if (!finalResult || finalResult === 'I was unable to complete your request due to reaching the maximum number of tool iterations.') {
+            if (!finalResult || finalResult === DEFAULT_MAX_ITER_MSG || finalResult.startsWith('I was unable to complete your request after')) {
               // Wind-down produced empty text — try to collect useful content.
               // Some models (e.g., Gemini) return finishReason:'other' with empty text
               // when forced from tool-calling to text-only mode mid-task.
@@ -4665,6 +4684,37 @@ Double-check your response based on the criteria above. If everything looks good
 
       if (currentIteration >= maxIterations) {
         console.warn(`[WARN] Max tool iterations (${maxIterations}) reached for session ${this.sessionId}.`);
+
+        // Build a descriptive failure message with a summary of tool calls made,
+        // so the caller (e.g. a parent agent) knows what was attempted and why it failed.
+        if (!finalResult || finalResult === DEFAULT_MAX_ITER_MSG) {
+          try {
+            const searchQueries = [];
+            const toolCounts = {};
+            for (const tc of _toolCallLog) {
+              toolCounts[tc.name] = (toolCounts[tc.name] || 0) + 1;
+              if (tc.name === 'search') {
+                const q = tc.args.query || '';
+                const exact = tc.args.exact ? ' (exact)' : '';
+                searchQueries.push(`"${q}"${exact}`);
+              }
+            }
+            const toolBreakdown = Object.entries(toolCounts)
+              .map(([name, count]) => `${name}: ${count}x`)
+              .join(', ');
+            const uniqueSearches = [...new Set(searchQueries)];
+
+            let summary = `I was unable to complete your request after ${currentIteration} tool iterations.\n\n`;
+            summary += `Tool calls made: ${toolBreakdown || 'none'}\n`;
+            if (uniqueSearches.length > 0) {
+              summary += `Search queries tried: ${uniqueSearches.join(', ')}\n`;
+            }
+            summary += `\nThe search approach may be fundamentally wrong for this query. Consider: using exact=true for literal string matching, using bash/grep for pattern-based file searches, or trying a completely different strategy instead of repeating similar searches.`;
+            finalResult = summary;
+          } catch {
+            finalResult = DEFAULT_MAX_ITER_MSG;
+          }
+        }
       }
 
       // Store final history
