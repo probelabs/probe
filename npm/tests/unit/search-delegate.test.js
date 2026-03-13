@@ -385,10 +385,9 @@ describe('searchDelegate behavior', () => {
     const r4 = await tool.execute({ query: 'test query', path: '.' });
     expect(r4).toContain('STOP');
     expect(r4).toContain('3 times');
-    expect(r4).toContain('final JSON answer NOW');
   });
 
-  test('dedup counter resets after a successful new search', async () => {
+  test('dedup counter is per search key, not global', async () => {
     mockSearch.mockResolvedValue('search result');
 
     const tool = searchTool({
@@ -398,16 +397,82 @@ describe('searchDelegate behavior', () => {
 
     // First query
     await tool.execute({ query: 'query1', path: '.' });
-    // Duplicate → 1x
+    // Duplicate of query1 → 1x
     const r1 = await tool.execute({ query: 'query1', path: '.' });
     expect(r1).toContain('1x');
 
-    // Different query succeeds and resets counter
+    // Different query succeeds
     const r2 = await tool.execute({ query: 'query2', path: '.' });
     expect(r2).toBe('search result');
 
-    // Duplicate of query2 should be 1x (not 2x)
+    // Duplicate of query2 should be 1x (independent counter)
     const r3 = await tool.execute({ query: 'query2', path: '.' });
     expect(r3).toContain('1x');
+
+    // Duplicate of query1 again should be 2x (its own counter continues)
+    const r4 = await tool.execute({ query: 'query1', path: '.' });
+    expect(r4).toContain('2x');
+  });
+
+  test('same query on different paths is not blocked', async () => {
+    mockSearch.mockResolvedValue('search result');
+
+    const tool = searchTool({
+      cwd: '/workspace',
+      searchDelegate: false
+    });
+
+    // Search in path /repo1
+    const r1 = await tool.execute({ query: 'findme', path: '/repo1' });
+    expect(r1).toBe('search result');
+
+    // Same query in path /repo2 should NOT be blocked
+    const r2 = await tool.execute({ query: 'findme', path: '/repo2' });
+    expect(r2).toBe('search result');
+  });
+
+  test('dedup message differentiates no-results vs had-results', async () => {
+    const tool = searchTool({
+      cwd: '/workspace',
+      searchDelegate: false
+    });
+
+    // Search that returns results
+    mockSearch.mockResolvedValueOnce('Found: file1.rs line 10');
+    await tool.execute({ query: 'with_results', path: '.' });
+    const r1 = await tool.execute({ query: 'with_results', path: '.' });
+    expect(r1).toContain('found results');
+    expect(r1).toContain('Use extract');
+
+    // Search that returns no results
+    mockSearch.mockResolvedValueOnce('No results found.');
+    await tool.execute({ query: 'no_results', path: '.' });
+    const r2 = await tool.execute({ query: 'no_results', path: '.' });
+    expect(r2).toContain('NO results');
+    expect(r2).not.toContain('Use extract');
+  });
+
+  test('no-results hint for ticket/issue ID queries', async () => {
+    mockSearch.mockResolvedValue('No results found. Search completed in 5ms');
+
+    const tool = searchTool({
+      cwd: '/workspace',
+      searchDelegate: false
+    });
+
+    // Ticket ID pattern like TT-16546
+    const r1 = await tool.execute({ query: 'TT-16546', path: '.' });
+    expect(r1).toContain('ticket/issue ID');
+    expect(r1).toContain('technical concepts');
+
+    // JIRA-style pattern
+    mockSearch.mockResolvedValue('No results found.');
+    const r2 = await tool.execute({ query: 'PROJ-123', path: '/other' });
+    expect(r2).toContain('ticket/issue ID');
+
+    // Normal query should NOT get ticket hint
+    mockSearch.mockResolvedValue('No results found.');
+    const r3 = await tool.execute({ query: 'handleAuth', path: '/repo' });
+    expect(r3).not.toContain('ticket/issue ID');
   });
 });
