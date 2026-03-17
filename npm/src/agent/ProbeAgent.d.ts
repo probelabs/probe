@@ -116,8 +116,38 @@ export interface ProbeAgentOptions {
   negotiatedTimeoutMaxRequests?: number;
   /** Max ms per extension request for negotiated timeout (default: 600000 = 10 min). Env var: NEGOTIATED_TIMEOUT_MAX_PER_REQUEST */
   negotiatedTimeoutMaxPerRequest?: number;
-  /** External hard timeout ceiling in ms (e.g., visor's Promise.race timeout). When set, the observer caps extensions so granted time never exceeds this ceiling. Env var: EXTERNAL_HARD_TIMEOUT */
-  externalHardTimeout?: number | null;
+}
+
+/**
+ * Emitted when the negotiated timeout observer grants a time extension.
+ * Parent processes should listen to this event and extend their own deadlines accordingly.
+ */
+export interface TimeoutExtendedEvent {
+  /** Duration of the granted extension in milliseconds */
+  grantedMs: number;
+  /** Reason the observer granted the extension */
+  reason: string;
+  /** Number of extensions used so far */
+  extensionsUsed: number;
+  /** Number of extensions remaining */
+  extensionsRemaining: number;
+  /** Total extra time granted across all extensions in ms */
+  totalExtraTimeMs: number;
+  /** Remaining budget for future extensions in ms */
+  budgetRemainingMs: number;
+}
+
+/**
+ * Emitted when the negotiated timeout observer declines an extension and begins wind-down.
+ * After this event, the agent will produce its final answer and no more extensions will be granted.
+ */
+export interface TimeoutWindingDownEvent {
+  /** Reason the observer declined the extension */
+  reason: string;
+  /** Number of extensions used before declining */
+  extensionsUsed: number;
+  /** Total extra time granted across all extensions in ms */
+  totalExtraTimeMs: number;
 }
 
 /**
