@@ -425,6 +425,14 @@ export class ProbeAgent {
       return (isNaN(parsed) || parsed < 60000 || parsed > 3600000) ? 600000 : parsed;
     })();
 
+    // External hard timeout: the caller's hard ceiling (e.g., visor's Promise.race timeout).
+    // When set, the observer caps extensions so granted time never exceeds this ceiling,
+    // preventing the agent from being killed mid-work with no partial results. (#522)
+    this.externalHardTimeout = options.externalHardTimeout ?? (() => {
+      const parsed = parseInt(process.env.EXTERNAL_HARD_TIMEOUT, 10);
+      return (isNaN(parsed) || parsed < 0) ? null : parsed;
+    })();
+
     // Graceful stop deadline: how long to wait for subagents/MCP after observer declines (default 45s)
     this.gracefulStopDeadline = options.gracefulStopDeadline ?? (() => {
       const parsed = parseInt(process.env.GRACEFUL_STOP_DEADLINE, 10);
@@ -2759,7 +2767,7 @@ export class ProbeAgent {
       }
 
       // Initialize the MCP XML bridge
-      this.mcpBridge = new MCPXmlBridge({ debug: this.debug });
+      this.mcpBridge = new MCPXmlBridge({ debug: this.debug, agentEvents: this.events });
       await this.mcpBridge.initialize(mcpConfig);
 
       const mcpToolNames = this.mcpBridge.getToolNames();
@@ -3704,6 +3712,31 @@ Follow these instructions carefully:
           return;
         }
 
+        // Check external hard timeout headroom — if the caller has a hard ceiling
+        // (e.g., visor's Promise.race), decline extensions when headroom is insufficient (#522)
+        const MINIMUM_USEFUL_HEADROOM_MS = 60000; // 60s — less than this isn't useful for an extension
+        if (this.externalHardTimeout) {
+          const elapsed = Date.now() - negotiatedTimeoutState.startTime;
+          const externalHeadroom = Math.max(0, this.externalHardTimeout - elapsed);
+          if (externalHeadroom < MINIMUM_USEFUL_HEADROOM_MS) {
+            if (this.debug) {
+              console.log(`[DEBUG] Timeout observer: external hard timeout headroom exhausted (${Math.round(externalHeadroom / 1000)}s < ${MINIMUM_USEFUL_HEADROOM_MS / 1000}s minimum) — triggering graceful wind-down`);
+            }
+            if (this.tracer) {
+              this.tracer.addEvent('negotiated_timeout.external_headroom_exhausted', {
+                external_hard_timeout_ms: this.externalHardTimeout,
+                elapsed_ms: elapsed,
+                headroom_ms: externalHeadroom,
+                minimum_useful_ms: MINIMUM_USEFUL_HEADROOM_MS,
+                extensions_used: negotiatedTimeoutState.extensionsUsed,
+              });
+            }
+            await this._initiateGracefulStop(gracefulTimeoutState, 'external hard timeout headroom exhausted');
+            negotiatedTimeoutState.observerRunning = false;
+            return;
+          }
+        }
+
         // Build context for the observer
         const activeToolsList = Array.from(activeTools.values());
         const now = Date.now();
@@ -3810,7 +3843,22 @@ or
 
           if (decision.extend && decision.minutes > 0) {
             const requestedMs = Math.min(decision.minutes, maxPerReqMin) * 60000;
-            const grantedMs = Math.min(requestedMs, remainingBudgetMs, negotiatedTimeoutState.maxPerRequestMs);
+            // Cap to external hard timeout headroom if set (#522)
+            const externalCap = this.externalHardTimeout
+              ? Math.max(0, this.externalHardTimeout - (Date.now() - negotiatedTimeoutState.startTime))
+              : Infinity;
+            const grantedMs = Math.min(requestedMs, remainingBudgetMs, negotiatedTimeoutState.maxPerRequestMs, externalCap);
+
+            // If capped below minimum useful time, decline instead of granting a useless extension
+            if (grantedMs < MINIMUM_USEFUL_HEADROOM_MS) {
+              if (this.debug) {
+                console.log(`[DEBUG] Timeout observer: extension capped to ${Math.round(grantedMs / 1000)}s (below ${MINIMUM_USEFUL_HEADROOM_MS / 1000}s minimum) — declining and triggering graceful wind-down`);
+              }
+              await this._initiateGracefulStop(gracefulTimeoutState, `extension capped below minimum useful time (${Math.round(grantedMs / 1000)}s)`);
+              negotiatedTimeoutState.observerRunning = false;
+              return;
+            }
+
             const grantedMin = Math.round(grantedMs / 60000 * 10) / 10;
 
             // Update state
