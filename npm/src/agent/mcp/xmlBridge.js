@@ -36,6 +36,7 @@ export class MCPXmlBridge {
   constructor(options = {}) {
     this.debug = options.debug || false;
     this.tracer = options.tracer || null;
+    this.agentEvents = options.agentEvents || null;
     this.mcpTools = {};
     this.mcpManager = null;
     this.toolDescriptions = {};
@@ -84,7 +85,7 @@ export class MCPXmlBridge {
         console.error('[MCP DEBUG] Initializing MCP client manager...');
       }
 
-      this.mcpManager = new MCPClientManager({ debug: this.debug, tracer: this.tracer });
+      this.mcpManager = new MCPClientManager({ debug: this.debug, tracer: this.tracer, agentEvents: this.agentEvents });
       const result = await this.mcpManager.initialize(mcpConfigs);
 
       // Get tools from the manager (already in Vercel format)

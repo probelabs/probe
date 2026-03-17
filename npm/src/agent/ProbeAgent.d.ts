@@ -116,6 +116,8 @@ export interface ProbeAgentOptions {
   negotiatedTimeoutMaxRequests?: number;
   /** Max ms per extension request for negotiated timeout (default: 600000 = 10 min). Env var: NEGOTIATED_TIMEOUT_MAX_PER_REQUEST */
   negotiatedTimeoutMaxPerRequest?: number;
+  /** External hard timeout ceiling in ms (e.g., visor's Promise.race timeout). When set, the observer caps extensions so granted time never exceeds this ceiling. Env var: EXTERNAL_HARD_TIMEOUT */
+  externalHardTimeout?: number | null;
 }
 
 /**

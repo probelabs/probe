@@ -164,6 +164,8 @@ export class MCPClientManager {
     this.debug = options.debug || process.env.DEBUG_MCP === '1';
     this.config = null;
     this.tracer = options.tracer || null;
+    // Optional event emitter for broadcasting tool call lifecycle to the agent (#522)
+    this.agentEvents = options.agentEvents || null;
   }
 
   /**
@@ -452,6 +454,7 @@ export class MCPClientManager {
     }
 
     const startTime = Date.now();
+    const toolCallId = `mcp-${toolName}-${startTime}`;
 
     // Record tool call start
     this.recordMcpEvent('tool.call_started', {
@@ -459,6 +462,17 @@ export class MCPClientManager {
       serverName: tool.serverName,
       originalToolName: tool.originalName
     });
+
+    // Emit toolCall event so the agent's activeTools map tracks MCP tool calls (#522)
+    if (this.agentEvents) {
+      this.agentEvents.emit('toolCall', {
+        toolCallId,
+        name: toolName,
+        args,
+        status: 'started',
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     try {
       if (this.debug) {
@@ -502,6 +516,16 @@ export class MCPClientManager {
         durationMs
       });
 
+      // Emit toolCall completion so agent's activeTools removes this entry (#522)
+      if (this.agentEvents) {
+        this.agentEvents.emit('toolCall', {
+          toolCallId,
+          name: toolName,
+          status: 'completed',
+          timestamp: new Date().toISOString(),
+        });
+      }
+
       return result;
     } catch (error) {
       const durationMs = Date.now() - startTime;
@@ -520,6 +544,16 @@ export class MCPClientManager {
         durationMs,
         isTimeout: error.message.includes('timeout')
       });
+
+      // Emit toolCall error so agent's activeTools removes this entry (#522)
+      if (this.agentEvents) {
+        this.agentEvents.emit('toolCall', {
+          toolCallId,
+          name: toolName,
+          status: 'error',
+          timestamp: new Date().toISOString(),
+        });
+      }
 
       throw error;
     }
