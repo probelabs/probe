@@ -853,3 +853,115 @@ fn test_skipped_files_with_match_counts() {
         "Total results + skipped should be at least 2"
     );
 }
+
+/// Issue #527: Quoted search on a directory should behave like exact/literal search.
+/// Previously, quoted queries like '"cleanupScopeMappings"' ran filename matching
+/// and BM25 ranking with tokenized subwords, causing unrelated files containing
+/// "cleanup", "scope", or "map" individually to appear in results.
+#[test]
+fn test_quoted_search_excludes_unrelated_files() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    // File that DOES contain the exact camelCase symbol
+    let src_dir = temp_dir.path().join("model");
+    fs::create_dir(&src_dir).expect("Failed to create model dir");
+    let mut target_file = File::create(src_dir.join("products.go")).unwrap();
+    target_file
+        .write_all(
+            b"package products\n\n\
+              func cleanupScopeMappings(tx interface{}, newApis []string, oldApis []string) error {\n\
+              \treturn nil\n\
+              }\n",
+        )
+        .unwrap();
+
+    // File that does NOT contain the symbol but has subwords: cleanup, scope, mapping
+    let app_dir = temp_dir.path().join("app");
+    fs::create_dir(&app_dir).expect("Failed to create app dir");
+    let mut unrelated_file = File::create(app_dir.join("about.go")).unwrap();
+    unrelated_file
+        .write_all(
+            b"package about\n\n\
+              // GetVersion returns the cleanup version info for scope mappings\n\
+              func GetVersion() string {\n\
+              \treturn \"1.0.0\"\n\
+              }\n\n\
+              // GetStatus returns the status of the scope cleanup mapping service\n\
+              func GetStatus() string {\n\
+              \treturn \"running\"\n\
+              }\n",
+        )
+        .unwrap();
+
+    // Another unrelated file with no matching subwords at all
+    let mut other_file = File::create(app_dir.join("users.go")).unwrap();
+    other_file
+        .write_all(
+            b"package users\n\n\
+              func GetUser(id string) (interface{}, error) {\n\
+              \treturn nil, nil\n\
+              }\n",
+        )
+        .unwrap();
+
+    let custom_ignores: Vec<String> = vec![];
+
+    // Quoted query — should only return products.go
+    let queries = vec!["\"cleanupScopeMappings\"".to_string()];
+    let options = SearchOptions {
+        path: temp_dir.path(),
+        queries: &queries,
+        files_only: false,
+        custom_ignores: &custom_ignores,
+        exclude_filenames: false,
+        language: None,
+        reranker: "hybrid",
+        frequency_search: false,
+        max_results: None,
+        max_bytes: None,
+        max_tokens: None,
+        allow_tests: true,
+        no_merge: false,
+        merge_threshold: None,
+        dry_run: false,
+        session: None,
+        timeout: 30,
+        question: None,
+        exact: false, // NOT using --exact flag, just quoted query
+        no_gitignore: true,
+        lsp: false,
+    };
+
+    let search_result = perform_probe(&options).expect("Search should succeed");
+
+    println!(
+        "Quoted search returned {} results:",
+        search_result.results.len()
+    );
+    for r in &search_result.results {
+        println!("  File: {} Lines: {:?}", r.file, r.lines);
+    }
+
+    // All results should be from products.go (the file containing the exact symbol)
+    assert!(
+        !search_result.results.is_empty(),
+        "Quoted search should find at least one result"
+    );
+    for r in &search_result.results {
+        assert!(
+            r.file.contains("products.go"),
+            "Quoted search should only return files containing the exact symbol, got: {}",
+            r.file
+        );
+    }
+
+    // Specifically: about.go should NOT appear (it only has subwords, not the full symbol)
+    let has_about = search_result
+        .results
+        .iter()
+        .any(|r| r.file.contains("about.go"));
+    assert!(
+        !has_about,
+        "about.go should not appear in quoted search results — it doesn't contain 'cleanupScopeMappings'"
+    );
+}
