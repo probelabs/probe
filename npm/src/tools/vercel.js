@@ -13,6 +13,7 @@ import { searchSchema, querySchema, extractSchema, delegateSchema, analyzeAllSch
 import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
+import { truncateForSpan } from '../agent/simpleTelemetry.js';
 
 /**
  * Auto-quote search query terms that contain mixed case or underscores.
@@ -551,6 +552,12 @@ export const searchTool = (options = {}) => {
 					? await options.tracer.withSpan('search.delegate', runDelegation, {
 						'search.query': searchQuery,
 						'search.path': searchPath
+					}, (span, result) => {
+						const text = typeof result === 'string' ? result : '';
+						span.setAttributes({
+							'search.delegate.output': truncateForSpan(text),
+							'search.delegate.output_length': text.length
+						});
 					})
 					: await runDelegation();
 

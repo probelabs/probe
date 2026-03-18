@@ -38,6 +38,7 @@ import { existsSync } from 'fs';
 import { readFile, stat, readdir } from 'fs/promises';
 import { resolve, isAbsolute, dirname, basename, normalize, sep } from 'path';
 import { TokenCounter } from './tokenCounter.js';
+import { truncateForSpan } from './simpleTelemetry.js';
 import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
 import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
 import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES, isFormatSupportedByProvider } from './imageConfig.js';
@@ -4327,9 +4328,7 @@ Double-check your response based on the criteria above. If everything looks good
 
           let aiResult;
           if (this.tracer) {
-            const inputPreview = message.length > 1000
-              ? message.substring(0, 1000) + '... [truncated]'
-              : message;
+            const inputPreview = truncateForSpan(message, 4096);
 
             aiResult = await this.tracer.withSpan('ai.request', executeAIRequest, {
               'ai.model': this.model,
@@ -4340,6 +4339,12 @@ Double-check your response based on the criteria above. If everything looks good
               'max_tokens': maxResponseTokens,
               'temperature': 0.3,
               'message_count': currentMessages.length
+            }, (span, result) => {
+              const text = result?.finalText || '';
+              span.setAttributes({
+                'ai.output': truncateForSpan(text),
+                'ai.output_length': text.length
+              });
             });
           } else {
             aiResult = await executeAIRequest();
