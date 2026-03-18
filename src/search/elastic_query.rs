@@ -224,7 +224,8 @@ impl Expr {
                     } else {
                         // No required terms: treat multiple keywords within a Term as alternatives
                         // This avoids false negatives for stemming variants (e.g., repository/repositori).
-                        keywords.iter().any(|kw| {
+                        // Use lowercase_keywords for lookup since term_indices stores lowercase keys.
+                        lowercase_keywords.iter().any(|kw| {
                             term_indices
                                 .get(kw)
                                 .map(|idx| matched_terms.contains(idx))
