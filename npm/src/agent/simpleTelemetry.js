@@ -3,6 +3,21 @@ import { dirname } from 'path';
 import { patchConsole } from './otelLogBridge.js';
 
 /**
+ * Truncate text for span attributes, preserving head and tail for context.
+ * For text <= maxLen, returns as-is. For longer text, shows first half and
+ * last half of the budget with a separator indicating omitted chars.
+ * @param {string} text - The text to truncate
+ * @param {number} [maxLen=4096] - Maximum output length
+ * @returns {string} The truncated text
+ */
+export function truncateForSpan(text, maxLen = 4096) {
+  if (!text || text.length <= maxLen) return text || '';
+  const half = Math.floor((maxLen - 40) / 2); // 40 chars reserved for separator
+  const omitted = text.length - half * 2;
+  return text.substring(0, half) + `\n... [${omitted} chars omitted] ...\n` + text.substring(text.length - half);
+}
+
+/**
  * Simple telemetry implementation for probe-agent
  * This provides basic tracing functionality without complex OpenTelemetry dependencies
  */
@@ -463,7 +478,7 @@ export class SimpleAppTracer {
     });
   }
 
-  async withSpan(spanName, fn, attributes = {}) {
+  async withSpan(spanName, fn, attributes = {}, onResult = null) {
     if (!this.isEnabled()) {
       return fn();
     }
@@ -476,12 +491,19 @@ export class SimpleAppTracer {
     try {
       const result = await fn();
       span.setStatus('OK');
+      if (onResult) {
+        try {
+          onResult(span, result);
+        } catch (_) {
+          // Don't let span enrichment errors break the flow
+        }
+      }
       return result;
     } catch (error) {
       span.setStatus('ERROR');
-      span.addEvent('exception', { 
+      span.addEvent('exception', {
         'exception.message': error.message,
-        'exception.stack': error.stack 
+        'exception.stack': error.stack
       });
       throw error;
     } finally {

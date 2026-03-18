@@ -88,7 +88,8 @@ describe('searchDelegate behavior', () => {
       expect.objectContaining({
         'search.query': expect.stringContaining('searchDelegate'),
         'search.path': expect.any(String)
-      })
+      }),
+      expect.any(Function)
     );
     const extractArgs = mockExtract.mock.calls[0][0];
     expect(extractArgs).toEqual(expect.objectContaining({ files: expect.any(Array) }));

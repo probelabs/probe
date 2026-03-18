@@ -4,7 +4,50 @@
  */
 
 import { jest, describe, test, expect, beforeEach, afterEach } from '@jest/globals';
-import { SimpleTelemetry, SimpleAppTracer } from '../../src/agent/simpleTelemetry.js';
+import { SimpleTelemetry, SimpleAppTracer, truncateForSpan } from '../../src/agent/simpleTelemetry.js';
+
+describe('truncateForSpan', () => {
+  test('should return short text as-is', () => {
+    expect(truncateForSpan('hello')).toBe('hello');
+    expect(truncateForSpan('x'.repeat(4096))).toBe('x'.repeat(4096));
+  });
+
+  test('should return empty string for falsy input', () => {
+    expect(truncateForSpan('')).toBe('');
+    expect(truncateForSpan(null)).toBe('');
+    expect(truncateForSpan(undefined)).toBe('');
+  });
+
+  test('should preserve head and tail for long text', () => {
+    const text = 'H'.repeat(3000) + 'T'.repeat(3000);
+    const result = truncateForSpan(text, 4096);
+
+    expect(result.length).toBeLessThanOrEqual(4096);
+    expect(result).toMatch(/^H+/);  // starts with head
+    expect(result).toMatch(/T+$/);  // ends with tail
+    expect(result).toContain('chars omitted');
+  });
+
+  test('should report correct omitted count', () => {
+    const text = 'x'.repeat(10000);
+    const result = truncateForSpan(text, 4096);
+    const match = result.match(/\[(\d+) chars omitted\]/);
+
+    expect(match).not.toBeNull();
+    const omitted = parseInt(match[1], 10);
+    // head + tail + omitted should equal original length
+    const half = Math.floor((4096 - 40) / 2);
+    expect(omitted).toBe(10000 - half * 2);
+  });
+
+  test('should respect custom maxLen', () => {
+    const text = 'x'.repeat(500);
+    const result = truncateForSpan(text, 100);
+
+    expect(result.length).toBeLessThanOrEqual(150); // some slack for separator
+    expect(result).toContain('chars omitted');
+  });
+});
 
 describe('SimpleTelemetry', () => {
   let telemetry;
@@ -277,6 +320,75 @@ describe('SimpleAppTracer', () => {
       });
 
       expect(result).toBe('executed');
+    });
+
+    test('should call onResult callback with span and result before span ends', async () => {
+      let capturedSpan = null;
+      let capturedResult = null;
+
+      const result = await tracer.withSpan('ai.request', async () => {
+        return { finalText: 'AI response text' };
+      }, { 'ai.model': 'test-model' }, (span, res) => {
+        capturedSpan = span;
+        capturedResult = res;
+        span.setAttributes({
+          'ai.output': res.finalText,
+          'ai.output_length': res.finalText.length
+        });
+      });
+
+      expect(result).toEqual({ finalText: 'AI response text' });
+      expect(capturedSpan).not.toBeNull();
+      expect(capturedResult).toEqual({ finalText: 'AI response text' });
+      // Verify the attributes were set on the span
+      expect(capturedSpan.attributes['ai.output']).toBe('AI response text');
+      expect(capturedSpan.attributes['ai.output_length']).toBe(16);
+    });
+
+    test('should not break if onResult callback throws', async () => {
+      const result = await tracer.withSpan('ai.request', async () => {
+        return { finalText: 'response' };
+      }, {}, () => {
+        throw new Error('callback error');
+      });
+
+      // Should still return the result despite callback error
+      expect(result).toEqual({ finalText: 'response' });
+    });
+
+    test('should not call onResult on error', async () => {
+      let onResultCalled = false;
+
+      await expect(tracer.withSpan('ai.request', async () => {
+        throw new Error('execution failed');
+      }, {}, () => {
+        onResultCalled = true;
+      })).rejects.toThrow('execution failed');
+
+      expect(onResultCalled).toBe(false);
+    });
+
+    test('should truncate long output in onResult callback using head+tail', async () => {
+      let capturedSpan = null;
+      const longText = 'A'.repeat(2500) + 'B'.repeat(2500);
+
+      await tracer.withSpan('search.delegate', async () => {
+        return longText;
+      }, { 'search.query': 'test' }, (span, result) => {
+        capturedSpan = span;
+        const text = typeof result === 'string' ? result : '';
+        span.setAttributes({
+          'search.delegate.output': truncateForSpan(text),
+          'search.delegate.output_length': text.length
+        });
+      });
+
+      expect(capturedSpan.attributes['search.delegate.output'].length).toBeLessThan(5000);
+      expect(capturedSpan.attributes['search.delegate.output']).toContain('chars omitted');
+      // Should contain both head (A's) and tail (B's)
+      expect(capturedSpan.attributes['search.delegate.output']).toMatch(/^A+/);
+      expect(capturedSpan.attributes['search.delegate.output']).toMatch(/B+$/);
+      expect(capturedSpan.attributes['search.delegate.output_length']).toBe(5000);
     });
   });
 
