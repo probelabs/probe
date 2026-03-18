@@ -494,3 +494,62 @@ fn test_required_term_in_or_bug() {
     println!("Test 4 - No terms present: matched_terms={matched_terms:?}, result={result}");
     assert!(!result, "Should return false when no terms are present");
 }
+
+#[test]
+fn test_exact_camel_case_evaluate_uses_lowercase_keywords() {
+    // Issue #525: exact search for camelCase symbols fails because evaluate()
+    // uses `keywords` (original case) for term_indices lookup instead of
+    // `lowercase_keywords`. term_indices stores lowercase keys, so lookup
+    // with original case like "cleanupScopeMappings" returns None.
+    //
+    // This is the root cause of --exact missing real camelCase symbols.
+
+    // term_indices always stores lowercase keys (built from lowercase_keywords)
+    let term_indices = create_term_indices(&["cleanupscopemappings"]);
+
+    // Exact term preserves original case in `keywords` but lowercase in `lowercase_keywords`
+    let expr = create_exact_term("cleanupScopeMappings");
+
+    // The regex pattern finds the symbol in source → matched_terms = {0}
+    let matched_terms = create_matched_terms(&[0]);
+
+    // This SHOULD return true: the term was found by regex search
+    let result = expr.evaluate(&matched_terms, &term_indices, false);
+    assert!(
+        result,
+        "Exact camelCase term should match when term index 0 is present in matched_terms. \
+         Bug: evaluate() uses original-case keywords for term_indices lookup instead of lowercase_keywords."
+    );
+
+    // Also test with ignore_negatives=true (used in early filtering)
+    let result_ignore_neg = expr.evaluate(&matched_terms, &term_indices, true);
+    assert!(
+        result_ignore_neg,
+        "Exact camelCase term should match with ignore_negatives=true"
+    );
+}
+
+#[test]
+fn test_exact_camel_case_all_present_uses_lowercase() {
+    // Verify that the `all_present` check (used for required terms) also works
+    // for exact camelCase terms
+    let term_indices = create_term_indices(&["cleanupscopemappings"]);
+
+    let expr = Expr::Term {
+        keywords: vec!["cleanupScopeMappings".to_string()],
+        lowercase_keywords: vec!["cleanupscopemappings".to_string()],
+        field: None,
+        required: true,
+        excluded: false,
+        exact: true,
+    };
+
+    let matched_terms = create_matched_terms(&[0]);
+
+    // Required exact camelCase term should match
+    let result = expr.evaluate(&matched_terms, &term_indices, false);
+    assert!(
+        result,
+        "Required exact camelCase term should match via lowercase_keywords lookup"
+    );
+}
