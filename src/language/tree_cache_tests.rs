@@ -151,8 +151,9 @@ fn test_tree_cache_invalidation() {
     // But the content is different, so the byte positions should differ
     assert_ne!(tree1.root_node().end_byte(), tree2.root_node().end_byte());
 
-    // Check that the cache still has one entry (the updated one)
-    assert_eq!(tree_cache::get_cache_size(), 1);
+    // Check that the file is still in the cache (updated entry)
+    // Note: we don't check exact cache size because other tests running in parallel
+    // may add entries to the global cache even though this test holds the local mutex.
     assert!(tree_cache::is_in_cache("test_file2.rs"));
 }
 
