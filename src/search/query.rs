@@ -271,7 +271,7 @@ fn update_ast_exact(expr: &mut elastic_query::Expr) {
 }
 
 /// Helper function to check if the AST represents an exact search
-fn is_exact_search(expr: &elastic_query::Expr) -> bool {
+pub fn is_exact_search(expr: &elastic_query::Expr) -> bool {
     match expr {
         elastic_query::Expr::Term { exact, .. } => *exact,
         elastic_query::Expr::And(left, right) => is_exact_search(left) && is_exact_search(right),

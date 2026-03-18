@@ -508,8 +508,12 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
     let mut all_files = file_term_map.keys().cloned().collect::<HashSet<_>>();
 
     // Add filename matches if enabled
+    // Skip filename matching for exact searches (--exact flag) and when all AST terms
+    // are exact (e.g., quoted queries like "cleanupScopeMappings"). Filename matching
+    // tokenizes terms into subwords which creates false positives for exact queries. (#527)
     let fm_start = Instant::now();
-    if include_filenames && !exact {
+    let ast_all_exact = crate::search::query::is_exact_search(&plan.ast);
+    if include_filenames && !exact && !ast_all_exact {
         if debug_mode {
             println!("DEBUG: Starting filename matching...");
         }
@@ -1352,17 +1356,18 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
             format_duration(remaining_time)
         );
     }
-    // Rank results (skip if exact flag is set)
+    // Rank results (skip if exact flag is set or all AST terms are exact like quoted queries)
     let rr_start = Instant::now();
+    let skip_ranking = *exact || ast_all_exact;
     if debug_mode {
-        if *exact {
+        if skip_ranking {
             println!("DEBUG: Skipping result ranking due to exact flag being set");
         } else {
             println!("DEBUG: Starting result ranking...");
         }
     }
 
-    if !*exact {
+    if !skip_ranking {
         // Only perform ranking if exact flag is not set
         rank_search_results(&mut final_results, queries, reranker, *question);
 
