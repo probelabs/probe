@@ -97,6 +97,7 @@ describe('Delegate Tool Integration', () => {
         model: undefined,
         tracer: undefined,
         enableBash: false,
+        allowEdit: false,
         bashConfig: undefined,
         architectureFileName: undefined,
         searchDelegate: undefined,
