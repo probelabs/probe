@@ -54,6 +54,7 @@ describe('Delegate Tool Configuration', () => {
         model: undefined,
         tracer: undefined,
         enableBash: false,
+        allowEdit: false,
         bashConfig: undefined,
         architectureFileName: undefined,
         searchDelegate: undefined,

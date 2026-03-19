@@ -476,4 +476,45 @@ describe('searchDelegate behavior', () => {
     const r3 = await tool.execute({ query: 'handleAuth', path: '/repo' });
     expect(r3).not.toContain('ticket/issue ID');
   });
+
+  test('search delegation passes allowEdit to delegate (#534)', async () => {
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      targets: ['a.js#foo']
+    }));
+    mockExtract.mockResolvedValue('EXTRACTED');
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      allowEdit: true,
+      tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+    });
+
+    await tool.execute({ query: 'test', path: 'src' });
+
+    expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
+      allowEdit: true
+    }));
+  });
+
+  test('search delegation defaults allowEdit to false when not set (#534)', async () => {
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      targets: ['a.js#foo']
+    }));
+    mockExtract.mockResolvedValue('EXTRACTED');
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+    });
+
+    await tool.execute({ query: 'test', path: 'src' });
+
+    expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
+      allowEdit: false
+    }));
+  });
 });

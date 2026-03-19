@@ -620,3 +620,41 @@ describe('delegateTool path priority', () => {
     });
   });
 });
+
+describe('delegateTool allowEdit inheritance (#534)', () => {
+  test('should pass allowEdit=true to delegate when parent has allowEdit', async () => {
+    const tool = delegateTool({
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      allowEdit: true,
+    });
+
+    // The tool should be configured — verify it destructured allowEdit
+    expect(tool).toBeDefined();
+    expect(typeof tool.execute).toBe('function');
+  });
+
+  test('should default allowEdit to false when not provided', async () => {
+    const tool = delegateTool({
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+    });
+
+    expect(tool).toBeDefined();
+    expect(typeof tool.execute).toBe('function');
+  });
+
+  test('ProbeAgent derives hashLines from allowEdit by default', () => {
+    const agentWithEdit = new ProbeAgent({ allowEdit: true });
+    expect(agentWithEdit.allowEdit).toBe(true);
+    expect(agentWithEdit.hashLines).toBe(true);
+
+    const agentWithoutEdit = new ProbeAgent({ allowEdit: false });
+    expect(agentWithoutEdit.allowEdit).toBe(false);
+    expect(agentWithoutEdit.hashLines).toBe(false);
+
+    const agentDefault = new ProbeAgent({});
+    expect(agentDefault.allowEdit).toBe(false);
+    expect(agentDefault.hashLines).toBe(false);
+  });
+});

@@ -540,6 +540,7 @@ export const searchTool = (options = {}) => {
 					tracer: options.tracer || null,
 					enableBash: false,
 					bashConfig: null,
+					allowEdit: options.allowEdit || false,
 					architectureFileName: options.architectureFileName || null,
 					promptType: 'code-searcher',
 					allowedTools: ['search', 'extract', 'listFiles'],
@@ -895,7 +896,7 @@ export const extractTool = (options = {}) => {
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null,
+	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, allowEdit = false, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null,
 		// Timeout settings inherited from parent agent
 		timeoutBehavior, maxOperationTimeout, requestTimeout, gracefulTimeoutBonusSteps,
 		negotiatedTimeoutBudget, negotiatedTimeoutMaxRequests, negotiatedTimeoutMaxPerRequest,
@@ -1014,6 +1015,7 @@ export const delegateTool = (options = {}) => {
 				model,
 				tracer,
 				enableBash,
+				allowEdit,
 				bashConfig,
 				architectureFileName,
 				searchDelegate,
