@@ -3746,19 +3746,23 @@ ${activeToolsDesc}
 - Time budget remaining: ${Math.round(remainingBudgetMs / 60000)} minutes
 - Max per extension: ${maxPerReqMin} minutes
 
-Decide whether the agent should get more time. EXTEND if:
+Your DEFAULT should be to EXTEND. The agent is working on a task and deserves time to finish. Only decline if you see clear evidence of a problem.
+
+EXTEND (this should be your default) if:
 - Tools are actively running (especially delegates or complex analysis) — they need time to finish
-- The agent is making clear progress on a complex task
+- The agent is making progress, even if slowly — complex tasks take time
 - New information is being gathered that will improve the final answer
+- The agent is iterating on an approach (trying different searches, refining queries) — this is normal problem-solving, not a loop
+- There is remaining budget and the task is not yet complete
+- When in doubt, extend — it's better to give the agent a chance than to cut it off prematurely
 
-DO NOT EXTEND if:
-- The agent appears stuck in a loop (repeating the same tool calls or getting the same errors)
-- The conversation shows the agent retrying failed operations without changing approach
-- The agent has enough information to answer but keeps searching for more
-- Tool calls are returning empty or error results repeatedly
-- The agent is doing redundant work (searching for things it already found)
+DO NOT EXTEND only if you see CLEAR evidence of:
+- The agent is stuck in an obvious loop — repeating the EXACT same tool calls with the EXACT same arguments and getting the same errors back-to-back (3+ times)
+- The agent is retrying a fundamentally broken operation without changing its approach at all
+- Tool calls are consistently returning errors or empty results AND the agent is not adapting
+- The conversation clearly shows the agent has all the information it needs and is just making redundant calls
 
-A stuck agent will not recover with more time — it will just burn the budget. Better to force it to answer with what it has.
+IMPORTANT: Iterating, refining, or trying variations is NOT the same as being stuck in a loop. A loop means identical repeated calls with no variation. Be generous with time — a slightly longer response time is much better than a prematurely cut-off incomplete answer.
 
 Respond with ONLY valid JSON (no markdown, no explanation):
 {"extend": true, "minutes": <1-${maxPerReqMin}>, "reason": "your reason here"}
@@ -3885,6 +3889,20 @@ or
 
             await this._initiateGracefulStop(gracefulTimeoutState, `observer declined: ${decision.reason}`);
           }
+
+          // Return decision data for span enrichment
+          return {
+            decision: decision.extend ? 'extended' : 'declined',
+            reason: decision.reason || '',
+            ...(decision.extend ? {
+              granted_ms: grantedMs,
+              granted_min: grantedMin,
+              budget_remaining_ms: remainingBudgetMs - grantedMs,
+            } : {}),
+            extensions_used: negotiatedTimeoutState.extensionsUsed,
+            max_requests: negotiatedTimeoutState.maxRequests,
+            total_extra_time_ms: negotiatedTimeoutState.totalExtraTimeMs,
+          };
         };
 
         try {
@@ -3894,6 +3912,23 @@ or
               'timeout.extensions_used': negotiatedTimeoutState.extensionsUsed,
               'timeout.active_tools_count': activeToolsList.length,
               'timeout.remaining_budget_ms': remainingBudgetMs,
+            }, (span, result) => {
+              if (result) {
+                span.setAttributes({
+                  'observer.decision': result.decision,
+                  'observer.reason': result.reason,
+                  'observer.extensions_used': result.extensions_used,
+                  'observer.max_requests': result.max_requests,
+                  'observer.total_extra_time_ms': result.total_extra_time_ms,
+                });
+                if (result.decision === 'extended') {
+                  span.setAttributes({
+                    'observer.granted_ms': result.granted_ms,
+                    'observer.granted_min': result.granted_min,
+                    'observer.budget_remaining_ms': result.budget_remaining_ms,
+                  });
+                }
+              }
             });
           } else {
             await observerFn();
@@ -4033,7 +4068,7 @@ or
                   }
                   return {
                     toolChoice: 'none',
-                    userMessage: `⚠️ TIME LIMIT REACHED. You are running out of time. You have ${remaining} step(s) remaining. Provide your BEST answer NOW using the information you have already gathered. Do NOT call any more tools. Summarize your findings and respond completely. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`
+                    userMessage: `⚠️ TIME BUDGET EXHAUSTED. Your allocated time for this task has run out. You have ${remaining} step(s) remaining to provide your answer.\n\nIMPORTANT: This is a time budget constraint, NOT a system shutdown or error. The system is working perfectly — you simply used all your allocated time.\n\nDo NOT say things like "the system is shutting down" or "try again later" — the user submitted a request and is waiting for YOUR answer right now.\n\nProvide your BEST answer NOW using the information you have already gathered. Do NOT call any more tools. Summarize your findings and respond completely. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`
                   };
                 }
 
@@ -4571,8 +4606,10 @@ Double-check your response based on the criteria above. If everything looks good
                 } catch {}
               }
 
-              const summaryPrompt = `Your operation was interrupted by a timeout observer because the time limit was reached. ` +
-                `Some of your tool calls were cancelled mid-execution.\n\n` +
+              const summaryPrompt = `Your allocated time budget for this task has been exhausted. ` +
+                `Some of your tool calls were cancelled mid-execution because the timeout observer determined the time limit was reached.\n\n` +
+                `IMPORTANT: This is a time budget constraint, NOT a system shutdown or error. The system is working perfectly — you simply used all your allocated time. ` +
+                `Do NOT say things like "the system is shutting down" or "try again later." The user is waiting for your answer RIGHT NOW.\n\n` +
                 `Please provide a DETAILED summary of:\n` +
                 `1. What you were asked to do (the original task)\n` +
                 `2. What you accomplished — include ALL findings, code snippets, data, and conclusions you gathered\n` +
@@ -4615,6 +4652,13 @@ Double-check your response based on the criteria above. If everything looks good
               if (this.tracer) {
                 summaryText = await this.tracer.withSpan('negotiated_timeout.abort_summary', summaryFn, {
                   'summary.conversation_messages': currentMessages.length,
+                  'observer.was_timeout': true,
+                }, (span, result) => {
+                  if (result) {
+                    span.setAttributes({
+                      'observer.summary_length': result.length,
+                    });
+                  }
                 });
               } else {
                 summaryText = await summaryFn();

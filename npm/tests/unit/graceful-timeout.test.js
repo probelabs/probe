@@ -118,7 +118,7 @@ describe('prepareStep wind-down behavior', () => {
 
     const result = prepareStep({ steps: [], stepNumber: 0 });
     expect(result.toolChoice).toBe('none');
-    expect(result.userMessage).toContain('TIME LIMIT REACHED');
+    expect(result.userMessage).toContain('TIME BUDGET EXHAUSTED');
     expect(result.userMessage).toContain('3 step(s) remaining');
     expect(result.userMessage).toContain('Do NOT call any more tools');
     expect(gracefulTimeoutState.bonusStepsUsed).toBe(1);
@@ -364,7 +364,7 @@ describe('Full wind-down cycle simulation', () => {
     // Step 1: gets wrap-up message
     const step1 = prepareStep({ steps: [], stepNumber: 0 });
     expect(step1.toolChoice).toBe('none');
-    expect(step1.userMessage).toContain('TIME LIMIT REACHED');
+    expect(step1.userMessage).toContain('TIME BUDGET EXHAUSTED');
     expect(step1.userMessage).toContain('2 step(s) remaining');
     expect(stopWhen({ steps: [] })).toBe(false); // 1 < 3
 

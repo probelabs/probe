@@ -33,6 +33,7 @@ export const bashTool = (options = {}) => {
     debug = false,
     cwd,
     allowedFolders = [],
+    allowEdit = false,
     workspaceRoot: providedWorkspaceRoot,
     tracer = null
   } = options;
@@ -47,6 +48,7 @@ export const bashTool = (options = {}) => {
     deny: bashConfig.deny,
     disableDefaultAllow: bashConfig.disableDefaultAllow,
     disableDefaultDeny: bashConfig.disableDefaultDeny,
+    allowEdit,
     debug,
     tracer
   });
