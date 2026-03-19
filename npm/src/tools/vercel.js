@@ -426,16 +426,16 @@ export const searchTool = (options = {}) => {
 	const MAX_PAGES_PER_QUERY = 3;
 
 	/**
-	 * Normalize a search query to detect concept-level duplicates.
-	 * Strips quotes, common prefixes like "func ", dots→camelCase, lowercases.
-	 * "func ctxGetData", "ctxGetData", "ctx.GetData" all → "ctxgetdata"
+	 * Normalize a search query to detect syntax-level duplicates.
+	 * Strips quotes, dots, underscores/hyphens, and lowercases.
+	 * "ctxGetData", "ctx.GetData", "ctx_get_data" all → "ctxgetdata"
+	 * Note: does NOT strip language keywords (func, type) — those change search
+	 * semantics and are already handled as stopwords by the Rust search engine.
 	 */
 	function normalizeQueryConcept(query) {
 		if (!query) return '';
 		return query
 			.replace(/^["']|["']$/g, '')      // strip outer quotes
-			.replace(/\bfunc\b\s*/gi, '')      // strip "func " prefix
-			.replace(/\btype\b\s*/gi, '')      // strip "type " prefix
 			.replace(/\./g, '')                 // "ctx.GetData" → "ctxGetData"
 			.replace(/[_\-\s]+/g, '')           // strip underscores/hyphens/spaces
 			.toLowerCase()
