@@ -4372,6 +4372,14 @@ Double-check your response based on the criteria above. If everything looks good
             finalResult = aiResult.finalText;
           }
 
+          // Ensure finalResult is always a string (#533).
+          // When both structured output and finalText are empty (e.g., timeout,
+          // model returns nothing), downstream callers like delegate() expect a
+          // string and would otherwise throw "not a string".
+          if (finalResult === null || finalResult === undefined) {
+            finalResult = '';
+          }
+
           // Graceful timeout handling: ensure the response clearly indicates
           // the research was interrupted and may be incomplete.
           if (gracefulTimeoutState.triggered) {

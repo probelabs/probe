@@ -154,8 +154,10 @@ fn build_file_list(
     let builder_start = Instant::now();
     let mut builder = WalkBuilder::new(path);
 
-    // CRITICAL: Never follow symlinks to avoid junction point cycles on Windows
-    builder.follow_links(false);
+    // Follow symlinks so that symlinked subdirectories are searched (#532).
+    // The `walkdir` crate (used by `ignore`) has built-in loop detection,
+    // and `same_file_system(true)` below prevents crossing mount points.
+    builder.follow_links(true);
 
     // Stay on the same file system to avoid traversing mount points
     builder.same_file_system(true);
@@ -857,6 +859,47 @@ mod tests {
         assert!(
             key_without_gitignore.contains("no_gitignore"),
             "Cache key should contain 'no_gitignore' when no_gitignore is true"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_file_list_follows_symlinked_directories() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // Create a real directory with a source file outside the root
+        let real_dir = root.join("real_subdir");
+        std::fs::create_dir_all(&real_dir).unwrap();
+        let real_file = real_dir.join("hello.rs");
+        std::fs::write(&real_file, "fn hello() {}").unwrap();
+
+        // Create a workspace directory and symlink the real directory into it
+        let workspace = root.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        let linked = workspace.join("linked");
+        symlink(&real_dir, &linked).unwrap();
+
+        // Also add a regular file in the workspace
+        let regular = workspace.join("main.rs");
+        std::fs::write(&regular, "fn main() {}").unwrap();
+
+        // Build file list from workspace — should find files in the symlinked dir
+        let file_list = build_file_list(&workspace, true, &[], false).unwrap();
+
+        assert!(
+            file_list.files.iter().any(|f| f.ends_with("main.rs")),
+            "Regular file should be found"
+        );
+        assert!(
+            file_list
+                .files
+                .iter()
+                .any(|f| { f.to_string_lossy().contains("linked") && f.ends_with("hello.rs") }),
+            "File inside symlinked directory should be found, got: {:?}",
+            file_list.files
         );
     }
 }
