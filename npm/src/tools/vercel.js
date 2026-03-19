@@ -248,8 +248,23 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'- Searching "getUserData" ALREADY matches "get", "user", "data" and their variations.',
 		'- NEVER repeat the same search query — you will get the same results. Changing the path does NOT change this.',
 		'- NEVER search trivial variations of the same keyword (e.g., AllowedIPs then allowedIps then allowed_ips). This is wasteful — probe handles it.',
-		'- If a search returns no results, the term likely does not exist. Try a genuinely DIFFERENT keyword or concept, not a variation.',
-		'- If 2-3 searches return no results for a concept, STOP searching for it and move on. Do NOT keep retrying.',
+		'',
+		'When a search returns no results:',
+		'- If you searched a SUBFOLDER (e.g., path="gateway/"), the term might exist elsewhere.',
+		'  Try searching from the workspace root (omit the path parameter) or a different directory.',
+		'  But do NOT retry the same subfolder with different quoting — that will not help.',
+		'- If you searched the WORKSPACE ROOT and got no results, the term does not exist in this codebase.',
+		'  Changing quotes, adding "func " prefix, or switching to method syntax will NOT help.',
+		'- These are ALL the same failed search, NOT different searches:',
+		'    search("func ctxGetData") → no results',
+		'    search("ctxGetData")      → no results  ← WASTED, same concept, different quoting',
+		'    search(ctxGetData)         → no results  ← WASTED, same concept, no quotes',
+		'    search("ctx.GetData")      → no results  ← WASTED, method syntax of same concept',
+		'  After the FIRST "no results" at a given scope, either widen the search path or try',
+		'  a fundamentally different approach: search for a broader concept, use listFiles',
+		'  to discover actual function names, or extract a known file to read real code.',
+		'- If 2 searches return no results for a concept (across different scopes), the code likely',
+		'  uses different naming than you expect — discover the real names via extract or listFiles.',
 		'',
 		'When to use exact=true:',
 		'- Use exact=true when searching for a KNOWN symbol name (function, type, variable, struct).',
@@ -302,6 +317,21 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'  → search "ForwardMessage" → search "ForwardMessage" → search "ForwardMessage" (WRONG: repeating the exact same query)',
 		'  → search "authentication" → wait → search "session management" → wait (WRONG: these are independent, run them in parallel)',
 		'',
+		'  WORST pattern — retrying a non-existent function with quote/syntax variations (this wastes 30 minutes):',
+		'  → search "func ctxGetData" → no results',
+		'  → search "ctxGetData" → no results          ← WRONG: same term without "func" prefix',
+		'  → search "ctx.GetData" → no results          ← WRONG: method syntax of same concept',
+		'  → search "ctx.SetData" → no results          ← WRONG: Set variant of same concept',
+		'  → search ctxGetData → no results             ← WRONG: unquoted version of same term',
+		'  → extract api.go → extract api.go → extract api.go (8 times!) ← WRONG: re-reading same file',
+		'  FIX: After "func ctxGetData" returns no results in gateway/:',
+		'  Option A: Widen scope — search from the workspace root (omit path) in case the',
+		'    function is defined in a different package (e.g., apidef/, user/, config/).',
+		'  Option B: Discover real names — extract a file you KNOW uses context (e.g., a',
+		'    middleware file) and READ what functions it actually calls.',
+		'  Option C: Browse — use listFiles to see what files exist and extract the relevant ones.',
+		'  NEVER: retry the same concept with different quoting in the same directory.',
+		'',
 		'Keyword tips:',
 		'- Common programming keywords are filtered as stopwords when unquoted: function, class, return, new, struct, impl, var, let, const, etc.',
 		'- Avoid searching for these alone — combine with a specific term (e.g., "middleware function" is fine, "function" alone is too generic).',
@@ -340,7 +370,7 @@ function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, all
 		'   - Type references and imports → include type definitions.',
 		'   - Registered handlers/middleware → include all registered items.',
 		'6. If a search returns results, use extract to verify relevance. Run multiple extracts in parallel too.',
-		'7. If a search returns NO results, the term does not exist. Do NOT retry with variations. Move on.',
+		'7. If a search returns NO results: widen the path scope if you searched a subfolder, or move on. Do NOT retry with quote/syntax variations — they search the same index.',
 		'8. Once you have enough targets (typically 5-15), output your final JSON answer immediately.',
 		'',
 		`Query: ${searchQuery}`,
@@ -388,7 +418,29 @@ export const searchTool = (options = {}) => {
 	const dupBlockCounts = new Map();
 	// Track pagination counts per query to cap runaway pagination
 	const paginationCounts = new Map();
+	// Track consecutive no-result searches (circuit breaker)
+	let consecutiveNoResults = 0;
+	const MAX_CONSECUTIVE_NO_RESULTS = 4;
+	// Track normalized query concepts for fuzzy dedup (catches quote/syntax variations)
+	const failedConcepts = new Map(); // normalizedKey → count
 	const MAX_PAGES_PER_QUERY = 3;
+
+	/**
+	 * Normalize a search query to detect syntax-level duplicates.
+	 * Strips quotes, dots, underscores/hyphens, and lowercases.
+	 * "ctxGetData", "ctx.GetData", "ctx_get_data" all → "ctxgetdata"
+	 * Note: does NOT strip language keywords (func, type) — those change search
+	 * semantics and are already handled as stopwords by the Rust search engine.
+	 */
+	function normalizeQueryConcept(query) {
+		if (!query) return '';
+		return query
+			.replace(/^["']|["']$/g, '')      // strip outer quotes
+			.replace(/\./g, '')                 // "ctx.GetData" → "ctxGetData"
+			.replace(/[_\-\s]+/g, '')           // strip underscores/hyphens/spaces
+			.toLowerCase()
+			.trim();
+	}
 
 	return tool({
 		name: 'search',
@@ -478,6 +530,35 @@ export const searchTool = (options = {}) => {
 					}
 					previousSearches.set(searchKey, { hadResults: false });
 					paginationCounts.set(searchKey, 0);
+
+					// Fuzzy concept dedup: catch quote/syntax variations of the same failed concept
+					// e.g., "func ctxGetData", "ctxGetData", "ctx.GetData" all normalize to "ctxgetdata"
+					const normalizedKey = `${searchPath}::${normalizeQueryConcept(searchQuery)}`;
+					if (failedConcepts.has(normalizedKey) && failedConcepts.get(normalizedKey) >= 2) {
+						const conceptCount = failedConcepts.get(normalizedKey) + 1;
+						failedConcepts.set(normalizedKey, conceptCount);
+						if (debug) {
+							console.error(`[CONCEPT-DEDUP] Blocked variation of failed concept (${conceptCount}x): "${searchQuery}" normalized to "${normalizeQueryConcept(searchQuery)}"`);
+						}
+						const isSubfolder = path && path !== effectiveSearchCwd && path !== '.';
+						const scopeHint = isSubfolder
+							? `\n- Try searching from the workspace root (omit the path parameter) — the term may exist in a different directory`
+							: `\n- The term does not exist in this codebase at any path`;
+						return `CONCEPT ALREADY FAILED (${conceptCount} variations tried). You already searched for "${normalizeQueryConcept(searchQuery)}" with different quoting/syntax in this path and got NO results each time. Changing quotes, adding "func" prefix, or switching to method syntax will NOT change the results.\n\nChange your strategy:${scopeHint}\n- Use extract on a file you ALREADY found to read actual code and discover real function/type names\n- Use listFiles to browse directories and find what functions actually exist\n- Search for a BROADER concept (e.g., instead of "ctxGetData", try "context" or "middleware data access")\n- If you have enough information from prior searches, provide your final answer NOW`;
+					}
+
+					// Circuit breaker: too many consecutive no-result searches means the model
+					// is stuck in a loop guessing names that don't exist
+					if (consecutiveNoResults >= MAX_CONSECUTIVE_NO_RESULTS) {
+						if (debug) {
+							console.error(`[CIRCUIT-BREAKER] ${consecutiveNoResults} consecutive no-result searches, blocking: "${searchQuery}"`);
+						}
+						const isSubfolderCB = path && path !== effectiveSearchCwd && path !== '.';
+						const cbScopeHint = isSubfolderCB
+							? `\n- You have been searching in "${path}" — try searching from the workspace root or a different directory`
+							: '';
+						return `CIRCUIT BREAKER: Your last ${consecutiveNoResults} searches ALL returned no results. You appear to be guessing function/type names that don't match what's actually in the code.\n\nChange your approach:${cbScopeHint}\n1. Use extract on files you already found — read the actual code to discover real function names\n2. Use listFiles to browse directories and see what files/functions actually exist\n3. If you found some results earlier, those are likely sufficient — provide your final answer\n\nRetrying search query variations will not help. Discover real names from real code instead.`;
+					}
 				} else {
 					// Cap pagination to prevent runaway page-through of broad queries
 					const pageCount = (paginationCounts.get(searchKey) || 0) + 1;
@@ -493,11 +574,28 @@ export const searchTool = (options = {}) => {
 					const result = maybeAnnotate(await runRawSearch());
 					// Track whether this search had results for better dedup messages
 					if (typeof result === 'string' && result.includes('No results found')) {
+						// Track consecutive no-results and failed concepts for circuit breaker
+						consecutiveNoResults++;
+						const normalizedKey = `${searchPath}::${normalizeQueryConcept(searchQuery)}`;
+						failedConcepts.set(normalizedKey, (failedConcepts.get(normalizedKey) || 0) + 1);
+						if (debug) {
+							console.error(`[NO-RESULTS] consecutiveNoResults=${consecutiveNoResults}, concept "${normalizeQueryConcept(searchQuery)}" failed ${failedConcepts.get(normalizedKey)}x`);
+						}
 						// Append contextual hint for ticket/issue ID queries
 						if (/^[A-Z]+-\d+$/.test(searchQuery.trim()) || /^[A-Z]+-\d+$/.test(searchQuery.replace(/"/g, '').trim())) {
 							return result + '\n\n⚠️ Your query looks like a ticket/issue ID (e.g., JIRA-1234). Ticket IDs are rarely present in source code. Search for the technical concepts described in the ticket instead (e.g., function names, error messages, variable names).';
 						}
+						// Add a hint when approaching the circuit breaker threshold
+						if (consecutiveNoResults >= MAX_CONSECUTIVE_NO_RESULTS - 1) {
+							const isSubfolderWarn = path && path !== effectiveSearchCwd && path !== '.';
+							const warnScopeHint = isSubfolderWarn
+								? ` You are searching in "${path}" — consider searching from the workspace root or a different directory.`
+								: '';
+							return result + `\n\n⚠️ WARNING: ${consecutiveNoResults} consecutive searches returned no results.${warnScopeHint} Before your next action: use extract on a file you already found to read actual code, or use listFiles to discover what functions really exist. One more failed search will trigger the circuit breaker.`;
+						}
 					} else if (typeof result === 'string') {
+						// Successful search — reset consecutive counter
+						consecutiveNoResults = 0;
 						const entry = previousSearches.get(searchKey);
 						if (entry) entry.hadResults = true;
 					}
