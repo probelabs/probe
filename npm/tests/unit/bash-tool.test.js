@@ -1170,10 +1170,9 @@ describe('Security Tests (Updated)', () => {
     });
 
     test('should reject complex commands with constructs that cannot be split', () => {
-      // Commands with command substitution, redirection cannot be split into simple components
+      // Commands with command substitution cannot be split into simple components
       const unsplittableCommands = [
-        'echo $(date)',
-        'ls > output.txt'
+        'echo $(date)'
       ];
 
       for (const command of unsplittableCommands) {
@@ -1184,6 +1183,21 @@ describe('Security Tests (Updated)', () => {
         const execArray = parseCommandForExecution(command);
         expect(execArray).toBeNull();
       }
+    });
+
+    test('should allow redirection when base command is in allow list and allowEdit is true', () => {
+      // Redirection is not a command separator — ls is checked against allow/deny
+      // But output redirection requires allowEdit since it writes files
+      const editChecker = new BashPermissionChecker({ allowEdit: true });
+      const permResult = editChecker.check('ls > output.txt');
+      expect(permResult.allowed).toBe(true);
+      expect(permResult.isComplex).toBe(false);
+    });
+
+    test('should block output redirection when allowEdit is false', () => {
+      const permResult = checker.check('ls > output.txt');
+      expect(permResult.allowed).toBe(false);
+      expect(permResult.reason).toMatch(/allowEdit/);
     });
   });
 });

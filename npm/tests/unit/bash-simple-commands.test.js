@@ -88,9 +88,9 @@ describe('Simple Command Parser', () => {
       expect(isComplexCommand('ls `pwd`')).toBe(true);
     });
 
-    test('should detect redirections as complex', () => {
-      expect(isComplexCommand('ls > output.txt')).toBe(true);
-      expect(isComplexCommand('cat < input.txt')).toBe(true);
+    test('should treat redirections as simple (not command separators)', () => {
+      expect(isComplexCommand('ls > output.txt')).toBe(false);
+      expect(isComplexCommand('cat < input.txt')).toBe(false);
     });
 
     test('should detect background execution as complex', () => {
@@ -142,9 +142,9 @@ describe('Complex Pattern Matching', () => {
       expect(isComplexPattern('* || echo failed')).toBe(true);
     });
 
-    test('should detect patterns with redirections', () => {
-      expect(isComplexPattern('* > output.txt')).toBe(true);
-      expect(isComplexPattern('cat < *')).toBe(true);
+    test('should not detect patterns with only redirections as complex', () => {
+      expect(isComplexPattern('* > output.txt')).toBe(false);
+      expect(isComplexPattern('cat < *')).toBe(false);
     });
 
     test('should detect patterns with semicolon', () => {
@@ -271,10 +271,11 @@ describe('Simplified Permission Checker', () => {
       expect(result.reason).toContain('Complex shell commands require explicit allow patterns');
     });
 
-    test('should reject redirections without matching patterns', () => {
-      const result = checker.check('ls > output.txt');
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain('Complex shell commands require explicit allow patterns');
+    test('should allow redirections when base command is in allow list and allowEdit is true', () => {
+      // ls is in the default allow list, so ls > output.txt should be allowed when editing is permitted
+      const editChecker = new BashPermissionChecker({ allowEdit: true });
+      const result = editChecker.check('ls > output.txt');
+      expect(result.allowed).toBe(true);
     });
   });
 
@@ -622,7 +623,22 @@ describe('Component-based Complex Command Evaluation', () => {
       expect(result.isComplex).toBe(true);
     });
 
-    test('should reject commands with redirection in any component', () => {
+    test('should allow commands with redirection when base commands are allowed and allowEdit is true', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls', 'cat'],
+        deny: [],
+        allowEdit: true,
+        disableDefaultAllow: true,
+        disableDefaultDeny: true
+      });
+
+      // Redirection in second component — both ls and cat are allowed, and allowEdit permits writes
+      const result = checker.check('ls && cat > /tmp/out');
+      expect(result.allowed).toBe(true);
+      expect(result.isComplex).toBe(true);
+    });
+
+    test('should deny commands with output redirection in complex commands without allowEdit', () => {
       const checker = new BashPermissionChecker({
         allow: ['ls', 'cat'],
         deny: [],
@@ -630,13 +646,12 @@ describe('Component-based Complex Command Evaluation', () => {
         disableDefaultDeny: true
       });
 
-      // Redirection in second component
+      // Output redirection requires allowEdit even in complex commands
       const result = checker.check('ls && cat > /tmp/out');
       expect(result.allowed).toBe(false);
-      expect(result.isComplex).toBe(true);
     });
 
-    test('should reject commands with input redirection in any component', () => {
+    test('should allow commands with input redirection when base commands are allowed', () => {
       const checker = new BashPermissionChecker({
         allow: ['ls', 'cat'],
         deny: [],
@@ -645,7 +660,7 @@ describe('Component-based Complex Command Evaluation', () => {
       });
 
       const result = checker.check('ls && cat < /etc/passwd');
-      expect(result.allowed).toBe(false);
+      expect(result.allowed).toBe(true);
       expect(result.isComplex).toBe(true);
     });
 
@@ -1086,7 +1101,6 @@ describe('Architecture Alignment Tests', () => {
       'ls | grep test',
       'make && make test',
       'echo $(date)',
-      'ls > output.txt',
       'cmd1 ; cmd2',
       'background-task &'
     ];
@@ -1099,6 +1113,10 @@ describe('Architecture Alignment Tests', () => {
       expect(parserResult).toBeNull();
       expect(isComplex).toBe(true);
     }
+
+    // Redirection is NOT complex — it's part of a simple command
+    expect(isComplexCommand('ls > output.txt')).toBe(false);
+    expect(parseCommandForExecution('ls > output.txt')).not.toBeNull();
   });
 
   test('should allow complex commands via component evaluation when all components match wildcard', () => {
@@ -1124,6 +1142,7 @@ describe('Architecture Alignment Tests', () => {
     const checkerWithWildcard = new BashPermissionChecker({
       allow: ['*'],
       deny: [],
+      allowEdit: true,
       disableDefaultAllow: true,
       disableDefaultDeny: true
     });
@@ -1132,22 +1151,23 @@ describe('Architecture Alignment Tests', () => {
     const result1 = checkerWithWildcard.check('echo $(date)');
     expect(result1.allowed).toBe(false);
 
-    // Redirection cannot be split into simple components
+    // Redirection is treated as simple — ls is in the allow list via wildcard
     const result2 = checkerWithWildcard.check('ls > output.txt');
-    expect(result2.allowed).toBe(false);
+    expect(result2.allowed).toBe(true);
   });
 
   test('should allow complex commands when matching patterns are configured', () => {
     const checkerWithPatterns = new BashPermissionChecker({
       allow: [
         'ls | grep *',
+        'ls',
         'make && make test',
         'echo $(date)',
-        'ls > *',
         'cmd1 ; cmd2',
         'background-task &'
       ],
       deny: [],
+      allowEdit: true,
       disableDefaultAllow: true,
       disableDefaultDeny: true
     });
@@ -1156,7 +1176,6 @@ describe('Architecture Alignment Tests', () => {
       'ls | grep test',
       'make && make test',
       'echo $(date)',
-      'ls > output.txt',
       'cmd1 ; cmd2',
       'background-task &'
     ];
@@ -1166,5 +1185,201 @@ describe('Architecture Alignment Tests', () => {
       expect(result.allowed).toBe(true);
       expect(result.isComplex).toBe(true);
     }
+
+    // Redirection is simple, not complex — ls is checked as a simple command
+    // 'ls > *' in the allow list is now a simple pattern matching 'ls'
+    const redirectResult = checkerWithPatterns.check('ls > output.txt');
+    expect(redirectResult.allowed).toBe(true);
+    expect(redirectResult.isComplex).toBe(false);
+  });
+});
+
+// ---- Redirection is not a command separator (#536) -------------------------
+
+describe('Redirection treated as simple, not complex (#536)', () => {
+  describe('parseSimpleCommand treats redirection as simple', () => {
+    test('output redirection is not complex', () => {
+      const result = parseSimpleCommand('ls > output.txt');
+      expect(result.isComplex).toBe(false);
+      expect(result.success).toBe(true);
+      expect(result.command).toBe('ls');
+    });
+
+    test('input redirection is not complex', () => {
+      const result = parseSimpleCommand('cat < input.txt');
+      expect(result.isComplex).toBe(false);
+      expect(result.success).toBe(true);
+      expect(result.command).toBe('cat');
+    });
+
+    test('append redirection is not complex', () => {
+      const result = parseSimpleCommand('echo hello >> log.txt');
+      expect(result.isComplex).toBe(false);
+      expect(result.success).toBe(true);
+    });
+
+    test('pipes are still complex', () => {
+      expect(parseSimpleCommand('ls | grep foo').isComplex).toBe(true);
+    });
+
+    test('&& is still complex', () => {
+      expect(parseSimpleCommand('cd /tmp && ls').isComplex).toBe(true);
+    });
+
+    test('command substitution is still complex', () => {
+      expect(parseSimpleCommand('echo $(whoami)').isComplex).toBe(true);
+    });
+  });
+
+  describe('isComplexCommand with redirection', () => {
+    test('redirection is not complex', () => {
+      expect(isComplexCommand('gh run view 123 > logs.txt')).toBe(false);
+    });
+
+    test('pipes are still complex', () => {
+      expect(isComplexCommand('ls | wc -l')).toBe(true);
+    });
+  });
+
+  describe('BashPermissionChecker allows redirection when base command is allowed', () => {
+    test('allows redirection when base command matches allow list and allowEdit is true', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['gh:*'],
+        allowEdit: true,
+      });
+      const result = checker.check('gh run view 123 > logs.txt');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('denies redirection when base command is not in allow list', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls'],
+        allowEdit: true,
+        disableDefaultAllow: true,
+        disableDefaultDeny: true,
+      });
+      // gh is not in allow list (only ls is)
+      const result = checker.check('gh run view 123 > logs.txt');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('denies redirection when base command matches deny list', () => {
+      const checker = new BashPermissionChecker({
+        deny: ['rm:*'],
+        allowEdit: true,
+        disableDefaultAllow: true,
+        disableDefaultDeny: true,
+      });
+      const result = checker.check('rm -rf / > /dev/null');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('real-world: cat with output redirect', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['cat:*'],
+        allowEdit: true,
+      });
+      const result = checker.check('cat file.txt > output.txt');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('real-world: base64 decode with redirect', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['base64:*'],
+        allowEdit: true,
+      });
+      const result = checker.check('base64 -d > decoded.py');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('real-world: gh API output to file', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['gh:*'],
+        allowEdit: true,
+      });
+      const result = checker.check('gh run view 23284908771 --repo TykTechnologies/tyk-analytics --log-failed > failed_logs.txt');
+      expect(result.allowed).toBe(true);
+    });
+  });
+
+  describe('Output redirection requires allowEdit', () => {
+    test('blocks output redirection (>) when allowEdit is false', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+      });
+      const result = checker.check('echo hello > output.txt');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toMatch(/allowEdit/);
+    });
+
+    test('blocks append redirection (>>) when allowEdit is false', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+      });
+      const result = checker.check('echo hello >> output.txt');
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toMatch(/allowEdit/);
+    });
+
+    test('allows output redirection when allowEdit is true', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['echo'],
+        allowEdit: true,
+      });
+      const result = checker.check('echo hello > output.txt');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('allows append redirection when allowEdit is true', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['cat:*'],
+        allowEdit: true,
+      });
+      const result = checker.check('cat file.txt >> log.txt');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('allows input redirection (<) even without allowEdit', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['sort'],
+      });
+      const result = checker.check('sort < input.txt');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('blocks > but allows < in same check logic', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['sort'],
+      });
+      // Input redirection is read-only, should be allowed
+      expect(checker.check('sort < input.txt').allowed).toBe(true);
+      // Output redirection is a write, should be blocked
+      expect(checker.check('sort > output.txt').allowed).toBe(false);
+    });
+
+    test('commands without redirection are unaffected by allowEdit', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['ls'],
+      });
+      const result = checker.check('ls -la');
+      expect(result.allowed).toBe(true);
+    });
+
+    test('real-world: gh run view > logs.txt blocked without allowEdit', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['gh:*'],
+      });
+      const result = checker.check('gh run view 123 > logs.txt');
+      expect(result.allowed).toBe(false);
+    });
+
+    test('real-world: gh run view > logs.txt allowed with allowEdit', () => {
+      const checker = new BashPermissionChecker({
+        allow: ['gh:*'],
+        allowEdit: true,
+      });
+      const result = checker.check('gh run view 123 > logs.txt');
+      expect(result.allowed).toBe(true);
+    });
   });
 });

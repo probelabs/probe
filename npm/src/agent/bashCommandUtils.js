@@ -132,8 +132,9 @@ export function parseSimpleCommand(command) {
     /&$/,           // Background execution
     /\$\(/,         // Command substitution $()
     /`/,            // Command substitution ``
-    />/,            // Redirection >
-    /</,            // Redirection <
+    // Note: > and < (redirection) are intentionally NOT in this list.
+    // They are not command separators — they redirect I/O on a single command.
+    // The base command is still checked against allow/deny lists.
     /\*\*/,         // Glob patterns (potentially dangerous)
     /^\s*\{.*,.*\}|\{.*\.\.\.*\}/,  // Brace expansion like {a,b} or {1..10} (but not find {} placeholders)
   ];
@@ -257,6 +258,7 @@ export function isComplexPattern(pattern) {
   if (!pattern || typeof pattern !== 'string') return false;
 
   // Check for operators in the pattern (aligned with complexPatterns in parseSimpleCommand)
+  // Note: > and < are not included — redirection is not a command separator
   const operatorPatterns = [
     /\|/,           // Pipes
     /&&/,           // Logical AND
@@ -266,8 +268,6 @@ export function isComplexPattern(pattern) {
     /&$/,           // Background execution
     /\$\(/,         // Command substitution $()
     /`/,            // Command substitution ``
-    />/,            // Redirection >
-    /</,            // Redirection <
   ];
 
   return operatorPatterns.some(p => p.test(pattern));

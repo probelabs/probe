@@ -94,12 +94,14 @@ export class BashPermissionChecker {
    * @param {string[]} [config.deny] - Additional deny patterns (always win)
    * @param {boolean} [config.disableDefaultAllow] - Disable default allow list
    * @param {boolean} [config.disableDefaultDeny] - Disable default deny list
+   * @param {boolean} [config.allowEdit] - Whether file editing is allowed (controls output redirection)
    * @param {boolean} [config.debug] - Enable debug logging
    * @param {Object} [config.tracer] - Optional tracer for telemetry
    */
   constructor(config = {}) {
     this.debug = config.debug || false;
     this.tracer = config.tracer || null;
+    this.allowEdit = config.allowEdit || false;
 
     // Separate default and custom patterns for priority-based resolution
     this.defaultAllowPatterns = config.disableDefaultAllow ? [] : [...DEFAULT_ALLOW_PATTERNS];
@@ -201,6 +203,27 @@ export class BashPermissionChecker {
     if (this.debug) {
       console.log(`[BashPermissions] Checking simple command: "${command}"`);
       console.log(`[BashPermissions] Parsed: ${parsed.command} with args: [${parsed.args.join(', ')}]`);
+    }
+
+    // Block output redirection when allowEdit is false
+    // Output redirection (>, >>) writes to files, which is an edit operation
+    if (!this.allowEdit && parsed.args.some(arg => arg === '>' || arg === '>>')) {
+      const result = {
+        allowed: false,
+        reason: 'Output redirection (> or >>) requires edit permissions (allowEdit)',
+        command: command,
+        parsed: parsed
+      };
+      if (this.debug) {
+        console.log(`[BashPermissions] DENIED - output redirection without allowEdit`);
+      }
+      this.recordBashEvent('permission.denied', {
+        command,
+        parsedCommand: parsed.command,
+        reason: 'output_redirection_without_allow_edit',
+        isComplex: false
+      });
+      return result;
     }
 
     // Priority-based permission check:
@@ -531,6 +554,17 @@ export class BashPermissionChecker {
           allAllowed = false;
           deniedComponent = component;
           deniedReason = parsed.error || 'Component contains nested complex constructs';
+          break;
+        }
+
+        // Block output redirection in components when allowEdit is false
+        if (!this.allowEdit && parsed.args && parsed.args.some(arg => arg === '>' || arg === '>>')) {
+          if (this.debug) {
+            console.log(`[BashPermissions] Component "${component}" has output redirection without allowEdit`);
+          }
+          allAllowed = false;
+          deniedComponent = component;
+          deniedReason = 'Output redirection (> or >>) requires edit permissions (allowEdit)';
           break;
         }
 
