@@ -63,7 +63,11 @@ export class TaskManager {
    * @throws {Error} If dependencies are invalid or create a cycle
    */
   createTask(taskData) {
-    const id = this._generateId();
+    const id = taskData.id || this._generateId();
+    // If a user-provided ID collides with an existing task, throw
+    if (taskData.id && this.tasks.has(taskData.id)) {
+      throw new Error(`Task ID "${taskData.id}" already exists. Choose a different ID. Available tasks: ${this._getAvailableTaskIds()}`);
+    }
     const now = this._now();
 
     // Validate dependencies exist
@@ -148,46 +152,42 @@ export class TaskManager {
       }
     }
 
-    // Build a mapping of user-provided IDs to future auto-generated IDs
-    const idMap = new Map();
-    const batchAutoIds = new Set();
-    let nextCounter = this.taskCounter;
+    // Collect all IDs that will exist after this batch (for dependency validation)
+    const batchIds = new Set();
     for (const taskData of tasksData) {
-      nextCounter++;
-      const autoId = `task-${nextCounter}`;
-      batchAutoIds.add(autoId);
       if (taskData.id) {
-        idMap.set(taskData.id, autoId);
+        if (this.tasks.has(taskData.id)) {
+          throw new Error(`Task ID "${taskData.id}" already exists. Choose a different ID. Available tasks: ${this._getAvailableTaskIds()}`);
+        }
+        if (batchIds.has(taskData.id)) {
+          throw new Error(`Duplicate task ID "${taskData.id}" in batch. Each task must have a unique ID.`);
+        }
+        batchIds.add(taskData.id);
       }
     }
 
-    // Resolve dependencies and "after" references, then validate before creating anything
+    // Validate dependencies and "after" references before creating anything
     const resolvedTasksData = tasksData.map(taskData => {
       const resolved = { ...taskData };
-      delete resolved.id; // Don't pass user ID to createTask
 
       if (resolved.dependencies) {
         resolved.dependencies = resolved.dependencies.map(depId => {
-          if (idMap.has(depId)) return idMap.get(depId);
-          // Check if it's already an existing task ID or a batch auto-generated ID
-          if (this.tasks.has(depId) || batchAutoIds.has(depId)) return depId;
-          const batchIds = idMap.size > 0 ? Array.from(idMap.keys()).join(', ') : '(none provided)';
-          throw new Error(`Dependency "${depId}" does not exist. Each task in the batch must have an "id" field, and dependencies must reference those IDs. Current batch IDs: ${batchIds}. Existing tasks: ${this._getAvailableTaskIds()}`);
+          if (batchIds.has(depId) || this.tasks.has(depId)) return depId;
+          const knownIds = batchIds.size > 0 ? Array.from(batchIds).join(', ') : '(none provided)';
+          throw new Error(`Dependency "${depId}" does not exist. Each task in the batch must have an "id" field, and dependencies must reference those IDs. Current batch IDs: ${knownIds}. Existing tasks: ${this._getAvailableTaskIds()}`);
         });
       }
 
       if (resolved.after) {
-        if (idMap.has(resolved.after)) {
-          resolved.after = idMap.get(resolved.after);
-        } else if (!this.tasks.has(resolved.after) && !batchAutoIds.has(resolved.after)) {
-          throw new Error(`Task "${resolved.after}" does not exist. Cannot insert after non-existent task. Available tasks: ${this._getAvailableTaskIds()}${idMap.size > 0 ? `, batch IDs: ${Array.from(idMap.keys()).join(', ')}` : ''}`);
+        if (!batchIds.has(resolved.after) && !this.tasks.has(resolved.after)) {
+          throw new Error(`Task "${resolved.after}" does not exist. Cannot insert after non-existent task. Available tasks: ${this._getAvailableTaskIds()}${batchIds.size > 0 ? `, batch IDs: ${Array.from(batchIds).join(', ')}` : ''}`);
         }
       }
 
       return resolved;
     });
 
-    // All validation passed — create tasks
+    // All validation passed — create tasks (user-provided IDs are preserved by createTask)
     const createdTasks = [];
     for (const taskData of resolvedTasksData) {
       const task = this.createTask(taskData);
