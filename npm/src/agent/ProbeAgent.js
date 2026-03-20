@@ -3814,10 +3814,13 @@ or
           const jsonStr = responseText.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '');
           const decision = JSON.parse(jsonStr);
 
+          let grantedMs = 0;
+          let grantedMin = 0;
+
           if (decision.extend && decision.minutes > 0) {
             const requestedMs = Math.min(decision.minutes, maxPerReqMin) * 60000;
-            const grantedMs = Math.min(requestedMs, remainingBudgetMs, negotiatedTimeoutState.maxPerRequestMs);
-            const grantedMin = Math.round(grantedMs / 60000 * 10) / 10;
+            grantedMs = Math.min(requestedMs, remainingBudgetMs, negotiatedTimeoutState.maxPerRequestMs);
+            grantedMin = Math.round(grantedMs / 60000 * 10) / 10;
 
             // Update state
             negotiatedTimeoutState.extensionsUsed++;
