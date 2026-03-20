@@ -3012,7 +3012,7 @@ export class ProbeAgent {
 
     // Add high-level instructions about when to use tools
     const searchToolDesc1 = this.searchDelegate
-      ? '- search: Ask natural language questions to find code (e.g., "How does authentication work?"). A subagent handles keyword searches and returns extracted code blocks. Do NOT formulate keyword queries — just ask questions.'
+      ? '- search: Ask natural language questions to find code locations (e.g., "How does authentication work?"). Returns structured JSON with file locations grouped by relevance. Use extract() on the returned files to read the actual code. Do NOT formulate keyword queries — just ask questions.'
       : '- search: Find code patterns using keyword queries with Elasticsearch syntax. Handles stemming and case variations automatically — do NOT try manual keyword variations.';
     systemPrompt += `You have access to powerful code search and analysis tools through MCP:
 ${searchToolDesc1}
@@ -3025,10 +3025,10 @@ ${searchToolDesc1}
     }
 
     const searchGuidance1 = this.searchDelegate
-      ? '1. Start with search — ask a question about what you want to understand. It returns extracted code blocks directly.'
+      ? '1. Start with search — ask a question about what you want to understand. It returns file locations grouped by relevance (JSON with confidence and groups).'
       : '1. Start with search to find relevant code patterns. One search per concept is usually enough — probe handles stemming and case variations.';
     const extractGuidance1 = this.searchDelegate
-      ? '2. Use extract only if you need more context or a full file'
+      ? '2. Use extract on the file locations returned by search to read the actual code. Each group has a "reason" explaining why those files matter.'
       : '2. Use extract to get detailed context when needed';
 
     systemPrompt += `\n
@@ -3078,7 +3078,7 @@ ${extractGuidance1}
 
     // Add high-level instructions about when to use tools
     const searchToolDesc2 = this.searchDelegate
-      ? '- search: Ask natural language questions to find code (e.g., "How does authentication work?"). A subagent handles keyword searches and returns extracted code blocks. Do NOT formulate keyword queries — just ask questions.'
+      ? '- search: Ask natural language questions to find code locations (e.g., "How does authentication work?"). Returns structured JSON with file locations grouped by relevance. Use extract() on the returned files to read the actual code. Do NOT formulate keyword queries — just ask questions.'
       : '- search: Find code patterns using keyword queries with Elasticsearch syntax. Handles stemming and case variations automatically — do NOT try manual keyword variations.';
     systemPrompt += `You have access to powerful code search and analysis tools through MCP:
 ${searchToolDesc2}
@@ -3091,10 +3091,10 @@ ${searchToolDesc2}
     }
 
     const searchGuidance2 = this.searchDelegate
-      ? '1. Start with search — ask a question about what you want to understand. It returns extracted code blocks directly.'
+      ? '1. Start with search — ask a question about what you want to understand. It returns file locations grouped by relevance (JSON with confidence and groups).'
       : '1. Start with search to find relevant code patterns. One search per concept is usually enough — probe handles stemming and case variations.';
     const extractGuidance2 = this.searchDelegate
-      ? '2. Use extract only if you need more context or a full file'
+      ? '2. Use extract on the file locations returned by search to read the actual code. Each group has a "reason" explaining why those files matter.'
       : '2. Use extract to get detailed context when needed';
 
     systemPrompt += `\n
@@ -3160,7 +3160,7 @@ ${extractGuidance2}
 Follow these instructions carefully:
 1. Analyze the user's request.
 2. Use the available tools step-by-step to fulfill the request.
-3. You MUST use the search tool before answering ANY code-related question. NEVER answer from memory or general knowledge — your answers must be grounded in actual code found via search/extract.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns extracted code blocks. Use extract only to expand context or read full files.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
+3. You MUST use the search tool before answering ANY code-related question. NEVER answer from memory or general knowledge — your answers must be grounded in actual code found via search/extract.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns file locations grouped by relevance. Then use extract() on those locations to read the actual code.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
 4. Ensure to get really deep and understand the full picture before answering. Follow call chains — if function A calls B, search for B too. Look for related subsystems (e.g., if asked about rate limiting, also check for quota, throttling, smoothing).
 5. Once the task is fully completed, provide your final answer directly as text. Always cite specific files and line numbers as evidence. Do NOT output planning or thinking text — go straight to the answer.
 6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
@@ -4088,9 +4088,16 @@ or
                 const searchSummary = searchesTried.length > 0
                   ? `\nSearches attempted: ${searchesTried.join(', ')}`
                   : '';
+
+                // For code-searcher subagents: instruct to output structured JSON even on partial results
+                const isCodeSearcher = this.promptType === 'code-searcher';
+                const lastIterMessage = isCodeSearcher
+                  ? `⚠️ LAST ITERATION — you are out of tool calls. Output your JSON response NOW with whatever files you have verified so far. Set confidence to "low" if your search was incomplete. Include the "searches" array listing all search queries you made with their paths and outcomes.${searchSummary}`
+                  : `⚠️ LAST ITERATION — you are out of tool calls. Provide your BEST answer NOW with the information gathered so far. If you could not find what was requested, explain exactly what you searched for and why it did not work, so the caller can try a different approach.${searchSummary}`;
+
                 return {
                   toolChoice: 'none',
-                  userMessage: `⚠️ LAST ITERATION — you are out of tool calls. Provide your BEST answer NOW with the information gathered so far. If you could not find what was requested, explain exactly what you searched for and why it did not work, so the caller can try a different approach.${searchSummary}`
+                  userMessage: lastIterMessage
                 };
               }
 
@@ -4766,13 +4773,16 @@ Double-check your response based on the criteria above. If everything looks good
         if (!finalResult || finalResult === DEFAULT_MAX_ITER_MSG) {
           try {
             const searchQueries = [];
+            const searchDetails = [];
             const toolCounts = {};
             for (const tc of _toolCallLog) {
               toolCounts[tc.name] = (toolCounts[tc.name] || 0) + 1;
               if (tc.name === 'search') {
                 const q = tc.args.query || '';
+                const p = tc.args.path || '.';
                 const exact = tc.args.exact ? ' (exact)' : '';
                 searchQueries.push(`"${q}"${exact}`);
+                searchDetails.push({ query: q, path: p, had_results: false });
               }
             }
             const toolBreakdown = Object.entries(toolCounts)
@@ -4780,13 +4790,23 @@ Double-check your response based on the criteria above. If everything looks good
               .join(', ');
             const uniqueSearches = [...new Set(searchQueries)];
 
-            let summary = `I was unable to complete your request after ${currentIteration} tool iterations.\n\n`;
-            summary += `Tool calls made: ${toolBreakdown || 'none'}\n`;
-            if (uniqueSearches.length > 0) {
-              summary += `Search queries tried: ${uniqueSearches.join(', ')}\n`;
+            // For code-searcher subagents: produce structured JSON so the parent
+            // can still use partial results instead of getting a plain error string.
+            if (this.promptType === 'code-searcher') {
+              finalResult = JSON.stringify({
+                confidence: 'low',
+                groups: [],
+                searches: searchDetails
+              });
+            } else {
+              let summary = `I was unable to complete your request after ${currentIteration} tool iterations.\n\n`;
+              summary += `Tool calls made: ${toolBreakdown || 'none'}\n`;
+              if (uniqueSearches.length > 0) {
+                summary += `Search queries tried: ${uniqueSearches.join(', ')}\n`;
+              }
+              summary += `\nThe search approach may be fundamentally wrong for this query. Consider: using exact=true for literal string matching, using bash/grep for pattern-based file searches, or trying a completely different strategy instead of repeating similar searches.`;
+              finalResult = summary;
             }
-            summary += `\nThe search approach may be fundamentally wrong for this query. Consider: using exact=true for literal string matching, using bash/grep for pattern-based file searches, or trying a completely different strategy instead of repeating similar searches.`;
-            finalResult = summary;
           } catch {
             finalResult = DEFAULT_MAX_ITER_MSG;
           }

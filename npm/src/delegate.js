@@ -659,10 +659,12 @@ export async function delegate({
 			});
 
 			if (delegationSpan) {
+				const { truncateForSpan } = await import('./agent/simpleTelemetry.js');
 				delegationSpan.setAttributes({
 					'delegation.result.success': true,
 					'delegation.result.response_length': response.length,
-					'delegation.result.duration_ms': duration
+					'delegation.result.duration_ms': duration,
+					'delegation.result': truncateForSpan(response, 4096)
 				});
 				delegationSpan.setStatus({ code: 1 }); // OK
 				delegationSpan.end();

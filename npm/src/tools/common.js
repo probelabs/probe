@@ -7,6 +7,11 @@ import { z } from 'zod';
 import { resolve, isAbsolute } from 'path';
 
 // Common schemas for tool parameters (used for internal execution after XML parsing)
+export const searchDelegateSchema = z.object({
+	query: z.string().describe('Natural language question about the code (e.g., "How does authentication work?", "Where is the rate limiting middleware?"). Do NOT use keyword syntax — just describe what you are looking for in plain English. A subagent will handle keyword searches for you.'),
+	path: z.string().optional().default('.').describe('Path to search in.'),
+});
+
 export const searchSchema = z.object({
 	query: z.string().describe('Search query — natural language questions or Elasticsearch-style keywords both work. For keywords: use quotes for exact phrases, AND/OR for boolean logic, - for negation. Probe handles stemming and camelCase/snake_case splitting automatically, so do NOT try case or style variations of the same keyword.'),
 	path: z.string().optional().default('.').describe('Path to search in. For dependencies use "go:github.com/owner/repo", "js:package_name", or "rust:cargo_name" etc.'),
@@ -100,7 +105,17 @@ export const attemptCompletionSchema = {
 // Tool descriptions (used by Vercel tool() definitions)
 
 export const searchDescription = 'Search code in the repository. Free-form questions are accepted, but Elasticsearch-style keyword queries work best. Use this tool first for any code-related questions. NOTE: By default, search handles stemming, case-insensitive matching, and camelCase/snake_case splitting automatically — do NOT manually try keyword variations like "getAllUsers" then "get_all_users" then "GetAllUsers". One search covers all variations.';
-export const searchDelegateDescription = 'Search code in the repository by asking a question. Accepts natural language questions (e.g., "How does authentication work?", "Where is the user validation logic?"). A specialized subagent breaks down your question into targeted keyword searches and returns extracted code blocks. Do NOT formulate keyword queries yourself — just ask the question naturally.';
+export const searchDelegateDescription = `Find where relevant code is located by asking a natural language question. A subagent searches the codebase and returns file locations grouped by relevance, with reasons explaining why each group matters. Use extract() to read the actual code from the returned locations.
+
+Returns JSON: { "confidence": "high|medium|low", "groups": [{ "reason": "why these files matter", "files": ["path#Symbol", ...] }] }
+
+IMPORTANT — each call spawns a subagent (expensive, takes minutes). Be deliberate:
+- Ask plain English questions about WHERE code is, NOT keyword queries. Good: "How are user sessions extracted from cookies?" Bad: "ctxGetSession OR GetSession"
+- Each call should explore a DIFFERENT ANGLE of the problem. Don't rephrase — reframe:
+  Good: 1) "How are sessions extracted from HTTP requests?" 2) "What middleware runs before route handlers?" 3) "How is the session cookie parsed and validated?"
+  Bad: 1) "How does session extraction work?" 2) "Where is the session extracted?" 3) "Find session extraction code" ← same question reworded
+- If a search returned no useful results, ask about a DIFFERENT part of the system. Think: what upstream/downstream component touches this?
+- After getting results, use extract() to read the files you need — search only locates, extract reads.`;
 export const queryDescription = 'Search code using ast-grep structural pattern matching. Use this tool to find specific code structures like functions, classes, or methods.';
 export const extractDescription = 'Extract code blocks from files based on file paths and optional line numbers. Use this tool to see complete context after finding relevant files. Line numbers from output can be used with edit start_line/end_line for precise editing.';
 export const delegateDescription = 'Automatically delegate big distinct tasks to specialized probe subagents within the agentic loop. Used by AI agents to break down complex requests into focused, parallel tasks.';

@@ -46,13 +46,12 @@ describe('searchDelegate behavior', () => {
     jest.clearAllMocks();
   });
 
-  test('delegates search and extracts targets when searchDelegate=true', async () => {
+  test('delegates search and returns structured JSON when searchDelegate=true', async () => {
     // Delegate returns paths relative to the search directory (searchPaths[0]),
     // not relative to cwd
     mockDelegate.mockResolvedValue(JSON.stringify({
       targets: ['a.js#foo', 'b.js:10-12']
     }));
-    mockExtract.mockResolvedValue('EXTRACTED');
 
     const tracer = {
       withSpan: jest.fn(async (_name, fn) => fn())
@@ -72,7 +71,14 @@ describe('searchDelegate behavior', () => {
       path: 'src'
     });
 
-    expect(result).toBe('EXTRACTED');
+    // Now returns structured JSON instead of auto-extracting
+    const parsed = JSON.parse(result);
+    expect(parsed.confidence).toBe('medium');
+    expect(parsed.groups).toHaveLength(1);
+    expect(parsed.groups[0].files).toEqual(expect.arrayContaining([
+      expect.stringContaining('a.js#foo'),
+      expect.stringContaining('b.js:10-12')
+    ]));
     expect(mockDelegate).toHaveBeenCalledTimes(1);
     expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
       promptType: 'code-searcher',
@@ -91,17 +97,8 @@ describe('searchDelegate behavior', () => {
       }),
       expect.any(Function)
     );
-    const extractArgs = mockExtract.mock.calls[0][0];
-    expect(extractArgs).toEqual(expect.objectContaining({ files: expect.any(Array) }));
-    // Paths should be resolved against delegateBase (allowedFolders[0] = /workspace),
-    // not searchPaths[0] (/workspace/src)
-    const normalizedFiles = extractArgs.files.map((file) =>
-      file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
-    );
-    expect(normalizedFiles).toEqual(expect.arrayContaining([
-      '/workspace/a.js#foo',
-      '/workspace/b.js:10-12'
-    ]));
+    // Extract should NOT be called — structured JSON is returned directly
+    expect(mockExtract).not.toHaveBeenCalled();
     expect(mockSearch).not.toHaveBeenCalled();
   });
 
@@ -111,7 +108,6 @@ describe('searchDelegate behavior', () => {
     mockDelegate.mockResolvedValue(JSON.stringify({
       targets: ['tyk-analytics/dashboard/api.go#Handler', 'tyk-analytics/dashboard/model.go:10-20']
     }));
-    mockExtract.mockResolvedValue('EXTRACTED');
 
     const tool = searchTool({
       searchDelegate: true,
@@ -124,21 +120,15 @@ describe('searchDelegate behavior', () => {
       path: '/tmp/workspace/tyk-analytics'
     });
 
-    expect(result).toBe('EXTRACTED');
-    const extractArgs = mockExtract.mock.calls[0][0];
-    const normalizedFiles = extractArgs.files.map((file) =>
-      file.replace(/^[A-Za-z]:/, '').replace(/\\/g, '/')
-    );
-    // Paths should resolve against delegateBase (/tmp/workspace), NOT searchPaths[0] (/tmp/workspace/tyk-analytics)
-    // This prevents doubled path: /tmp/workspace/tyk-analytics/tyk-analytics/dashboard/api.go
-    expect(normalizedFiles).toEqual(expect.arrayContaining([
-      '/tmp/workspace/tyk-analytics/dashboard/api.go#Handler',
-      '/tmp/workspace/tyk-analytics/dashboard/model.go:10-20'
-    ]));
+    // Returns structured JSON with resolved paths (workspace prefix stripped)
+    const parsed = JSON.parse(result);
+    expect(parsed.confidence).toBe('medium');
+    expect(parsed.groups).toHaveLength(1);
+    const files = parsed.groups[0].files;
     // Should NOT have doubled paths
-    expect(normalizedFiles.some(f => f.includes('tyk-analytics/tyk-analytics'))).toBe(false);
-    // Extract cwd should be the search path (resolutionBase)
-    expect(extractArgs.cwd).toBe('/tmp/workspace/tyk-analytics');
+    expect(files.some(f => f.includes('tyk-analytics/tyk-analytics'))).toBe(false);
+    // Extract should NOT be called — structured JSON is returned directly
+    expect(mockExtract).not.toHaveBeenCalled();
   });
 
   test('falls back to raw search when delegation fails', async () => {
@@ -179,18 +169,11 @@ describe('searchDelegate behavior', () => {
     expect(mockSearch).toHaveBeenCalledTimes(1);
   });
 
-  test('strips workspace root prefix from extract output paths', async () => {
+  test('strips workspace root prefix from file paths in structured output', async () => {
     // Delegate returns absolute paths (which is common from the subagent)
     mockDelegate.mockResolvedValue(JSON.stringify({
       targets: ['/tmp/workspace/tyk/apidef/migration.go#migrateGlobalRateLimit']
     }));
-    // Extract output contains the absolute path in its text
-    mockExtract.mockResolvedValue(
-      '=== /tmp/workspace/tyk/apidef/migration.go ===\n' +
-      'func migrateGlobalRateLimit() {\n' +
-      '  // ...\n' +
-      '}\n'
-    );
 
     const tool = searchTool({
       searchDelegate: true,
@@ -203,13 +186,12 @@ describe('searchDelegate behavior', () => {
       path: '/tmp/workspace/tyk'
     });
 
-    // The workspace root prefix should be stripped from the output
-    expect(result).toBe(
-      '=== apidef/migration.go ===\n' +
-      'func migrateGlobalRateLimit() {\n' +
-      '  // ...\n' +
-      '}\n'
-    );
+    // Returns structured JSON with workspace prefix stripped from file paths
+    const parsed = JSON.parse(result);
+    expect(parsed.confidence).toBe('medium');
+    expect(parsed.groups).toHaveLength(1);
+    expect(parsed.groups[0].files[0]).toBe('apidef/migration.go#migrateGlobalRateLimit');
+    // Should not contain the workspace root prefix
     expect(result).not.toContain('/tmp/workspace/tyk/');
   });
 
@@ -217,7 +199,6 @@ describe('searchDelegate behavior', () => {
     mockDelegate.mockResolvedValue(JSON.stringify({
       targets: ['a.js#foo']
     }));
-    mockExtract.mockResolvedValue('EXTRACTED');
 
     const tool = searchTool({
       searchDelegate: true,
@@ -248,7 +229,6 @@ describe('searchDelegate behavior', () => {
       mockDelegate.mockResolvedValue(JSON.stringify({
         targets: ['a.js#foo']
       }));
-      mockExtract.mockResolvedValue('EXTRACTED');
 
       const tool = searchTool({
         searchDelegate: true,
@@ -283,7 +263,6 @@ describe('searchDelegate behavior', () => {
       mockDelegate.mockResolvedValue(JSON.stringify({
         targets: ['a.js#foo']
       }));
-      mockExtract.mockResolvedValue('EXTRACTED');
 
       const tool = searchTool({
         searchDelegate: true,
@@ -321,7 +300,6 @@ describe('searchDelegate behavior', () => {
       mockDelegate.mockResolvedValue(JSON.stringify({
         targets: ['a.js#foo']
       }));
-      mockExtract.mockResolvedValue('EXTRACTED');
 
       const tool = searchTool({
         searchDelegate: true,
@@ -481,7 +459,6 @@ describe('searchDelegate behavior', () => {
     mockDelegate.mockResolvedValue(JSON.stringify({
       targets: ['a.js#foo']
     }));
-    mockExtract.mockResolvedValue('EXTRACTED');
 
     const tool = searchTool({
       searchDelegate: true,
@@ -502,7 +479,6 @@ describe('searchDelegate behavior', () => {
     mockDelegate.mockResolvedValue(JSON.stringify({
       targets: ['a.js#foo']
     }));
-    mockExtract.mockResolvedValue('EXTRACTED');
 
     const tool = searchTool({
       searchDelegate: true,
@@ -516,5 +492,168 @@ describe('searchDelegate behavior', () => {
     expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
       allowEdit: false
     }));
+  });
+
+  describe('structured response with searches field', () => {
+    test('passes through searches array from delegate response', async () => {
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        confidence: 'high',
+        groups: [
+          { reason: 'Core auth logic', files: ['src/auth.js#login'] }
+        ],
+        searches: [
+          { query: 'authentication', path: '/workspace', had_results: true },
+          { query: 'login handler', path: '/workspace', had_results: true },
+          { query: 'oauth provider', path: '/workspace', had_results: false }
+        ]
+      }));
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+      });
+
+      const result = await tool.execute({ query: 'How does authentication work?', path: '/workspace' });
+      const parsed = JSON.parse(result);
+
+      expect(parsed.confidence).toBe('high');
+      expect(parsed.groups).toHaveLength(1);
+      expect(parsed.groups[0].reason).toBe('Core auth logic');
+      expect(parsed.searches).toHaveLength(3);
+      expect(parsed.searches[0]).toEqual({ query: 'authentication', path: '/workspace', had_results: true });
+      expect(parsed.searches[2].had_results).toBe(false);
+    });
+
+    test('defaults searches to empty array when missing from response', async () => {
+      // Legacy format without searches field
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        targets: ['src/main.js#init']
+      }));
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+      });
+
+      const result = await tool.execute({ query: 'Where is init?', path: '/workspace' });
+      const parsed = JSON.parse(result);
+
+      expect(parsed.searches).toEqual([]);
+      expect(parsed.groups).toHaveLength(1);
+    });
+
+    test('handles partial results with low confidence from iteration-limited delegate', async () => {
+      // Simulate what a delegate outputs when it runs out of iterations:
+      // partial results with low confidence and search history
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        confidence: 'low',
+        groups: [
+          { reason: 'Possibly related to rate limiting', files: ['src/middleware/rateLimit.js#RateLimiter'] }
+        ],
+        searches: [
+          { query: 'rate limiting', path: '/workspace', had_results: true },
+          { query: 'throttle middleware', path: '/workspace', had_results: false },
+          { query: 'request quota', path: '/workspace', had_results: false }
+        ]
+      }));
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+      });
+
+      const result = await tool.execute({ query: 'How does rate limiting work?', path: '/workspace' });
+      const parsed = JSON.parse(result);
+
+      // Partial results should still be returned as structured JSON
+      expect(parsed.confidence).toBe('low');
+      expect(parsed.groups).toHaveLength(1);
+      expect(parsed.searches).toHaveLength(3);
+      // Parent can see which searches failed and decide to retry with different terms
+      const failedSearches = parsed.searches.filter(s => !s.had_results);
+      expect(failedSearches).toHaveLength(2);
+    });
+
+    test('handles empty groups with searches from exhausted delegate', async () => {
+      // Delegate ran out of iterations without finding anything relevant
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        confidence: 'low',
+        groups: [],
+        searches: [
+          { query: 'nonexistent function', path: '/workspace', had_results: false },
+          { query: 'missing_module', path: '/workspace', had_results: false }
+        ]
+      }));
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+      });
+
+      // When delegate returns empty groups, should fall back to raw search
+      mockSearch.mockResolvedValue('Fallback search results');
+      const result = await tool.execute({ query: 'Find nonexistent thing', path: '/workspace' });
+
+      // Falls back to raw search since no groups
+      expect(result).toBe('Fallback search results');
+      expect(mockSearch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  test('delegate prompt includes searches field in output format', async () => {
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      confidence: 'medium',
+      groups: [{ reason: 'test', files: ['a.js#foo'] }],
+      searches: [{ query: 'test', path: '.', had_results: true }]
+    }));
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+    });
+
+    await tool.execute({ query: 'test', path: '/workspace' });
+
+    // The delegate task prompt should mention searches field
+    const delegateCall = mockDelegate.mock.calls[0][0];
+    expect(delegateCall.task).toContain('"searches"');
+    expect(delegateCall.task).toContain('had_results');
+    // Should also mention relevance filtering
+    expect(delegateCall.task).toContain('VERIFIED');
+    expect(delegateCall.task).toContain('RELEVANCE FILTERING');
+  });
+
+  test('uses searchDelegateSchema (only query+path) when searchDelegate=true', async () => {
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      confidence: 'medium',
+      groups: [{ reason: 'test', files: ['a.js#foo'] }],
+      searches: []
+    }));
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+    });
+
+    // The tool schema should only have query and path for delegate mode
+    const schema = tool.inputSchema;
+    expect(schema.shape.query).toBeDefined();
+    expect(schema.shape.path).toBeDefined();
+    // Should NOT have exact, language, nextPage etc in delegate schema
+    expect(schema.shape.exact).toBeUndefined();
+    expect(schema.shape.language).toBeUndefined();
+    expect(schema.shape.nextPage).toBeUndefined();
   });
 });
