@@ -30,6 +30,7 @@ export {
 	listFilesSchema,
 	searchFilesSchema,
 	readImageSchema,
+	readMediaSchema,
 	listSkillsSchema,
 	useSkillSchema
 } from './common.js';

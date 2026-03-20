@@ -32,6 +32,7 @@ import {
 	listFilesSchema,
 	searchFilesSchema,
 	readImageSchema,
+	readMediaSchema,
 	listSkillsSchema,
 	useSkillSchema
 } from './tools/common.js';
@@ -115,6 +116,7 @@ export {
 	listFilesSchema,
 	searchFilesSchema,
 	readImageSchema,
+	readMediaSchema,
 	listSkillsSchema,
 	useSkillSchema,
 	// Export task management

@@ -26,6 +26,7 @@ import {
   listFilesSchema,
   searchFilesSchema,
   readImageSchema,
+  readMediaSchema,
   listSkillsSchema,
   useSkillSchema
 } from '../index.js';
@@ -109,6 +110,7 @@ export {
   listFilesSchema,
   searchFilesSchema,
   readImageSchema,
+  readMediaSchema,
   listSkillsSchema,
   useSkillSchema
 };

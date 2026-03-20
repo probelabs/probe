@@ -38,7 +38,7 @@ import { TokenCounter } from './tokenCounter.js';
 import { truncateForSpan } from './simpleTelemetry.js';
 import { InMemoryStorageAdapter } from './storage/InMemoryStorageAdapter.js';
 import { HookManager, HOOK_TYPES } from './hooks/HookManager.js';
-import { SUPPORTED_IMAGE_EXTENSIONS, IMAGE_MIME_TYPES, isFormatSupportedByProvider } from './imageConfig.js';
+import { SUPPORTED_IMAGE_EXTENSIONS, SUPPORTED_MEDIA_EXTENSIONS, MEDIA_MIME_TYPES, IMAGE_MIME_TYPES, isFormatSupportedByProvider, isImageExtension, isDocumentExtension } from './mediaConfig.js';
 import {
   createTools,
   searchSchema,
@@ -55,6 +55,7 @@ import {
   listFilesSchema,
   searchFilesSchema,
   readImageSchema,
+  readMediaSchema,
   listSkillsSchema,
   useSkillSchema
 } from './tools.js';
@@ -121,6 +122,8 @@ const MAX_HISTORY_MESSAGES = 100;
 
 // Maximum image file size (20MB) to prevent OOM attacks
 const MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024;
+// Maximum document file size (32MB) — Claude's limit is 32MB, OpenAI 50MB, Gemini 50MB
+const MAX_DOCUMENT_FILE_SIZE = 32 * 1024 * 1024;
 
 /**
  * Truncate a string for debug logging, showing first and last portion.
@@ -958,40 +961,43 @@ export class ProbeAgent {
       }
     }
 
-    // Image loading tool
-    if (isToolAllowed('readImage')) {
-      this.toolImplementations.readImage = {
-        execute: async (params) => {
-          const imagePath = params.path;
-          if (!imagePath) {
-            throw new Error('Image path is required');
-          }
+    // Media loading tool (images + PDFs)
+    const readMediaExecute = async (params) => {
+      const mediaPath = params.path;
+      if (!mediaPath) {
+        throw new Error('File path is required');
+      }
 
-          // Validate extension before attempting to load
-          // Use basename to prevent path traversal attacks (e.g., 'malicious.jpg/../../../etc/passwd')
-          const filename = basename(imagePath);
-          const extension = filename.toLowerCase().split('.').pop();
+      // Validate extension before attempting to load
+      // Use basename to prevent path traversal attacks (e.g., 'malicious.jpg/../../../etc/passwd')
+      const filename = basename(mediaPath);
+      const extension = filename.toLowerCase().split('.').pop();
 
-          // Always validate extension is in allowed list (defense-in-depth)
-          if (!extension || !SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
-            throw new Error(`Invalid or unsupported image extension: ${extension}. Supported formats: ${SUPPORTED_IMAGE_EXTENSIONS.join(', ')}`);
-          }
+      // Always validate extension is in allowed list (defense-in-depth)
+      if (!extension || !SUPPORTED_MEDIA_EXTENSIONS.includes(extension)) {
+        throw new Error(`Unsupported file format: ${extension}. Supported formats: ${SUPPORTED_MEDIA_EXTENSIONS.join(', ')}`);
+      }
 
-          // Check provider-specific format restrictions (e.g., SVG not supported by Google Gemini)
-          if (this.apiType && !isFormatSupportedByProvider(extension, this.apiType)) {
-            throw new Error(`Image format '${extension}' is not supported by the current AI provider (${this.apiType}). Try using a different image format like PNG or JPEG.`);
-          }
+      // Check provider-specific format restrictions (e.g., SVG not supported by Google Gemini)
+      if (this.apiType && !isFormatSupportedByProvider(extension, this.apiType)) {
+        throw new Error(`File format '${extension}' is not supported by the current AI provider (${this.apiType}). Try converting to a different format.`);
+      }
 
-          // Load the image using the existing loadImageIfValid method
-          const loaded = await this.loadImageIfValid(imagePath);
+      // Load the media file
+      const loaded = await this.loadMediaIfValid(mediaPath);
 
-          if (!loaded) {
-            throw new Error(`Failed to load image: ${imagePath}. The file may not exist, be too large, have an unsupported format, or be outside allowed directories.`);
-          }
+      if (!loaded) {
+        throw new Error(`Failed to load file: ${mediaPath}. The file may not exist, be too large, have an unsupported format, or be outside allowed directories.`);
+      }
 
-          return `Image loaded successfully: ${imagePath}. The image is now available for analysis in the conversation.`;
-        }
-      };
+      const mediaType = isDocumentExtension(extension) ? 'Document' : 'Image';
+      return `${mediaType} loaded successfully: ${mediaPath}. The file is now available for analysis in the conversation.`;
+    };
+
+    if (isToolAllowed('readMedia') || isToolAllowed('readImage')) {
+      this.toolImplementations.readMedia = { execute: readMediaExecute };
+      // Keep readImage as backward-compatible alias
+      this.toolImplementations.readImage = { execute: readMediaExecute };
     }
 
     // Add bash tool if enabled and allowed
@@ -2219,9 +2225,9 @@ export class ProbeAgent {
         schema: searchFilesSchema,
         description: 'Find files matching a glob pattern with recursive search capability.'
       },
-      readImage: {
-        schema: readImageSchema,
-        description: 'Read and load an image file for AI analysis.'
+      readMedia: {
+        schema: readMediaSchema,
+        description: 'Read and load a media file (image or PDF document) for AI analysis. Supports: png, jpg, jpeg, webp, bmp, svg, pdf.'
       },
       listSkills: {
         schema: listSkillsSchema,
@@ -2383,7 +2389,7 @@ export class ProbeAgent {
 
     // Enhanced pattern to detect image file mentions in various contexts
     // Looks for: "image", "file", "screenshot", etc. followed by path-like strings with image extensions
-    const extensionsPattern = `(?:${SUPPORTED_IMAGE_EXTENSIONS.join('|')})`;
+    const extensionsPattern = `(?:${SUPPORTED_MEDIA_EXTENSIONS.join('|')})`;
     const imagePatterns = [
       // Direct file path mentions: "./screenshot.png", "/path/to/image.jpg", etc.
       new RegExp(`(?:\\.?\\.\\/)?[^\\s"'<>\\[\\]]+\\\.${extensionsPattern}(?!\\w)`, 'gi'),
@@ -2504,43 +2510,36 @@ export class ProbeAgent {
   }
 
   /**
-   * Load and cache an image if it's valid and accessible
-   * @param {string} imagePath - Path to the image file
-   * @returns {Promise<boolean>} - True if image was loaded successfully
+   * Load and cache a media file (image or PDF) if it's valid and accessible
+   * @param {string} mediaPath - Path to the media file
+   * @returns {Promise<boolean>} - True if file was loaded successfully
    */
-  async loadImageIfValid(imagePath) {
+  async loadMediaIfValid(mediaPath) {
     try {
       // Skip if already loaded
-      if (this.pendingImages.has(imagePath)) {
+      if (this.pendingImages.has(mediaPath)) {
         if (this.debug) {
-          console.log(`[DEBUG] Image already loaded: ${imagePath}`);
+          console.log(`[DEBUG] Media already loaded: ${mediaPath}`);
         }
         return true;
       }
 
       // Security validation: check if path is within any allowed directory
-      // Use safeRealpath() to resolve symlinks and handle path traversal attempts (e.g., '/allowed/../etc/passwd')
-      // This prevents symlink bypass attacks (e.g., /tmp -> /private/tmp on macOS)
       const allowedDirs = this.allowedFolders && this.allowedFolders.length > 0 ? this.allowedFolders : [process.cwd()];
 
       let absolutePath;
       let isPathAllowed = false;
 
-      // If absolute path, check if it's within any allowed directory
-      if (isAbsolute(imagePath)) {
-        // Use safeRealpath to resolve symlinks for security
-        absolutePath = safeRealpath(resolve(imagePath));
+      if (isAbsolute(mediaPath)) {
+        absolutePath = safeRealpath(resolve(mediaPath));
         isPathAllowed = allowedDirs.some(dir => {
           const resolvedDir = safeRealpath(dir);
-          // Ensure the path is within the allowed directory (add separator to prevent prefix attacks)
           return absolutePath === resolvedDir || absolutePath.startsWith(resolvedDir + sep);
         });
       } else {
-        // For relative paths, try resolving against each allowed directory
         for (const dir of allowedDirs) {
           const resolvedDir = safeRealpath(dir);
-          const resolvedPath = safeRealpath(resolve(dir, imagePath));
-          // Ensure the resolved path is within the allowed directory
+          const resolvedPath = safeRealpath(resolve(dir, mediaPath));
           if (resolvedPath === resolvedDir || resolvedPath.startsWith(resolvedDir + sep)) {
             absolutePath = resolvedPath;
             isPathAllowed = true;
@@ -2548,137 +2547,162 @@ export class ProbeAgent {
           }
         }
       }
-      
-      // Security check: ensure path is within at least one allowed directory
+
       if (!isPathAllowed) {
         if (this.debug) {
-          console.log(`[DEBUG] Image path outside allowed directories: ${imagePath}`);
+          console.log(`[DEBUG] Media path outside allowed directories: ${mediaPath}`);
         }
         return false;
       }
 
-      // Check if file exists and get file stats
       let fileStats;
       try {
         fileStats = await stat(absolutePath);
       } catch (error) {
         if (this.debug) {
-          console.log(`[DEBUG] Image file not found: ${absolutePath}`);
+          console.log(`[DEBUG] Media file not found: ${absolutePath}`);
         }
         return false;
       }
 
-      // Validate file size to prevent OOM attacks
-      if (fileStats.size > MAX_IMAGE_FILE_SIZE) {
-        if (this.debug) {
-          console.log(`[DEBUG] Image file too large: ${absolutePath} (${fileStats.size} bytes, max: ${MAX_IMAGE_FILE_SIZE})`);
-        }
-        return false;
-      }
-
-      // Validate file extension
       const extension = absolutePath.toLowerCase().split('.').pop();
-      if (!SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
+      if (!SUPPORTED_MEDIA_EXTENSIONS.includes(extension)) {
         if (this.debug) {
-          console.log(`[DEBUG] Unsupported image format: ${extension}`);
+          console.log(`[DEBUG] Unsupported media format: ${extension}`);
         }
         return false;
       }
 
-      // Note: Provider-specific format validation (e.g., SVG not supported by Google Gemini)
-      // is handled by the readImage tool which provides explicit error messages.
-      // loadImageIfValid is a lower-level method that only checks general format support.
+      // Apply size limit based on media type
+      const maxSize = isDocumentExtension(extension) ? MAX_DOCUMENT_FILE_SIZE : MAX_IMAGE_FILE_SIZE;
+      if (fileStats.size > maxSize) {
+        if (this.debug) {
+          console.log(`[DEBUG] Media file too large: ${absolutePath} (${fileStats.size} bytes, max: ${maxSize})`);
+        }
+        return false;
+      }
 
-      // Determine MIME type (from shared config)
-      const mimeType = IMAGE_MIME_TYPES[extension];
-
-      // Read and encode file asynchronously
+      const mimeType = MEDIA_MIME_TYPES[extension];
       const fileBuffer = await readFile(absolutePath);
       const base64Data = fileBuffer.toString('base64');
-      const dataUrl = `data:${mimeType};base64,${base64Data}`;
 
-      // Cache the loaded image
-      this.pendingImages.set(imagePath, dataUrl);
+      if (isDocumentExtension(extension)) {
+        // Store documents as objects with metadata for the 'file' content part
+        this.pendingImages.set(mediaPath, {
+          type: 'document',
+          mimeType,
+          data: base64Data,
+          filename: basename(mediaPath)
+        });
+      } else {
+        // Store images as data URLs (backward compatible)
+        const dataUrl = `data:${mimeType};base64,${base64Data}`;
+        this.pendingImages.set(mediaPath, dataUrl);
+      }
 
       if (this.debug) {
-        console.log(`[DEBUG] Successfully loaded image: ${imagePath} (${fileBuffer.length} bytes)`);
+        console.log(`[DEBUG] Successfully loaded media: ${mediaPath} (${fileBuffer.length} bytes, ${mimeType})`);
       }
 
       return true;
     } catch (error) {
       if (this.debug) {
-        console.log(`[DEBUG] Failed to load image ${imagePath}: ${error.message}`);
+        console.log(`[DEBUG] Failed to load media ${mediaPath}: ${error.message}`);
       }
       return false;
     }
   }
 
   /**
-   * Get all currently loaded images as an array for AI model consumption
-   * @returns {Array<string>} - Array of base64 data URLs
+   * Backward-compatible alias for loadMediaIfValid
+   * @param {string} imagePath - Path to the image file
+   * @returns {Promise<boolean>}
    */
-  getCurrentImages() {
-    return Array.from(this.pendingImages.values());
+  async loadImageIfValid(imagePath) {
+    return this.loadMediaIfValid(imagePath);
   }
 
   /**
-   * Clear loaded images (useful for new conversations)
+   * Get all currently loaded images as an array for AI model consumption
+   * @returns {Array<string>} - Array of base64 data URLs (images only, for backward compat)
+   */
+  getCurrentImages() {
+    return Array.from(this.pendingImages.values()).filter(v => typeof v === 'string');
+  }
+
+  /**
+   * Get all currently loaded media as an array of content parts
+   * @returns {Array<Object>} - Array of Vercel AI SDK content parts
+   */
+  getCurrentMedia() {
+    const parts = [];
+    for (const entry of this.pendingImages.values()) {
+      if (typeof entry === 'string') {
+        // Image data URL
+        parts.push({ type: 'image', image: entry });
+      } else if (entry && entry.type === 'document') {
+        // Document (PDF) — use Vercel AI SDK 'file' content part
+        parts.push({
+          type: 'file',
+          mediaType: entry.mimeType,
+          data: entry.data,
+          filename: entry.filename
+        });
+      }
+    }
+    return parts;
+  }
+
+  /**
+   * Clear loaded media (useful for new conversations)
    */
   clearLoadedImages() {
     this.pendingImages.clear();
     this.currentImages = [];
     if (this.debug) {
-      console.log('[DEBUG] Cleared all loaded images');
+      console.log('[DEBUG] Cleared all loaded media');
     }
   }
 
   /**
-   * Prepare messages for AI consumption, adding images to the latest user message if available
+   * Prepare messages for AI consumption, adding media to the latest user message if available
    * @param {Array} messages - Current conversation messages
-   * @returns {Array} - Messages formatted for AI SDK with potential image content
+   * @returns {Array} - Messages formatted for AI SDK with potential media content
    */
   prepareMessagesWithImages(messages) {
-    const loadedImages = this.getCurrentImages();
-    
-    // If no images loaded, return messages as-is
-    if (loadedImages.length === 0) {
+    const mediaParts = this.getCurrentMedia();
+
+    if (mediaParts.length === 0) {
       return messages;
     }
 
-    // Clone messages to avoid mutating the original
-    const messagesWithImages = [...messages];
-    
-    // Find the last user message to attach images to
-    const lastUserMessageIndex = messagesWithImages.map(m => m.role).lastIndexOf('user');
-    
+    const messagesWithMedia = [...messages];
+    const lastUserMessageIndex = messagesWithMedia.map(m => m.role).lastIndexOf('user');
+
     if (lastUserMessageIndex === -1) {
       if (this.debug) {
-        console.log('[DEBUG] No user messages found to attach images to');
+        console.log('[DEBUG] No user messages found to attach media to');
       }
       return messages;
     }
 
-    const lastUserMessage = messagesWithImages[lastUserMessageIndex];
-    
-    // Convert to multimodal format if we have images
+    const lastUserMessage = messagesWithMedia[lastUserMessageIndex];
+
     if (typeof lastUserMessage.content === 'string') {
-      messagesWithImages[lastUserMessageIndex] = {
+      messagesWithMedia[lastUserMessageIndex] = {
         ...lastUserMessage,
         content: [
           { type: 'text', text: lastUserMessage.content },
-          ...loadedImages.map(imageData => ({
-            type: 'image',
-            image: imageData
-          }))
+          ...mediaParts
         ]
       };
 
       if (this.debug) {
-        console.log(`[DEBUG] Added ${loadedImages.length} images to the latest user message`);
+        console.log(`[DEBUG] Added ${mediaParts.length} media items to the latest user message`);
       }
     }
 
-    return messagesWithImages;
+    return messagesWithMedia;
   }
 
   /**
