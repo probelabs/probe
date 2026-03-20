@@ -62,15 +62,28 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       );
     });
 
-    it('should use code-researcher prompt for subagent', async () => {
+    it('should use parent promptType for subagent (undefined = inherits parent default)', async () => {
       const task = 'Test task';
 
       await delegate({ task });
 
-      // Check that ProbeAgent was created with code-researcher prompt
+      // promptType defaults to undefined when not passed, which means
+      // the subagent will use its own default (code-explorer)
       expect(MockProbeAgent).toHaveBeenCalledWith(
         expect.objectContaining({
-          promptType: 'code-researcher'
+          promptType: undefined
+        })
+      );
+    });
+
+    it('should pass explicit promptType to subagent', async () => {
+      const task = 'Test task';
+
+      await delegate({ task, promptType: 'engineer' });
+
+      expect(MockProbeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          promptType: 'engineer'
         })
       );
     });
