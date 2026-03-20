@@ -630,7 +630,7 @@ describe('searchDelegate behavior', () => {
     expect(delegateCall.task).toContain('had_results');
     // Should also mention relevance filtering
     expect(delegateCall.task).toContain('VERIFIED');
-    expect(delegateCall.task).toContain('RELEVANCE FILTERING');
+    expect(delegateCall.task).toContain('relevance-filtering');
   });
 
   test('uses searchDelegateSchema (only query+path) when searchDelegate=true', async () => {
