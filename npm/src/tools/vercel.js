@@ -3,7 +3,7 @@
  * @module tools/vercel
  */
 
-import { tool } from 'ai';
+import { tool, generateText } from 'ai';
 import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
@@ -13,6 +13,7 @@ import { searchSchema, searchDelegateSchema, querySchema, extractSchema, delegat
 import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
+import { createLanguageModel } from '../utils/provider.js';
 import { truncateForSpan } from '../agent/simpleTelemetry.js';
 
 /**
@@ -92,6 +93,10 @@ const CODE_SEARCH_SCHEMA = {
 			enum: ['high', 'medium', 'low'],
 			description: 'How confident you are that these locations answer the question.'
 		},
+		reason: {
+			type: 'string',
+			description: 'Brief explanation of confidence level — what was found, partially found, or not found.'
+		},
 		groups: {
 			type: 'array',
 			items: {
@@ -125,9 +130,85 @@ const CODE_SEARCH_SCHEMA = {
 			description: 'All search queries executed during this session, with their paths and outcomes.'
 		}
 	},
-	required: ['confidence', 'groups', 'searches'],
+	required: ['confidence', 'reason', 'groups', 'searches'],
 	additionalProperties: false
 };
+
+/**
+ * LLM-based semantic dedup for delegate queries.
+ * Asks the same model to classify a new query against previous ones.
+ * Returns: { action: 'allow'|'block'|'rewrite', rewritten?: string, reason: string }
+ */
+async function checkDelegateDedup(newQuery, previousQueries, model, debug) {
+	if (!model || previousQueries.length === 0) {
+		return { action: 'allow', reason: 'no previous queries' };
+	}
+
+	const previousList = previousQueries
+		.map((q, i) => {
+			let line = `${i + 1}. "${q.query}" (path: ${q.path}, found results: ${q.hadResults})`;
+			if (q.reason) line += `\n   Outcome: ${q.reason}`;
+			if (q.groups && q.groups.length > 0) {
+				line += `\n   Found: ${q.groups.map(g => g.reason).join('; ')}`;
+			}
+			return line;
+		})
+		.join('\n');
+
+	try {
+		const result = await generateText({
+			model,
+			maxTokens: 150,
+			temperature: 0,
+			prompt: `You decide if a code search query is redundant given previous queries in the same session.
+
+PREVIOUS QUERIES:
+${previousList}
+
+NEW QUERY: "${newQuery}"
+
+Respond with exactly one line: ACTION|REASON
+For rewrites: rewrite|REASON|REWRITTEN_QUERY
+
+BLOCK when:
+- Same concept, different phrasing: "find X" / "definition of X" / "where is X" / "X implementation" → all the same
+- Synonym or narrower term of a previous query: "dedup" → "duplicate" → "unique" → all the same concept
+- Single generic word that's just a synonym of a previous failed query
+- Query is trying to brute-force the same concept with different keywords after previous failures
+
+REWRITE when:
+- Previous query was too narrow and failed, new query targets the same goal but could use a FUNDAMENTALLY different search strategy (e.g. searching for a caller instead of the function name, or searching the config/registration site instead of the implementation)
+- Previous query found WRONG results (e.g. found "FallbackManager" when looking for "dedup logic") — rewrite to target the actual concept more precisely using implementation-level terms
+
+ALLOW only when:
+- The new query targets a COMPLETELY DIFFERENT feature, module, or subsystem — not just a different word for the same thing
+
+Only BLOCK when you are CERTAIN the queries target the same concept. When uncertain, ALLOW — a missed dedup is cheaper than blocking a valid search.
+
+Examples:
+- Prev: "wrapToolWithEmitter" → New: "definition of wrapToolWithEmitter" → block|Same symbol
+- Prev: "search dedup" (no results) → New: "dedup" → block|Synonym of failed query
+- Prev: "dedup" (no results) → New: "duplicate" → block|Synonym of failed query
+- Prev: "dedup" (no results) → New: "unique" → block|Synonym of failed query
+- Prev: "auth middleware" → New: "rate limiting" → allow|Different subsystem
+- Prev: "search dedup" (no results) → New: "previousSearches Map" → rewrite|Searching for implementation detail instead of concept|previousSearches OR searchKey`
+		});
+
+		const line = result.text.trim().split('\n')[0];
+		const parts = line.split('|');
+		const action = (parts[0] || '').toLowerCase().trim();
+
+		if (action === 'block') {
+			return { action: 'block', reason: parts[1]?.trim() || 'duplicate query' };
+		} else if (action === 'rewrite' && parts[2]) {
+			return { action: 'rewrite', reason: parts[1]?.trim() || 'refined query', rewritten: parts[2].trim() };
+		}
+		return { action: 'allow', reason: parts[1]?.trim() || 'new concept' };
+	} catch (err) {
+		if (debug) console.error('[DEDUP-LLM] Error:', err.message);
+		return { action: 'allow', reason: 'dedup check failed, allowing' };
+	}
+}
 
 function normalizeTargets(targets) {
 	if (!Array.isArray(targets)) return [];
@@ -248,6 +329,7 @@ function parseDelegatedResponse(rawResponse) {
 		if (Array.isArray(parsed.groups)) {
 			return {
 				confidence: parsed.confidence || 'medium',
+				reason: parsed.reason || '',
 				groups: parsed.groups.map(g => ({
 					reason: g.reason || '',
 					files: normalizeTargets(g.files || [])
@@ -259,7 +341,7 @@ function parseDelegatedResponse(rawResponse) {
 		if (Array.isArray(parsed.targets)) {
 			const files = normalizeTargets(parsed.targets);
 			if (files.length > 0) {
-				return { confidence: 'medium', groups: [{ reason: 'Search results', files }], searches: [] };
+				return { confidence: 'medium', reason: '', groups: [{ reason: 'Search results', files }], searches: [] };
 			}
 			// Empty targets array — explicitly return null (don't fall through to text fallback)
 			return null;
@@ -268,7 +350,7 @@ function parseDelegatedResponse(rawResponse) {
 		if (Array.isArray(parsed)) {
 			const files = normalizeTargets(parsed);
 			if (files.length > 0) {
-				return { confidence: 'medium', groups: [{ reason: 'Search results', files }], searches: [] };
+				return { confidence: 'medium', reason: '', groups: [{ reason: 'Search results', files }], searches: [] };
 			}
 			return null;
 		}
@@ -277,7 +359,7 @@ function parseDelegatedResponse(rawResponse) {
 	// Fallback: extract targets from plain text
 	const files = normalizeTargets(fallbackTargetsFromText(trimmed));
 	if (files.length > 0) {
-		return { confidence: 'low', groups: [{ reason: 'Search results', files }], searches: [] };
+		return { confidence: 'low', reason: '', groups: [{ reason: 'Search results', files }], searches: [] };
 	}
 	return null;
 }
@@ -338,10 +420,11 @@ Browse directory structure to discover where code might live.
 
 <strategy>
 1. Analyze the question — identify key concepts and brainstorm what a developer would NAME the relevant code.
-2. Search for the main concept and synonyms in parallel.
-3. Use extract to verify relevance — skim the code to confirm it ACTUALLY relates to the question.
-4. Follow the trail: if you find a function, look for its callers, type definitions, and registered handlers.
-5. Group your findings by WHY they are relevant (not by how you found them).
+2. Start your first search with the FULL search-path provided above. Do NOT narrow to a subdirectory on first try — the code may live anywhere in the tree.
+3. Search for the main concept and synonyms in parallel.
+4. Use extract to verify relevance — skim the code to confirm it ACTUALLY relates to the question.
+5. Follow the trail: if you find a function, look for its callers, type definitions, and registered handlers.
+6. Group your findings by WHY they are relevant (not by how you found them).
 </strategy>
 
 <relevance-filtering priority="critical">
@@ -350,6 +433,7 @@ Browse directory structure to discover where code might live.
 - A file that mentions "session" in a comment is NOT relevant to "How do sessions work?" — look for the actual implementation.
 - Fewer verified-relevant files are far more valuable than many unverified keyword matches.
 - If a file is tangentially related but not core to the question, leave it out.
+- If NO files are truly relevant, return EMPTY groups with confidence "low". An honest empty result is far better than a wrong result. Never fill groups with loosely related files just to have something.
 </relevance-filtering>
 
 <stop-conditions>
@@ -365,37 +449,13 @@ Include ALL files you verified as relevant, even if coverage is partial.
 The "searches" field helps the caller understand what was attempted.
 </on-iteration-limit>
 
-<output-format>
-Return ONLY valid JSON in this exact format:
-{
-  "confidence": "high" | "medium" | "low",
-  "groups": [
-    {
-      "reason": "Why these files are relevant to the question",
-      "files": ["path/to/file.ext#Symbol", "path/to/file.ext:10-20"]
-    }
-  ],
-  "searches": [
-    { "query": "the search query", "path": "search/path", "had_results": true }
-  ]
-}
-</output-format>
-
-<output-guidelines>
-<field name="confidence">How confident you are that these locations answer the question.</field>
-<field name="groups">
-ONLY include files you have verified are relevant. No noise, no maybe-relevant files.
-Group files by their RELEVANCE to the question, not by search query.
-
-Example for "How does session auth work?":
-  { "reason": "Session extraction from HTTP cookie", "files": [...] }
-  { "reason": "Session validation and expiry checks", "files": [...] }
-  { "reason": "Middleware that wires session into request context", "files": [...] }
-</field>
-<field name="groups.reason">Explain WHY the caller should look at these files — what aspect of the question they address.</field>
-<field name="searches">List ALL search queries you executed, with path and whether they returned results. This helps the caller understand what was attempted and what might be worth retrying.</field>
-<field name="files">Use ABSOLUTE file paths. Prefer #Symbol when a function/class name is clear; otherwise use line ranges. Deduplicate files across groups.</field>
-</output-guidelines>`;
+<output-rules>
+- Return ONLY valid JSON matching the schema. No markdown, no explanation.
+- ONLY include files you have verified are relevant. No noise.
+- Group files by RELEVANCE to the question, not by search query.
+- Use ABSOLUTE file paths. Prefer #Symbol for functions/classes; otherwise use line ranges.
+- Deduplicate files across groups.
+</output-rules>`;
 }
 
 /**
@@ -440,7 +500,9 @@ export const searchTool = (options = {}) => {
 	// Track delegated searches at the PARENT level to prevent the pro model from
 	// spawning redundant delegates for the same concept. Each delegate is expensive
 	// (full flash agent session), so blocking repeats saves minutes.
-	const previousDelegations = []; // { norm: string, query: string, path: string, hadResults: boolean }
+	// LLM-based semantic dedup replaces deterministic normalization for delegates.
+	const previousDelegations = []; // { query: string, path: string, hadResults: boolean }
+	let cachedDedupModel = undefined; // lazily initialized
 
 	/**
 	 * Normalize a search query to detect syntax-level duplicates.
@@ -453,6 +515,9 @@ export const searchTool = (options = {}) => {
 		if (!query) return '';
 		return query
 			.replace(/^["']|["']$/g, '')      // strip outer quotes
+			// Strip filler prefixes: "definition of X", "find X", "where is X", etc.
+			.replace(/^(definition\s+of|implementation\s+of|usage\s+of|find|where\s+is|how\s+does|locate|show\s+me|get|look\s+for)\s+/i, '')
+			.replace(/^["']|["']$/g, '')      // strip quotes again after prefix removal
 			.replace(/\./g, '')                 // "ctx.GetData" → "ctxGetData"
 			.replace(/[_\-\s]+/g, '')           // strip underscores/hyphens/spaces
 			.toLowerCase()
@@ -636,32 +701,76 @@ export const searchTool = (options = {}) => {
 				}
 			}
 
-			// ── Delegate-level dedup ──────────────────────────────────────
+			// ── Delegate-level semantic dedup ────────────────────────────
 				// Each delegate is a full flash agent session (minutes, not seconds).
-				// Block exact normalized duplicates.
+				// Use LLM to detect semantic duplicates and suggest rewrites.
+				// Compare against ALL previous delegations (not filtered by path) because
+				// the parent model often narrows the path while asking the same concept
+				// (e.g., "dedup" at /src → "deduplicate" at /src/search.js).
 				const delegatePath = searchPath || '';
 
-				// Block exact normalized duplicates (catches quote/syntax variations)
-				const delegateNorm = normalizeQueryConcept(searchQuery);
-				const duplicate = previousDelegations.find(d => d.path === delegatePath && d.norm === delegateNorm);
-				if (duplicate) {
-					const hint = duplicate.hadResults
-						? 'Previous delegation for this query RETURNED RESULTS. Use extract() on the files already found instead of re-delegating.'
-						: 'Previous delegation for this query found NO results. Try a fundamentally different approach: widen the search path, use listFiles, or move on.';
-					return `DELEGATE BLOCKED: "${searchQuery}" is a duplicate of previous delegation "${duplicate.query}". ${hint}\n\nDo NOT re-delegate the same concept. Synthesize your answer from the results you already have.`;
+				let effectiveQuery = searchQuery;
+
+				if (previousDelegations.length > 0) {
+					// Lazily create the dedup model (same provider/model as delegate)
+					if (cachedDedupModel === undefined) {
+						const dedupProvider = options.searchDelegateProvider || process.env.PROBE_SEARCH_DELEGATE_PROVIDER || options.provider || process.env.FORCE_PROVIDER || null;
+						const dedupModelName = options.searchDelegateModel || process.env.PROBE_SEARCH_DELEGATE_MODEL || options.model || process.env.MODEL_NAME || null;
+						if (debug) {
+							console.error(`[DEDUP-LLM] Creating model: provider=${dedupProvider}, model=${dedupModelName}`);
+						}
+						cachedDedupModel = await createLanguageModel(dedupProvider, dedupModelName);
+						if (debug) {
+							console.error(`[DEDUP-LLM] Model created: ${cachedDedupModel ? 'success' : 'null'}`);
+						}
+					}
+
+					const dedupSpanAttrs = {
+						'dedup.query': searchQuery,
+						'dedup.previous_count': String(previousDelegations.length),
+						'dedup.previous_queries': previousDelegations.map(d => d.query).join(' | '),
+					};
+
+					const dedup = options.tracer?.withSpan
+						? await options.tracer.withSpan('search.delegate.dedup', async () => {
+							return await checkDelegateDedup(searchQuery, previousDelegations, cachedDedupModel, debug);
+						}, dedupSpanAttrs, (span, result) => {
+							span.setAttributes({
+								'dedup.action': result.action,
+								'dedup.reason': result.reason || '',
+								'dedup.rewritten': result.rewritten || '',
+							});
+						})
+						: await checkDelegateDedup(searchQuery, previousDelegations, cachedDedupModel, debug);
+
+					if (debug) {
+						console.error(`[DEDUP-LLM] Query: "${searchQuery}" → ${dedup.action}: ${dedup.reason}${dedup.rewritten ? ` → "${dedup.rewritten}"` : ''}`);
+					}
+
+					if (dedup.action === 'block') {
+						const prevQueries = previousDelegations.map(d => `"${d.query}"`).join(', ');
+						return `DELEGATE BLOCKED: "${searchQuery}" is semantically duplicate of previous delegation(s) [${prevQueries}]. ${dedup.reason}\n\nDo NOT re-delegate the same concept. Use extract() on files already found, or synthesize your answer from existing results.`;
+					}
+
+					if (dedup.action === 'rewrite' && dedup.rewritten) {
+						effectiveQuery = dedup.rewritten;
+						if (debug) {
+							console.error(`[DEDUP-LLM] Rewritten query: "${searchQuery}" → "${effectiveQuery}"`);
+						}
+					}
 				}
 
 				// Record this delegation
-				const delegationRecord = { norm: delegateNorm, query: searchQuery, path: delegatePath, hadResults: false };
+				const delegationRecord = { query: effectiveQuery, path: delegatePath, hadResults: false };
 				previousDelegations.push(delegationRecord);
 
 			try {
 				if (debug) {
-					console.error(`Delegating search with query: "${searchQuery}", path: "${searchPath}"`);
+					console.error(`Delegating search with query: "${effectiveQuery}", path: "${searchPath}"${effectiveQuery !== searchQuery ? ` (rewritten from: "${searchQuery}")` : ''}`);
 				}
 
 				const delegateTask = buildSearchDelegateTask({
-					searchQuery,
+					searchQuery: effectiveQuery,
 					searchPath,
 					exact,
 					language,
@@ -691,7 +800,8 @@ export const searchTool = (options = {}) => {
 				const delegateResult = options.tracer?.withSpan
 					? await options.tracer.withSpan('search.delegate', runDelegation, {
 						'search.query': searchQuery,
-						'search.path': searchPath
+						'search.path': searchPath,
+						...(effectiveQuery !== searchQuery ? { 'search.query.rewritten': effectiveQuery } : {})
 					}, (span, result) => {
 						const text = typeof result === 'string' ? result : JSON.stringify(result) || '';
 						if (debug) console.error(`[search-delegate] onResult: type=${typeof result}, length=${text.length}`);
@@ -703,11 +813,22 @@ export const searchTool = (options = {}) => {
 					: await runDelegation();
 
 				const structured = parseDelegatedResponse(delegateResult);
-				// Update delegation tracking with outcome
-				if (delegationRecord && structured && structured.groups.length > 0) {
-					delegationRecord.hadResults = true;
+				// Update delegation tracking with outcome (feeds into LLM dedup context)
+				if (delegationRecord && structured) {
+					delegationRecord.hadResults = structured.groups.length > 0;
+					delegationRecord.reason = structured.reason || '';
+					delegationRecord.groups = structured.groups.map(g => ({ reason: g.reason }));
 				}
 				if (!structured || structured.groups.length === 0) {
+					// If the delegate explicitly concluded nothing was found (low confidence + reason),
+					// return that verdict instead of falling back to raw search which would
+					// return tangentially related results and mislead the parent agent.
+					if (structured && structured.confidence === 'low' && structured.reason) {
+						if (debug) {
+							console.error(`Delegated search explicitly found nothing: ${structured.reason}`);
+						}
+						return `NOT FOUND: The search delegate thoroughly searched for "${searchQuery}" and concluded: ${structured.reason}\n\nDo NOT search for analogies or loosely related concepts. If the feature does not exist in the codebase, say so in your final answer.`;
+					}
 					if (debug) {
 						console.error('Delegated search returned no results; falling back to raw search');
 					}

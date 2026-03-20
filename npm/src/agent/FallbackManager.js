@@ -8,10 +8,7 @@
  * - Custom fallback chains with full configuration
  */
 
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
+import { createProviderInstance, DEFAULT_MODELS as SHARED_DEFAULT_MODELS } from '../utils/provider.js';
 
 /**
  * Fallback strategies
@@ -40,12 +37,7 @@ export const FALLBACK_STRATEGIES = {
 /**
  * Default model mappings for each provider
  */
-const DEFAULT_MODELS = {
-  anthropic: 'claude-sonnet-4-6',
-  openai: 'gpt-5.2',
-  google: 'gemini-2.5-flash',
-  bedrock: 'anthropic.claude-sonnet-4-6'
-};
+const DEFAULT_MODELS = SHARED_DEFAULT_MODELS;
 
 /**
  * FallbackManager class for handling provider and model fallback
@@ -138,53 +130,7 @@ export class FallbackManager {
    */
   _createProviderInstance(config) {
     try {
-      switch (config.provider) {
-        case 'anthropic':
-          return createAnthropic({
-            apiKey: config.apiKey,
-            ...(config.baseURL && { baseURL: config.baseURL })
-          });
-
-        case 'openai':
-          return createOpenAI({
-            compatibility: 'strict',
-            apiKey: config.apiKey,
-            ...(config.baseURL && { baseURL: config.baseURL })
-          });
-
-        case 'google':
-          return createGoogleGenerativeAI({
-            apiKey: config.apiKey,
-            ...(config.baseURL && { baseURL: config.baseURL })
-          });
-
-        case 'bedrock': {
-          const bedrockConfig = {};
-
-          if (config.apiKey) {
-            bedrockConfig.apiKey = config.apiKey;
-          } else if (config.accessKeyId && config.secretAccessKey) {
-            bedrockConfig.accessKeyId = config.accessKeyId;
-            bedrockConfig.secretAccessKey = config.secretAccessKey;
-            if (config.sessionToken) {
-              bedrockConfig.sessionToken = config.sessionToken;
-            }
-          }
-
-          if (config.region) {
-            bedrockConfig.region = config.region;
-          }
-
-          if (config.baseURL) {
-            bedrockConfig.baseURL = config.baseURL;
-          }
-
-          return createAmazonBedrock(bedrockConfig);
-        }
-
-        default:
-          throw new Error(`FallbackManager: Unknown provider "${config.provider}"`);
-      }
+      return createProviderInstance(config);
     } catch (error) {
       // Re-throw with more context
       const providerName = this._getProviderDisplayName(config);

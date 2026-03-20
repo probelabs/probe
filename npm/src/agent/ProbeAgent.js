@@ -27,10 +27,7 @@ export const ENGINE_ACTIVITY_TIMEOUT_MIN = 5000;
  */
 export const ENGINE_ACTIVITY_TIMEOUT_MAX = 600000;
 
-import { createAnthropic } from '@ai-sdk/anthropic';
-import { createOpenAI } from '@ai-sdk/openai';
-import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
+import { createProviderInstance, DEFAULT_MODELS } from '../utils/provider.js';
 import { streamText, generateText, tool, stepCountIs, jsonSchema, Output } from 'ai';
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
@@ -1673,13 +1670,10 @@ export class ProbeAgent {
    * Initialize Anthropic model
    */
   initializeAnthropicModel(apiKey, apiUrl, modelName) {
-    this.provider = createAnthropic({
-      apiKey: apiKey,
-      ...(apiUrl && { baseURL: apiUrl }),
-    });
-    this.model = modelName || 'claude-sonnet-4-6';
+    this.provider = createProviderInstance({ provider: 'anthropic', apiKey, ...(apiUrl && { baseURL: apiUrl }) });
+    this.model = modelName || DEFAULT_MODELS.anthropic;
     this.apiType = 'anthropic';
-    
+
     if (this.debug) {
       console.log(`Using Anthropic API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
     }
@@ -1689,14 +1683,10 @@ export class ProbeAgent {
    * Initialize OpenAI model
    */
   initializeOpenAIModel(apiKey, apiUrl, modelName) {
-    this.provider = createOpenAI({
-      compatibility: 'strict',
-      apiKey: apiKey,
-      ...(apiUrl && { baseURL: apiUrl }),
-    });
-    this.model = modelName || 'gpt-5.2';
+    this.provider = createProviderInstance({ provider: 'openai', apiKey, ...(apiUrl && { baseURL: apiUrl }) });
+    this.model = modelName || DEFAULT_MODELS.openai;
     this.apiType = 'openai';
-    
+
     if (this.debug) {
       console.log(`Using OpenAI API with model: ${this.model}${apiUrl ? ` (URL: ${apiUrl})` : ''}`);
     }
@@ -1706,10 +1696,7 @@ export class ProbeAgent {
    * Initialize Google model
    */
   initializeGoogleModel(apiKey, apiUrl, modelName) {
-    this.provider = createGoogleGenerativeAI({
-      apiKey: apiKey,
-      ...(apiUrl && { baseURL: apiUrl }),
-    });
+    this.provider = createProviderInstance({ provider: 'google', apiKey, ...(apiUrl && { baseURL: apiUrl }) });
     this.model = modelName || 'gemini-2.5-pro';
     this.apiType = 'google';
 
@@ -2245,32 +2232,10 @@ export class ProbeAgent {
    * Initialize AWS Bedrock model
    */
   initializeBedrockModel(accessKeyId, secretAccessKey, region, sessionToken, apiKey, baseURL, modelName) {
-    // Build configuration object, only including defined values
-    const config = {};
-    
-    // Authentication - prefer API key if provided, otherwise use AWS credentials
-    if (apiKey) {
-      config.apiKey = apiKey;
-    } else if (accessKeyId && secretAccessKey) {
-      config.accessKeyId = accessKeyId;
-      config.secretAccessKey = secretAccessKey;
-      if (sessionToken) {
-        config.sessionToken = sessionToken;
-      }
-    }
-    
-    // Region is required for AWS credentials but optional for API key
-    if (region) {
-      config.region = region;
-    }
-    
-    // Optional base URL
-    if (baseURL) {
-      config.baseURL = baseURL;
-    }
-    
-    this.provider = createAmazonBedrock(config);
-    this.model = modelName || 'anthropic.claude-sonnet-4-6';
+    this.provider = createProviderInstance({
+      provider: 'bedrock', apiKey, accessKeyId, secretAccessKey, sessionToken, region, baseURL
+    });
+    this.model = modelName || DEFAULT_MODELS.bedrock;
     this.apiType = 'bedrock';
 
     if (this.debug) {
@@ -3163,7 +3128,7 @@ Follow these instructions carefully:
 3. You MUST use the search tool before answering ANY code-related question. NEVER answer from memory or general knowledge — your answers must be grounded in actual code found via search/extract.${this.searchDelegate ? ' Ask natural language questions — the search subagent handles keyword formulation and returns file locations grouped by relevance. Then use extract() on those locations to read the actual code.' : ' Search handles stemming and case variations automatically — do NOT try keyword variations manually. Read full files only if really necessary.'}
 4. Ensure to get really deep and understand the full picture before answering. Follow call chains — if function A calls B, search for B too. Look for related subsystems (e.g., if asked about rate limiting, also check for quota, throttling, smoothing).
 5. Once the task is fully completed, provide your final answer directly as text. Always cite specific files and line numbers as evidence. Do NOT output planning or thinking text — go straight to the answer.
-6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question.' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
+6. ${this.searchDelegate ? 'Ask clear, specific questions when searching. Each search should target a distinct concept or question. NEVER re-search the same concept with different phrasing — if you already searched for "wrapToolWithEmitter", do NOT search again for "definition of wrapToolWithEmitter" or "how wrapToolWithEmitter works". Use extract() on the files already found instead. Limit yourself to one search per distinct concept. When formulating queries, describe WHAT you are looking for, not WHERE — the search agent will search the full codebase. Do NOT include file names or class names in the query unless that IS the concept (e.g., say "search dedup logic" not "search dedup ProbeAgent").' : 'Prefer concise and focused search queries. Use specific keywords and phrases to narrow down results.'}
 7. NEVER use bash for code exploration (no grep, cat, find, head, tail, awk, sed) — always use search and extract tools instead. Bash is only for system operations like building, running tests, or git commands.${this.allowEdit ? `
 7. When modifying files, choose the appropriate tool:
     - Use 'edit' for all code modifications:
@@ -4795,6 +4760,7 @@ Double-check your response based on the criteria above. If everything looks good
             if (this.promptType === 'code-searcher') {
               finalResult = JSON.stringify({
                 confidence: 'low',
+                reason: 'Search incomplete — iteration limit reached',
                 groups: [],
                 searches: searchDetails
               });

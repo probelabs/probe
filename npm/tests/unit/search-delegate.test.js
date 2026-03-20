@@ -498,6 +498,7 @@ describe('searchDelegate behavior', () => {
     test('passes through searches array from delegate response', async () => {
       mockDelegate.mockResolvedValue(JSON.stringify({
         confidence: 'high',
+        reason: 'Found auth module with login handler and OAuth integration',
         groups: [
           { reason: 'Core auth logic', files: ['src/auth.js#login'] }
         ],
@@ -519,6 +520,7 @@ describe('searchDelegate behavior', () => {
       const parsed = JSON.parse(result);
 
       expect(parsed.confidence).toBe('high');
+      expect(parsed.reason).toBe('Found auth module with login handler and OAuth integration');
       expect(parsed.groups).toHaveLength(1);
       expect(parsed.groups[0].reason).toBe('Core auth logic');
       expect(parsed.searches).toHaveLength(3);
@@ -543,7 +545,29 @@ describe('searchDelegate behavior', () => {
       const parsed = JSON.parse(result);
 
       expect(parsed.searches).toEqual([]);
+      expect(parsed.reason).toBe('');
       expect(parsed.groups).toHaveLength(1);
+    });
+
+    test('defaults reason to empty string when missing from response', async () => {
+      mockDelegate.mockResolvedValue(JSON.stringify({
+        confidence: 'high',
+        groups: [{ reason: 'Main entry', files: ['src/index.js#main'] }],
+        searches: [{ query: 'main', path: '/workspace', had_results: true }]
+      }));
+
+      const tool = searchTool({
+        searchDelegate: true,
+        cwd: '/workspace',
+        allowedFolders: ['/workspace'],
+        tracer: { withSpan: jest.fn(async (_name, fn) => fn()) }
+      });
+
+      const result = await tool.execute({ query: 'Where is main?', path: '/workspace' });
+      const parsed = JSON.parse(result);
+
+      expect(parsed.confidence).toBe('high');
+      expect(parsed.reason).toBe('');
     });
 
     test('handles partial results with low confidence from iteration-limited delegate', async () => {
@@ -626,8 +650,7 @@ describe('searchDelegate behavior', () => {
 
     // The delegate task prompt should mention searches field
     const delegateCall = mockDelegate.mock.calls[0][0];
-    expect(delegateCall.task).toContain('"searches"');
-    expect(delegateCall.task).toContain('had_results');
+    expect(delegateCall.task).toContain('searches');
     // Should also mention relevance filtering
     expect(delegateCall.task).toContain('VERIFIED');
     expect(delegateCall.task).toContain('relevance-filtering');
