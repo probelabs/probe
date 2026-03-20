@@ -88,11 +88,11 @@ describe('TaskManager', () => {
         { id: 'third', title: 'Task 3', dependencies: ['first', 'second'] }
       ]);
 
-      expect(tasks[1].dependencies).toEqual(['task-1']);
-      expect(tasks[2].dependencies).toEqual(['task-1', 'task-2']);
+      expect(tasks[1].dependencies).toEqual(['first']);
+      expect(tasks[2].dependencies).toEqual(['first', 'second']);
     });
 
-    test('should resolve user-provided IDs to auto-generated IDs in batch dependencies', () => {
+    test('should preserve user-provided IDs in batch creation', () => {
       const tasks = manager.createTasks([
         { id: 'auth', title: 'Authenticate with API' },
         { id: 'list-projects', title: 'List Projects', dependencies: ['auth'] },
@@ -100,15 +100,31 @@ describe('TaskManager', () => {
       ]);
 
       expect(tasks).toHaveLength(3);
-      // Dependencies should be remapped to auto-generated IDs
-      expect(tasks[0].id).toBe('task-1');
-      expect(tasks[1].id).toBe('task-2');
-      expect(tasks[1].dependencies).toEqual(['task-1']);
-      expect(tasks[2].id).toBe('task-3');
-      expect(tasks[2].dependencies).toEqual(['task-2']);
+      // User-provided IDs are preserved as-is
+      expect(tasks[0].id).toBe('auth');
+      expect(tasks[1].id).toBe('list-projects');
+      expect(tasks[1].dependencies).toEqual(['auth']);
+      expect(tasks[2].id).toBe('list-clusters');
+      expect(tasks[2].dependencies).toEqual(['list-projects']);
     });
 
-    test('should resolve user-provided IDs with multiple dependencies', () => {
+    test('should allow completing tasks by user-provided ID', () => {
+      manager.createTasks([
+        { id: 'tui-static-gen', title: 'Generate TUI statics' },
+        { id: 'tui-render', title: 'Render TUI', dependencies: ['tui-static-gen'] }
+      ]);
+
+      // Should be able to complete using the user-provided ID
+      const completed = manager.completeTask('tui-static-gen');
+      expect(completed.id).toBe('tui-static-gen');
+      expect(completed.status).toBe('completed');
+
+      // Dependent task should now be unblocked
+      const render = manager.getTask('tui-render');
+      expect(render).toBeTruthy();
+    });
+
+    test('should preserve user-provided IDs with multiple dependencies', () => {
       const tasks = manager.createTasks([
         { id: 'setup', title: 'Setup' },
         { id: 'build', title: 'Build', dependencies: ['setup'] },
@@ -117,10 +133,11 @@ describe('TaskManager', () => {
       ]);
 
       expect(tasks).toHaveLength(4);
-      expect(tasks[3].dependencies).toEqual(['task-2', 'task-3']);
+      expect(tasks[3].id).toBe('deploy');
+      expect(tasks[3].dependencies).toEqual(['build', 'test']);
     });
 
-    test('should resolve user-provided IDs in "after" parameter', () => {
+    test('should preserve user-provided IDs in "after" parameter', () => {
       const tasks = manager.createTasks([
         { id: 'first', title: 'First task' },
         { id: 'third', title: 'Third task' },
@@ -130,7 +147,25 @@ describe('TaskManager', () => {
       expect(tasks).toHaveLength(3);
       const allTasks = manager.listTasks();
       const taskIds = allTasks.map(t => t.id);
-      expect(taskIds).toEqual(['task-1', 'task-3', 'task-2']);
+      expect(taskIds).toEqual(['first', 'second', 'third']);
+    });
+
+    test('should reject duplicate IDs in batch', () => {
+      expect(() => {
+        manager.createTasks([
+          { id: 'dup', title: 'First' },
+          { id: 'dup', title: 'Second' }
+        ]);
+      }).toThrow(/Duplicate task ID "dup"/);
+    });
+
+    test('should reject IDs that collide with existing tasks', () => {
+      manager.createTask({ title: 'Existing' }); // creates task-1
+      expect(() => {
+        manager.createTasks([
+          { id: 'task-1', title: 'Collision' }
+        ]);
+      }).toThrow(/already exists/);
     });
 
     test('should not create any tasks if batch validation fails', () => {
