@@ -3,16 +3,17 @@
  * @module tools/vercel
  */
 
-import { tool } from 'ai';
+import { tool, generateText } from 'ai';
 import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
 import { delegate } from '../delegate.js';
 import { analyzeAll } from './analyzeAll.js';
-import { searchSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, searchDelegateDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
+import { searchSchema, searchDelegateSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, searchDelegateDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
+import { createLanguageModel } from '../utils/provider.js';
 import { truncateForSpan } from '../agent/simpleTelemetry.js';
 
 /**
@@ -87,15 +88,127 @@ function autoQuoteSearchTerms(query) {
 const CODE_SEARCH_SCHEMA = {
 	type: 'object',
 	properties: {
-		targets: {
+		confidence: {
+			type: 'string',
+			enum: ['high', 'medium', 'low'],
+			description: 'How confident you are that these locations answer the question.'
+		},
+		reason: {
+			type: 'string',
+			description: 'Brief explanation of confidence level — what was found, partially found, or not found.'
+		},
+		groups: {
 			type: 'array',
-			items: { type: 'string' },
-			description: 'List of file targets like "path/to/file.ext#Symbol" or "path/to/file.ext:line" or "path/to/file.ext:start-end".'
+			items: {
+				type: 'object',
+				properties: {
+					reason: {
+						type: 'string',
+						description: 'Why these files are relevant — what aspect of the question they address (not how the code works).'
+					},
+					files: {
+						type: 'array',
+						items: { type: 'string' },
+						description: 'File targets like "path/to/file.ext#Symbol" or "path/to/file.ext:10-20".'
+					}
+				},
+				required: ['reason', 'files']
+			},
+			description: 'Groups of related files, each with a reason explaining why they matter.'
+		},
+		searches: {
+			type: 'array',
+			items: {
+				type: 'object',
+				properties: {
+					query: { type: 'string', description: 'The search query used.' },
+					path: { type: 'string', description: 'The path searched in.' },
+					had_results: { type: 'boolean', description: 'Whether the search returned any results.' }
+				},
+				required: ['query', 'path', 'had_results']
+			},
+			description: 'All search queries executed during this session, with their paths and outcomes.'
 		}
 	},
-	required: ['targets'],
+	required: ['confidence', 'reason', 'groups', 'searches'],
 	additionalProperties: false
 };
+
+/**
+ * LLM-based semantic dedup for delegate queries.
+ * Asks the same model to classify a new query against previous ones.
+ * Returns: { action: 'allow'|'block'|'rewrite', rewritten?: string, reason: string }
+ */
+async function checkDelegateDedup(newQuery, previousQueries, model, debug) {
+	if (!model || previousQueries.length === 0) {
+		return { action: 'allow', reason: 'no previous queries' };
+	}
+
+	const previousList = previousQueries
+		.map((q, i) => {
+			let line = `${i + 1}. "${q.query}" (path: ${q.path}, found results: ${q.hadResults})`;
+			if (q.reason) line += `\n   Outcome: ${q.reason}`;
+			if (q.groups && q.groups.length > 0) {
+				line += `\n   Found: ${q.groups.map(g => g.reason).join('; ')}`;
+			}
+			return line;
+		})
+		.join('\n');
+
+	try {
+		const result = await generateText({
+			model,
+			maxTokens: 150,
+			temperature: 0,
+			prompt: `You decide if a code search query is redundant given previous queries in the same session.
+
+PREVIOUS QUERIES:
+${previousList}
+
+NEW QUERY: "${newQuery}"
+
+Respond with exactly one line: ACTION|REASON
+For rewrites: rewrite|REASON|REWRITTEN_QUERY
+
+BLOCK when:
+- Same concept, different phrasing: "find X" / "definition of X" / "where is X" / "X implementation" → all the same
+- Synonym or narrower term of a previous query: "dedup" → "duplicate" → "unique" → all the same concept
+- Single generic word that's just a synonym of a previous failed query
+- Query is trying to brute-force the same concept with different keywords after previous failures
+
+REWRITE when:
+- Previous query was too narrow and failed, new query targets the same goal but could use a FUNDAMENTALLY different search strategy (e.g. searching for a caller instead of the function name, or searching the config/registration site instead of the implementation)
+- Previous query found WRONG results (e.g. found "FallbackManager" when looking for "dedup logic") — rewrite to target the actual concept more precisely using implementation-level terms
+
+ALLOW only when:
+- The new query targets a COMPLETELY DIFFERENT feature, module, or subsystem — not just a different word for the same thing
+
+Only BLOCK when you are CERTAIN the queries target the same concept. When uncertain, ALLOW — a missed dedup is cheaper than blocking a valid search.
+
+Examples:
+- Prev: "wrapToolWithEmitter" → New: "definition of wrapToolWithEmitter" → block|Same symbol
+- Prev: "search dedup" (no results) → New: "dedup" → block|Synonym of failed query
+- Prev: "dedup" (no results) → New: "duplicate" → block|Synonym of failed query
+- Prev: "dedup" (no results) → New: "unique" → block|Synonym of failed query
+- Prev: "auth middleware" → New: "rate limiting" → allow|Different subsystem
+- Prev: "search dedup" (no results) → New: "previousSearches Map" → rewrite|Searching for implementation detail instead of concept|previousSearches OR searchKey`
+		});
+
+		const line = result.text.trim().split('\n')[0];
+		const parts = line.split('|');
+		const action = (parts[0] || '').toLowerCase().trim();
+
+		if (action === 'block') {
+			return { action: 'block', reason: parts[1]?.trim() || 'duplicate query' };
+		} else if (action === 'rewrite' && parts[2]) {
+			return { action: 'rewrite', reason: parts[1]?.trim() || 'refined query', rewritten: parts[2].trim() };
+		}
+		return { action: 'allow', reason: parts[1]?.trim() || 'new concept' };
+	} catch (err) {
+		if (debug) console.error('[DEDUP-LLM] Error:', err.message);
+		return { action: 'allow', reason: 'dedup check failed, allowing' };
+	}
+}
 
 function normalizeTargets(targets) {
 	if (!Array.isArray(targets)) return [];
@@ -186,8 +299,13 @@ function fallbackTargetsFromText(text) {
 	return candidates;
 }
 
-function parseDelegatedTargets(rawResponse) {
-	if (!rawResponse || typeof rawResponse !== 'string') return [];
+/**
+ * Parse the delegate sub-agent's raw response into a structured result.
+ * Returns { confidence, groups } when possible, or builds a single-group
+ * fallback from legacy { targets: [...] } or plain text.
+ */
+function parseDelegatedResponse(rawResponse) {
+	if (!rawResponse || typeof rawResponse !== 'string') return null;
 	const trimmed = rawResponse.trim();
 
 	const tryParse = (text) => {
@@ -207,15 +325,50 @@ function parseDelegatedTargets(rawResponse) {
 	}
 
 	if (parsed) {
-		if (Array.isArray(parsed)) {
-			return normalizeTargets(parsed);
+		// New format: { confidence, groups: [{ reason, files }], searches: [...] }
+		if (Array.isArray(parsed.groups)) {
+			return {
+				confidence: parsed.confidence || 'medium',
+				reason: parsed.reason || '',
+				groups: parsed.groups.map(g => ({
+					reason: g.reason || '',
+					files: normalizeTargets(g.files || [])
+				})).filter(g => g.files.length > 0),
+				searches: Array.isArray(parsed.searches) ? parsed.searches : []
+			};
 		}
+		// Legacy format: { targets: [...] }
 		if (Array.isArray(parsed.targets)) {
-			return normalizeTargets(parsed.targets);
+			const files = normalizeTargets(parsed.targets);
+			if (files.length > 0) {
+				return { confidence: 'medium', reason: '', groups: [{ reason: 'Search results', files }], searches: [] };
+			}
+			// Empty targets array — explicitly return null (don't fall through to text fallback)
+			return null;
+		}
+		// Plain array
+		if (Array.isArray(parsed)) {
+			const files = normalizeTargets(parsed);
+			if (files.length > 0) {
+				return { confidence: 'medium', reason: '', groups: [{ reason: 'Search results', files }], searches: [] };
+			}
+			return null;
 		}
 	}
 
-	return normalizeTargets(fallbackTargetsFromText(trimmed));
+	// Fallback: extract targets from plain text
+	const files = normalizeTargets(fallbackTargetsFromText(trimmed));
+	if (files.length > 0) {
+		return { confidence: 'low', reason: '', groups: [{ reason: 'Search results', files }], searches: [] };
+	}
+	return null;
+}
+
+// Keep backward compat for any other callers
+function parseDelegatedTargets(rawResponse) {
+	const result = parseDelegatedResponse(rawResponse);
+	if (!result) return [];
+	return result.groups.flatMap(g => g.files);
 }
 
 function splitTargetSuffix(target) {
@@ -231,159 +384,78 @@ function splitTargetSuffix(target) {
 }
 
 function buildSearchDelegateTask({ searchQuery, searchPath, exact, language, allowTests }) {
-	return [
-		'You are a code-search subagent. Your job is to find ALL relevant code locations for the given query.',
-		'',
-		'The query may be complex - it could be a natural language question, a multi-part request, or a simple keyword.',
-		'Break down complex queries into multiple searches to cover all aspects.',
-		'',
-		'Available tools:',
-		'- search: Find code matching keywords or patterns. Results are paginated — use nextPage=true when results are relevant to get more. Run multiple searches for different aspects.',
-		'- extract: Verify code snippets to ensure targets are actually relevant before including them.',
-		'- listFiles: Understand directory structure to find where relevant code might live.',
-		'',
-		'CRITICAL - How probe search works (do NOT ignore):',
-		'- By default (exact=false), probe ALREADY handles stemming, case-insensitive matching, and camelCase/snake_case splitting automatically.',
-		'- Searching "allowed_ips" ALREADY matches "AllowedIPs", "allowedIps", "allowed_ips", etc. Do NOT manually try case/style variations.',
-		'- Searching "getUserData" ALREADY matches "get", "user", "data" and their variations.',
-		'- NEVER repeat the same search query — you will get the same results. Changing the path does NOT change this.',
-		'- NEVER search trivial variations of the same keyword (e.g., AllowedIPs then allowedIps then allowed_ips). This is wasteful — probe handles it.',
-		'',
-		'When a search returns no results:',
-		'- If you searched a SUBFOLDER (e.g., path="gateway/"), the term might exist elsewhere.',
-		'  Try searching from the workspace root (omit the path parameter) or a different directory.',
-		'  But do NOT retry the same subfolder with different quoting — that will not help.',
-		'- If you searched the WORKSPACE ROOT and got no results, the term does not exist in this codebase.',
-		'  Changing quotes, adding "func " prefix, or switching to method syntax will NOT help.',
-		'- These are ALL the same failed search, NOT different searches:',
-		'    search("func ctxGetData") → no results',
-		'    search("ctxGetData")      → no results  ← WASTED, same concept, different quoting',
-		'    search(ctxGetData)         → no results  ← WASTED, same concept, no quotes',
-		'    search("ctx.GetData")      → no results  ← WASTED, method syntax of same concept',
-		'  After the FIRST "no results" at a given scope, either widen the search path or try',
-		'  a fundamentally different approach: search for a broader concept, use listFiles',
-		'  to discover actual function names, or extract a known file to read real code.',
-		'- If 2 searches return no results for a concept (across different scopes), the code likely',
-		'  uses different naming than you expect — discover the real names via extract or listFiles.',
-		'',
-		'When to use exact=true:',
-		'- Use exact=true when searching for a KNOWN symbol name (function, type, variable, struct).',
-		'- exact=true matches the literal string only — no stemming, no splitting.',
-		'- This is ideal for precise lookups: exact=true "ForwardMessage", exact=true "SessionLimiter", exact=true "ThrottleRetryLimit".',
-		'- IMPORTANT: Use exact=true when searching for strings containing punctuation, quotes, or empty values.',
-		'  Default BM25 search strips punctuation and treats quoted empty strings as noise.',
-		'  Example: searching for \'description: ""\' with exact=false will NOT find empty description fields — it just matches "description".',
-		'  Use exact=true for literal patterns like \'description: ""\', \'value: \\\'\\\'\', or any YAML/config field with specific punctuation.',
-		'- Do NOT use exact=true for exploratory/conceptual queries — use the default for those.',
-		'',
-		'Combining searches with OR:',
-		'- Multiple unquoted words use OR logic: rate limit matches files containing EITHER "rate" OR "limit".',
-		'- IMPORTANT: Multiple quoted terms use AND logic by default: \'"RateLimit" "middleware"\' requires BOTH in the same file.',
-		'- To search for ANY of several quoted symbols, use the explicit OR operator: \'"ForwardMessage" OR "SessionLimiter"\'.',
-		'- Without quotes, camelCase like limitDRL gets split into "limit" + "DRL" — not what you want for symbol lookup.',
-		'- Use OR to search for multiple related symbols in ONE search instead of separate searches.',
-		'- This is much faster than running separate searches sequentially.',
-		'- Example: search \'"ForwardMessage" OR "SessionLimiter"\' finds files with either exact symbol in one call.',
-		'- Example: search \'"limitDRL" OR "doRollingWindowWrite"\' finds both rate limiting functions at once.',
-		'- Use AND (or just put quoted terms together) when you need both terms in the same file.',
-		'',
-		'Parallel tool calls:',
-		'- When you need to search for INDEPENDENT concepts, call multiple search tools IN PARALLEL (same response).',
-		'- Do NOT wait for one search to finish before starting the next if they are independent.',
-		'- Example: for "rate limiting and session management", call search "rate limiting" AND search "session management" in parallel.',
-		'- Similarly, call multiple extract tools in parallel when verifying different files.',
-		'',
-		'GOOD search strategy (do this):',
-		'  Query: "How does authentication work and how are sessions managed?"',
-		'  → search "authentication" + search "session management" IN PARALLEL (two independent concepts)',
-		'  Query: "Find the IP allowlist middleware"',
-		'  → search "allowlist middleware" (one search, probe handles IP/ip/Ip variations)',
-		'  Query: "Find ForwardMessage and SessionLimiter"',
-		'  → search \'"ForwardMessage" OR "SessionLimiter"\' (one OR search finds both exact symbols)',
-		'  OR: search exact=true "ForwardMessage" + search exact=true "SessionLimiter" IN PARALLEL',
-		'  Query: "Find limitDRL and limitRedis functions"',
-		'  → search \'"limitDRL" OR "limitRedis"\' (one OR search, quoted to prevent camelCase splitting)',
-		'  Query: "Find ThrottleRetryLimit usage"',
-		'  → search exact=true "ThrottleRetryLimit" (one search, if no results the symbol does not exist — stop)',
-		'  Query: "How does BM25 scoring work with SIMD optimization?"',
-		'  → search "BM25 scoring" + search "SIMD optimization" IN PARALLEL (two different concepts)',
-		'',
-		'BAD search strategy (never do this):',
-		'  → search "AllowedIPs" → search "allowedIps" → search "allowed_ips" (WRONG: case/style variations, probe handles them)',
-		'  → search "limitDRL" → search "LimitDRL" (WRONG: case variation — combine with OR: \'"limitDRL" OR "limitRedis"\')',
-		'  → search "throttle_retry_limit" after searching "ThrottleRetryLimit" (WRONG: snake_case variation, probe handles it)',
-		'  → search "ThrottleRetryLimit" path=tyk → search "ThrottleRetryLimit" path=gateway → search "ThrottleRetryLimit" path=apidef (WRONG: same query on different paths — probe searches recursively)',
-		'  → search "func (k *RateLimitAndQuotaCheck) handleRateLimitFailure" (WRONG: do not search full function signatures, just use exact=true "handleRateLimitFailure")',
-		'  → search "ForwardMessage" → search "ForwardMessage" → search "ForwardMessage" (WRONG: repeating the exact same query)',
-		'  → search "authentication" → wait → search "session management" → wait (WRONG: these are independent, run them in parallel)',
-		'',
-		'  WORST pattern — retrying a non-existent function with quote/syntax variations (this wastes 30 minutes):',
-		'  → search "func ctxGetData" → no results',
-		'  → search "ctxGetData" → no results          ← WRONG: same term without "func" prefix',
-		'  → search "ctx.GetData" → no results          ← WRONG: method syntax of same concept',
-		'  → search "ctx.SetData" → no results          ← WRONG: Set variant of same concept',
-		'  → search ctxGetData → no results             ← WRONG: unquoted version of same term',
-		'  → extract api.go → extract api.go → extract api.go (8 times!) ← WRONG: re-reading same file',
-		'  FIX: After "func ctxGetData" returns no results in gateway/:',
-		'  Option A: Widen scope — search from the workspace root (omit path) in case the',
-		'    function is defined in a different package (e.g., apidef/, user/, config/).',
-		'  Option B: Discover real names — extract a file you KNOW uses context (e.g., a',
-		'    middleware file) and READ what functions it actually calls.',
-		'  Option C: Browse — use listFiles to see what files exist and extract the relevant ones.',
-		'  NEVER: retry the same concept with different quoting in the same directory.',
-		'',
-		'Keyword tips:',
-		'- Common programming keywords are filtered as stopwords when unquoted: function, class, return, new, struct, impl, var, let, const, etc.',
-		'- Avoid searching for these alone — combine with a specific term (e.g., "middleware function" is fine, "function" alone is too generic).',
-		'- To bypass stopword filtering: wrap terms in quotes ("return", "struct") or set exact=true. Both disable stemming and splitting too.',
-		'- camelCase terms are split: getUserData becomes "get", "user", "data" — so one search covers all naming styles.',
-		'- Do NOT search for full function signatures like "func (r *Type) Method(args)". Just search for the method name with exact=true.',
-		'- Do NOT search for file names (e.g., "sliding_log.go"). Use listFiles to discover files by name.',
-		'',
-		'PAGINATION:',
-		'- Search results are paginated (~20k tokens per page).',
-		'- If your search returned relevant files, call the same query with nextPage=true to check for more.',
-		'- Keep paginating while results stay relevant. Stop when results are off-topic or "All results retrieved".',
-		'',
-		'WHEN TO STOP:',
-		'- After you have explored the main concept AND related subsystems.',
-		'- Once you have 5-15 targets covering different aspects of the query.',
-		'- If you get a "DUPLICATE SEARCH BLOCKED" message, do NOT rephrase the same query — try a FUNDAMENTALLY different approach:',
-		'  * Switch between exact=true and exact=false',
-		'  * Search for a broader term and filter results manually',
-		'  * Use listFiles to browse the directory structure directly',
-		'  * Look for related/surrounding patterns instead of the exact string',
-		'- If 2-3 genuinely different search approaches fail, STOP and report what you tried and why it failed.',
-		'  Do NOT keep trying variations of the same failing concept.',
-		'',
-		'Strategy:',
-		'1. Analyze the query — identify key concepts, then brainstorm SYNONYMS and alternative terms for each.',
-		'   Code naming often differs from the concept: "authentication" → verify, credentials, login, auth;',
-		'   "rate limiting" → throttle, quota, limiter, bucket; "error handling" → catch, recover, panic.',
-		'   Think about what a developer would NAME the function/struct/variable, not just the concept.',
-		'2. Run INDEPENDENT searches in PARALLEL — search for the main concept AND synonyms simultaneously.',
-		'   After each search, check if results are relevant. If yes, call nextPage=true for more results.',
-		'3. Combine related symbols into OR searches: \'"symbolA" OR "symbolB"\' finds files with either.',
-		'4. For known symbol names use exact=true. For concepts use default (exact=false).',
-		'5. After your first round of searches, READ the extracted code and look for connected code:',
-		'   - Function calls to other important functions → include those targets.',
-		'   - Type references and imports → include type definitions.',
-		'   - Registered handlers/middleware → include all registered items.',
-		'6. If a search returns results, use extract to verify relevance. Run multiple extracts in parallel too.',
-		'7. If a search returns NO results: widen the path scope if you searched a subfolder, or move on. Do NOT retry with quote/syntax variations — they search the same index.',
-		'8. Once you have enough targets (typically 5-15), output your final JSON answer immediately.',
-		'',
-		`Query: ${searchQuery}`,
-		`Search path(s): ${searchPath}`,
-		`Options: exact=${exact ? 'true' : 'false'}, language=${language || 'auto'}, allow_tests=${allowTests ? 'true' : 'false'}.`,
-		'',
-		'Return ONLY valid JSON: {"targets": ["path/to/file.ext#Symbol", "path/to/file.ext:line", "path/to/file.ext:start-end"]}',
-		'IMPORTANT: Use ABSOLUTE file paths in targets (e.g., "/full/path/to/file.ext#Symbol"). If you only have relative paths, make them relative to the search path above.',
-		'Prefer #Symbol when a function/class name is clear; otherwise use line numbers.',
-		'Deduplicate targets. Do NOT explain or answer - ONLY return the JSON targets.',
-		'',
-		'Remember: if your search returned relevant results, use nextPage=true to check for more before outputting.'
-	].join('\n');
+	return `<role>
+You are a code-location subagent. Your job is to find WHERE relevant code lives for the given question.
+You are NOT answering the question — you are finding the code locations that would help answer it.
+</role>
+
+<task>
+<question>${searchQuery}</question>
+<search-path>${searchPath}</search-path>
+<options language="${language || 'auto'}" allow_tests="${allowTests ? 'true' : 'false'}" />
+</task>
+
+<tools>
+<tool name="search">
+Find code matching keywords or patterns. Results are paginated — use nextPage=true when results are relevant to get more.
+</tool>
+<tool name="extract">
+Read code to verify a file is actually relevant before including it.
+</tool>
+<tool name="listFiles">
+Browse directory structure to discover where code might live.
+</tool>
+</tools>
+
+<search-engine-behavior>
+- Probe handles stemming, case-insensitive matching, and camelCase/snake_case splitting automatically.
+- "allowed_ips" ALREADY matches "AllowedIPs", "allowedIps", etc. Do NOT try case/style variations.
+- NEVER repeat the same search query — you will get the same results.
+- If a search returns no results at workspace root, the term does not exist. Move on.
+- If a search returns no results in a subfolder, try the workspace root or a different directory.
+- Use exact=true for known symbol names. Use default for conceptual/exploratory queries.
+- Combine related symbols with OR: "SymbolA" OR "SymbolB" finds files with either.
+- Run INDEPENDENT searches in PARALLEL — do not wait between unrelated searches.
+</search-engine-behavior>
+
+<strategy>
+1. Analyze the question — identify key concepts and brainstorm what a developer would NAME the relevant code.
+2. Start your first search with the FULL search-path provided above. Do NOT narrow to a subdirectory on first try — the code may live anywhere in the tree.
+3. Search for the main concept and synonyms in parallel.
+4. Use extract to verify relevance — skim the code to confirm it ACTUALLY relates to the question.
+5. Follow the trail: if you find a function, look for its callers, type definitions, and registered handlers.
+6. Group your findings by WHY they are relevant (not by how you found them).
+</strategy>
+
+<relevance-filtering priority="critical">
+- Only include files you have VERIFIED are relevant by reading them with extract.
+- Do NOT include files just because they matched a keyword — confirm the match is meaningful.
+- A file that mentions "session" in a comment is NOT relevant to "How do sessions work?" — look for the actual implementation.
+- Fewer verified-relevant files are far more valuable than many unverified keyword matches.
+- If a file is tangentially related but not core to the question, leave it out.
+- If NO files are truly relevant, return EMPTY groups with confidence "low". An honest empty result is far better than a wrong result. Never fill groups with loosely related files just to have something.
+</relevance-filtering>
+
+<stop-conditions>
+- Once you have found locations covering the main concept and related subsystems.
+- If 2-3 different search approaches fail, stop and report what you have.
+- Do NOT keep trying quote/syntax variations of the same failing keyword.
+</stop-conditions>
+
+<on-iteration-limit>
+If you run out of tool iterations, you MUST still output your JSON response with whatever you found so far.
+Set confidence to "low" if your search was incomplete.
+Include ALL files you verified as relevant, even if coverage is partial.
+The "searches" field helps the caller understand what was attempted.
+</on-iteration-limit>
+
+<output-rules>
+- Return ONLY valid JSON matching the schema. No markdown, no explanation.
+- ONLY include files you have verified are relevant. No noise.
+- Group files by RELEVANCE to the question, not by search query.
+- Use ABSOLUTE file paths. Prefer #Symbol for functions/classes; otherwise use line ranges.
+- Deduplicate files across groups.
+</output-rules>`;
 }
 
 /**
@@ -425,6 +497,13 @@ export const searchTool = (options = {}) => {
 	const failedConcepts = new Map(); // normalizedKey → count
 	const MAX_PAGES_PER_QUERY = 3;
 
+	// Track delegated searches at the PARENT level to prevent the pro model from
+	// spawning redundant delegates for the same concept. Each delegate is expensive
+	// (full flash agent session), so blocking repeats saves minutes.
+	// LLM-based semantic dedup replaces deterministic normalization for delegates.
+	const previousDelegations = []; // { query: string, path: string, hadResults: boolean }
+	let cachedDedupModel = undefined; // lazily initialized
+
 	/**
 	 * Normalize a search query to detect syntax-level duplicates.
 	 * Strips quotes, dots, underscores/hyphens, and lowercases.
@@ -436,6 +515,9 @@ export const searchTool = (options = {}) => {
 		if (!query) return '';
 		return query
 			.replace(/^["']|["']$/g, '')      // strip outer quotes
+			// Strip filler prefixes: "definition of X", "find X", "where is X", etc.
+			.replace(/^(definition\s+of|implementation\s+of|usage\s+of|find|where\s+is|how\s+does|locate|show\s+me|get|look\s+for)\s+/i, '')
+			.replace(/^["']|["']$/g, '')      // strip quotes again after prefix removal
 			.replace(/\./g, '')                 // "ctx.GetData" → "ctxGetData"
 			.replace(/[_\-\s]+/g, '')           // strip underscores/hyphens/spaces
 			.toLowerCase()
@@ -447,7 +529,7 @@ export const searchTool = (options = {}) => {
 		description: searchDelegate
 			? searchDelegateDescription
 			: searchDescription,
-		inputSchema: searchSchema,
+		inputSchema: searchDelegate ? searchDelegateSchema : searchSchema,
 		execute: async ({ query: searchQuery, path, allow_tests, exact, maxTokens: paramMaxTokens, language, session, nextPage, workingDirectory }) => {
 			// Auto-quote mixed-case and underscore terms to prevent unwanted stemming/splitting
 			// Skip when exact=true since that already preserves the literal string
@@ -619,13 +701,76 @@ export const searchTool = (options = {}) => {
 				}
 			}
 
+			// ── Delegate-level semantic dedup ────────────────────────────
+				// Each delegate is a full flash agent session (minutes, not seconds).
+				// Use LLM to detect semantic duplicates and suggest rewrites.
+				// Compare against ALL previous delegations (not filtered by path) because
+				// the parent model often narrows the path while asking the same concept
+				// (e.g., "dedup" at /src → "deduplicate" at /src/search.js).
+				const delegatePath = searchPath || '';
+
+				let effectiveQuery = searchQuery;
+
+				if (previousDelegations.length > 0) {
+					// Lazily create the dedup model (same provider/model as delegate)
+					if (cachedDedupModel === undefined) {
+						const dedupProvider = options.searchDelegateProvider || process.env.PROBE_SEARCH_DELEGATE_PROVIDER || options.provider || process.env.FORCE_PROVIDER || null;
+						const dedupModelName = options.searchDelegateModel || process.env.PROBE_SEARCH_DELEGATE_MODEL || options.model || process.env.MODEL_NAME || null;
+						if (debug) {
+							console.error(`[DEDUP-LLM] Creating model: provider=${dedupProvider}, model=${dedupModelName}`);
+						}
+						cachedDedupModel = await createLanguageModel(dedupProvider, dedupModelName);
+						if (debug) {
+							console.error(`[DEDUP-LLM] Model created: ${cachedDedupModel ? 'success' : 'null'}`);
+						}
+					}
+
+					const dedupSpanAttrs = {
+						'dedup.query': searchQuery,
+						'dedup.previous_count': String(previousDelegations.length),
+						'dedup.previous_queries': previousDelegations.map(d => d.query).join(' | '),
+					};
+
+					const dedup = options.tracer?.withSpan
+						? await options.tracer.withSpan('search.delegate.dedup', async () => {
+							return await checkDelegateDedup(searchQuery, previousDelegations, cachedDedupModel, debug);
+						}, dedupSpanAttrs, (span, result) => {
+							span.setAttributes({
+								'dedup.action': result.action,
+								'dedup.reason': result.reason || '',
+								'dedup.rewritten': result.rewritten || '',
+							});
+						})
+						: await checkDelegateDedup(searchQuery, previousDelegations, cachedDedupModel, debug);
+
+					if (debug) {
+						console.error(`[DEDUP-LLM] Query: "${searchQuery}" → ${dedup.action}: ${dedup.reason}${dedup.rewritten ? ` → "${dedup.rewritten}"` : ''}`);
+					}
+
+					if (dedup.action === 'block') {
+						const prevQueries = previousDelegations.map(d => `"${d.query}"`).join(', ');
+						return `DELEGATE BLOCKED: "${searchQuery}" is semantically duplicate of previous delegation(s) [${prevQueries}]. ${dedup.reason}\n\nDo NOT re-delegate the same concept. Use extract() on files already found, or synthesize your answer from existing results.`;
+					}
+
+					if (dedup.action === 'rewrite' && dedup.rewritten) {
+						effectiveQuery = dedup.rewritten;
+						if (debug) {
+							console.error(`[DEDUP-LLM] Rewritten query: "${searchQuery}" → "${effectiveQuery}"`);
+						}
+					}
+				}
+
+				// Record this delegation
+				const delegationRecord = { query: effectiveQuery, path: delegatePath, hadResults: false };
+				previousDelegations.push(delegationRecord);
+
 			try {
 				if (debug) {
-					console.error(`Delegating search with query: "${searchQuery}", path: "${searchPath}"`);
+					console.error(`Delegating search with query: "${effectiveQuery}", path: "${searchPath}"${effectiveQuery !== searchQuery ? ` (rewritten from: "${searchQuery}")` : ''}`);
 				}
 
 				const delegateTask = buildSearchDelegateTask({
-					searchQuery,
+					searchQuery: effectiveQuery,
 					searchPath,
 					exact,
 					language,
@@ -655,20 +800,37 @@ export const searchTool = (options = {}) => {
 				const delegateResult = options.tracer?.withSpan
 					? await options.tracer.withSpan('search.delegate', runDelegation, {
 						'search.query': searchQuery,
-						'search.path': searchPath
+						'search.path': searchPath,
+						...(effectiveQuery !== searchQuery ? { 'search.query.rewritten': effectiveQuery } : {})
 					}, (span, result) => {
-						const text = typeof result === 'string' ? result : '';
+						const text = typeof result === 'string' ? result : JSON.stringify(result) || '';
+						if (debug) console.error(`[search-delegate] onResult: type=${typeof result}, length=${text.length}`);
 						span.setAttributes({
 							'search.delegate.output': truncateForSpan(text),
-							'search.delegate.output_length': text.length
+							'search.delegate.output_length': String(text.length)
 						});
 					})
 					: await runDelegation();
 
-				const targets = parseDelegatedTargets(delegateResult);
-				if (!targets.length) {
+				const structured = parseDelegatedResponse(delegateResult);
+				// Update delegation tracking with outcome (feeds into LLM dedup context)
+				if (delegationRecord && structured) {
+					delegationRecord.hadResults = structured.groups.length > 0;
+					delegationRecord.reason = structured.reason || '';
+					delegationRecord.groups = structured.groups.map(g => ({ reason: g.reason }));
+				}
+				if (!structured || structured.groups.length === 0) {
+					// If the delegate explicitly concluded nothing was found (low confidence + reason),
+					// return that verdict instead of falling back to raw search which would
+					// return tangentially related results and mislead the parent agent.
+					if (structured && structured.confidence === 'low' && structured.reason) {
+						if (debug) {
+							console.error(`Delegated search explicitly found nothing: ${structured.reason}`);
+						}
+						return `NOT FOUND: The search delegate thoroughly searched for "${searchQuery}" and concluded: ${structured.reason}\n\nDo NOT search for analogies or loosely related concepts. If the feature does not exist in the codebase, say so in your final answer.`;
+					}
 					if (debug) {
-						console.error('Delegated search returned no targets; falling back to raw search');
+						console.error('Delegated search returned no results; falling back to raw search');
 					}
 					const fallbackResult = maybeAnnotate(await runRawSearch());
 					if (options.fileTracker && typeof fallbackResult === 'string') {
@@ -677,78 +839,52 @@ export const searchTool = (options = {}) => {
 					return fallbackResult;
 				}
 
-				// The delegate runs from workspace root (allowedFolders[0] or cwd), NOT from searchPaths[0].
-				// It returns paths relative to that workspace root. Resolve against the same base.
+				// Resolve and validate file paths in each group
 				const delegateBase = options.allowedFolders?.[0] || options.cwd || '.';
 				const resolutionBase = searchPaths[0] || options.cwd || '.';
-				const resolvedTargets = targets.map(target => resolveTargetPath(target, delegateBase));
+				const wsPrefix = resolutionBase.endsWith('/') ? resolutionBase : resolutionBase + '/';
 
-				// Auto-fix: detect and repair invalid paths (doubled segments, AI hallucinations)
-				const validatedTargets = [];
-				for (const target of resolvedTargets) {
-					const { filePart, suffix } = splitTargetSuffix(target);
+				for (const group of structured.groups) {
+					group.files = group.files
+						.map(target => resolveTargetPath(target, delegateBase))
+						.map(target => {
+							const { filePart, suffix } = splitTargetSuffix(target);
 
-					// 1. Path exists as-is
-					if (existsSync(filePart)) {
-						validatedTargets.push(target);
-						continue;
-					}
+							// 1. Path exists as-is
+							if (existsSync(filePart)) return target;
 
-					// 2. Detect doubled directory segments: /ws/proj/proj/src → /ws/proj/src
-					let fixed = false;
-					const parts = filePart.split('/').filter(Boolean);
-					for (let i = 0; i < parts.length - 1; i++) {
-						if (parts[i] === parts[i + 1]) {
-							const candidate = '/' + [...parts.slice(0, i), ...parts.slice(i + 1)].join('/');
-							if (existsSync(candidate)) {
-								validatedTargets.push(candidate + suffix);
-								if (debug) console.error(`[search-delegate] Fixed doubled path segment: ${filePart} → ${candidate}`);
-								fixed = true;
-								break;
+							// 2. Fix doubled directory segments: /ws/proj/proj/src → /ws/proj/src
+							const parts = filePart.split('/').filter(Boolean);
+							for (let i = 0; i < parts.length - 1; i++) {
+								if (parts[i] === parts[i + 1]) {
+									const candidate = '/' + [...parts.slice(0, i), ...parts.slice(i + 1)].join('/');
+									if (existsSync(candidate)) {
+										if (debug) console.error(`[search-delegate] Fixed doubled path: ${filePart} → ${candidate}`);
+										return candidate + suffix;
+									}
+								}
 							}
-						}
-					}
-					if (fixed) continue;
 
-					// 3. Try resolving against alternative bases (searchPaths[0], cwd)
-					for (const altBase of [resolutionBase, options.cwd].filter(Boolean)) {
-						if (altBase === delegateBase) continue;
-						const altResolved = resolveTargetPath(target, altBase);
-						const { filePart: altFile } = splitTargetSuffix(altResolved);
-						if (existsSync(altFile)) {
-							validatedTargets.push(altResolved);
-							if (debug) console.error(`[search-delegate] Resolved with alt base: ${filePart} → ${altFile}`);
-							fixed = true;
-							break;
-						}
-					}
-					if (fixed) continue;
+							// 3. Try alternative bases
+							for (const altBase of [resolutionBase, options.cwd].filter(Boolean)) {
+								if (altBase === delegateBase) continue;
+								const altResolved = resolveTargetPath(target, altBase);
+								const { filePart: altFile } = splitTargetSuffix(altResolved);
+								if (existsSync(altFile)) {
+									if (debug) console.error(`[search-delegate] Resolved with alt base: ${filePart} → ${altFile}`);
+									return altResolved;
+								}
+							}
 
-					// 4. Keep target anyway (probe binary will report the error)
-					//    but log a warning
-					if (debug) console.error(`[search-delegate] Warning: target may not exist: ${filePart}`);
-					validatedTargets.push(target);
+							if (debug) console.error(`[search-delegate] Warning: target may not exist: ${filePart}`);
+							return target;
+						})
+						// Strip workspace prefix to make paths relative
+						.map(target => target.split(wsPrefix).join(''));
 				}
 
-				const extractOptions = {
-					files: validatedTargets,
-					cwd: resolutionBase,
-					allowTests: allow_tests ?? true
-				};
-
-				if (outline) {
-					extractOptions.format = 'xml';
-				}
-
-				const extractResult = await extract(extractOptions);
-
-				// Strip workspace root prefix from extract output so paths are relative
-				if (resolutionBase && typeof extractResult === 'string') {
-					const wsPrefix = resolutionBase.endsWith('/') ? resolutionBase : resolutionBase + '/';
-					return maybeAnnotate(extractResult.split(wsPrefix).join(''));
-				}
-
-				return maybeAnnotate(extractResult);
+				// Return structured JSON for the parent AI to decide what to extract
+				return JSON.stringify(structured, null, 2);
 			} catch (error) {
 				console.error('Delegated search failed, falling back to raw search:', error);
 				try {

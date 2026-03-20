@@ -177,6 +177,20 @@ describe('Concept dedup counter', () => {
 		expect(r6).not.toContain('CIRCUIT BREAKER');
 	});
 
+	test('normalizeQueryConcept strips filler prefixes for better dedup', async () => {
+		// "wrapToolWithEmitter" should be treated as same concept as "definition of wrapToolWithEmitter"
+		await tool.execute({ query: 'wrapToolWithEmitter', path: '/test' });
+		await tool.execute({ query: 'definition of wrapToolWithEmitter', path: '/test' });
+
+		// 3rd attempt with "find wrapToolWithEmitter" — same concept, should be blocked
+		const r = await tool.execute({ query: 'find wrapToolWithEmitter', path: '/test' });
+		expect(r).toContain('CONCEPT ALREADY FAILED');
+
+		// "where is wrapToolWithEmitter" — also same concept
+		const r2 = await tool.execute({ query: 'where is wrapToolWithEmitter', path: '/test' });
+		expect(r2).toContain('CONCEPT ALREADY FAILED');
+	});
+
 	test('concept dedup fires before circuit breaker when applicable', async () => {
 		// Same concept twice
 		await tool.execute({ query: 'getData', path: '/test' });
