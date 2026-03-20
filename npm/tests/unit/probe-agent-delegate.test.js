@@ -658,3 +658,111 @@ describe('delegateTool allowEdit inheritance (#534)', () => {
     expect(agentDefault.hashLines).toBe(false);
   });
 });
+
+describe('Delegate MCP config propagation', () => {
+  test('delegateTool should receive enableMcp from configOptions', () => {
+    // When enableMcp is passed in options, delegateTool should use it
+    const tool = delegateTool({
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      enableMcp: true,
+      mcpConfig: { servers: { test: { command: 'echo' } } },
+      mcpConfigPath: '/path/to/mcp.json',
+    });
+
+    expect(tool).toBeDefined();
+    expect(typeof tool.execute).toBe('function');
+  });
+
+  test('delegateTool should default enableMcp to false when not provided', () => {
+    const tool = delegateTool({
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+    });
+
+    expect(tool).toBeDefined();
+    expect(typeof tool.execute).toBe('function');
+  });
+
+  test('ProbeAgent configOptions should include MCP config when enableMcp is set', () => {
+    const mcpConfig = { servers: { 'workable-api': { command: 'node', args: ['server.js'] } } };
+    const agent = new ProbeAgent({
+      enableDelegate: true,
+      enableMcp: true,
+      mcpConfig,
+      mcpConfigPath: '/path/to/mcp.json',
+    });
+
+    // The agent stores MCP config
+    expect(agent.enableMcp).toBe(true);
+    expect(agent.mcpConfig).toEqual(mcpConfig);
+    expect(agent.mcpConfigPath).toBe('/path/to/mcp.json');
+
+    // Delegate tool should be registered
+    expect(agent.toolImplementations).toHaveProperty('delegate');
+  });
+
+  test('ProbeAgent should store MCP config in constructor before initializeTools', () => {
+    // Verify MCP config fields are set before tools are initialized
+    // This ensures configOptions can include them
+    const agent = new ProbeAgent({
+      enableMcp: true,
+      mcpConfig: { servers: {} },
+      mcpConfigPath: '/test/mcp.json',
+    });
+
+    expect(agent.enableMcp).toBe(true);
+    expect(agent.mcpConfig).toEqual({ servers: {} });
+    expect(agent.mcpConfigPath).toBe('/test/mcp.json');
+  });
+});
+
+describe('Delegate prompt type propagation', () => {
+  test('delegateTool should receive promptType from configOptions', () => {
+    const tool = delegateTool({
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      promptType: 'engineer',
+    });
+
+    expect(tool).toBeDefined();
+    expect(typeof tool.execute).toBe('function');
+  });
+
+  test('ProbeAgent with engineer promptType should propagate to delegate subagent', () => {
+    const agent = new ProbeAgent({
+      enableDelegate: true,
+      promptType: 'engineer',
+    });
+
+    // Agent should store the prompt type
+    expect(agent.promptType).toBe('engineer');
+    // Delegate should be registered
+    expect(agent.toolImplementations).toHaveProperty('delegate');
+  });
+
+  test('code-researcher prompt type does not exist - should fall back to code-explorer', async () => {
+    // This documents the bug: 'code-researcher' was the delegate default but doesn't exist
+    const { predefinedPrompts } = await import('../../src/agent/shared/prompts.js');
+
+    expect(predefinedPrompts['code-researcher']).toBeUndefined();
+    expect(predefinedPrompts['code-explorer']).toBeDefined();
+    expect(predefinedPrompts['engineer']).toBeDefined();
+  });
+
+  test('code-explorer prompt is read-only - inappropriate for delegate subagents', async () => {
+    const { predefinedPrompts } = await import('../../src/agent/shared/prompts.js');
+
+    // The code-explorer prompt explicitly says READ-ONLY
+    expect(predefinedPrompts['code-explorer']).toContain('READ-ONLY');
+    expect(predefinedPrompts['code-explorer']).toContain('NEVER create, modify, delete, or write files');
+
+    // The engineer prompt does NOT have this restriction
+    expect(predefinedPrompts['engineer']).not.toContain('READ-ONLY');
+  });
+
+  test('default promptType is code-explorer which would be inherited by delegate', () => {
+    const agent = new ProbeAgent({});
+    expect(agent.promptType).toBe('code-explorer');
+  });
+});

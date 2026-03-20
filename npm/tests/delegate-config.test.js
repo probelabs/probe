@@ -41,7 +41,7 @@ describe('Delegate Tool Configuration', () => {
       const result = await tool.execute({ task });
 
       // Tool now passes all parameters including defaults
-      expect(mockDelegate).toHaveBeenCalledWith({
+      expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
         task,
         timeout: 600,
         debug: true,
@@ -62,7 +62,7 @@ describe('Delegate Tool Configuration', () => {
         mcpConfig: null,
         mcpConfigPath: null,
         delegationManager: null  // Per-instance delegation limits
-      });
+      }));
 
       expect(result).toBe('Mock delegate response');
     });

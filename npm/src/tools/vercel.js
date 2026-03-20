@@ -1135,7 +1135,7 @@ export const extractTool = (options = {}) => {
  * @returns {Object} Configured delegate tool
  */
 export const delegateTool = (options = {}) => {
-	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, allowEdit = false, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, delegationManager = null,
+	const { debug = false, timeout = 300, cwd, allowedFolders, workspaceRoot, enableBash = false, bashConfig, allowEdit = false, architectureFileName, enableMcp = false, mcpConfig = null, mcpConfigPath = null, promptType: parentPromptType, customPrompt: parentCustomPrompt = null, completionPrompt: parentCompletionPrompt = null, delegationManager = null,
 		// Timeout settings inherited from parent agent
 		timeoutBehavior, maxOperationTimeout, requestTimeout, gracefulTimeoutBonusSteps,
 		negotiatedTimeoutBudget, negotiatedTimeoutMaxRequests, negotiatedTimeoutMaxPerRequest,
@@ -1257,6 +1257,9 @@ export const delegateTool = (options = {}) => {
 				allowEdit,
 				bashConfig,
 				architectureFileName,
+				promptType: parentPromptType,  // Inherit parent's prompt type
+				customPrompt: parentCustomPrompt,  // Inherit parent's custom system prompt
+				completionPrompt: parentCompletionPrompt,  // Inherit parent's completion prompt
 				searchDelegate,
 				enableMcp,
 				mcpConfig,

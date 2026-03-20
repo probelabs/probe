@@ -882,6 +882,18 @@ export class ProbeAgent {
       outputBuffer: this._outputBuffer,
       concurrencyLimiter: this.concurrencyLimiter,  // Global AI concurrency limiter
       isToolAllowed,
+      // MCP config for delegate subagents — these are set in constructor before tools init,
+      // so they're available here. The delegate tool closure needs them to pass to subagents
+      // so they can create their own MCPXmlBridge instances.
+      enableMcp: this.enableMcp,
+      mcpConfig: this.mcpConfig,
+      mcpConfigPath: this.mcpConfigPath,
+      // Pass parent's prompt settings so delegate subagents inherit the same persona/capabilities.
+      // Without promptType, delegate() defaulted to 'code-researcher' which doesn't exist,
+      // causing fallback to the read-only 'code-explorer' prompt.
+      promptType: this.promptType,
+      customPrompt: this.customPrompt,
+      completionPrompt: this.completionPrompt,
       // Lazy MCP getters — MCP is initialized after tools are created, so we use
       // getter functions that resolve at call-time to get the current MCP state
       getMcpBridge: () => this.mcpBridge,

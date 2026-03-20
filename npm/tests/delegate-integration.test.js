@@ -84,7 +84,7 @@ describe('Delegate Tool Integration', () => {
 
       const result = await tool.execute({ task });
 
-      expect(mockDelegate).toHaveBeenCalledWith({
+      expect(mockDelegate).toHaveBeenCalledWith(expect.objectContaining({
         task,
         timeout: 600,
         debug: true,
@@ -105,7 +105,7 @@ describe('Delegate Tool Integration', () => {
         mcpConfig: null,
         mcpConfigPath: null,
         delegationManager: null  // Per-instance delegation limits
-      });
+      }));
 
       expect(result).toBe('Security analysis complete: Found 3 vulnerabilities');
     });

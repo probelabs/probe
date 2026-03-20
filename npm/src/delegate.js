@@ -387,7 +387,9 @@ export async function delegate({
 	bashConfig = null,
 	allowEdit = false,
 	architectureFileName = null,
-	promptType = 'code-researcher',
+	promptType = undefined,
+	customPrompt = null,
+	completionPrompt = null,
 	allowedTools = null,
 	disableTools = false,
 	searchDelegate = undefined,
@@ -474,7 +476,9 @@ export async function delegate({
 		// Tasks do not propagate back to the parent - each subagent has its own scope.
 		const subagent = new ProbeAgent({
 			sessionId,
-			promptType,               // Clean prompt, not inherited from parent
+			promptType,               // Inherit from parent (or use parent's default)
+			customPrompt,             // Inherit custom system prompt from parent
+			completionPrompt,         // Inherit completion prompt from parent
 			enableDelegate: false,     // Explicitly disable delegation to prevent recursion
 			disableMermaidValidation: true,  // Faster processing
 			disableJsonValidation: true,     // Simpler responses
