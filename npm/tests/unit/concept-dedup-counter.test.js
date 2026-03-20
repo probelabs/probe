@@ -102,6 +102,17 @@ describe('Concept dedup counter', () => {
 		expect(mockSearch).toHaveBeenCalledTimes(3); // all 3 ran real searches
 	});
 
+	test('same query with different language param is not deduped', async () => {
+		// Search for "class Foo" in python
+		await tool.execute({ query: 'class Foo', path: '/test', language: 'python' });
+
+		// Same query in java — different language, should NOT be blocked
+		const r = await tool.execute({ query: 'class Foo', path: '/test', language: 'java' });
+		expect(r).toContain('No results found');
+		expect(r).not.toContain('DUPLICATE SEARCH BLOCKED');
+		expect(mockSearch).toHaveBeenCalledTimes(2);
+	});
+
 	test('same concept in different paths tracked independently', async () => {
 		// Fail in path /test/src twice
 		await tool.execute({ query: 'ctxGetData', path: '/test/src' });
@@ -130,18 +141,40 @@ describe('Concept dedup counter', () => {
 		expect(r).not.toContain('CIRCUIT BREAKER');
 	});
 
-	test('circuit breaker triggers after 4 consecutive no-result searches', async () => {
+	test('circuit breaker warns after 4 consecutive no-result searches but still executes', async () => {
 		// 4 consecutive no-result searches with different concepts
 		await tool.execute({ query: 'missing1', path: '/test' });
 		await tool.execute({ query: 'missing2', path: '/test' });
 		await tool.execute({ query: 'missing3', path: '/test' });
 		await tool.execute({ query: 'missing4', path: '/test' });
 
-		// 5th should be blocked by circuit breaker
+		// 5th gets circuit breaker WARNING appended, but search still runs
 		const r = await tool.execute({ query: 'missing5', path: '/test' });
 		expect(r).toContain('CIRCUIT BREAKER');
-		// Search was NOT executed for the 5th
+		expect(r).toContain('No results found');
+		// Search WAS executed — circuit breaker is non-blocking
+		expect(mockSearch).toHaveBeenCalledTimes(5);
+	});
+
+	test('circuit breaker resets when a search succeeds after threshold', async () => {
+		// 4 consecutive no-result searches
+		await tool.execute({ query: 'missing1', path: '/test' });
+		await tool.execute({ query: 'missing2', path: '/test' });
+		await tool.execute({ query: 'missing3', path: '/test' });
+		await tool.execute({ query: 'missing4', path: '/test' });
 		expect(mockSearch).toHaveBeenCalledTimes(4);
+
+		// 5th search succeeds — should reset the counter
+		mockSearchResult = 'Found: function realCode() { ... }';
+		const r5 = await tool.execute({ query: 'realCode', path: '/test' });
+		expect(r5).toContain('Found: function realCode');
+		expect(mockSearch).toHaveBeenCalledTimes(5);
+
+		// After reset, new no-result search should NOT have circuit breaker warning
+		mockSearchResult = 'No results found';
+		const r6 = await tool.execute({ query: 'anotherMissing', path: '/test' });
+		expect(r6).toContain('No results found');
+		expect(r6).not.toContain('CIRCUIT BREAKER');
 	});
 
 	test('concept dedup fires before circuit breaker when applicable', async () => {
