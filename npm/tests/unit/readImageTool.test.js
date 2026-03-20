@@ -95,7 +95,7 @@ describe('ReadImage Tool', () => {
     test('should throw error when path parameter is missing', async () => {
       await expect(
         agent.toolImplementations.readImage.execute({})
-      ).rejects.toThrow('Image path is required');
+      ).rejects.toThrow('File path is required');
     });
 
     test('should throw error when image file does not exist', async () => {
@@ -281,7 +281,7 @@ describe('ReadImage Tool', () => {
         agentWithoutApiType.toolImplementations.readImage.execute({
           path: join(testDir, 'malicious.exe')
         })
-      ).rejects.toThrow(/Invalid or unsupported image extension/);
+      ).rejects.toThrow(/Unsupported file format/);
     });
 
     test('should reject path traversal disguised as valid extension', async () => {
@@ -298,7 +298,7 @@ describe('ReadImage Tool', () => {
         restrictedAgent.toolImplementations.readImage.execute({
           path: 'malicious.png/../../../etc/passwd'
         })
-      ).rejects.toThrow(/Invalid or unsupported image extension/);
+      ).rejects.toThrow(/Unsupported file format/);
     });
   });
 
@@ -363,6 +363,102 @@ describe('ReadImage Tool', () => {
       // loadImageIfValid should succeed - it doesn't do provider-specific filtering
       const result = await agent.loadImageIfValid(svgPath);
       expect(result).toBe(true);
+    });
+  });
+
+  describe('readMedia tool and PDF support', () => {
+    test('readMedia tool should be available in toolImplementations', () => {
+      expect(agent.toolImplementations).toHaveProperty('readMedia');
+      expect(agent.toolImplementations.readMedia).toHaveProperty('execute');
+      expect(typeof agent.toolImplementations.readMedia.execute).toBe('function');
+    });
+
+    test('readImage and readMedia should point to the same execute function', () => {
+      expect(agent.toolImplementations.readImage.execute).toBe(
+        agent.toolImplementations.readMedia.execute
+      );
+    });
+
+    test('should load PDF files successfully', async () => {
+      // Create a minimal PDF file
+      const pdfContent = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF');
+      const pdfPath = join(testDir, 'test-doc.pdf');
+      writeFileSync(pdfPath, pdfContent);
+
+      const result = await agent.toolImplementations.readMedia.execute({
+        path: pdfPath
+      });
+
+      expect(result).toContain('Document loaded successfully');
+      expect(result).toContain(pdfPath);
+      expect(agent.pendingImages.has(pdfPath)).toBe(true);
+    });
+
+    test('PDF should be stored as document type in pendingImages', async () => {
+      const pdfContent = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF');
+      const pdfPath = join(testDir, 'test-type.pdf');
+      writeFileSync(pdfPath, pdfContent);
+
+      await agent.toolImplementations.readMedia.execute({ path: pdfPath });
+
+      const entry = agent.pendingImages.get(pdfPath);
+      expect(entry).toBeDefined();
+      expect(typeof entry).toBe('object');
+      expect(entry.type).toBe('document');
+      expect(entry.mimeType).toBe('application/pdf');
+      expect(entry.filename).toBe('test-type.pdf');
+      expect(typeof entry.data).toBe('string'); // base64
+    });
+
+    test('getCurrentMedia should return file parts for PDFs', async () => {
+      agent.clearLoadedImages();
+
+      const pdfContent = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF');
+      const pdfPath = join(testDir, 'test-media.pdf');
+      writeFileSync(pdfPath, pdfContent);
+
+      await agent.toolImplementations.readMedia.execute({ path: pdfPath });
+
+      const media = agent.getCurrentMedia();
+      expect(media.length).toBe(1);
+      expect(media[0].type).toBe('file');
+      expect(media[0].mediaType).toBe('application/pdf');
+      expect(media[0].filename).toBe('test-media.pdf');
+    });
+
+    test('getCurrentImages should NOT include PDFs (backward compat)', async () => {
+      agent.clearLoadedImages();
+
+      // Load a PDF
+      const pdfContent = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF');
+      const pdfPath = join(testDir, 'test-filter.pdf');
+      writeFileSync(pdfPath, pdfContent);
+      await agent.toolImplementations.readMedia.execute({ path: pdfPath });
+
+      // Load an image
+      await agent.toolImplementations.readMedia.execute({ path: testImagePath });
+
+      // getCurrentImages should only return the image
+      const images = agent.getCurrentImages();
+      expect(images.length).toBe(1);
+      expect(images[0]).toMatch(/^data:image\/png;base64,/);
+
+      // getCurrentMedia should return both
+      const media = agent.getCurrentMedia();
+      expect(media.length).toBe(2);
+    });
+
+    test('readMedia via readImage alias should work for PDFs too', async () => {
+      const pdfContent = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF');
+      const pdfPath = join(testDir, 'test-alias.pdf');
+      writeFileSync(pdfPath, pdfContent);
+
+      // Use the readImage alias to load a PDF
+      const result = await agent.toolImplementations.readImage.execute({
+        path: pdfPath
+      });
+
+      expect(result).toContain('Document loaded successfully');
     });
   });
 

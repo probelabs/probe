@@ -11,7 +11,7 @@ ProbeAgent provides a comprehensive set of tools that the AI can use to interact
 | **Search & Query** | search, query, extract | Find and retrieve code |
 | **File Operations** | edit, create, listFiles, searchFiles | Modify and explore files |
 | **Execution** | bash | Run shell commands |
-| **Analysis** | analyze_all, readImage | Comprehensive analysis |
+| **Analysis** | analyze_all, readMedia | Comprehensive analysis |
 | **Agent Control** | delegate, attempt_completion | Orchestration and completion |
 | **Skills** | listSkills, useSkill | Dynamic capabilities |
 | **Tasks** | task | Multi-step tracking |
@@ -599,23 +599,36 @@ Comprehensive codebase analysis.
 
 ---
 
-### readImage
+### readMedia
 
-Load and analyze images.
+Load and analyze media files (images and PDF documents). The `readImage` tool name is supported as a backward-compatible alias.
 
 **Parameters:**
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `path` | string | Yes | Path to image file |
+| `path` | string | Yes | Path to media file (image or PDF) |
 
-**Supported Formats:** `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`
+**Supported Formats:**
+- **Images:** `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.svg`
+- **Documents:** `.pdf`
+
+**Provider Notes:**
+- PDF support is native across Claude (32MB limit), OpenAI (50MB), and Gemini (50MB)
+- SVG is not supported by Google Gemini
+- Documents are sent via the Vercel AI SDK `file` content part
 
 **Example AI Usage:**
 ```xml
-<readImage>
+<readMedia>
   <path>./docs/architecture-diagram.png</path>
-</readImage>
+</readMedia>
+```
+
+```xml
+<readMedia>
+  <path>./reports/analysis.pdf</path>
+</readMedia>
 ```
 
 ---
