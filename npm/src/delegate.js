@@ -20,13 +20,14 @@ import { ProbeAgent } from './agent/ProbeAgent.js';
  */
 class DelegationManager {
 	constructor(options = {}) {
+		const parseSafe = (val, fallback) => { const n = parseInt(val, 10); return Number.isNaN(n) ? fallback : n; };
 		this.maxConcurrent = options.maxConcurrent
-			?? parseInt(process.env.MAX_CONCURRENT_DELEGATIONS || '3', 10);
+			?? parseSafe(process.env.MAX_CONCURRENT_DELEGATIONS, 3);
 		this.maxPerSession = options.maxPerSession
-			?? parseInt(process.env.MAX_DELEGATIONS_PER_SESSION || '10', 10);
+			?? parseSafe(process.env.MAX_DELEGATIONS_PER_SESSION, 10);
 		// Default queue timeout: 60 seconds. Set DELEGATION_QUEUE_TIMEOUT=0 to disable.
 		this.defaultQueueTimeout = options.queueTimeout
-			?? parseInt(process.env.DELEGATION_QUEUE_TIMEOUT || '60000', 10);
+			?? parseSafe(process.env.DELEGATION_QUEUE_TIMEOUT, 60000);
 
 		// Track delegations per session with timestamp for potential TTL cleanup
 		// Map<string, { count: number, lastUpdated: number }>
@@ -545,6 +546,9 @@ export async function delegate({
 		// Phase 2: Hard cancel after deadline if subagent hasn't finished
 		let parentAbortHandler;
 		let parentAbortHardCancelId = null;
+		// Track whether the race has settled so late abort signals don't create
+		// unhandled promise rejections.
+		let raceSettled = false;
 		const parentAbortPromise = new Promise((_, reject) => {
 			if (parentAbortSignal) {
 				if (parentAbortSignal.aborted) {
@@ -553,6 +557,8 @@ export async function delegate({
 					return;
 				}
 				parentAbortHandler = () => {
+					// If the race already settled, the answer won — don't reject.
+					if (raceSettled) return;
 					// Phase 1: graceful wind-down — let subagent finish its current step
 					subagent.triggerGracefulWindDown();
 					if (debug) {
@@ -567,6 +573,7 @@ export async function delegate({
 					}
 					// Phase 2: hard cancel after 30s if subagent hasn't finished
 					parentAbortHardCancelId = setTimeout(() => {
+						if (raceSettled) return;
 						if (debug) {
 							console.error(`[DELEGATE] Graceful wind-down deadline expired — hard cancelling subagent ${sessionId}`);
 						}
@@ -594,6 +601,8 @@ export async function delegate({
 		try {
 			response = await Promise.race(racers);
 		} finally {
+			// Mark race as settled so late abort signals are ignored
+			raceSettled = true;
 			// Clean up parent abort listener and hard cancel timer to prevent memory leaks
 			if (parentAbortHandler && parentAbortSignal) {
 				parentAbortSignal.removeEventListener('abort', parentAbortHandler);

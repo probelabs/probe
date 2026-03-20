@@ -508,7 +508,8 @@ export const searchTool = (options = {}) => {
 				// Block duplicate non-paginated searches (models sometimes repeat the exact same call)
 				// Allow pagination: only nextPage=true is a legitimate repeat of the same query
 				// Include path in dedup key so same query across different repos is allowed (#520)
-				const searchKey = `${searchPath}::${searchQuery}::${exact || false}`;
+				const searchKey = `${searchPath}::${searchQuery}::${exact || false}::${language || ''}`;
+				let circuitBreakerWarning = '';
 				if (!nextPage) {
 					if (previousSearches.has(searchKey)) {
 						const blockCount = (dupBlockCounts.get(searchKey) || 0) + 1;
@@ -548,16 +549,20 @@ export const searchTool = (options = {}) => {
 					}
 
 					// Circuit breaker: too many consecutive no-result searches means the model
-					// is stuck in a loop guessing names that don't exist
+					// is stuck in a loop guessing names that don't exist.
+					// Not permanent: allow the search through but prepend a strong warning.
+					// If it succeeds, consecutiveNoResults resets to 0 (line ~598).
+					// If it fails, the counter keeps climbing and subsequent attempts
+					// get increasingly stern warnings.
 					if (consecutiveNoResults >= MAX_CONSECUTIVE_NO_RESULTS) {
 						if (debug) {
-							console.error(`[CIRCUIT-BREAKER] ${consecutiveNoResults} consecutive no-result searches, blocking: "${searchQuery}"`);
+							console.error(`[CIRCUIT-BREAKER] ${consecutiveNoResults} consecutive no-result searches, warning: "${searchQuery}"`);
 						}
 						const isSubfolderCB = path && path !== effectiveSearchCwd && path !== '.';
 						const cbScopeHint = isSubfolderCB
-							? `\n- You have been searching in "${path}" — try searching from the workspace root or a different directory`
+							? ` You have been searching in "${path}" — consider searching from the workspace root or a different directory.`
 							: '';
-						return `CIRCUIT BREAKER: Your last ${consecutiveNoResults} searches ALL returned no results. You appear to be guessing function/type names that don't match what's actually in the code.\n\nChange your approach:${cbScopeHint}\n1. Use extract on files you already found — read the actual code to discover real function names\n2. Use listFiles to browse directories and see what files/functions actually exist\n3. If you found some results earlier, those are likely sufficient — provide your final answer\n\nRetrying search query variations will not help. Discover real names from real code instead.`;
+						circuitBreakerWarning = `\n\n⚠️ CIRCUIT BREAKER: Your last ${consecutiveNoResults} searches ALL returned no results.${cbScopeHint} You MUST change your approach: use extract on files you already found, use listFiles to browse directories, or provide your final answer. Guessing names will not help.`;
 					}
 				} else {
 					// Cap pagination to prevent runaway page-through of broad queries
@@ -583,10 +588,10 @@ export const searchTool = (options = {}) => {
 						}
 						// Append contextual hint for ticket/issue ID queries
 						if (/^[A-Z]+-\d+$/.test(searchQuery.trim()) || /^[A-Z]+-\d+$/.test(searchQuery.replace(/"/g, '').trim())) {
-							return result + '\n\n⚠️ Your query looks like a ticket/issue ID (e.g., JIRA-1234). Ticket IDs are rarely present in source code. Search for the technical concepts described in the ticket instead (e.g., function names, error messages, variable names).';
+							return result + '\n\n⚠️ Your query looks like a ticket/issue ID (e.g., JIRA-1234). Ticket IDs are rarely present in source code. Search for the technical concepts described in the ticket instead (e.g., function names, error messages, variable names).' + circuitBreakerWarning;
 						}
 						// Add a hint when approaching the circuit breaker threshold
-						if (consecutiveNoResults >= MAX_CONSECUTIVE_NO_RESULTS - 1) {
+						if (consecutiveNoResults >= MAX_CONSECUTIVE_NO_RESULTS - 1 && !circuitBreakerWarning) {
 							const isSubfolderWarn = path && path !== effectiveSearchCwd && path !== '.';
 							const warnScopeHint = isSubfolderWarn
 								? ` You are searching in "${path}" — consider searching from the workspace root or a different directory.`
@@ -603,7 +608,7 @@ export const searchTool = (options = {}) => {
 					if (options.fileTracker && typeof result === 'string') {
 						options.fileTracker.trackFilesFromOutput(result, effectiveSearchCwd).catch(() => {});
 					}
-					return result;
+					return typeof result === 'string' ? result + circuitBreakerWarning : result;
 				} catch (error) {
 					console.error('Error executing search command:', error);
 					const formatted = formatErrorForAI(error);

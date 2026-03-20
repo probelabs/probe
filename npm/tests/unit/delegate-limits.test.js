@@ -28,7 +28,7 @@ jest.unstable_mockModule(probeAgentPath, () => ({
 }));
 
 // Import after mocking
-const { delegate, cleanupDelegationManager, getDelegationStats } = await import(delegatePath);
+const { delegate, cleanupDelegationManager, getDelegationStats, DelegationManager } = await import(delegatePath);
 
 describe('Delegate Tool Security and Limits (SDK-based)', () => {
   beforeEach(() => {
@@ -631,6 +631,42 @@ describe('Delegate Tool Security and Limits (SDK-based)', () => {
       // Aborting after completion should NOT trigger cancel
       controller.abort();
       expect(mockCancel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DelegationManager NaN protection', () => {
+    it('should use defaults when env vars are non-numeric', () => {
+      const origConcurrent = process.env.MAX_CONCURRENT_DELEGATIONS;
+      const origPerSession = process.env.MAX_DELEGATIONS_PER_SESSION;
+      const origQueueTimeout = process.env.DELEGATION_QUEUE_TIMEOUT;
+      try {
+        process.env.MAX_CONCURRENT_DELEGATIONS = 'abc';
+        process.env.MAX_DELEGATIONS_PER_SESSION = 'not-a-number';
+        process.env.DELEGATION_QUEUE_TIMEOUT = '';
+        const mgr = new DelegationManager();
+        expect(mgr.maxConcurrent).toBe(3);
+        expect(mgr.maxPerSession).toBe(10);
+        expect(mgr.defaultQueueTimeout).toBe(60000);
+      } finally {
+        if (origConcurrent === undefined) delete process.env.MAX_CONCURRENT_DELEGATIONS;
+        else process.env.MAX_CONCURRENT_DELEGATIONS = origConcurrent;
+        if (origPerSession === undefined) delete process.env.MAX_DELEGATIONS_PER_SESSION;
+        else process.env.MAX_DELEGATIONS_PER_SESSION = origPerSession;
+        if (origQueueTimeout === undefined) delete process.env.DELEGATION_QUEUE_TIMEOUT;
+        else process.env.DELEGATION_QUEUE_TIMEOUT = origQueueTimeout;
+      }
+    });
+
+    it('should use valid env var values when provided', () => {
+      const origConcurrent = process.env.MAX_CONCURRENT_DELEGATIONS;
+      try {
+        process.env.MAX_CONCURRENT_DELEGATIONS = '5';
+        const mgr = new DelegationManager();
+        expect(mgr.maxConcurrent).toBe(5);
+      } finally {
+        if (origConcurrent === undefined) delete process.env.MAX_CONCURRENT_DELEGATIONS;
+        else process.env.MAX_CONCURRENT_DELEGATIONS = origConcurrent;
+      }
     });
   });
 });
