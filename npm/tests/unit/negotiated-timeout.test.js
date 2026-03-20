@@ -711,3 +711,76 @@ describe('Two-phase Graceful Stop', () => {
     if (agent._gracefulStopHardAbortId) clearTimeout(agent._gracefulStopHardAbortId);
   });
 });
+
+// ---- 14. grantedMs / grantedMin scoping regression (block-scope fix) --------
+
+describe('grantedMs / grantedMin block-scope regression', () => {
+  test('grantedMs and grantedMin are accessible in return statement after extend block', () => {
+    // This test replicates the observer function's control flow to verify
+    // that grantedMs / grantedMin are accessible outside the if-block.
+    // Before the fix, they were declared with `const` inside the if-block,
+    // causing a ReferenceError when ncc bundled the code and the return
+    // statement (outside the block) tried to reference them.
+
+    function simulateObserverReturn(decision, remainingBudgetMs, maxPerRequestMs, maxPerReqMin) {
+      let grantedMs = 0;
+      let grantedMin = 0;
+
+      if (decision.extend && decision.minutes > 0) {
+        const requestedMs = Math.min(decision.minutes, maxPerReqMin) * 60000;
+        grantedMs = Math.min(requestedMs, remainingBudgetMs, maxPerRequestMs);
+        grantedMin = Math.round(grantedMs / 60000 * 10) / 10;
+      }
+
+      return {
+        decision: decision.extend ? 'extended' : 'declined',
+        reason: decision.reason || '',
+        ...(decision.extend ? {
+          granted_ms: grantedMs,
+          granted_min: grantedMin,
+          budget_remaining_ms: remainingBudgetMs - grantedMs,
+        } : {}),
+      };
+    }
+
+    // Case 1: extend = true — grantedMs / grantedMin should have real values
+    const extended = simulateObserverReturn(
+      { extend: true, minutes: 3, reason: 'work in progress' },
+      600000, 600000, 10,
+    );
+    expect(extended.decision).toBe('extended');
+    expect(extended.granted_ms).toBe(180000);
+    expect(extended.granted_min).toBe(3);
+    expect(extended.budget_remaining_ms).toBe(420000);
+
+    // Case 2: extend = false — grantedMs / grantedMin should default to 0
+    // and not appear in the result (spread is empty object)
+    const declined = simulateObserverReturn(
+      { extend: false, reason: 'task complete' },
+      600000, 600000, 10,
+    );
+    expect(declined.decision).toBe('declined');
+    expect(declined.granted_ms).toBeUndefined();
+    expect(declined.granted_min).toBeUndefined();
+    expect(declined.budget_remaining_ms).toBeUndefined();
+  });
+
+  test('actual ProbeAgent source uses let for grantedMs/grantedMin (not const inside if-block)', async () => {
+    // Read the source and verify the fix is in place — grantedMs/grantedMin
+    // must be declared with let before the if-block, not const inside it.
+    const fs = await import('fs');
+    const path = await import('path');
+    const sourceFile = path.resolve(
+      new URL('../../src/agent/ProbeAgent.js', import.meta.url).pathname,
+    );
+    const source = fs.readFileSync(sourceFile, 'utf8');
+
+    // Should find "let grantedMs = 0" BEFORE the if-block
+    const letPattern = /let grantedMs\s*=\s*0;\s*\n\s*let grantedMin\s*=\s*0;/;
+    expect(source).toMatch(letPattern);
+
+    // Should NOT find "const grantedMs" (the old broken pattern)
+    const constPattern = /const grantedMs\s*=/;
+    expect(source).not.toMatch(constPattern);
+  });
+});
