@@ -186,6 +186,13 @@ function buildLineEditResponse(file_path, startLine, endLine, newLineCount, upda
   return msg;
 }
 
+const lineTargetedModeGuidance = `Line-targeted mode has three explicit behaviors:
+- Replace/update lines: provide start_line and optionally end_line, and omit position
+- Insert near a line: provide start_line and set position to "before" or "after"
+- Delete lines: provide start_line/end_line for the exact range and set new_string to empty string ""
+
+Inverted ranges (end_line < start_line) are always invalid and are never treated as insertion.`;
+
 /**
  * Handle line-targeted editing (replace, insert, delete by line numbers)
  * @param {Object} params - Parameters
@@ -211,12 +218,15 @@ async function handleLineEdit({ resolvedPath, file_path, start_line, end_line, n
   const endLine = endRef ? endRef.line : startLine;
 
   if (endLine < startLine) {
-    return `Error editing file: end_line (${endLine}) must be >= start_line (${startLine}).`;
+    const insertionHint = endLine === startLine - 1
+      ? ` This looks like an insertion between lines ${endLine} and ${startLine}. To insert there without replacing existing code, use start_line="${startLine}" with position="before" or start_line="${endLine}" with position="after".`
+      : ' To insert new code, choose a single anchor line in start_line and set position to "before" or "after" instead of using an inverted range.';
+    return `Error editing file: end_line (${endLine}) must be >= start_line (${startLine}). Omitting position means replace/update the addressed lines, not insert.${insertionHint} To delete lines, use new_string as the empty string "" with a valid non-inverted range.`;
   }
 
   // Validate position if provided
   if (position !== undefined && position !== null && position !== 'before' && position !== 'after') {
-    return 'Error editing file: Invalid position - must be "before" or "after". Use position="before" to insert before the line, or position="after" to insert after it.';
+    return 'Error editing file: Invalid position - must be "before" or "after". Use position="before" to insert before start_line, position="after" to insert after start_line, or omit position to replace/update the addressed lines.';
   }
 
   // Read the file
@@ -304,23 +314,25 @@ export const editTool = (options = {}) => {
 
   return tool({
     name: 'edit',
-    description: `Edit files using text replacement, AST-aware symbol operations, or line-targeted editing.
+    description: `Edit files using text replacement, AST-aware symbol operations, or line-targeted line replacement/insertion/deletion.
 
 Modes:
 1. Text edit: Provide old_string + new_string to find and replace text (with fuzzy matching fallback)
 2. Symbol replace: Provide symbol + new_string to replace an entire function/class/method by name
 3. Symbol insert: Provide symbol + new_string + position to insert code before/after a symbol
-4. Line-targeted edit: Provide start_line + new_string to edit by line number (from extract/search output)
+4. Line-targeted edit: Provide start_line + new_string to replace/update, insert, or delete lines by line number (from extract/search output)
+
+${lineTargetedModeGuidance}
 
 Parameters:
 - file_path: Path to the file to edit (absolute or relative)
-- new_string: Replacement text or new code content
+- new_string: Replacement text or new code content. Use empty string "" to delete the targeted line range.
 - old_string: (optional) Text to find and replace. If omitted, symbol or start_line must be provided.
 - replace_all: (optional) Replace all occurrences (text mode only)
 - symbol: (optional) Symbol name for AST-aware editing (e.g. "myFunction", "MyClass.myMethod")
-- position: (optional) "before" or "after" — insert code near a symbol or line instead of replacing it
-- start_line: (optional) Line reference (e.g. "42" or "42:ab") for line-targeted editing
-- end_line: (optional) End of line range, inclusive (e.g. "55" or "55:cd")`,
+- position: (optional) "before" or "after" — insert code near a symbol or line instead of replacing it. Omit position to replace/update.
+- start_line: (optional) Line reference (e.g. "42" or "42:ab") for line-targeted editing. With position, this is the insertion anchor. Without position, this is the first line to replace/update/delete.
+- end_line: (optional) End of line range, inclusive (e.g. "55" or "55:cd"). Must be >= start_line. Omit for single-line updates. Do not use inverted ranges for insertion.`,
 
     inputSchema: {
       type: 'object',
@@ -335,7 +347,7 @@ Parameters:
         },
         new_string: {
           type: 'string',
-          description: 'Replacement text or new code content'
+          description: 'Replacement text or new code content. Use empty string "" to delete the targeted line range.'
         },
         replace_all: {
           type: 'boolean',
@@ -349,15 +361,15 @@ Parameters:
         position: {
           type: 'string',
           enum: ['before', 'after'],
-          description: 'Insert before/after symbol or line (requires symbol or start_line, omit to replace)'
+          description: 'Insert before/after the target symbol or start_line anchor. Omit position to replace/update the addressed symbol or line range.'
         },
         start_line: {
           type: 'string',
-          description: 'Line reference for line-targeted editing (e.g. "42" or "42:ab" with hash)'
+          description: 'Line reference for line-targeted editing (e.g. "42" or "42:ab" with hash). With position, this is the insertion anchor. Without position, this is the first line to replace/update/delete.'
         },
         end_line: {
           type: 'string',
-          description: 'End of line range, inclusive (e.g. "55" or "55:cd"). Defaults to start_line.'
+          description: 'Inclusive end of the line range to replace/delete (e.g. "55" or "55:cd"). Must be >= start_line. Defaults to start_line.'
         }
       },
       required: ['file_path', 'new_string']
@@ -702,7 +714,7 @@ export const editSchema = {
     },
     new_string: {
       type: 'string',
-      description: 'Replacement text or new code content'
+      description: 'Replacement text or new code content. Use empty string "" to delete the targeted line range.'
     },
     replace_all: {
       type: 'boolean',
@@ -715,15 +727,15 @@ export const editSchema = {
     position: {
       type: 'string',
       enum: ['before', 'after'],
-      description: 'Insert before/after symbol or line (requires symbol or start_line, omit to replace)'
+      description: 'Insert before/after the target symbol or start_line anchor. Omit position to replace/update the addressed symbol or line range.'
     },
     start_line: {
       type: 'string',
-      description: 'Line reference for line-targeted editing (e.g. "42" or "42:ab" with hash)'
+      description: 'Line reference for line-targeted editing (e.g. "42" or "42:ab" with hash). With position, this is the insertion anchor. Without position, this is the first line to replace/update/delete.'
     },
     end_line: {
       type: 'string',
-      description: 'End of line range, inclusive (e.g. "55" or "55:cd"). Defaults to start_line.'
+      description: 'Inclusive end of the line range to replace/delete (e.g. "55" or "55:cd"). Must be >= start_line. Defaults to start_line.'
     }
   },
   required: ['file_path', 'new_string']
@@ -760,7 +772,7 @@ export const multiEditSchema = {
 };
 
 // Tool descriptions for XML definitions
-export const editDescription = 'Edit files using text replacement, AST-aware symbol operations, or line-targeted editing. Supports fuzzy matching for text edits and optional hash-based integrity verification for line edits.';
+export const editDescription = 'Edit files using text replacement, AST-aware symbol operations, or line-targeted replacement/insertion/deletion. Supports fuzzy matching for text edits and optional hash-based integrity verification for line edits.';
 export const createDescription = 'Create new files with specified content. Will create parent directories if needed.';
 export const multiEditDescription = 'Apply multiple file edits in a single tool call. Accepts a JSON array of edit operations, each supporting the same modes as the edit tool.';
 
@@ -779,15 +791,21 @@ Four editing modes — choose based on the scope of your change:
 
 4. **Line-targeted edit** (start_line + new_string): For precise edits using line numbers from extract/search output. Use start_line with a line number (e.g. "42") or line:hash (e.g. "42:ab") for integrity verification. Add end_line for multi-line ranges. Use position="before" or "after" to insert instead of replace.
 
+How line-targeted mode behaves:
+- Replace/update lines: provide start_line and optionally end_line, and omit position
+- Insert near a line: provide start_line and set position to "before" or "after"
+- Delete lines: provide start_line/end_line for the exact range and set new_string to empty string ""
+- Inverted ranges are invalid: end_line must be >= start_line and is never treated as insertion
+
 Parameters:
 - file_path: (required) Path to the file to edit
-- new_string: (required) Replacement text or new code content
+- new_string: (required) Replacement text or new code content. Use empty string "" to delete the targeted line range.
 - old_string: (optional) Text to find and replace — copy verbatim from the file, do not paraphrase or reformat
 - replace_all: (optional, default: false) Replace all occurrences of old_string (text mode only)
 - symbol: (optional) Name of a code symbol (e.g. "myFunction", "MyClass.myMethod") — must match a function, class, or method definition
-- position: (optional) "before" or "after" — insert new_string near the symbol or line instead of replacing it
-- start_line: (optional) Line reference for line-targeted editing (e.g. "42" or "42:ab")
-- end_line: (optional) End of line range, inclusive (e.g. "55" or "55:cd"). Defaults to start_line.
+- position: (optional) "before" or "after" — insert new_string near the symbol or line instead of replacing it. Omit position to replace/update.
+- start_line: (optional) Line reference for line-targeted editing (e.g. "42" or "42:ab"). With position, this is the insertion anchor. Without position, this is the first line to replace/update/delete.
+- end_line: (optional) End of line range, inclusive (e.g. "55" or "55:cd"). Defaults to start_line. Must be >= start_line. Use it for replace/update/delete ranges, not insertion.
 
 Mode selection rules (priority order):
 - If symbol is provided, symbol mode is used (old_string and start_line are ignored)
@@ -799,12 +817,15 @@ When to use each mode:
 - Small edits (a line or a few lines): use text mode with old_string
 - Replacing entire functions/classes/methods: use symbol mode — no exact text matching needed
 - Editing specific lines from extract/search output: use line-targeted mode with start_line
+- Adding a new block near an existing line: use line-targeted mode with start_line plus position="before" or position="after"
+- Removing lines entirely: use line-targeted mode with start_line/end_line and new_string=""
 - Editing inside large functions without rewriting them entirely: first use extract with the symbol target (e.g. "file.js#myFunction") to see the function with line numbers, then use start_line/end_line to edit specific lines within it
 
 Error handling:
 - If an edit fails, read the error message carefully — it contains specific instructions for how to fix the call and retry
 - Common fixes: use 'search'/'extract' to get exact file content, add more context to old_string, switch between text and symbol modes
 - Line-targeted hash mismatch: the file changed since last read; the error provides updated line:hash references
+- Inverted line ranges are invalid; the error explains how to express insertion with position="before"/"after"
 
 Examples:
 
@@ -856,6 +877,22 @@ Line-targeted edit (replace a range of lines):
 <end_line>55</end_line>
 <new_string>  // simplified implementation
   return processItems(order.items);</new_string>
+</edit>
+
+Line-targeted edit (insert before a line without replacing it):
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<position>before</position>
+<new_string>  logger.debug("starting process");</new_string>
+</edit>
+
+Line-targeted edit (delete a range of lines):
+<edit>
+<file_path>src/main.js</file_path>
+<start_line>42</start_line>
+<end_line>45</end_line>
+<new_string></new_string>
 </edit>
 
 Line-targeted edit with hash verification:

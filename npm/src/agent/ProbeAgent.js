@@ -3179,6 +3179,8 @@ Follow these instructions carefully:
 7. When modifying files, choose the appropriate tool:
     - Use 'edit' for all code modifications:
       * PREFERRED: Use start_line (and optionally end_line) for line-targeted editing — this is the safest and most precise approach.${this.hashLines ? ' Use the line:hash references from extract/search output (e.g. "42:ab") for integrity verification.' : ''} Always use extract first to see line numbers${this.hashLines ? ' and hashes' : ''}, then edit by line reference.
+      * In line-targeted mode, omitting position means replace/update the addressed lines. To insert new code near a line, you MUST set position="before" or position="after". Never express insertion as end_line < start_line.
+      * To delete lines in line-targeted mode, target the exact start_line/end_line range and set new_string to the empty string "".
       * For editing inside large functions: first use extract with the symbol target (e.g. "file.js#myFunction") to see the function with line numbers${this.hashLines ? ' and hashes' : ''}, then use start_line/end_line to surgically edit specific lines within it.
       * For rewriting entire functions/classes/methods, use the symbol parameter instead (no exact text matching needed).
       * FALLBACK ONLY: Use old_string + new_string for simple single-line changes where the text is unique. Copy old_string verbatim from the file. Keep old_string as small as possible.
