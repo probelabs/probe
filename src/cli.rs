@@ -301,6 +301,25 @@ pub enum Commands {
         include_stdlib: bool,
     },
 
+    /// List symbols (functions, structs, classes, constants, etc.) in files
+    ///
+    /// This command provides a table-of-contents view of a file's symbols using tree-sitter
+    /// AST parsing. It shows functions, structs, classes, constants, type aliases, and other
+    /// definitions with their line numbers and nesting (e.g., methods inside impl blocks).
+    Symbols {
+        /// Files to list symbols from
+        #[arg(value_name = "FILES")]
+        files: Vec<String>,
+
+        /// Output format (default: text)
+        #[arg(short = 'o', long = "format", default_value = "text", value_parser = ["text", "json"])]
+        format: String,
+
+        /// Include test functions/methods
+        #[arg(long = "allow-tests")]
+        allow_tests: bool,
+    },
+
     /// Search code using AST patterns for precise structural matching
     ///
     /// This command uses ast-grep to search for structural patterns in code.

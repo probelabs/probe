@@ -4,7 +4,7 @@
  */
 
 // Export Vercel AI SDK tool generators
-export { searchTool, queryTool, extractTool, delegateTool } from './vercel.js';
+export { searchTool, queryTool, extractTool, delegateTool, symbolsTool } from './vercel.js';
 export { bashTool } from './bash.js';
 export { editTool, createTool, multiEditTool } from './edit.js';
 
@@ -31,6 +31,7 @@ export {
 	searchFilesSchema,
 	readImageSchema,
 	readMediaSchema,
+	symbolsSchema,
 	listSkillsSchema,
 	useSkillSchema
 } from './common.js';

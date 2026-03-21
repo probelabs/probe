@@ -204,6 +204,7 @@ Direct access to Probe's search, query, and extract tools—without the agent la
 - `search` - Semantic code search with Elasticsearch-style queries
 - `query` - AST-based structural pattern matching
 - `extract` - Extract code blocks by line number or symbol name
+- `symbols` - List all symbols in a file (functions, classes, constants) with line numbers
 
 ---
 
@@ -287,6 +288,24 @@ probe extract src/main.rs:10-50
 go test | probe extract
 ```
 
+#### Symbols Command
+
+```bash
+probe symbols <FILES> [OPTIONS]
+```
+
+**Examples:**
+```bash
+# List symbols in a file
+probe symbols src/main.rs
+
+# JSON output for programmatic use
+probe symbols src/main.rs --format json
+
+# Multiple files
+probe symbols src/main.rs src/lib.rs
+```
+
 #### Query Command (AST Patterns)
 
 ```bash
@@ -333,7 +352,7 @@ console.log(agent.getTokenUsage());
 **Direct functions:**
 
 ```javascript
-import { search, extract, query } from '@probelabs/probe';
+import { search, extract, query, symbols } from '@probelabs/probe';
 
 // Semantic search
 const results = await search({
@@ -346,6 +365,11 @@ const results = await search({
 const code = await extract({
   files: ['src/auth.ts:42'],
   format: 'markdown'
+});
+
+// List symbols in a file
+const fileSymbols = await symbols({
+  files: ['src/auth.ts']
 });
 
 // AST pattern query
@@ -461,6 +485,7 @@ Full documentation available at [probelabs.com/probe](https://probelabs.com/prob
 ### Probe CLI
 - [Search Command](./docs/probe-cli/search.md) - Elasticsearch-style semantic search
 - [Extract Command](./docs/probe-cli/extract.md) - Extract code blocks with full AST context
+- [Symbols Command](./docs/probe-cli/symbols.md) - List all symbols in files with line numbers
 - [Query Command](./docs/probe-cli/query.md) - AST-based structural pattern matching
 - [CLI Reference](./docs/probe-cli/cli-reference.md) - Complete command-line reference
 

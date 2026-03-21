@@ -107,7 +107,7 @@ The Probe MCP server:
 - Implements the Model Context Protocol specification
 - Uses stdio for communication with AI editors
 - Automatically downloads and manages the Probe binary
-- Provides three main tools: search_code, query_code, and extract_code
+- Provides tools: search_code, query_code, extract_code, and symbols_code
 - Handles tool execution and error reporting
 
 ## Available Tools
@@ -213,6 +213,26 @@ Extract code blocks from files based on file paths and optional line numbers.
 {
   "path": "/path/to/your/project",
   "files": ["/path/to/your/project/src/main.rs:42"]
+}
+```
+
+### symbols_code
+
+List all symbols (functions, classes, structs, constants, etc.) in a file. Returns a hierarchical tree with line numbers.
+
+#### Parameters
+
+| Parameter | Type | Description | Required |
+|-----------|------|-------------|----------|
+| `path` | string | Absolute path to the directory | Yes |
+| `file` | string | File path to list symbols from | Yes |
+
+#### Example
+
+```json
+{
+  "path": "/path/to/your/project",
+  "file": "src/main.rs"
 }
 ```
 

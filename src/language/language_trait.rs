@@ -30,6 +30,13 @@ pub trait LanguageImpl {
         None
     }
 
+    /// Check if a node is a symbol that should appear in a file's symbol tree/TOC.
+    /// Broader than is_acceptable_parent — includes constants, type aliases, etc.
+    /// Override in language implementations to add language-specific symbol types.
+    fn is_symbol_node(&self, node: &Node) -> bool {
+        self.is_acceptable_parent(node)
+    }
+
     /// Extract the receiver/associated type name from a method declaration node.
     ///
     /// For languages where methods are declared outside of type definitions

@@ -235,4 +235,12 @@ impl LanguageImpl for GoLanguage {
 
         None
     }
+
+    fn is_symbol_node(&self, node: &Node) -> bool {
+        self.is_acceptable_parent(node)
+            || matches!(
+                node.kind(),
+                "const_declaration" | "var_declaration" | "const_spec" | "var_spec"
+            )
+    }
 }

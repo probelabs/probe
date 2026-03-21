@@ -150,7 +150,8 @@ Initialize the ACP connection.
       "tools": [
         { "name": "search", "kind": "search" },
         { "name": "query", "kind": "query" },
-        { "name": "extract", "kind": "extract" }
+        { "name": "extract", "kind": "extract" },
+        { "name": "symbols", "kind": "symbols" }
       ],
       "sessionManagement": true,
       "streaming": true,
@@ -454,6 +455,22 @@ Session state changed.
       "format": { "type": "string", "enum": ["plain", "markdown", "json"] }
     },
     "required": ["files"]
+  }
+}
+```
+
+### symbols
+
+```json
+{
+  "name": "symbols",
+  "description": "List all symbols in a file with line numbers and nesting",
+  "kind": "symbols",
+  "inputSchema": {
+    "properties": {
+      "file": { "type": "string", "description": "Path to the file to list symbols from" }
+    },
+    "required": ["file"]
   }
 }
 ```

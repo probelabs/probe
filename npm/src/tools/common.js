@@ -72,6 +72,10 @@ export const readMediaSchema = z.object({
 	path: z.string().describe('Path to the media file to read. Supports images (png, jpg, jpeg, webp, bmp, svg) and documents (pdf).')
 });
 
+export const symbolsSchema = z.object({
+	file: z.string().describe('Path to the file to list symbols from. Returns a tree of functions, classes, structs, constants, etc. with line numbers.')
+});
+
 export const bashSchema = z.object({
 	command: z.string().describe('The bash command to execute'),
 	workingDirectory: z.string().optional().describe('Directory to execute the command in (optional)'),

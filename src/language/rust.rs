@@ -325,4 +325,9 @@ impl LanguageImpl for RustLanguage {
             _ => None,
         }
     }
+
+    fn is_symbol_node(&self, node: &Node) -> bool {
+        self.is_acceptable_parent(node)
+            || matches!(node.kind(), "const_item" | "static_item" | "type_item")
+    }
 }

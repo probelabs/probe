@@ -195,6 +195,21 @@ The extract_code tool supports the following parameters:
 - `contextLines`: Number of context lines to include (default: 0)
 - `format`: Output format (default: "json")
 
+### symbols_code
+
+List all symbols in a file — functions, classes, structs, constants, etc. with line numbers and nesting.
+
+```json
+{
+  "path": "/path/to/your/project",
+  "file": "src/main.rs"
+}
+```
+
+The symbols_code tool supports the following parameters:
+- `path`: The base directory
+- `file`: Path to the file to list symbols from
+
 ## Using Probe with AI Assistants
 
 Once configured, you can ask your AI assistant to search your codebase with natural language queries. The AI will translate your request into appropriate Probe commands and display the results.

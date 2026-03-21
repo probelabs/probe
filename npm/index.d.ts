@@ -409,6 +409,58 @@ export interface QueryParams {
 }
 
 /**
+ * Symbols tool parameters
+ */
+export interface SymbolsParams {
+  /** Files to list symbols from */
+  files: string[];
+  /** Working directory for resolving relative paths */
+  cwd?: string;
+  /** Include test functions/methods */
+  allowTests?: boolean;
+  /** Binary options */
+  binaryOptions?: {
+    forceDownload?: boolean;
+    version?: string;
+  };
+}
+
+/**
+ * A node in the symbol tree
+ */
+export interface SymbolNode {
+  /** Symbol name */
+  name: string;
+  /** Symbol kind (function, struct, class, const, etc.) */
+  kind: string;
+  /** Clean signature without body */
+  signature: string;
+  /** Start line (1-indexed) */
+  line: number;
+  /** End line (1-indexed) */
+  end_line: number;
+  /** Nested symbols (methods inside classes/impl blocks, etc.) */
+  children?: SymbolNode[];
+}
+
+/**
+ * Symbols extracted from a single file
+ */
+export interface FileSymbols {
+  /** File path */
+  file: string;
+  /** Top-level symbols with optional nesting */
+  symbols: SymbolNode[];
+}
+
+/**
+ * Symbols tool function type
+ */
+export type SymbolsTool = (options?: SearchOptions) => {
+  execute(params: { file: string }): Promise<string>;
+};
+
+/**
  * Extract tool parameters
  */
 export interface ExtractParams {
@@ -538,6 +590,11 @@ export declare function grep(options: {
 }): Promise<string>;
 
 /**
+ * List symbols (functions, structs, classes, constants, etc.) in files
+ */
+export declare function symbols(options: SymbolsParams): Promise<FileSymbols[]>;
+
+/**
  * Extract code blocks from files
  */
 export declare function extract(
@@ -563,6 +620,11 @@ export declare function queryTool(options?: SearchOptions): ReturnType<QueryTool
  * Create extract tool instance
  */
 export declare function extractTool(options?: SearchOptions): ReturnType<ExtractTool>;
+
+/**
+ * Create symbols tool instance
+ */
+export declare function symbolsTool(options?: SearchOptions): ReturnType<SymbolsTool>;
 
 /**
  * Get the path to the probe binary
@@ -778,6 +840,7 @@ export declare function createTool(options?: EditToolOptions): {
 export declare const searchSchema: any;
 export declare const querySchema: any;
 export declare const extractSchema: any;
+export declare const symbolsSchema: any;
 export declare const editSchema: any;
 export declare const createSchema: any;
 export declare const attemptCompletionSchema: any;

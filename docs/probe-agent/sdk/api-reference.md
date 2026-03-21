@@ -359,6 +359,22 @@ const code = await extract(
 
 ---
 
+### symbols()
+
+List all symbols in a file — functions, classes, structs, constants, etc. with line numbers and nesting.
+
+```javascript
+const fileSymbols = await symbols({
+  files: ['src/auth.ts'],
+  cwd: './project',
+  allowTests: false
+}): Promise<FileSymbols[]>
+```
+
+**Returns** an array of `FileSymbols` objects, each containing a `file` path and `symbols` array with nested `SymbolNode` entries.
+
+---
+
 ### grep()
 
 Ripgrep-style search.
@@ -383,13 +399,14 @@ const results = await grep({
 ```javascript
 import { tools } from '@probelabs/probe';
 
-const { searchTool, queryTool, extractTool } = tools;
+const { searchTool, queryTool, extractTool, symbolsTool } = tools;
 
 // For Vercel AI SDK
 const toolSet = {
   search: searchTool({ defaultPath: './src' }),
   query: queryTool({ defaultPath: './src' }),
-  extract: extractTool({ defaultPath: './src' })
+  extract: extractTool({ defaultPath: './src' }),
+  symbols: symbolsTool({ defaultPath: './src' })
 };
 ```
 

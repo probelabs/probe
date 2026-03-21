@@ -455,4 +455,12 @@ impl LanguageImpl for TypeScriptLanguage {
             _ => None,
         }
     }
+
+    fn is_symbol_node(&self, node: &Node) -> bool {
+        self.is_acceptable_parent(node)
+            || matches!(
+                node.kind(),
+                "variable_declarator" | "lexical_declaration" | "variable_declaration"
+            )
+    }
 }

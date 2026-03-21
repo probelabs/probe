@@ -23,6 +23,7 @@ During installation, the package will automatically download the appropriate pro
 - **Search Code**: Search for patterns in your codebase using Elasticsearch-like query syntax
 - **Query Code**: Find specific code structures using tree-sitter patterns
 - **Extract Code**: Extract code blocks from files based on file paths and line numbers
+- **List Symbols**: Get a file's table of contents — functions, classes, constants with line numbers and nesting
 - **Edit Code**: AI-powered code editing with text replacement (fuzzy matching), AST-aware symbol replace/insert across 16 languages, and line-targeted editing with optional hash-based integrity verification
 - **AI Tools Integration**: Ready-to-use tools for Vercel AI SDK, LangChain, and other AI frameworks
 - **System Message**: Default system message for AI assistants with instructions on using probe tools
@@ -297,6 +298,7 @@ const agent5 = new ProbeAgent({
 - `search` - Semantic code search
 - `query` - Tree-sitter pattern matching
 - `extract` - Extract code blocks
+- `symbols` - List all symbols in a file with line numbers
 - `listFiles` - List files and directories
 - `searchFiles` - Find files by glob pattern
 - `bash` - Execute bash commands (requires `enableBash: true`)
@@ -708,6 +710,29 @@ const results = await extract({
 - `binaryOptions`: Options for getting the binary
   - `forceDownload`: Force download even if binary exists
   - `version`: Specific version to download
+
+### Symbols
+
+```javascript
+import { symbols } from '@probelabs/probe';
+
+const result = await symbols({
+  files: ['src/main.rs'],
+  cwd: '/path/to/project',
+  allowTests: false
+});
+
+// result is an array of FileSymbols
+// result[0].file => 'src/main.rs'
+// result[0].symbols => [{ name, kind, signature, line, end_line, children }, ...]
+```
+
+#### Parameters
+
+- `files` (required): Array of file paths to list symbols from
+- `cwd`: Working directory for resolving relative paths
+- `allowTests`: Include test functions/methods (default: false)
+- `binaryOptions`: Options for getting the binary
 
 ### Binary Management
 
