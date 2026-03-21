@@ -265,6 +265,15 @@ export function createWrappedTools(baseTools) {
     );
   }
 
+  // Wrap symbols tool
+  if (baseTools.symbolsTool) {
+    wrappedTools.symbolsToolInstance = wrapToolWithEmitter(
+      baseTools.symbolsTool,
+      'symbols',
+      baseTools.symbolsTool.execute
+    );
+  }
+
   return wrappedTools;
 }
 

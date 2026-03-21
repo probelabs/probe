@@ -5,6 +5,7 @@ import {
   extractTool,
   delegateTool,
   analyzeAllTool,
+  symbolsTool,
   createExecutePlanTool,
   createCleanupExecutePlanTool,
   bashTool,
@@ -27,6 +28,7 @@ import {
   searchFilesSchema,
   readImageSchema,
   readMediaSchema,
+  symbolsSchema,
   listSkillsSchema,
   useSkillSchema
 } from '../index.js';
@@ -51,6 +53,9 @@ export function createTools(configOptions) {
   }
   if (isToolAllowed('extract')) {
     tools.extractTool = extractTool(configOptions);
+  }
+  if (isToolAllowed('symbols')) {
+    tools.symbolsTool = symbolsTool(configOptions);
   }
   if (configOptions.enableDelegate && isToolAllowed('delegate')) {
     tools.delegateTool = delegateTool(configOptions);
@@ -111,6 +116,7 @@ export {
   searchFilesSchema,
   readImageSchema,
   readMediaSchema,
+  symbolsSchema,
   listSkillsSchema,
   useSkillSchema
 };

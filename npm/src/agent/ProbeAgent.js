@@ -56,6 +56,7 @@ import {
   searchFilesSchema,
   readImageSchema,
   readMediaSchema,
+  symbolsSchema,
   listSkillsSchema,
   useSkillSchema
 } from './tools.js';
@@ -944,6 +945,9 @@ export class ProbeAgent {
     }
     if (isToolAllowed('searchFiles')) {
       this.toolImplementations.searchFiles = searchFilesToolInstance;
+    }
+    if (wrappedTools.symbolsToolInstance && isToolAllowed('symbols')) {
+      this.toolImplementations.symbols = wrappedTools.symbolsToolInstance;
     }
 
     if (this.enableSkills) {
@@ -2225,6 +2229,10 @@ export class ProbeAgent {
         schema: searchFilesSchema,
         description: 'Find files matching a glob pattern with recursive search capability.'
       },
+      symbols: {
+        schema: symbolsSchema,
+        description: 'List all symbols (functions, classes, structs, constants, etc.) in a file. Returns a hierarchical tree with line numbers — like a table of contents for code.'
+      },
       readMedia: {
         schema: readMediaSchema,
         description: 'Read and load a media file (image or PDF document) for AI analysis. Supports: png, jpg, jpeg, webp, bmp, svg, pdf.'
@@ -3019,7 +3027,8 @@ export class ProbeAgent {
 ${searchToolDesc1}
 - extract: Extract specific code sections with context
 - listFiles: Browse directory contents
-- searchFiles: Find files by name patterns`;
+- searchFiles: Find files by name patterns
+- symbols: List all symbols in a file (functions, classes, constants, etc.) with line numbers`;
 
     if (this.enableBash) {
       systemPrompt += `\n- bash: Execute bash commands for system operations (building, running tests, git, etc.). NEVER use bash for code exploration (no grep, cat, find, head, tail) — always use search and extract tools instead, they are faster and more accurate.`;
@@ -3085,7 +3094,8 @@ ${extractGuidance1}
 ${searchToolDesc2}
 - extract: Extract specific code sections with context
 - listFiles: Browse directory contents
-- searchFiles: Find files by name patterns`;
+- searchFiles: Find files by name patterns
+- symbols: List all symbols in a file (functions, classes, constants, etc.) with line numbers`;
 
     if (this.enableBash) {
       systemPrompt += `\n- bash: Execute bash commands for system operations (building, running tests, git, etc.). NEVER use bash for code exploration (no grep, cat, find, head, tail) — always use search and extract tools instead, they are faster and more accurate.`;

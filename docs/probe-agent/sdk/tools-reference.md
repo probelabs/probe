@@ -8,7 +8,7 @@ ProbeAgent provides a comprehensive set of tools that the AI can use to interact
 
 | Category | Tools | Description |
 |----------|-------|-------------|
-| **Search & Query** | search, query, extract | Find and retrieve code |
+| **Search & Query** | search, query, extract, symbols | Find and retrieve code |
 | **File Operations** | edit, create, listFiles, searchFiles | Modify and explore files |
 | **Execution** | bash | Run shell commands |
 | **Analysis** | analyze_all, readMedia | Comprehensive analysis |
@@ -198,6 +198,39 @@ Extract code blocks from files by location or symbol.
   <file>src/auth/login.ts:42</file>
   <context>5</context>
 </extract>
+```
+
+---
+
+### symbols
+
+List all symbols (functions, classes, structs, constants, etc.) in a file. Returns a hierarchical tree with line numbers — like a table of contents for code files.
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file` | string | Yes | Path to the file to list symbols from |
+
+**Example AI Usage:**
+```xml
+<symbols>
+  <file>src/auth/login.ts</file>
+</symbols>
+```
+
+**Response format (JSON):**
+```json
+{
+  "file": "src/auth/login.ts",
+  "symbols": [
+    { "name": "loginUser", "kind": "function", "line": 5, "end_line": 25, "signature": "async function loginUser(email: string, password: string)" },
+    { "name": "AuthService", "kind": "class", "line": 27, "end_line": 80, "signature": "class AuthService", "children": [
+      { "name": "constructor", "kind": "method", "line": 28, "end_line": 35, "signature": "constructor()" },
+      { "name": "validate", "kind": "method", "line": 37, "end_line": 50, "signature": "validate(token: string): boolean" }
+    ]}
+  ]
+}
 ```
 
 ---

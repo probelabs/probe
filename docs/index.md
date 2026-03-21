@@ -37,6 +37,7 @@ Pick a path based on what you need to do.
 |----------|-------------|
 | [Search](./probe-cli/search.md) | Semantic code search and query syntax |
 | [Extract](./probe-cli/extract.md) | Block extraction by line, range, symbol, or stdin/diff |
+| [Symbols](./probe-cli/symbols.md) | File symbol tree / table of contents with line numbers |
 | [Query](./probe-cli/query.md) | AST-grep structural search |
 | [CLI Reference](./probe-cli/cli-reference.md) | Command matrix and options |
 

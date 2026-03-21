@@ -47,6 +47,7 @@ When running as an MCP server, Probe exposes these tools:
 | `search` | Semantic code search with Elasticsearch syntax |
 | `query` | AST-based structural queries |
 | `extract` | Extract code blocks from files |
+| `symbols` | List all symbols in a file (TOC with line numbers) |
 | `listFiles` | List files in directory |
 | `searchFiles` | Find files by name pattern |
 
@@ -101,6 +102,24 @@ When running as an MCP server, Probe exposes these tools:
       }
     },
     "required": ["files"]
+  }
+}
+```
+
+**symbols**
+```json
+{
+  "name": "symbols",
+  "description": "List all symbols in a file with line numbers",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "file": {
+        "type": "string",
+        "description": "Path to the file to list symbols from"
+      }
+    },
+    "required": ["file"]
   }
 }
 ```

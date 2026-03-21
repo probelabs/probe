@@ -10,6 +10,7 @@ mod outline_diff_formatter;
 mod processor;
 mod prompts;
 pub mod symbol_finder;
+pub mod symbols;
 
 // Re-export public functions
 #[allow(unused_imports)]

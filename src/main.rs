@@ -834,6 +834,11 @@ async fn main() -> Result<()> {
                     .unwrap_or(false),
             lsp,
         })?,
+        Some(Commands::Symbols {
+            files,
+            format,
+            allow_tests,
+        }) => probe_code::extract::symbols::handle_symbols(files, &format, allow_tests)?,
         Some(Commands::Query {
             pattern,
             path,

@@ -7,9 +7,10 @@ import { tool, generateText } from 'ai';
 import { search } from '../search.js';
 import { query } from '../query.js';
 import { extract } from '../extract.js';
+import { symbols } from '../symbols.js';
 import { delegate } from '../delegate.js';
 import { analyzeAll } from './analyzeAll.js';
-import { searchSchema, searchDelegateSchema, querySchema, extractSchema, delegateSchema, analyzeAllSchema, searchDescription, searchDelegateDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
+import { searchSchema, searchDelegateSchema, querySchema, extractSchema, symbolsSchema, delegateSchema, analyzeAllSchema, searchDescription, searchDelegateDescription, queryDescription, extractDescription, delegateDescription, analyzeAllDescription, parseTargets, parseAndResolvePaths, resolveTargetPath } from './common.js';
 import { existsSync } from 'fs';
 import { formatErrorForAI } from '../utils/error-types.js';
 import { annotateOutputWithHashes } from './hashline.js';
@@ -1339,6 +1340,40 @@ export const analyzeAllTool = (options = {}) => {
 				return result;
 			} catch (error) {
 				console.error('Error executing analyze_all:', error);
+				return formatErrorForAI(error);
+			}
+		}
+	});
+};
+
+export const symbolsTool = (options = {}) => {
+	return tool({
+		name: 'symbols',
+		description: 'List all symbols (functions, classes, structs, constants, etc.) in a file. Returns a hierarchical tree with line numbers — like a table of contents for code files.',
+		inputSchema: symbolsSchema,
+		execute: async ({ file }) => {
+			try {
+				let filePath = file;
+				if (options.cwd) {
+					const resolvedPaths = parseAndResolvePaths(file, options.cwd);
+					if (resolvedPaths.length > 0) {
+						filePath = resolvedPaths[0];
+					}
+				}
+
+				const result = await symbols({
+					files: [filePath],
+					cwd: options.cwd,
+					binaryOptions: options.binaryOptions
+				});
+
+				// Schema accepts single file, so return first result directly
+				if (result && result.length > 0) {
+					return JSON.stringify(result[0], null, 2);
+				}
+				return JSON.stringify({ file, symbols: [] }, null, 2);
+			} catch (error) {
+				console.error('Error executing symbols:', error);
 				return formatErrorForAI(error);
 			}
 		}

@@ -14,6 +14,7 @@ dotenv.config();
 import { search } from './search.js';
 import { query } from './query.js';
 import { extract } from './extract.js';
+import { symbols } from './symbols.js';
 import { grep } from './grep.js';
 import { delegate } from './delegate.js';
 import { getBinaryPath, setBinaryPath } from './utils.js';
@@ -33,6 +34,7 @@ import {
 	searchFilesSchema,
 	readImageSchema,
 	readMediaSchema,
+	symbolsSchema,
 	listSkillsSchema,
 	useSkillSchema
 } from './tools/common.js';
@@ -41,7 +43,7 @@ import {
 	createSchema,
 	multiEditSchema
 } from './tools/edit.js';
-import { searchTool, queryTool, extractTool, delegateTool, analyzeAllTool } from './tools/vercel.js';
+import { searchTool, queryTool, extractTool, delegateTool, analyzeAllTool, symbolsTool } from './tools/vercel.js';
 import { createExecutePlanTool, createCleanupExecutePlanTool } from './tools/executePlan.js';
 import { bashTool } from './tools/bash.js';
 import { editTool, createTool, multiEditTool } from './tools/edit.js';
@@ -62,6 +64,7 @@ export {
 	search,
 	query,
 	extract,
+	symbols,
 	grep,
 	delegate,
 	getBinaryPath,
@@ -91,6 +94,7 @@ export {
 	extractTool,
 	delegateTool,
 	analyzeAllTool,
+	symbolsTool,
 	createExecutePlanTool,
 	createCleanupExecutePlanTool,
 	bashTool,
@@ -117,6 +121,7 @@ export {
 	searchFilesSchema,
 	readImageSchema,
 	readMediaSchema,
+	symbolsSchema,
 	listSkillsSchema,
 	useSkillSchema,
 	// Export task management
