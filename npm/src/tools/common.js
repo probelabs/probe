@@ -73,7 +73,7 @@ export const readMediaSchema = z.object({
 });
 
 export const symbolsSchema = z.object({
-	file: z.string().describe('Path to the file to list symbols from. Returns a tree of functions, classes, structs, constants, etc. with line numbers.')
+	file: z.string().describe('Path to the file to list symbols from. Returns a hierarchical tree of functions, classes, structs, constants, etc. with line numbers and nesting (e.g., methods inside classes/impl blocks).')
 });
 
 export const bashSchema = z.object({

@@ -887,11 +887,11 @@ fn find_node_and_extract_signature(
     None
 }
 
-/// Extract all root-level symbols from a file
-/// Returns a vector of SearchResults, one for each root-level symbol.
+/// Legacy wrapper: extract root-level symbols as flat `SearchResult`s.
 ///
-/// Delegates to `symbols::extract_symbols` for AST parsing and symbol collection,
-/// then converts the hierarchical `SymbolNode` tree into flat `SearchResult`s.
+/// Delegates to `symbols::extract_symbols()` for the actual AST parsing, then
+/// flattens the hierarchical tree into a flat list for backward compatibility.
+/// For hierarchical output with nesting, use `symbols::extract_symbols()` directly.
 #[allow(dead_code)]
 pub fn extract_all_symbols_from_file(path: &Path, allow_tests: bool) -> Result<Vec<SearchResult>> {
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";

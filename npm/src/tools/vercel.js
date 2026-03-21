@@ -1367,11 +1367,11 @@ export const symbolsTool = (options = {}) => {
 					binaryOptions: options.binaryOptions
 				});
 
-				// Return formatted JSON (full array to avoid data loss with multiple files)
+				// Schema accepts single file, so return first result directly
 				if (result && result.length > 0) {
-					return JSON.stringify(result.length === 1 ? result[0] : result, null, 2);
+					return JSON.stringify(result[0], null, 2);
 				}
-				return 'No symbols found in file.';
+				return JSON.stringify({ file, symbols: [] }, null, 2);
 			} catch (error) {
 				console.error('Error executing symbols:', error);
 				return formatErrorForAI(error);

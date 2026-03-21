@@ -75,7 +75,7 @@ export async function symbols(options) {
 				const result = JSON.parse(stdout);
 				resolve(result);
 			} catch (error) {
-				reject(new Error(`Failed to parse symbols output: ${error.message}`));
+				reject(new Error(`Failed to parse symbols output: ${error.message}. Output: ${stdout.substring(0, 200)}`));
 			}
 		});
 

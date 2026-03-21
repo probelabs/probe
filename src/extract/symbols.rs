@@ -10,6 +10,11 @@ use tree_sitter::Node;
 
 use crate::language::{factory::get_language_impl, get_pooled_parser, return_pooled_parser};
 
+/// Maximum nesting depth for recursive symbol collection.
+/// Prevents excessive output and stack depth for deeply nested structures.
+/// Depth 3 covers: module → class/impl → method, which handles all common patterns.
+const MAX_SYMBOL_DEPTH: usize = 3;
+
 /// A node in the symbol tree.
 #[derive(Debug, Clone, Serialize)]
 pub struct SymbolNode {
@@ -91,7 +96,7 @@ fn collect_symbols(
     allow_tests: bool,
     depth: usize,
 ) -> Vec<SymbolNode> {
-    let mut symbols = Vec::new();
+    let mut symbols = Vec::with_capacity(node.child_count().min(32));
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
@@ -115,7 +120,7 @@ fn collect_symbols(
             let end_line = child.end_position().row + 1;
 
             // Recursively collect children for container nodes
-            let children = if is_container_node(child.kind()) && depth < 3 {
+            let children = if is_container_node(child.kind()) && depth < MAX_SYMBOL_DEPTH {
                 collect_children_symbols(&child, source, lang, allow_tests, depth + 1)
             } else {
                 Vec::new()
@@ -268,7 +273,7 @@ fn normalize_kind(kind: &str) -> String {
 
 /// Format symbols as plain text with indentation.
 pub fn format_symbols_text(file_symbols: &[FileSymbols]) -> String {
-    let mut output = String::new();
+    let mut output = String::with_capacity(file_symbols.len() * 256);
 
     for fs in file_symbols {
         output.push_str(&fs.file);
