@@ -761,6 +761,15 @@ describe('Delegate prompt type propagation', () => {
     expect(predefinedPrompts['engineer']).not.toContain('READ-ONLY');
   });
 
+  test('engineer prompt explains line-targeted insert vs replace semantics', async () => {
+    const { predefinedPrompts } = await import('../../src/agent/shared/prompts.js');
+
+    expect(predefinedPrompts['engineer']).toContain('omitting position means replace/update the addressed lines');
+    expect(predefinedPrompts['engineer']).toContain('position="before" or position="after"');
+    expect(predefinedPrompts['engineer']).toContain('Never express insertion as end_line < start_line');
+    expect(predefinedPrompts['engineer']).toContain('set new_string to the empty string ""');
+  });
+
   test('default promptType is code-explorer which would be inherited by delegate', () => {
     const agent = new ProbeAgent({});
     expect(agent.promptType).toBe('code-explorer');

@@ -138,6 +138,8 @@ Bash is fine for: formatters (gofmt, prettier, black), build/test/lint commands,
 - Never expose secrets, API keys, or credentials in generated code. Never log sensitive information.
 - Do not surprise the user with unrequested changes. Do what was asked, including reasonable follow-up actions, but do not refactor surrounding code or add features that were not requested.
 - When editing files, keep edits focused and minimal. For changes spanning more than a few lines, prefer line-targeted editing (start_line/end_line) over text replacement (old_string) — it constrains scope and prevents accidental removal of adjacent content. Never include unrelated sections in an edit operation.
+- In line-targeted mode, omitting position means replace/update the addressed lines. To insert code near an existing line, you MUST use position="before" or position="after". Never express insertion as end_line < start_line.
+- To remove lines with line-targeted mode, target the exact start_line/end_line range and set new_string to the empty string "".
 - After every significant change, verify the project still builds and passes linting. Do not wait until the end to discover breakage.
 
 # Writing Tests

@@ -44,12 +44,25 @@ describe('Line-Targeted Edit Mode', () => {
 
     test('editDescription should mention line-targeted', () => {
       expect(editDescription).toContain('line-targeted');
+      expect(editDescription).toContain('insertion');
+      expect(editDescription).toContain('deletion');
     });
 
     test('editToolDefinition should document line-targeted mode', () => {
       expect(editToolDefinition).toContain('Line-targeted edit');
       expect(editToolDefinition).toContain('start_line');
       expect(editToolDefinition).toContain('end_line');
+      expect(editToolDefinition).toContain('Replace/update lines');
+      expect(editToolDefinition).toContain('Insert near a line');
+      expect(editToolDefinition).toContain('Delete lines');
+      expect(editToolDefinition).toContain('Inverted ranges are invalid');
+    });
+
+    test('schema descriptions should explain replace, insert, and delete semantics', () => {
+      expect(editSchema.properties.new_string.description).toContain('empty string');
+      expect(editSchema.properties.position.description).toContain('Omit position to replace/update');
+      expect(editSchema.properties.start_line.description).toContain('insertion anchor');
+      expect(editSchema.properties.end_line.description).toContain('Must be >= start_line');
     });
   });
 
@@ -295,6 +308,23 @@ describe('Line-Targeted Edit Mode', () => {
       });
       expect(result).toContain('Error editing file');
       expect(result).toContain('must be >= start_line');
+      expect(result).toContain('replace/update the addressed lines, not insert');
+      expect(result).toContain('position');
+      expect(result).toContain('empty string');
+    });
+
+    test('should give explicit insertion guidance for adjacent inverted ranges', async () => {
+      const testFile = join(tempDir, 'test.js');
+      await fs.writeFile(testFile, sampleContent);
+      const result = await tool.execute({
+        file_path: testFile,
+        start_line: '4',
+        end_line: '3',
+        new_string: '  const w = 3;'
+      });
+      expect(result).toContain('This looks like an insertion between lines 3 and 4');
+      expect(result).toContain('start_line="4" with position="before"');
+      expect(result).toContain('start_line="3" with position="after"');
     });
 
     test('should error when start_line is beyond file length', async () => {
