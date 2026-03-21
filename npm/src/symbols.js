@@ -4,7 +4,7 @@
  */
 
 import { spawn } from 'child_process';
-import { getBinaryPath } from './utils.js';
+import { getBinaryPath, escapeString } from './utils.js';
 import { validateCwdPath } from './utils/path-validation.js';
 
 /**
@@ -37,7 +37,7 @@ export async function symbols(options) {
 	}
 
 	for (const file of options.files) {
-		args.push(file);
+		args.push(escapeString(file));
 	}
 
 	if (process.env.DEBUG === '1') {
