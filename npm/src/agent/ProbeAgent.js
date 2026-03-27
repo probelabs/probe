@@ -4084,7 +4084,7 @@ or
                   }
                   return {
                     toolChoice: 'none',
-                    userMessage: `⚠️ TIME BUDGET EXHAUSTED. Your allocated time for this task has run out. You have ${remaining} step(s) remaining to provide your answer.\n\nIMPORTANT: This is a time budget constraint, NOT a system shutdown or error. The system is working perfectly — you simply used all your allocated time.\n\nDo NOT say things like "the system is shutting down" or "try again later" — the user submitted a request and is waiting for YOUR answer right now.\n\nProvide your BEST answer NOW using the information you have already gathered. Do NOT call any more tools. Summarize your findings and respond completely. If something was not completed, honestly state what was not done and provide any partial results or recommendations you can offer.`
+                    userMessage: `⚠️ TIME BUDGET EXHAUSTED. Your allocated time for this task has run out. You have ${remaining} step(s) remaining to provide your answer.\n\nIMPORTANT: This is a time budget constraint, NOT a system shutdown or error. The system is working perfectly — you simply used all your allocated time.\n\nDo NOT say things like "the system is shutting down" or "try again later" — the user submitted a request and is waiting for YOUR answer right now.\n\nYou MUST now produce a detailed PROGRESS REPORT so that a follow-up agent can continue your work without starting over. Structure your response as follows:\n\n## Task\nWhat was the original request / goal.\n\n## Completed Work\nWhat you successfully accomplished — include ALL findings, code snippets, file paths, data, and conclusions gathered. Be specific and include actual content, not just descriptions.\n\n## Key Findings\nConcrete facts, answers, or data points you discovered. Include file paths with line numbers, code snippets, configuration values, etc.\n\n## Attempted but Inconclusive\nWhat you tried that did not yield clear results — include the approach and why it was inconclusive, so the next agent does not repeat it.\n\n## Not Started / Remaining\nWhat parts of the task you did not get to, and any recommendations for how to approach them.\n\n## Suggested Next Steps\nSpecific, actionable steps for a follow-up agent to continue this work efficiently.\n\nIMPORTANT: Include ALL useful data you gathered inline — do not just say "I found X", actually include X. The next agent will only see this report, not your tool call history.`
                   };
                 }
 
@@ -4094,22 +4094,48 @@ or
                 return { toolChoice: 'none' };
               }
 
-              // Last-iteration warning — force text-only and tell the AI to summarize
+              // Last-iteration warning — force text-only and request a structured progress report
               if (stepNumber === maxIterations - 1) {
-                // Build a brief summary of tools used so the model can reference them in its answer
-                const searchesTried = _toolCallLog
-                  .filter(tc => tc.name === 'search')
-                  .map(tc => `"${tc.args.query || ''}"${tc.args.exact ? ' (exact)' : ''}`)
-                  .filter((v, i, a) => a.indexOf(v) === i); // unique
-                const searchSummary = searchesTried.length > 0
-                  ? `\nSearches attempted: ${searchesTried.join(', ')}`
-                  : '';
+                // Build a detailed activity log so the model can produce an accurate handoff report
+                const toolActivity = _toolCallLog
+                  .filter(tc => tc.name !== '_assistant_text')
+                  .map(tc => {
+                    const argStr = tc.name === 'search'
+                      ? `query="${tc.args.query || ''}"${tc.args.exact ? ' exact' : ''} path=${tc.args.path || '.'}`
+                      : JSON.stringify(tc.args || {}).substring(0, 200);
+                    const brief = tc.resultBrief ? ` → ${tc.resultBrief.substring(0, 150)}` : '';
+                    return `  [step ${tc.step}] ${tc.name}(${argStr})${brief}`;
+                  })
+                  .join('\n');
+                const activityLog = toolActivity ? `\n\nTool activity so far:\n${toolActivity}` : '';
 
                 // For code-searcher subagents: instruct to output structured JSON even on partial results
                 const isCodeSearcher = this.promptType === 'code-searcher';
                 const lastIterMessage = isCodeSearcher
-                  ? `⚠️ LAST ITERATION — you are out of tool calls. Output your JSON response NOW with whatever files you have verified so far. Set confidence to "low" if your search was incomplete. Include the "searches" array listing all search queries you made with their paths and outcomes.${searchSummary}`
-                  : `⚠️ LAST ITERATION — you are out of tool calls. Provide your BEST answer NOW with the information gathered so far. If you could not find what was requested, explain exactly what you searched for and why it did not work, so the caller can try a different approach.${searchSummary}`;
+                  ? `⚠️ LAST ITERATION — you are out of tool calls. Output your JSON response NOW with whatever files you have verified so far. Set confidence to "low" if your search was incomplete. Include the "searches" array listing all search queries you made with their paths and outcomes.${activityLog}`
+                  : `⚠️ ITERATION LIMIT REACHED — you have no more tool calls. You MUST now produce a detailed PROGRESS REPORT so that a follow-up agent can continue your work without starting over.
+
+Structure your response as follows:
+
+## Task
+What was the original request / goal.
+
+## Completed Work
+What you successfully accomplished — include ALL findings, code snippets, file paths, data, and conclusions gathered. Be specific and include actual content, not just descriptions.
+
+## Key Findings
+Concrete facts, answers, or data points you discovered. Include file paths with line numbers, code snippets, configuration values, etc.
+
+## Attempted but Inconclusive
+What you tried that did not yield clear results — include the approach and why it was inconclusive, so the next agent does not repeat it.
+
+## Not Started / Remaining
+What parts of the task you did not get to, and any recommendations for how to approach them.
+
+## Suggested Next Steps
+Specific, actionable steps for a follow-up agent to continue this work efficiently.
+
+IMPORTANT: Include ALL useful data you gathered inline — do not just say "I found X", actually include X. The next agent will only see this report, not your tool call history.${activityLog}`;
 
                 return {
                   toolChoice: 'none',
@@ -4208,11 +4234,24 @@ Double-check your response based on the criteria above. If everything looks good
               currentIteration++;
               toolContext.currentIteration = currentIteration;
 
-              // Track tool calls for failure diagnostics
+              // Track tool calls for failure diagnostics and progress reports
               if (toolCalls?.length > 0) {
-                for (const tc of toolCalls) {
-                  _toolCallLog.push({ name: tc.toolName, args: tc.args || {} });
+                for (let i = 0; i < toolCalls.length; i++) {
+                  const tc = toolCalls[i];
+                  const tr = toolResults?.[i];
+                  let resultBrief = '';
+                  if (tr) {
+                    const raw = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result);
+                    resultBrief = raw ? raw.substring(0, 500) : '';
+                  }
+                  const tcArgs = tc.args || (typeof tc.input === 'string' ? (() => { try { return JSON.parse(tc.input); } catch { return {}; } })() : tc.input) || {};
+                  _toolCallLog.push({ name: tc.toolName, args: tcArgs, resultBrief, step: currentIteration });
                 }
+              }
+
+              // Track assistant text output per step for progress reports
+              if (text && text.trim()) {
+                _toolCallLog.push({ name: '_assistant_text', args: {}, resultBrief: text.substring(0, 1000), step: currentIteration });
               }
 
               // Record telemetry — include model's reasoning and tool call details
@@ -4633,13 +4672,16 @@ Double-check your response based on the criteria above. If everything looks good
                 `Some of your tool calls were cancelled mid-execution because the timeout observer determined the time limit was reached.\n\n` +
                 `IMPORTANT: This is a time budget constraint, NOT a system shutdown or error. The system is working perfectly — you simply used all your allocated time. ` +
                 `Do NOT say things like "the system is shutting down" or "try again later." The user is waiting for your answer RIGHT NOW.\n\n` +
-                `Please provide a DETAILED summary of:\n` +
-                `1. What you were asked to do (the original task)\n` +
-                `2. What you accomplished — include ALL findings, code snippets, data, and conclusions you gathered\n` +
-                `3. What was still in progress or not yet started\n` +
-                `4. Any partial results or recommendations you can offer based on what you found so far` +
+                `You MUST produce a detailed PROGRESS REPORT so that a follow-up agent can continue your work without starting over. ` +
+                `Structure your response with these sections:\n\n` +
+                `## Task\nWhat was the original request / goal.\n\n` +
+                `## Completed Work\nWhat you successfully accomplished — include ALL findings, code snippets, file paths, data, and conclusions gathered. Be specific and include actual content, not just descriptions.\n\n` +
+                `## Key Findings\nConcrete facts, answers, or data points you discovered. Include file paths with line numbers, code snippets, configuration values, etc.\n\n` +
+                `## Attempted but Inconclusive\nWhat you tried that did not yield clear results — include the approach and why it was inconclusive, so the next agent does not repeat it.\n\n` +
+                `## Not Started / Remaining\nWhat parts of the task you did not get to, and any recommendations for how to approach them.\n\n` +
+                `## Suggested Next Steps\nSpecific, actionable steps for a follow-up agent to continue this work efficiently.` +
                 `${taskContext}${schemaContext}\n\n` +
-                `Be thorough — this is the user's only response. Include all useful information you collected.`;
+                `IMPORTANT: Include ALL useful data you gathered inline — do not just say "I found X", actually include X. The next agent will only see this report, not your tool call history.`;
 
               const summaryMessages = [
                 ...currentMessages,
@@ -4791,20 +4833,32 @@ Double-check your response based on the criteria above. If everything looks good
             const searchQueries = [];
             const searchDetails = [];
             const toolCounts = {};
+            const toolTimeline = [];
             for (const tc of _toolCallLog) {
+              if (tc.name === '_assistant_text') continue;
               toolCounts[tc.name] = (toolCounts[tc.name] || 0) + 1;
               if (tc.name === 'search') {
                 const q = tc.args.query || '';
                 const p = tc.args.path || '.';
                 const exact = tc.args.exact ? ' (exact)' : '';
                 searchQueries.push(`"${q}"${exact}`);
-                searchDetails.push({ query: q, path: p, had_results: false });
+                searchDetails.push({ query: q, path: p, had_results: !!(tc.resultBrief && tc.resultBrief.trim()) });
               }
+              const argStr = tc.name === 'search'
+                ? `query="${tc.args.query || ''}"${tc.args.exact ? ' exact' : ''}`
+                : JSON.stringify(tc.args || {}).substring(0, 150);
+              const brief = tc.resultBrief ? ` → ${tc.resultBrief.substring(0, 200)}` : ' → (no result)';
+              toolTimeline.push(`  [step ${tc.step}] ${tc.name}(${argStr})${brief}`);
             }
             const toolBreakdown = Object.entries(toolCounts)
               .map(([name, count]) => `${name}: ${count}x`)
               .join(', ');
             const uniqueSearches = [...new Set(searchQueries)];
+
+            // Collect any assistant text fragments as partial findings
+            const assistantTexts = _toolCallLog
+              .filter(tc => tc.name === '_assistant_text' && tc.resultBrief)
+              .map(tc => tc.resultBrief);
 
             // For code-searcher subagents: produce structured JSON so the parent
             // can still use partial results instead of getting a plain error string.
@@ -4816,12 +4870,18 @@ Double-check your response based on the criteria above. If everything looks good
                 searches: searchDetails
               });
             } else {
-              let summary = `I was unable to complete your request after ${currentIteration} tool iterations.\n\n`;
-              summary += `Tool calls made: ${toolBreakdown || 'none'}\n`;
+              let summary = `## Progress Report (iteration limit reached after ${currentIteration} steps)\n\n`;
+              summary += `### Tool Usage Summary\n${toolBreakdown || 'none'}\n\n`;
               if (uniqueSearches.length > 0) {
-                summary += `Search queries tried: ${uniqueSearches.join(', ')}\n`;
+                summary += `### Search Queries Attempted\n${uniqueSearches.join(', ')}\n\n`;
               }
-              summary += `\nThe search approach may be fundamentally wrong for this query. Consider: using exact=true for literal string matching, using bash/grep for pattern-based file searches, or trying a completely different strategy instead of repeating similar searches.`;
+              if (toolTimeline.length > 0) {
+                summary += `### Step-by-Step Activity Log\n${toolTimeline.join('\n')}\n\n`;
+              }
+              if (assistantTexts.length > 0) {
+                summary += `### Partial Findings\n${assistantTexts.join('\n\n')}\n\n`;
+              }
+              summary += `### Recommendation for Follow-Up\nThe iteration limit was reached before the task could be completed. A follow-up agent should review the activity log above to avoid repeating the same searches, and consider alternative approaches such as: using exact=true for literal string matching, using bash/grep for pattern-based file searches, or trying a different strategy.`;
               finalResult = summary;
             }
           } catch {

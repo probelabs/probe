@@ -445,7 +445,7 @@ describe('prepareStep extension message delivery', () => {
     const result = prepareStep({ steps: [], stepNumber: 0 });
     // Should enter graceful wind-down, not deliver extension message
     expect(result.toolChoice).toBe('none');
-    expect(result.userMessage).toContain('Do NOT call any more tools');
+    expect(result.userMessage).toContain('PROGRESS REPORT');
   });
 });
 
@@ -483,7 +483,7 @@ describe('Full negotiated timeout lifecycle', () => {
     // prepareStep should now show graceful wind-down
     const step2 = prepareStep({ steps: [], stepNumber: 1 });
     expect(step2.toolChoice).toBe('none');
-    expect(step2.userMessage).toContain('Do NOT call any more tools');
+    expect(step2.userMessage).toContain('PROGRESS REPORT');
 
     // stopWhen should stop after bonus steps exhausted
     gracefulTimeoutState.bonusStepsUsed = 2;
