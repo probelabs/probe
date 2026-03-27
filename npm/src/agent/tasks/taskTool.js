@@ -42,111 +42,150 @@ export const taskToolDefinition = '';
 /**
  * Task system prompt addition - guidance for AI on when and how to use tasks
  */
-export const taskSystemPrompt = `[Task Management]
+export const taskSystemPrompt = `<task_management_system>
 
-Use the task tool to track progress on complex requests with multiple distinct goals.
+<purpose>
+Track progress on requests with multiple distinct goals using the task tool.
+Tasks are visible to the user in real time — keeping them accurate is critical.
+</purpose>
 
-## When to Use Tasks
-
-CREATE tasks when the request has **multiple separate deliverables**:
+<when_to_use_tasks>
+CREATE tasks when the request has multiple separate deliverables:
 - "Fix bug A AND add feature B" → two tasks
 - "Investigate auth, payments, AND notifications" → three tasks
 - "Implement X, then add tests, then update docs" → three sequential tasks with dependencies
 
-SKIP tasks for single-goal requests, even complex ones:
-- "How does ranking work?" — just investigate and answer
-- "Explain the authentication flow" — just trace and explain
+DO NOT create tasks for single-goal requests, even complex ones:
+- "How does ranking work?" → just investigate and answer
+- "Explain the authentication flow" → just trace and explain
 Multiple internal steps (search, read, analyze) for one goal ≠ multiple tasks.
 
-## Granularity
-
-Tasks = logical units of work, not files or steps.
+Granularity: tasks = logical units of work, not individual files or steps.
 - "Fix 8 similar test files" → ONE task (same fix repeated)
 - "Update API + tests + docs" → THREE tasks (different work types)
-- Max 5-6 tasks at initial planning. You can always add more as work unfolds.
+</when_to_use_tasks>
 
-## Task Chains and Dependencies
+<dependency_chains>
+Use dependencies to enforce ordering. A task CANNOT start until ALL its dependencies are completed.
 
-Use dependencies to express ordering constraints. A task cannot start until all its dependencies are completed.
-
-**Sequential chain**: tasks that must happen in order:
-\`\`\`
+<pattern name="sequential_chain" description="Tasks that must happen in strict order">
 tasks: [
   { id: "design", title: "Design the API schema" },
   { id: "implement", title: "Implement endpoints", dependencies: ["design"] },
   { id: "test", title: "Write integration tests", dependencies: ["implement"] }
 ]
-\`\`\`
-This creates: design → implement → test. You cannot start "implement" until "design" is completed.
+Result: design → implement → test. "implement" is blocked until "design" is completed.
+</pattern>
 
-**Fan-out**: multiple tasks that can run after one prerequisite:
-\`\`\`
+<pattern name="fan_out" description="Multiple tasks unlock after one prerequisite">
 tasks: [
   { id: "setup", title: "Set up database" },
   { id: "auth", title: "Add auth module", dependencies: ["setup"] },
   { id: "api", title: "Add API routes", dependencies: ["setup"] }
 ]
-\`\`\`
-Both "auth" and "api" can start after "setup" is done.
+Result: both "auth" and "api" become ready once "setup" is completed.
+</pattern>
 
-**Fan-in**: one task that depends on multiple prerequisites:
-\`\`\`
+<pattern name="fan_in" description="One task waits for multiple prerequisites">
 tasks: [
   { id: "auth", title: "Auth module" },
   { id: "api", title: "API routes" },
   { id: "e2e", title: "End-to-end tests", dependencies: ["auth", "api"] }
 ]
-\`\`\`
+Result: "e2e" is blocked until both "auth" and "api" are completed.
+</pattern>
+</dependency_chains>
 
-## Adding Tasks Mid-Work
+<modifying_tasks_mid_work>
+When new requirements emerge during execution, modify the task plan dynamically.
 
-When new requirements emerge during execution, add tasks dynamically:
+<technique name="add_subtask">
+Add a new task after an existing one, with a dependency to enforce order:
+  action: "create", id: "fix-edge-case", title: "Handle null input edge case",
+    dependencies: ["implement"], after: "implement"
+</technique>
 
-**Add a subtask after the current task**: Use \`after\` to insert it in the right position and \`dependencies\` to enforce ordering:
-\`\`\`
-action: "create", id: "fix-edge-case", title: "Handle null input edge case",
-  dependencies: ["implement"], after: "implement"
-\`\`\`
+<technique name="split_task">
+If a task is bigger than expected, create subtasks with dependencies on it, then complete or cancel the original.
+</technique>
 
-**Split a task**: If a task turns out to be bigger than expected, create new subtasks with dependencies, then cancel or complete the original.
+<technique name="insert_into_chain">
+Insert a new task between two existing tasks in a chain:
+Step 1 — Create the new task depending on the predecessor:
+  action: "create", id: "review", title: "Code review", dependencies: ["implement"], after: "implement"
+Step 2 — Update the successor to depend on the new task:
+  action: "update", id: "test", dependencies: ["review"]
+Original: design → implement → test
+Result:   design → implement → review → test
+</technique>
+</modifying_tasks_mid_work>
 
-**Insert into a chain**: Create a new task with dependencies on the predecessor and update the successor's dependencies:
-\`\`\`
-// Original chain: design → implement → test
-// Insert "review" between implement and test:
-action: "create", id: "review", title: "Code review", dependencies: ["implement"], after: "implement"
-// Then update test to depend on review instead:
-action: "update", id: "test", dependencies: ["review"]
-\`\`\`
+<workflow_rules>
+These rules are MANDATORY. Violating them produces incorrect progress tracking.
 
-## Strict Workflow Rules
+<rule id="1" name="plan_first">
+Call task tool with action="create" and a tasks array BEFORE starting any work.
+Use dependencies to express ordering constraints between tasks.
+</rule>
 
-1. **Plan first**: Call task tool with action="create" and a tasks array before starting any work.
-2. **One task at a time**: Set the current task to "in_progress" BEFORE you begin working on it.
-3. **Complete IMMEDIATELY**: The moment you finish a task's work, call the task tool with action="complete" for that task RIGHT AWAY — in the same step, not later. Do NOT batch completions. Do NOT wait until the end. Every task completion should happen the instant its work is verified done.
-4. **Verify before completing**: Do not mark a task as completed unless you have actually verified the result — code compiles, tests pass, output is correct. "I wrote the code" is not enough; confirm it works.
-5. **Respect the chain**: Never work on a task whose dependencies are not yet completed. Check the task list if unsure.
-6. **Adapt the plan**: If you discover new work during execution, add new tasks with proper dependencies. Do not silently do extra work without tracking it. If a task turns out to need subtasks, create them as dependent tasks.
-7. **Finish clean**: All tasks must be "completed" or "cancelled" before providing your final answer. You cannot finish with pending tasks.
+<rule id="2" name="mark_in_progress">
+Set the current task to status="in_progress" BEFORE you begin working on it.
+Only one task should be in_progress at a time.
+</rule>
 
-## Rules
+<rule id="3" name="complete_immediately" priority="critical">
+The MOMENT you finish a task's work, call the task tool with action="complete" for that task.
+Do this in the SAME response — not in the next step, not at the end, not batched with other completions.
+Every task must be completed the instant its work is verified done.
+</rule>
 
-- Dependencies are strictly enforced: a task CANNOT start until ALL its dependencies are completed
+<rule id="4" name="verify_before_completing">
+Do NOT mark a task completed unless you have verified the result:
+- Code compiles without errors
+- Tests pass
+- Output is correct and complete
+"I wrote the code" is NOT sufficient — you must confirm it works.
+</rule>
+
+<rule id="5" name="respect_dependencies">
+NEVER work on a task whose dependencies are not yet completed.
+The task list shows blocked_by attributes — check them. If a task is blocked, complete its blockers first.
+</rule>
+
+<rule id="6" name="adapt_the_plan">
+If you discover new work during execution, create new tasks with proper dependencies.
+Do NOT silently do extra work without tracking it in the task list.
+If a task needs subtasks, create them as new tasks depending on the current one.
+</rule>
+
+<rule id="7" name="finish_clean">
+ALL tasks must be "completed" or "cancelled" before you provide your final answer.
+You CANNOT finish with pending or in_progress tasks. The system will block you.
+</rule>
+</workflow_rules>
+
+<system_enforcement>
+- Dependencies are strictly enforced: blocked tasks cannot be started
 - Circular dependencies are rejected
-- Completion is blocked while tasks remain unresolved
-- ALWAYS mark tasks complete immediately — this is critical for progress tracking
+- You will be blocked from finishing while tasks remain unresolved
+- Task status is visible to the user in real time — stale status is misleading
+</system_enforcement>
+
+</task_management_system>
 `;
 
 /**
  * Task guidance to inject at start of request
  */
-export const taskGuidancePrompt = `Does this request have MULTIPLE DISTINCT GOALS?
+export const taskGuidancePrompt = `<task_decision>
+Does this request have MULTIPLE DISTINCT GOALS?
 - "Do A AND B AND C" (multiple goals) → Create tasks for each goal
 - "Do X, then Y, then Z" (sequential goals) → Create tasks with dependencies: Y depends on X, Z depends on Y
 - "Investigate/explain/find X" (single goal) → Skip tasks, just answer directly
 Multiple internal steps for ONE goal = NO tasks needed.
 If creating tasks: call the task tool with action="create" and a tasks array FIRST, using dependencies for ordering.
-CRITICAL: Complete each task IMMEDIATELY when its work is done. Do not defer completions.`;
+CRITICAL: Complete each task IMMEDIATELY when its work is done — do not defer completions.
+</task_decision>`;
 
 /**
  * Create task completion blocked message
@@ -154,16 +193,21 @@ CRITICAL: Complete each task IMMEDIATELY when its work is done. Do not defer com
  * @returns {string} Formatted message
  */
 export function createTaskCompletionBlockedMessage(taskSummary) {
-  return `⚠️ You cannot finish — there are unresolved tasks:
+  return `<task_completion_blocked>
+You CANNOT provide a final answer yet. There are unresolved tasks:
 
 ${taskSummary}
 
-You MUST resolve every task before providing your final answer:
-- If the work is DONE → action="complete", id="<task-id>" (do this immediately!)
-- If it is NOT needed → action="update", id="<task-id>", status="cancelled"
-- If it is BLOCKED → complete its dependencies first, then come back to it
+<required_actions>
+For EACH unresolved task, do ONE of the following RIGHT NOW:
+- Work is DONE → action="complete", id="<task-id>"
+- Work is NOT needed → action="update", id="<task-id>", status="cancelled"
+- Work is BLOCKED → complete its dependencies first, then return to it
+- Work is NOT started → set to "in_progress" and do the work, then complete it
+</required_actions>
 
-Do not provide a final answer until all tasks are completed or cancelled.`;
+You will continue to be blocked until every task is completed or cancelled.
+</task_completion_blocked>`;
 }
 
 /**
