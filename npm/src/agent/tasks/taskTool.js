@@ -51,7 +51,7 @@ Use the task tool to track progress on complex requests with multiple distinct g
 CREATE tasks when the request has **multiple separate deliverables**:
 - "Fix bug A AND add feature B" → two tasks
 - "Investigate auth, payments, AND notifications" → three tasks
-- "Implement X, then add tests, then update docs" → three sequential tasks
+- "Implement X, then add tests, then update docs" → three sequential tasks with dependencies
 
 SKIP tasks for single-goal requests, even complex ones:
 - "How does ranking work?" — just investigate and answer
@@ -63,19 +63,78 @@ Multiple internal steps (search, read, analyze) for one goal ≠ multiple tasks.
 Tasks = logical units of work, not files or steps.
 - "Fix 8 similar test files" → ONE task (same fix repeated)
 - "Update API + tests + docs" → THREE tasks (different work types)
-- Max 3–4 tasks. More means you're too granular.
+- Max 5-6 tasks at initial planning. You can always add more as work unfolds.
 
-## Workflow
+## Task Chains and Dependencies
 
-1. **Plan**: Call task tool with action="create" and a tasks array up front
-2. **Execute**: Update status to "in_progress" / "completed" as you work. Add, split, or cancel tasks as you learn more.
-3. **Finish**: All tasks must be "completed" or "cancelled" before providing your final answer.
+Use dependencies to express ordering constraints. A task cannot start until all its dependencies are completed.
+
+**Sequential chain**: tasks that must happen in order:
+\`\`\`
+tasks: [
+  { id: "design", title: "Design the API schema" },
+  { id: "implement", title: "Implement endpoints", dependencies: ["design"] },
+  { id: "test", title: "Write integration tests", dependencies: ["implement"] }
+]
+\`\`\`
+This creates: design → implement → test. You cannot start "implement" until "design" is completed.
+
+**Fan-out**: multiple tasks that can run after one prerequisite:
+\`\`\`
+tasks: [
+  { id: "setup", title: "Set up database" },
+  { id: "auth", title: "Add auth module", dependencies: ["setup"] },
+  { id: "api", title: "Add API routes", dependencies: ["setup"] }
+]
+\`\`\`
+Both "auth" and "api" can start after "setup" is done.
+
+**Fan-in**: one task that depends on multiple prerequisites:
+\`\`\`
+tasks: [
+  { id: "auth", title: "Auth module" },
+  { id: "api", title: "API routes" },
+  { id: "e2e", title: "End-to-end tests", dependencies: ["auth", "api"] }
+]
+\`\`\`
+
+## Adding Tasks Mid-Work
+
+When new requirements emerge during execution, add tasks dynamically:
+
+**Add a subtask after the current task**: Use \`after\` to insert it in the right position and \`dependencies\` to enforce ordering:
+\`\`\`
+action: "create", id: "fix-edge-case", title: "Handle null input edge case",
+  dependencies: ["implement"], after: "implement"
+\`\`\`
+
+**Split a task**: If a task turns out to be bigger than expected, create new subtasks with dependencies, then cancel or complete the original.
+
+**Insert into a chain**: Create a new task with dependencies on the predecessor and update the successor's dependencies:
+\`\`\`
+// Original chain: design → implement → test
+// Insert "review" between implement and test:
+action: "create", id: "review", title: "Code review", dependencies: ["implement"], after: "implement"
+// Then update test to depend on review instead:
+action: "update", id: "test", dependencies: ["review"]
+\`\`\`
+
+## Strict Workflow Rules
+
+1. **Plan first**: Call task tool with action="create" and a tasks array before starting any work.
+2. **One task at a time**: Set the current task to "in_progress" BEFORE you begin working on it.
+3. **Complete IMMEDIATELY**: The moment you finish a task's work, call the task tool with action="complete" for that task RIGHT AWAY — in the same step, not later. Do NOT batch completions. Do NOT wait until the end. Every task completion should happen the instant its work is verified done.
+4. **Verify before completing**: Do not mark a task as completed unless you have actually verified the result — code compiles, tests pass, output is correct. "I wrote the code" is not enough; confirm it works.
+5. **Respect the chain**: Never work on a task whose dependencies are not yet completed. Check the task list if unsure.
+6. **Adapt the plan**: If you discover new work during execution, add new tasks with proper dependencies. Do not silently do extra work without tracking it. If a task turns out to need subtasks, create them as dependent tasks.
+7. **Finish clean**: All tasks must be "completed" or "cancelled" before providing your final answer. You cannot finish with pending tasks.
 
 ## Rules
 
-- Dependencies are enforced: a task cannot start until its dependencies are completed
+- Dependencies are strictly enforced: a task CANNOT start until ALL its dependencies are completed
 - Circular dependencies are rejected
 - Completion is blocked while tasks remain unresolved
+- ALWAYS mark tasks complete immediately — this is critical for progress tracking
 `;
 
 /**
@@ -83,9 +142,11 @@ Tasks = logical units of work, not files or steps.
  */
 export const taskGuidancePrompt = `Does this request have MULTIPLE DISTINCT GOALS?
 - "Do A AND B AND C" (multiple goals) → Create tasks for each goal
+- "Do X, then Y, then Z" (sequential goals) → Create tasks with dependencies: Y depends on X, Z depends on Y
 - "Investigate/explain/find X" (single goal) → Skip tasks, just answer directly
 Multiple internal steps for ONE goal = NO tasks needed.
-If creating tasks, use the task tool with action="create" first.`;
+If creating tasks: call the task tool with action="create" and a tasks array FIRST, using dependencies for ordering.
+CRITICAL: Complete each task IMMEDIATELY when its work is done. Do not defer completions.`;
 
 /**
  * Create task completion blocked message
@@ -93,15 +154,16 @@ If creating tasks, use the task tool with action="create" first.`;
  * @returns {string} Formatted message
  */
 export function createTaskCompletionBlockedMessage(taskSummary) {
-  return `You cannot complete yet. The following tasks are still unresolved:
+  return `⚠️ You cannot finish — there are unresolved tasks:
 
 ${taskSummary}
 
-For each pending/in_progress task, either:
-- Complete it: call task tool with action="complete", id="task-X"
-- Cancel it: call task tool with action="update", id="task-X", status="cancelled"
+You MUST resolve every task before providing your final answer:
+- If the work is DONE → action="complete", id="<task-id>" (do this immediately!)
+- If it is NOT needed → action="update", id="<task-id>", status="cancelled"
+- If it is BLOCKED → complete its dependencies first, then come back to it
 
-After all tasks are resolved, provide your final answer.`;
+Do not provide a final answer until all tasks are completed or cancelled.`;
 }
 
 /**
