@@ -136,9 +136,28 @@ export class SimpleTelemetry {
  * Simple tracer for application-level tracing
  */
 export class SimpleAppTracer {
-  constructor(telemetry, sessionId = null) {
+  constructor(telemetry, sessionId = null, options = {}) {
     this.telemetry = telemetry;
     this.sessionId = sessionId || this.generateSessionId();
+    this.parentSessionId = options.parentSessionId || null;
+    this.rootSessionId = options.rootSessionId || this.sessionId;
+    this.agentKind = options.agentKind || 'main';
+  }
+
+  /**
+   * Create a child tracer for a delegated subagent.
+   * Inherits the same telemetry backend but scopes events to the child session.
+   * @param {string} childSessionId - The subagent's session ID
+   * @param {Object} [options] - Additional options
+   * @param {string} [options.agentKind='delegate'] - Kind of child agent
+   * @returns {SimpleAppTracer} A new tracer scoped to the child session
+   */
+  createChildTracer(childSessionId, options = {}) {
+    return new SimpleAppTracer(this.telemetry, childSessionId, {
+      parentSessionId: this.sessionId,
+      rootSessionId: this.rootSessionId,
+      agentKind: options.agentKind || 'delegate',
+    });
   }
 
   generateSessionId() {

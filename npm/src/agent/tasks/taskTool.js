@@ -105,28 +105,87 @@ After all tasks are resolved, provide your final answer.`;
 }
 
 /**
+ * Monotonic event sequence counter for deterministic replay ordering.
+ * Shared across all task tool instances within the same process.
+ */
+let _globalSequence = 0;
+
+/**
+ * Serialize a task object into a flat telemetry-friendly payload.
+ * @param {Object} task - Task from TaskManager
+ * @param {number} index - Position in the task list (0-based)
+ * @returns {Object} Flat task payload
+ */
+function serializeTask(task, index) {
+  return {
+    id: task.id,
+    title: task.title,
+    status: task.status,
+    priority: task.priority || null,
+    dependencies: task.dependencies || [],
+    after: null, // 'after' is an insertion hint, not stored on the task
+    order: index,
+  };
+}
+
+/**
  * Create task tool instance
  * @param {Object} options - Configuration options
  * @param {import('./TaskManager.js').TaskManager} options.taskManager - TaskManager instance
- * @param {Object} [options.tracer] - Optional tracer for telemetry
+ * @param {Object} [options.tracer] - Optional tracer for telemetry (SimpleAppTracer with session hierarchy)
  * @param {boolean} [options.debug=false] - Enable debug logging
+ * @param {string} [options.delegationTask] - Description of the delegated task (if this is a subagent)
  * @returns {Object} Tool instance with execute function
  */
 export function createTaskTool(options = {}) {
-  const { taskManager, tracer, debug = false } = options;
+  const { taskManager, tracer, debug = false, delegationTask = null } = options;
 
   if (!taskManager) {
     throw new Error('TaskManager instance is required');
   }
 
   /**
-   * Record task telemetry event
+   * Build the agent scope fields from the tracer's session hierarchy.
+   * These fields are included in every emitted task event so consumers
+   * can group events by agent/subagent without relying on span ancestry.
+   * @returns {Object} Agent scope attributes
+   */
+  const getAgentScope = () => {
+    if (!tracer) return {};
+    return {
+      'agent.session_id': tracer.sessionId || null,
+      'agent.parent_session_id': tracer.parentSessionId || null,
+      'agent.root_session_id': tracer.rootSessionId || null,
+      'agent.kind': tracer.agentKind || 'main',
+      ...(delegationTask ? { 'delegation.task': delegationTask } : {}),
+    };
+  };
+
+  /**
+   * Build global task-list context fields (total count, incomplete remaining).
+   * @returns {Object}
+   */
+  const getListContext = () => {
+    const all = taskManager.listTasks();
+    const incomplete = taskManager.getIncompleteTasks();
+    return {
+      'task.total_count': all.length,
+      'task.incomplete_remaining': incomplete.length,
+    };
+  };
+
+  /**
+   * Record task telemetry event with agent scope and monotonic sequence.
    * @param {string} eventType - Event type (created, updated, completed, deleted, listed, error)
    * @param {Object} data - Event data
    */
   const recordTaskEvent = (eventType, data = {}) => {
     if (tracer && typeof tracer.recordTaskEvent === 'function') {
-      tracer.recordTaskEvent(eventType, data);
+      tracer.recordTaskEvent(eventType, {
+        'task.sequence': ++_globalSequence,
+        ...getAgentScope(),
+        ...data
+      });
     }
   };
 
@@ -167,25 +226,30 @@ export function createTaskTool(options = {}) {
             if (tasks && Array.isArray(tasks)) {
               // Batch create
               const created = taskManager.createTasks(tasks);
-              const ids = created.map(t => t.id).join(', ');
+              const allTasks = taskManager.listTasks();
+              const taskIndex = new Map(allTasks.map((t, i) => [t.id, i]));
               recordTaskEvent('batch_created', {
                 'task.action': 'create',
                 'task.count': created.length,
-                'task.ids': ids,
-                'task.total_count': taskManager.listTasks().length
+                'task.items_json': JSON.stringify(created.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
+                ...getListContext()
               });
-              return `Created ${created.length} tasks: ${ids}\n\n${taskManager.formatTasksForPrompt()}`;
+              return `Created ${created.length} tasks: ${created.map(t => t.id).join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (title) {
               // Single create
               const task = taskManager.createTask({ title, description, priority, dependencies, after });
+              const allTasks = taskManager.listTasks();
+              const order = allTasks.findIndex(t => t.id === task.id);
               recordTaskEvent('created', {
                 'task.action': 'create',
                 'task.id': task.id,
-                'task.title': title,
-                'task.priority': priority || 'none',
-                'task.has_dependencies': dependencies && dependencies.length > 0,
-                'task.after': after || 'none',
-                'task.total_count': taskManager.listTasks().length
+                'task.title': task.title,
+                'task.status': task.status,
+                'task.priority': task.priority || null,
+                'task.dependencies': JSON.stringify(task.dependencies || []),
+                'task.after': after || null,
+                'task.order': order,
+                ...getListContext()
               });
               return `Created task ${task.id}: ${task.title}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
@@ -197,13 +261,15 @@ export function createTaskTool(options = {}) {
             if (tasks && Array.isArray(tasks)) {
               // Batch update
               const updated = taskManager.updateTasks(tasks);
-              const ids = updated.map(t => t.id).join(', ');
+              const allTasks = taskManager.listTasks();
+              const taskIndex = new Map(allTasks.map((t, i) => [t.id, i]));
               recordTaskEvent('batch_updated', {
                 'task.action': 'update',
                 'task.count': updated.length,
-                'task.ids': ids
+                'task.items_json': JSON.stringify(updated.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
+                ...getListContext()
               });
-              return `Updated ${updated.length} tasks: ${ids}\n\n${taskManager.formatTasksForPrompt()}`;
+              return `Updated ${updated.length} tasks: ${updated.map(t => t.id).join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
               // Single update
               const updates = {};
@@ -214,11 +280,18 @@ export function createTaskTool(options = {}) {
               if (dependencies) updates.dependencies = dependencies;
 
               const task = taskManager.updateTask(id, updates);
+              const allTasks = taskManager.listTasks();
+              const order = allTasks.findIndex(t => t.id === task.id);
               recordTaskEvent('updated', {
                 'task.action': 'update',
-                'task.id': id,
-                'task.new_status': status || 'unchanged',
-                'task.fields_updated': Object.keys(updates).join(', ')
+                'task.id': task.id,
+                'task.title': task.title,
+                'task.status': task.status,
+                'task.priority': task.priority || null,
+                'task.dependencies': JSON.stringify(task.dependencies || []),
+                'task.order': order,
+                'task.fields_updated': Object.keys(updates).join(', '),
+                ...getListContext()
               });
               return `Updated task ${task.id}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
@@ -235,21 +308,29 @@ export function createTaskTool(options = {}) {
                 throw new Error(`Invalid task item at index ${index}: must be a string ID or object with 'id' property`);
               });
               const completed = taskManager.completeTasks(ids);
+              const allTasks = taskManager.listTasks();
+              const taskIndex = new Map(allTasks.map((t, i) => [t.id, i]));
               recordTaskEvent('batch_completed', {
                 'task.action': 'complete',
                 'task.count': completed.length,
-                'task.ids': ids.join(', '),
-                'task.incomplete_remaining': taskManager.getIncompleteTasks().length
+                'task.items_json': JSON.stringify(completed.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
+                ...getListContext()
               });
               return `Completed ${completed.length} tasks\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
               // Single complete
               const task = taskManager.completeTask(id);
+              const allTasks = taskManager.listTasks();
+              const order = allTasks.findIndex(t => t.id === task.id);
               recordTaskEvent('completed', {
                 'task.action': 'complete',
-                'task.id': id,
+                'task.id': task.id,
                 'task.title': task.title,
-                'task.incomplete_remaining': taskManager.getIncompleteTasks().length
+                'task.status': task.status,
+                'task.priority': task.priority || null,
+                'task.dependencies': JSON.stringify(task.dependencies || []),
+                'task.order': order,
+                ...getListContext()
               });
               return `Completed task ${task.id}: ${task.title}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
@@ -265,21 +346,26 @@ export function createTaskTool(options = {}) {
                 if (t && typeof t.id === 'string') return t.id;
                 throw new Error(`Invalid task item at index ${index}: must be a string ID or object with 'id' property`);
               });
+              // Capture task data before deletion for the event
+              const tasksBefore = ids.map(tid => taskManager.getTask(tid)).filter(Boolean);
               const deleted = taskManager.deleteTasks(ids);
               recordTaskEvent('batch_deleted', {
                 'task.action': 'delete',
                 'task.count': deleted.length,
-                'task.ids': deleted.join(', '),
-                'task.total_count': taskManager.listTasks().length
+                'task.items_json': JSON.stringify(tasksBefore.map((t, i) => ({ id: t.id, title: t.title, status: t.status }))),
+                ...getListContext()
               });
               return `Deleted ${deleted.length} tasks: ${deleted.join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
-              // Single delete
+              // Capture task data before deletion
+              const taskBefore = taskManager.getTask(id);
               taskManager.deleteTask(id);
               recordTaskEvent('deleted', {
                 'task.action': 'delete',
                 'task.id': id,
-                'task.total_count': taskManager.listTasks().length
+                'task.title': taskBefore?.title || null,
+                'task.status': taskBefore?.status || null,
+                ...getListContext()
               });
               return `Deleted task ${id}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
@@ -294,7 +380,8 @@ export function createTaskTool(options = {}) {
               'task.action': 'list',
               'task.total_count': allTasks.length,
               'task.incomplete_count': incomplete.length,
-              'task.completed_count': allTasks.length - incomplete.length
+              'task.completed_count': allTasks.length - incomplete.length,
+              'task.items_json': JSON.stringify(allTasks.map((t, i) => serializeTask(t, i)))
             });
             return taskManager.formatTasksForPrompt();
           }
