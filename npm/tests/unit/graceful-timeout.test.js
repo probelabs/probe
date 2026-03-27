@@ -120,7 +120,7 @@ describe('prepareStep wind-down behavior', () => {
     expect(result.toolChoice).toBe('none');
     expect(result.userMessage).toContain('TIME BUDGET EXHAUSTED');
     expect(result.userMessage).toContain('3 step(s) remaining');
-    expect(result.userMessage).toContain('Do NOT call any more tools');
+    expect(result.userMessage).toContain('PROGRESS REPORT');
     expect(gracefulTimeoutState.bonusStepsUsed).toBe(1);
   });
 

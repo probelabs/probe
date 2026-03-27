@@ -84,7 +84,7 @@ describe('Code-searcher iteration limit handling', () => {
     expect(result).toBeDefined();
     expect(result.toolChoice).toBe('none');
     // Regular agent should get the generic message
-    expect(result.userMessage).toContain('Provide your BEST answer');
+    expect(result.userMessage).toContain('PROGRESS REPORT');
     // Should NOT mention JSON output format
     expect(result.userMessage).not.toContain('JSON response');
 
