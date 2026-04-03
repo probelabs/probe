@@ -287,14 +287,15 @@ export function createTaskTool(options = {}) {
 
   /**
    * Build global task-list context fields (total count, incomplete remaining).
+   * @param {Array} [allTasks] - Pre-fetched task list to avoid redundant calls
    * @returns {Object}
    */
-  const getListContext = () => {
-    const all = taskManager.listTasks();
-    const incomplete = taskManager.getIncompleteTasks();
+  const getListContext = (allTasks) => {
+    const all = allTasks || taskManager.listTasks();
+    const incompleteCount = all.filter(t => t.status !== 'completed' && t.status !== 'cancelled').length;
     return {
       'task.total_count': all.length,
-      'task.incomplete_remaining': incomplete.length,
+      'task.incomplete_remaining': incompleteCount,
     };
   };
 
@@ -361,7 +362,7 @@ export function createTaskTool(options = {}) {
                 'task.action': 'create',
                 'task.count': created.length,
                 'task.items_json': safeStringify(created.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
-                ...getListContext()
+                ...getListContext(allTasks)
               });
               return `Created ${created.length} tasks: ${created.map(t => t.id).join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (title) {
@@ -378,7 +379,7 @@ export function createTaskTool(options = {}) {
                 'task.dependencies': safeStringify(task.dependencies || []),
                 'task.after': after || null,
                 'task.order': order,
-                ...getListContext()
+                ...getListContext(allTasks)
               });
               return `Created task ${task.id}: ${task.title}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
@@ -396,7 +397,7 @@ export function createTaskTool(options = {}) {
                 'task.action': 'update',
                 'task.count': updated.length,
                 'task.items_json': safeStringify(updated.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
-                ...getListContext()
+                ...getListContext(allTasks)
               });
               return `Updated ${updated.length} tasks: ${updated.map(t => t.id).join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
@@ -420,7 +421,7 @@ export function createTaskTool(options = {}) {
                 'task.dependencies': safeStringify(task.dependencies || []),
                 'task.order': order,
                 'task.fields_updated': Object.keys(updates).join(', '),
-                ...getListContext()
+                ...getListContext(allTasks)
               });
               return `Updated task ${task.id}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
@@ -443,7 +444,7 @@ export function createTaskTool(options = {}) {
                 'task.action': 'complete',
                 'task.count': completed.length,
                 'task.items_json': safeStringify(completed.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
-                ...getListContext()
+                ...getListContext(allTasks)
               });
               return `Completed ${completed.length} tasks\n\n${taskManager.formatTasksForPrompt()}`;
             } else if (id) {
@@ -459,7 +460,7 @@ export function createTaskTool(options = {}) {
                 'task.priority': task.priority || null,
                 'task.dependencies': safeStringify(task.dependencies || []),
                 'task.order': order,
-                ...getListContext()
+                ...getListContext(allTasks)
               });
               return `Completed task ${task.id}: ${task.title}\n\n${taskManager.formatTasksForPrompt()}`;
             } else {
@@ -504,12 +505,12 @@ export function createTaskTool(options = {}) {
 
           case 'list': {
             const allTasks = taskManager.listTasks();
-            const incomplete = taskManager.getIncompleteTasks();
+            const ctx = getListContext(allTasks);
             recordTaskEvent('listed', {
               'task.action': 'list',
-              'task.total_count': allTasks.length,
-              'task.incomplete_count': incomplete.length,
-              'task.completed_count': allTasks.length - incomplete.length,
+              'task.total_count': ctx['task.total_count'],
+              'task.incomplete_count': ctx['task.incomplete_remaining'],
+              'task.completed_count': ctx['task.total_count'] - ctx['task.incomplete_remaining'],
               'task.items_json': safeStringify(allTasks.map((t, i) => serializeTask(t, i)))
             });
             return taskManager.formatTasksForPrompt();

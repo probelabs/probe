@@ -508,10 +508,13 @@ export class TaskManager {
     });
 
     // Add a brief status line so the AI can quickly assess progress
-    const completed = tasks.filter(t => t.status === 'completed').length;
-    const inProgress = tasks.filter(t => t.status === 'in_progress').length;
-    const pending = tasks.filter(t => t.status === 'pending').length;
-    const cancelled = tasks.filter(t => t.status === 'cancelled').length;
+    let completed = 0, inProgress = 0, pending = 0, cancelled = 0;
+    for (const t of tasks) {
+      if (t.status === 'completed') completed++;
+      else if (t.status === 'in_progress') inProgress++;
+      else if (t.status === 'pending') pending++;
+      else if (t.status === 'cancelled') cancelled++;
+    }
     const statusLine = `  <!-- ${completed}/${tasks.length} completed` +
       (inProgress > 0 ? `, ${inProgress} in progress` : '') +
       (pending > 0 ? `, ${pending} pending` : '') +

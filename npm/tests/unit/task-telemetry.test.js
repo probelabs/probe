@@ -16,6 +16,7 @@ describe('Task telemetry enrichment', () => {
   let events;
 
   beforeEach(() => {
+    _resetSequence();
     manager = new TaskManager({ debug: false });
     events = [];
 
