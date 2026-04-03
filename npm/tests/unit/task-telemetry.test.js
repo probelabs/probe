@@ -7,7 +7,7 @@
 
 import { jest, describe, test, expect, beforeEach } from '@jest/globals';
 import { TaskManager } from '../../src/agent/tasks/TaskManager.js';
-import { createTaskTool } from '../../src/agent/tasks/taskTool.js';
+import { createTaskTool, _resetSequence } from '../../src/agent/tasks/taskTool.js';
 import { SimpleAppTracer, SimpleTelemetry } from '../../src/agent/simpleTelemetry.js';
 
 describe('Task telemetry enrichment', () => {
@@ -355,6 +355,61 @@ describe('Task telemetry enrichment', () => {
     test('child isEnabled matches parent', () => {
       const child = tracer.createChildTracer('child-sess');
       expect(child.isEnabled()).toBe(tracer.isEnabled());
+    });
+  });
+
+  // ---- G. Error handling and edge cases ----
+
+  describe('error handling and edge cases', () => {
+    test('createTaskTool throws without TaskManager', () => {
+      expect(() => createTaskTool({ tracer })).toThrow('TaskManager instance is required');
+    });
+
+    test('events still work when tracer is null', async () => {
+      const tool = createTaskTool({ taskManager: manager, tracer: null });
+      const result = await tool.execute({ action: 'create', title: 'No tracer' });
+      expect(result).toContain('Created task');
+    });
+
+    test('invalid action returns error', async () => {
+      const tool = createTool();
+      const result = await tool.execute({ action: 'unknown_action' });
+      // Zod validation will reject this
+      expect(result).toContain('Error');
+    });
+
+    test('sequence numbers are monotonic across multiple tool instances', async () => {
+      _resetSequence();
+      const manager2 = new TaskManager({ debug: false });
+      const tool1 = createTool();
+      const tool2 = createTaskTool({ taskManager: manager2, tracer, debug: false });
+
+      await tool1.execute({ action: 'create', title: 'From tool 1' });
+      await tool2.execute({ action: 'create', title: 'From tool 2' });
+
+      const seqs = events
+        .filter(e => e.name.startsWith('task.'))
+        .map(e => e.attrs['task.sequence']);
+      expect(seqs.length).toBe(2);
+      expect(seqs[1]).toBeGreaterThan(seqs[0]);
+    });
+
+    test('malformed tasks JSON string returns error', async () => {
+      const tool = createTool();
+      const result = await tool.execute({ action: 'create', tasks: '{not valid json' });
+      expect(result).toContain('Error');
+    });
+
+    test('delete non-existent task returns error', async () => {
+      const tool = createTool();
+      const result = await tool.execute({ action: 'delete', id: 'does-not-exist' });
+      expect(result).toContain('Error');
+    });
+
+    test('complete non-existent task returns error', async () => {
+      const tool = createTool();
+      const result = await tool.execute({ action: 'complete', id: 'does-not-exist' });
+      expect(result).toContain('Error');
     });
   });
 });

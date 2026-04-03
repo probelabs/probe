@@ -486,7 +486,7 @@ export async function delegate({
 			debug,
 			tracer: tracer && typeof tracer.createChildTracer === 'function'
 				? tracer.createChildTracer(sessionId, { agentKind: 'delegate' })
-				: tracer,
+				: (tracer && debug && console.warn('[delegate] createChildTracer not available, using parent tracer — events will not be scoped to subagent'), tracer),
 			delegationTask: task,
 			path,       // Workspace root (from delegateTool)
 			allowedFolders, // Inherit allowed folders to keep architecture context root consistent

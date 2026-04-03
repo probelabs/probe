@@ -3360,10 +3360,10 @@ Follow these instructions carefully:
           if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
             this.tracer.recordTaskEvent('session_started', {
               'task.enabled': true,
-              'agent.session_id': this.tracer.sessionId || null,
-              'agent.parent_session_id': this.tracer.parentSessionId || null,
-              'agent.root_session_id': this.tracer.rootSessionId || null,
-              'agent.kind': this.tracer.agentKind || 'main',
+              'agent.session_id': this.tracer?.sessionId ?? null,
+              'agent.parent_session_id': this.tracer?.parentSessionId ?? null,
+              'agent.root_session_id': this.tracer?.rootSessionId ?? null,
+              'agent.kind': this.tracer?.agentKind ?? 'main',
             });
           }
 

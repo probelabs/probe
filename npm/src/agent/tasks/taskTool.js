@@ -213,8 +213,26 @@ You will continue to be blocked until every task is completed or cancelled.
 /**
  * Monotonic event sequence counter for deterministic replay ordering.
  * Shared across all task tool instances within the same process.
+ * Node.js is single-threaded so no race condition is possible.
+ * Resets at Number.MAX_SAFE_INTEGER to prevent overflow.
  */
 let _globalSequence = 0;
+
+/** @internal Reset the global sequence counter (for testing only). */
+export function _resetSequence() { _globalSequence = 0; }
+
+/**
+ * Safe JSON.stringify wrapper that returns '[]' on failure.
+ * @param {*} value - Value to serialize
+ * @returns {string} JSON string or fallback
+ */
+function safeStringify(value) {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return '[]';
+  }
+}
 
 /**
  * Serialize a task object into a flat telemetry-friendly payload.
@@ -287,11 +305,16 @@ export function createTaskTool(options = {}) {
    */
   const recordTaskEvent = (eventType, data = {}) => {
     if (tracer && typeof tracer.recordTaskEvent === 'function') {
-      tracer.recordTaskEvent(eventType, {
-        'task.sequence': ++_globalSequence,
-        ...getAgentScope(),
-        ...data
-      });
+      if (_globalSequence >= Number.MAX_SAFE_INTEGER) _globalSequence = 0;
+      try {
+        tracer.recordTaskEvent(eventType, {
+          'task.sequence': ++_globalSequence,
+          ...getAgentScope(),
+          ...data
+        });
+      } catch (err) {
+        if (debug) console.error('[TaskTool] Failed to record telemetry event:', err);
+      }
     }
   };
 
@@ -337,7 +360,7 @@ export function createTaskTool(options = {}) {
               recordTaskEvent('batch_created', {
                 'task.action': 'create',
                 'task.count': created.length,
-                'task.items_json': JSON.stringify(created.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
+                'task.items_json': safeStringify(created.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
                 ...getListContext()
               });
               return `Created ${created.length} tasks: ${created.map(t => t.id).join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
@@ -352,7 +375,7 @@ export function createTaskTool(options = {}) {
                 'task.title': task.title,
                 'task.status': task.status,
                 'task.priority': task.priority || null,
-                'task.dependencies': JSON.stringify(task.dependencies || []),
+                'task.dependencies': safeStringify(task.dependencies || []),
                 'task.after': after || null,
                 'task.order': order,
                 ...getListContext()
@@ -372,7 +395,7 @@ export function createTaskTool(options = {}) {
               recordTaskEvent('batch_updated', {
                 'task.action': 'update',
                 'task.count': updated.length,
-                'task.items_json': JSON.stringify(updated.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
+                'task.items_json': safeStringify(updated.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
                 ...getListContext()
               });
               return `Updated ${updated.length} tasks: ${updated.map(t => t.id).join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
@@ -394,7 +417,7 @@ export function createTaskTool(options = {}) {
                 'task.title': task.title,
                 'task.status': task.status,
                 'task.priority': task.priority || null,
-                'task.dependencies': JSON.stringify(task.dependencies || []),
+                'task.dependencies': safeStringify(task.dependencies || []),
                 'task.order': order,
                 'task.fields_updated': Object.keys(updates).join(', '),
                 ...getListContext()
@@ -419,7 +442,7 @@ export function createTaskTool(options = {}) {
               recordTaskEvent('batch_completed', {
                 'task.action': 'complete',
                 'task.count': completed.length,
-                'task.items_json': JSON.stringify(completed.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
+                'task.items_json': safeStringify(completed.map(t => serializeTask(t, taskIndex.get(t.id) ?? 0))),
                 ...getListContext()
               });
               return `Completed ${completed.length} tasks\n\n${taskManager.formatTasksForPrompt()}`;
@@ -434,7 +457,7 @@ export function createTaskTool(options = {}) {
                 'task.title': task.title,
                 'task.status': task.status,
                 'task.priority': task.priority || null,
-                'task.dependencies': JSON.stringify(task.dependencies || []),
+                'task.dependencies': safeStringify(task.dependencies || []),
                 'task.order': order,
                 ...getListContext()
               });
@@ -458,7 +481,7 @@ export function createTaskTool(options = {}) {
               recordTaskEvent('batch_deleted', {
                 'task.action': 'delete',
                 'task.count': deleted.length,
-                'task.items_json': JSON.stringify(tasksBefore.map((t, i) => ({ id: t.id, title: t.title, status: t.status }))),
+                'task.items_json': safeStringify(tasksBefore.map((t, i) => ({ id: t.id, title: t.title, status: t.status }))),
                 ...getListContext()
               });
               return `Deleted ${deleted.length} tasks: ${deleted.join(', ')}\n\n${taskManager.formatTasksForPrompt()}`;
@@ -487,7 +510,7 @@ export function createTaskTool(options = {}) {
               'task.total_count': allTasks.length,
               'task.incomplete_count': incomplete.length,
               'task.completed_count': allTasks.length - incomplete.length,
-              'task.items_json': JSON.stringify(allTasks.map((t, i) => serializeTask(t, i)))
+              'task.items_json': safeStringify(allTasks.map((t, i) => serializeTask(t, i)))
             });
             return taskManager.formatTasksForPrompt();
           }
