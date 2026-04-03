@@ -500,13 +500,28 @@ export class TaskManager {
 
       let line = `  <task id="${this._escapeXml(task.id)}" status="${this._escapeXml(task.status)}"`;
       if (task.priority) line += ` priority="${this._escapeXml(task.priority)}"`;
+      if (task.dependencies.length > 0) line += ` depends_on="${this._escapeXml(task.dependencies.join(','))}"`;
       if (blockers.length > 0) line += ` blocked_by="${this._escapeXml(blockers.join(','))}"`;
       line += `>${this._escapeXml(task.title)}</task>`;
 
       return line;
     });
 
-    return `<task_status>\n${taskLines.join('\n')}\n</task_status>`;
+    // Add a brief status line so the AI can quickly assess progress
+    let completed = 0, inProgress = 0, pending = 0, cancelled = 0;
+    for (const t of tasks) {
+      if (t.status === 'completed') completed++;
+      else if (t.status === 'in_progress') inProgress++;
+      else if (t.status === 'pending') pending++;
+      else if (t.status === 'cancelled') cancelled++;
+    }
+    const statusLine = `  <!-- ${completed}/${tasks.length} completed` +
+      (inProgress > 0 ? `, ${inProgress} in progress` : '') +
+      (pending > 0 ? `, ${pending} pending` : '') +
+      (cancelled > 0 ? `, ${cancelled} cancelled` : '') +
+      ` -->`;
+
+    return `<task_status>\n${statusLine}\n${taskLines.join('\n')}\n</task_status>`;
   }
 
   /**

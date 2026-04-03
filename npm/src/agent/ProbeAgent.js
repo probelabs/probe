@@ -350,6 +350,7 @@ export class ProbeAgent {
     // Task management configuration
     this.enableTasks = !!options.enableTasks;
     this.taskManager = null; // Initialized per-request in answer()
+    this.delegationTask = options.delegationTask || null; // Task description when this is a subagent
 
     // Per-instance delegation manager for concurrent delegation limits
     // Each ProbeAgent instance has its own limits, not shared globally
@@ -3350,14 +3351,19 @@ Follow these instructions carefully:
             this.toolImplementations.task = createTaskTool({
               taskManager: this.taskManager,
               tracer: this.tracer,
-              debug: this.debug
+              debug: this.debug,
+              delegationTask: this.delegationTask
             });
           }
 
           // Record telemetry for task initialization
           if (this.tracer && typeof this.tracer.recordTaskEvent === 'function') {
             this.tracer.recordTaskEvent('session_started', {
-              'task.enabled': true
+              'task.enabled': true,
+              'agent.session_id': this.tracer?.sessionId ?? null,
+              'agent.parent_session_id': this.tracer?.parentSessionId ?? null,
+              'agent.root_session_id': this.tracer?.rootSessionId ?? null,
+              'agent.kind': this.tracer?.agentKind ?? 'main',
             });
           }
 
