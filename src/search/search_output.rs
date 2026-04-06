@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use probe_code::language::is_test_file;
 use probe_code::models::SearchResult;
 use probe_code::search::query::QueryPlan;
 use probe_code::search::search_tokens::sum_tokens_with_deduplication;
@@ -571,6 +572,9 @@ fn format_and_print_json_results(
         lines: [usize; 2],
         node_type: &'a str,
         code: &'a str,
+        // Whether this result comes from a test file or contains test code
+        #[serde(skip_serializing_if = "Option::is_none")]
+        is_test: Option<bool>,
         // Symbol signature (when symbols flag is used)
         symbol_signature: Option<&'a String>,
         // Include other relevant fields
@@ -593,20 +597,33 @@ fn format_and_print_json_results(
 
     let json_results: Vec<JsonResult> = results
         .iter()
-        .map(|r| JsonResult {
-            file: &r.file,
-            lines: [r.lines.0, r.lines.1],
-            node_type: &r.node_type,
-            code: &r.code,
-            symbol_signature: r.symbol_signature.as_ref(),
-            matched_keywords: r.matched_keywords.as_ref(),
-            score: r.score,
-            tfidf_score: r.tfidf_score,
-            bm25_score: r.bm25_score,
-            file_unique_terms: r.file_unique_terms,
-            file_total_matches: r.file_total_matches,
-            block_unique_terms: r.block_unique_terms,
-            block_total_matches: r.block_total_matches,
+        .map(|r| {
+            // Compute is_test from file path (test file naming conventions)
+            // and from code content (test function patterns)
+            let file_is_test = is_test_file(Path::new(&r.file));
+            let code_is_test = !file_is_test && is_test_code_block(&r.code, &r.node_type);
+            let is_test = if file_is_test || code_is_test {
+                Some(true)
+            } else {
+                None // omit from JSON when not a test (less noise)
+            };
+
+            JsonResult {
+                file: &r.file,
+                lines: [r.lines.0, r.lines.1],
+                node_type: &r.node_type,
+                code: &r.code,
+                is_test,
+                symbol_signature: r.symbol_signature.as_ref(),
+                matched_keywords: r.matched_keywords.as_ref(),
+                score: r.score,
+                tfidf_score: r.tfidf_score,
+                bm25_score: r.bm25_score,
+                file_unique_terms: r.file_unique_terms,
+                file_total_matches: r.file_total_matches,
+                block_unique_terms: r.block_unique_terms,
+                block_total_matches: r.block_total_matches,
+            }
         })
         .collect();
 
@@ -680,6 +697,60 @@ fn format_and_print_json_results(
 
     println!("{json}", json = serde_json::to_string_pretty(&wrapper)?);
     Ok(())
+}
+
+/// Heuristic check for test-like code blocks based on content patterns.
+///
+/// This complements `is_test_file()` (which checks file naming) by detecting
+/// individual test functions/blocks in files that aren't named as test files
+/// (e.g., inline `#[cfg(test)]` modules in Rust, or mixed test/impl files).
+fn is_test_code_block(code: &str, node_type: &str) -> bool {
+    // Skip pure type/struct declarations that aren't test constructs
+    let is_structural_only = node_type == "type_declaration"
+        || node_type == "struct_item"
+        || node_type == "struct_declaration"
+        || node_type == "package_clause"
+        || node_type == "import_declaration";
+
+    if is_structural_only {
+        return false;
+    }
+
+    // Check for common test patterns across languages in the code content.
+    // We check the code itself rather than relying only on node_type because
+    // comment-attached-to-declaration blocks may have node_type "comment"
+    // while the code includes both the comment and its owning test function.
+    let first_lines: String = code.lines().take(10).collect::<Vec<_>>().join("\n");
+
+    // Rust: #[test], #[cfg(test)]
+    if first_lines.contains("#[test]") || first_lines.contains("#[cfg(test)]") {
+        return true;
+    }
+
+    // Python: def test_
+    if first_lines.contains("def test_") {
+        return true;
+    }
+
+    // JS/TS: test(', describe(', it(', expect(
+    if first_lines.contains("test(")
+        || first_lines.contains("describe(")
+        || first_lines.contains("it(")
+    {
+        return true;
+    }
+
+    // Go: func Test
+    if first_lines.contains("func Test") {
+        return true;
+    }
+
+    // Java/C#: @Test
+    if first_lines.contains("@Test") {
+        return true;
+    }
+
+    false
 }
 
 /// Format and print search results in XML format
@@ -3018,5 +3089,90 @@ mod tests {
 
         assert_eq!(cache.get(&path1).unwrap().as_ref(), content1);
         assert_eq!(cache.get(&path2).unwrap().as_ref(), content2);
+    }
+
+    #[test]
+    fn test_is_test_code_block_rust() {
+        assert!(is_test_code_block(
+            "#[test]\nfn test_something() {}",
+            "function_item"
+        ));
+        assert!(is_test_code_block("#[cfg(test)]\nmod tests {}", "module"));
+        assert!(!is_test_code_block("fn main() {}", "function_item"));
+    }
+
+    #[test]
+    fn test_is_test_code_block_python() {
+        assert!(is_test_code_block(
+            "def test_something():\n    pass",
+            "function_definition"
+        ));
+        assert!(!is_test_code_block(
+            "def something():\n    pass",
+            "function_definition"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_js() {
+        assert!(is_test_code_block(
+            "test('gamma', () => {})",
+            "call_expression"
+        ));
+        assert!(is_test_code_block(
+            "describe('suite', () => {})",
+            "call_expression"
+        ));
+        assert!(is_test_code_block(
+            "it('should work', () => {})",
+            "call_expression"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_go() {
+        assert!(is_test_code_block(
+            "func TestSomething(t *testing.T) {}",
+            "function_definition"
+        ));
+        assert!(!is_test_code_block(
+            "func Something() {}",
+            "function_definition"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_comment_with_test_function() {
+        // Comment nodes that include an attached test function should be detected
+        assert!(is_test_code_block(
+            "# Verifies: REQ-001\ndef test_beta():\n    pass",
+            "comment"
+        ));
+        assert!(is_test_code_block(
+            "// Verifies: REQ-001\ntest('gamma', () => {})",
+            "comment"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_type_declarations_excluded() {
+        // Type declarations should never be detected as test blocks
+        assert!(!is_test_code_block(
+            "type TestStruct struct{}",
+            "type_declaration"
+        ));
+        assert!(!is_test_code_block(
+            "// Verifies: REQ-001\npackage workflow\ntype Foo struct{}",
+            "type_declaration"
+        ));
+    }
+
+    #[test]
+    fn test_is_test_code_block_plain_comment_not_test() {
+        // A comment without test function code should not be detected as test
+        assert!(!is_test_code_block(
+            "// Verifies: REQ-001\n// Some regular comment",
+            "comment"
+        ));
     }
 }

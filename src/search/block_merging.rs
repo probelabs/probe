@@ -4,6 +4,119 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+/// Deduplicates overlapping search results where one block fully contains another.
+///
+/// When multiple search hits land in the same file, the parser may emit both a
+/// comment node (with its attached declaration) and the declaration itself as
+/// separate results with overlapping line ranges. This function keeps only the
+/// larger (containing) block and drops the contained one, preserving matched
+/// keywords from both.
+///
+/// This should run regardless of the `--no-merge` flag — it is deduplication,
+/// not merging of adjacent blocks.
+pub fn deduplicate_contained_blocks(results: Vec<SearchResult>) -> Vec<SearchResult> {
+    let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
+
+    if results.len() <= 1 {
+        return results;
+    }
+
+    let original_count = results.len();
+
+    // Group results by file
+    let mut file_blocks: BTreeMap<String, Vec<SearchResult>> = BTreeMap::new();
+    for result in results {
+        file_blocks
+            .entry(result.file.clone())
+            .or_default()
+            .push(result);
+    }
+
+    let mut deduped_results = Vec::new();
+
+    for (_file_path, mut blocks) in file_blocks {
+        if blocks.len() == 1 {
+            deduped_results.push(blocks.remove(0));
+            continue;
+        }
+
+        // Sort by start line, then by span size descending (larger blocks first)
+        blocks.sort_by(|a, b| {
+            a.lines.0.cmp(&b.lines.0).then_with(|| {
+                let span_a = a.lines.1 - a.lines.0;
+                let span_b = b.lines.1 - b.lines.0;
+                span_b.cmp(&span_a)
+            })
+        });
+
+        // Mark blocks that are fully contained within a larger block
+        let len = blocks.len();
+        let mut removed = vec![false; len];
+
+        for i in 0..len {
+            if removed[i] {
+                continue;
+            }
+            for j in (i + 1)..len {
+                if removed[j] {
+                    continue;
+                }
+                let (outer_start, outer_end) = blocks[i].lines;
+                let (inner_start, inner_end) = blocks[j].lines;
+
+                // Check if j is fully contained within i
+                if inner_start >= outer_start && inner_end <= outer_end {
+                    // Merge matched_keywords from the contained block into the container
+                    if let Some(ref inner_kw) = blocks[j].matched_keywords {
+                        let mut merged_kw: Vec<String> =
+                            blocks[i].matched_keywords.clone().unwrap_or_default();
+                        for kw in inner_kw {
+                            if !merged_kw.contains(kw) {
+                                merged_kw.push(kw.clone());
+                            }
+                        }
+                        merged_kw.sort();
+                        blocks[i].matched_keywords = Some(merged_kw);
+                    }
+                    removed[j] = true;
+                }
+                // Check if i is fully contained within j (can happen if j has same start but larger span)
+                else if outer_start >= inner_start && outer_end <= inner_end {
+                    if let Some(ref outer_kw) = blocks[i].matched_keywords {
+                        let mut merged_kw: Vec<String> =
+                            blocks[j].matched_keywords.clone().unwrap_or_default();
+                        for kw in outer_kw {
+                            if !merged_kw.contains(kw) {
+                                merged_kw.push(kw.clone());
+                            }
+                        }
+                        merged_kw.sort();
+                        blocks[j].matched_keywords = Some(merged_kw);
+                    }
+                    removed[i] = true;
+                    break; // i is removed, no need to check further
+                }
+            }
+        }
+
+        for (idx, block) in blocks.into_iter().enumerate() {
+            if !removed[idx] {
+                deduped_results.push(block);
+            }
+        }
+    }
+
+    if debug_mode && deduped_results.len() < original_count {
+        println!(
+            "DEBUG: Deduplicated contained blocks: {} -> {} results",
+            original_count,
+            deduped_results.len()
+        );
+    }
+
+    deduped_results
+}
+
 /// Merges ranked search results that are adjacent or overlapping
 ///
 /// This function should be called AFTER ranking and limiting to merge blocks
@@ -557,5 +670,145 @@ fn merge_matched_keywords(block1: &SearchResult, block2: &SearchResult) -> Optio
         let mut keyword_vec: Vec<String> = keywords.into_iter().collect();
         keyword_vec.sort();
         Some(keyword_vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_result(file: &str, start: usize, end: usize, node_type: &str) -> SearchResult {
+        SearchResult {
+            file: file.to_string(),
+            lines: (start, end),
+            node_type: node_type.to_string(),
+            code: format!("code lines {start}-{end}"),
+            symbol_signature: None,
+            matched_by_filename: None,
+            rank: None,
+            score: None,
+            tfidf_score: None,
+            bm25_score: None,
+            tfidf_rank: None,
+            bm25_rank: None,
+            new_score: None,
+            hybrid2_rank: None,
+            combined_score_rank: None,
+            file_unique_terms: None,
+            file_total_matches: None,
+            file_match_rank: None,
+            block_unique_terms: None,
+            block_total_matches: None,
+            parent_file_id: None,
+            block_id: None,
+            matched_keywords: None,
+            matched_lines: None,
+            tokenized_content: None,
+            lsp_info: None,
+            parent_context: None,
+        }
+    }
+
+    #[test]
+    fn test_dedup_removes_contained_block() {
+        // Simulates the issue: comment block (1-4) contains function block (2-4)
+        let results = vec![
+            make_result("example.py", 1, 4, "comment"),
+            make_result("example.py", 2, 4, "function_definition"),
+        ];
+
+        let deduped = deduplicate_contained_blocks(results);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].lines, (1, 4));
+        assert_eq!(deduped[0].node_type, "comment");
+    }
+
+    #[test]
+    fn test_dedup_preserves_non_overlapping() {
+        let results = vec![
+            make_result("example.py", 1, 4, "function_definition"),
+            make_result("example.py", 10, 15, "function_definition"),
+        ];
+
+        let deduped = deduplicate_contained_blocks(results);
+        assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_different_files_not_deduped() {
+        // Same line ranges but different files should not be deduped
+        let results = vec![
+            make_result("a.py", 1, 4, "comment"),
+            make_result("b.py", 1, 4, "comment"),
+        ];
+
+        let deduped = deduplicate_contained_blocks(results);
+        assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_merges_keywords_from_contained_block() {
+        let mut outer = make_result("example.py", 1, 4, "comment");
+        outer.matched_keywords = Some(vec!["REQ-001".to_string()]);
+
+        let mut inner = make_result("example.py", 2, 4, "function_definition");
+        inner.matched_keywords = Some(vec!["REQ-002".to_string()]);
+
+        let deduped = deduplicate_contained_blocks(vec![outer, inner]);
+        assert_eq!(deduped.len(), 1);
+        let kw = deduped[0].matched_keywords.as_ref().unwrap();
+        assert!(kw.contains(&"REQ-001".to_string()));
+        assert!(kw.contains(&"REQ-002".to_string()));
+    }
+
+    #[test]
+    fn test_dedup_keeps_larger_block_when_inner_comes_first() {
+        // Inner block sorted first but outer should win
+        let results = vec![
+            make_result("example.ts", 2, 3, "arrow_function"),
+            make_result("example.ts", 1, 3, "comment"),
+        ];
+
+        let deduped = deduplicate_contained_blocks(results);
+        assert_eq!(deduped.len(), 1);
+        assert_eq!(deduped[0].lines, (1, 3));
+    }
+
+    #[test]
+    fn test_dedup_single_result_passthrough() {
+        let results = vec![make_result("a.py", 1, 10, "function_definition")];
+        let deduped = deduplicate_contained_blocks(results);
+        assert_eq!(deduped.len(), 1);
+    }
+
+    #[test]
+    fn test_dedup_empty_passthrough() {
+        let results: Vec<SearchResult> = vec![];
+        let deduped = deduplicate_contained_blocks(results);
+        assert!(deduped.is_empty());
+    }
+
+    #[test]
+    fn test_dedup_partially_overlapping_not_deduped() {
+        // Blocks that overlap but neither fully contains the other
+        let results = vec![
+            make_result("example.py", 1, 5, "function_definition"),
+            make_result("example.py", 3, 8, "function_definition"),
+        ];
+
+        let deduped = deduplicate_contained_blocks(results);
+        assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn test_dedup_exact_same_range() {
+        // Two blocks with identical ranges — one should be removed
+        let results = vec![
+            make_result("example.py", 1, 4, "comment"),
+            make_result("example.py", 1, 4, "function_definition"),
+        ];
+
+        let deduped = deduplicate_contained_blocks(results);
+        assert_eq!(deduped.len(), 1);
     }
 }
