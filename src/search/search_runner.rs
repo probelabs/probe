@@ -1527,6 +1527,23 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
         );
     }
 
+    // Always deduplicate contained blocks (overlapping results from the same
+    // file where one fully contains the other). This is NOT merging — it
+    // removes true duplicates regardless of --no-merge.
+    let limited = if !limited.results.is_empty() {
+        use probe_code::search::block_merging::deduplicate_contained_blocks;
+        let deduped = deduplicate_contained_blocks(limited.results);
+        LimitedSearchResults {
+            results: deduped,
+            skipped_files: limited.skipped_files,
+            limits_applied: limited.limits_applied,
+            cached_blocks_skipped: limited.cached_blocks_skipped,
+            files_skipped_early_termination: limited.files_skipped_early_termination,
+        }
+    } else {
+        limited
+    };
+
     // Optional block merging - AFTER initial caching
     let bm_start = Instant::now();
     if debug_mode && !limited.results.is_empty() && !*no_merge {
