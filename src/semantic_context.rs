@@ -265,6 +265,7 @@ pub fn extract_owner_symbol_from_source(code: &str, node_type: &str) -> Option<S
 pub fn leading_comments_from_block(code: &str, start_line: usize) -> Vec<SourceComment> {
     let mut comments = Vec::new();
     let mut pending: Option<(usize, usize, Vec<String>)> = None;
+    let mut in_block_comment = false;
 
     for (idx, line) in code.lines().enumerate() {
         let line_no = start_line + idx;
@@ -275,7 +276,9 @@ pub fn leading_comments_from_block(code: &str, start_line: usize) -> Vec<SourceC
             }
             continue;
         }
-        if is_comment_line(trimmed) {
+
+        let starts_comment = is_comment_line(trimmed) || in_block_comment;
+        if starts_comment {
             match &mut pending {
                 Some((_, end, lines)) => {
                     *end = line_no;
@@ -284,6 +287,13 @@ pub fn leading_comments_from_block(code: &str, start_line: usize) -> Vec<SourceC
                 None => {
                     pending = Some((line_no, line_no, vec![trimmed.to_string()]));
                 }
+            }
+
+            if starts_block_comment(trimmed) && !ends_block_comment(trimmed) {
+                in_block_comment = true;
+            }
+            if in_block_comment && ends_block_comment(trimmed) {
+                in_block_comment = false;
             }
             continue;
         }
@@ -325,7 +335,7 @@ pub fn classify_text_matches_in_block(
                 let byte_start = search_start + relative_pos;
                 let byte_end = byte_start + needle.len();
                 let line_no = start_line + line_idx;
-                let kind = classify_line_match_kind(line, byte_start);
+                let kind = classify_match_kind_at(code, line_idx, byte_start);
                 let comment_role = if kind == "comment"
                     && leading_comments
                         .iter()
@@ -380,28 +390,6 @@ pub fn classify_scope_from_node(
         return "module";
     }
     "declaration"
-}
-
-fn classify_line_match_kind(line: &str, byte_start: usize) -> String {
-    let before = line.get(..byte_start).unwrap_or("");
-    let trimmed_before = before.trim_start();
-    if trimmed_before.starts_with("//")
-        || trimmed_before.starts_with('#')
-        || trimmed_before.starts_with('*')
-        || trimmed_before.starts_with("/*")
-    {
-        return "comment".to_string();
-    }
-
-    let quote_count = before
-        .chars()
-        .filter(|ch| matches!(ch, '"' | '\'' | '`'))
-        .count();
-    if quote_count % 2 == 1 {
-        return "string".to_string();
-    }
-
-    "code".to_string()
 }
 
 fn build_owner_context(
@@ -712,6 +700,118 @@ fn is_comment_line(trimmed: &str) -> bool {
         || trimmed.starts_with("*")
         || trimmed.starts_with("/*")
         || trimmed.starts_with("*/")
+        || trimmed.starts_with("<!--")
+        || trimmed.starts_with("-->")
+}
+
+fn starts_block_comment(trimmed: &str) -> bool {
+    trimmed.starts_with("/*") || trimmed.starts_with("<!--")
+}
+
+fn ends_block_comment(trimmed: &str) -> bool {
+    trimmed.contains("*/") || trimmed.contains("-->")
+}
+
+fn classify_match_kind_at(code: &str, target_line_idx: usize, target_byte_start: usize) -> String {
+    let mut state = LexicalState::default();
+
+    for (line_idx, line) in code.lines().enumerate() {
+        state.line_comment = false;
+        let stop_at = if line_idx == target_line_idx {
+            Some(target_byte_start)
+        } else {
+            None
+        };
+
+        if scan_line_until(line, stop_at, &mut state) {
+            return if state.block_comment_end.is_some() {
+                "comment".to_string()
+            } else if state.line_comment {
+                "comment".to_string()
+            } else if state.quote.is_some() {
+                "string".to_string()
+            } else {
+                "code".to_string()
+            };
+        }
+    }
+
+    "code".to_string()
+}
+
+fn scan_line_until(line: &str, stop_at: Option<usize>, state: &mut LexicalState) -> bool {
+    let mut idx = 0;
+    let line_len = line.len();
+    let stop = stop_at.unwrap_or(line_len).min(line_len);
+
+    while idx < stop {
+        let rest = &line[idx..];
+
+        if let Some(end_marker) = state.block_comment_end {
+            if let Some(end_offset) = rest.find(end_marker) {
+                let end_idx = idx + end_offset + end_marker.len();
+                if end_idx > stop {
+                    return true;
+                }
+                state.block_comment_end = None;
+                idx = end_idx;
+                continue;
+            }
+            return stop_at.is_some();
+        }
+
+        if let Some(quote) = state.quote {
+            let Some(ch) = rest.chars().next() else {
+                break;
+            };
+            if state.escaped {
+                state.escaped = false;
+            } else if ch == '\\' {
+                state.escaped = true;
+            } else if ch == quote {
+                state.quote = None;
+            }
+            idx += ch.len_utf8();
+            continue;
+        }
+
+        if rest.starts_with("//") || rest.starts_with('#') {
+            if stop_at.is_none() {
+                return false;
+            }
+            state.line_comment = true;
+            return true;
+        }
+        if rest.starts_with("/*") {
+            state.block_comment_end = Some("*/");
+            idx += 2;
+            continue;
+        }
+        if rest.starts_with("<!--") {
+            state.block_comment_end = Some("-->");
+            idx += 4;
+            continue;
+        }
+
+        let Some(ch) = rest.chars().next() else {
+            break;
+        };
+        if matches!(ch, '"' | '\'' | '`') {
+            state.quote = Some(ch);
+            state.escaped = false;
+        }
+        idx += ch.len_utf8();
+    }
+
+    stop_at.is_some()
+}
+
+#[derive(Default)]
+struct LexicalState {
+    block_comment_end: Option<&'static str>,
+    line_comment: bool,
+    quote: Option<char>,
+    escaped: bool,
 }
 
 fn extract_name_after_keyword(line: &str, prefix: &str) -> Option<String> {
@@ -745,24 +845,41 @@ mod tests {
 
     #[test]
     fn test_classify_text_matches_in_comments_and_strings() {
-        let code = r#"// Implements: SYS-REQ-1
+        let code = r#"/*
+ * Implements: SYS-REQ-0
+ */
+// Implements: SYS-REQ-1
 export const literalOnly = "SYS-REQ-2";
+const templateLiteral = `
+  SYS-REQ-4
+`;
 export function run() {
   return SYS_REQ_3;
 }"#;
         let comments = leading_comments_from_block(code, 10);
         let keywords = vec![
+            "SYS-REQ-0".to_string(),
             "SYS-REQ-1".to_string(),
             "SYS-REQ-2".to_string(),
             "SYS_REQ_3".to_string(),
+            "SYS-REQ-4".to_string(),
         ];
 
         let matches = classify_text_matches_in_block(code, 10, Some(&keywords), &comments);
 
-        assert_eq!(matches.len(), 3);
+        assert_eq!(matches.len(), 5);
         assert_eq!(matches[0].kind, "comment");
         assert_eq!(matches[0].comment_role.as_deref(), Some("leading"));
-        assert_eq!(matches[1].kind, "string");
-        assert_eq!(matches[2].kind, "code");
+        assert_eq!(matches[1].kind, "comment");
+        assert_eq!(matches[1].comment_role.as_deref(), Some("leading"));
+        assert_eq!(matches[2].kind, "string");
+        assert_eq!(matches[3].kind, "code");
+        assert_eq!(matches[4].kind, "string");
+
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].start_line, 10);
+        assert_eq!(comments[0].end_line, 13);
+        assert!(comments[0].text.contains("SYS-REQ-0"));
+        assert!(comments[0].text.contains("SYS-REQ-1"));
     }
 }
