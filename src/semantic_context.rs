@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::path::Path;
-use tree_sitter::Node;
+use tree_sitter::{Node, Tree};
 
 use crate::language::{factory::get_language_impl, get_pooled_parser, return_pooled_parser};
 
@@ -110,44 +110,7 @@ pub fn build_query_source_context(
     byte_end: usize,
     fallback_text: &str,
 ) -> Option<QuerySourceContext> {
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-    let language = language_name_for_path(path)?.to_string();
-    let source = std::fs::read_to_string(path).ok()?;
-    let source_bytes = source.as_bytes();
-
-    let _language_impl = get_language_impl(extension)?;
-    let mut parser = get_pooled_parser(extension).ok()?;
-    let tree = parser.parse(&source, None)?;
-    let root = tree.root_node();
-    let matched = find_smallest_covering_node(root, byte_start, byte_end).unwrap_or(root);
-
-    let matched_text = matched
-        .utf8_text(source_bytes)
-        .map(|text| text.to_string())
-        .unwrap_or_else(|_| fallback_text.to_string());
-
-    let owner = find_owner_node(matched)
-        .map(|owner_node| build_owner_context(owner_node, matched, &source, source_bytes));
-
-    let context = QuerySourceContext {
-        language,
-        r#match: MatchContext {
-            node_type: matched.kind().to_string(),
-            content: matched_text,
-            lines: [
-                matched.start_position().row + 1,
-                matched.end_position().row + 1,
-            ],
-            columns: [
-                matched.start_position().column + 1,
-                matched.end_position().column + 1,
-            ],
-        },
-        owner,
-    };
-
-    return_pooled_parser(extension, parser);
-    Some(context)
+    ParsedSourceContext::parse(path)?.query_source_context(byte_start, byte_end, fallback_text)
 }
 
 pub fn build_search_owner_context(
@@ -156,27 +119,88 @@ pub fn build_search_owner_context(
     end_line: usize,
     fallback_code: &str,
 ) -> Option<OwnerContext> {
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
-    let source = std::fs::read_to_string(path).ok()?;
-    let source_bytes = source.as_bytes();
+    ParsedSourceContext::parse(path)?.search_owner_context(start_line, end_line, fallback_code)
+}
 
-    let _language_impl = get_language_impl(extension)?;
-    let mut parser = get_pooled_parser(extension).ok()?;
-    let tree = parser.parse(&source, None)?;
-    let root = tree.root_node();
-    let owner = find_search_owner_node(root, start_line, end_line);
-    let context = owner.map(|owner| build_owner_context(owner, owner, &source, source_bytes));
+pub struct ParsedSourceContext {
+    language: String,
+    source: String,
+    tree: Tree,
+}
 
-    return_pooled_parser(extension, parser);
+impl ParsedSourceContext {
+    pub fn parse(path: &Path) -> Option<Self> {
+        let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+        let language = language_name_for_path(path)?.to_string();
+        let source = std::fs::read_to_string(path).ok()?;
 
-    let context = context?;
-    if context.content.is_some() {
-        Some(context)
-    } else {
-        Some(OwnerContext {
-            content: Some(fallback_code.to_string()),
-            ..context
+        let _language_impl = get_language_impl(extension)?;
+        let mut parser = get_pooled_parser(extension).ok()?;
+        let tree = parser.parse(&source, None);
+        return_pooled_parser(extension, parser);
+
+        Some(Self {
+            language,
+            source,
+            tree: tree?,
         })
+    }
+
+    pub fn query_source_context(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+        fallback_text: &str,
+    ) -> Option<QuerySourceContext> {
+        let source_bytes = self.source.as_bytes();
+        let root = self.tree.root_node();
+        let matched = find_smallest_covering_node(root, byte_start, byte_end).unwrap_or(root);
+
+        let matched_text = matched
+            .utf8_text(source_bytes)
+            .map(|text| text.to_string())
+            .unwrap_or_else(|_| fallback_text.to_string());
+
+        let owner = find_owner_node(matched)
+            .map(|owner_node| build_owner_context(owner_node, matched, &self.source, source_bytes));
+
+        Some(QuerySourceContext {
+            language: self.language.clone(),
+            r#match: MatchContext {
+                node_type: matched.kind().to_string(),
+                content: matched_text,
+                lines: [
+                    matched.start_position().row + 1,
+                    matched.end_position().row + 1,
+                ],
+                columns: [
+                    matched.start_position().column + 1,
+                    matched.end_position().column + 1,
+                ],
+            },
+            owner,
+        })
+    }
+
+    pub fn search_owner_context(
+        &self,
+        start_line: usize,
+        end_line: usize,
+        fallback_code: &str,
+    ) -> Option<OwnerContext> {
+        let source_bytes = self.source.as_bytes();
+        let root = self.tree.root_node();
+        let owner = find_search_owner_node(root, start_line, end_line)?;
+        let context = build_owner_context(owner, owner, &self.source, source_bytes);
+
+        if context.content.is_some() {
+            Some(context)
+        } else {
+            Some(OwnerContext {
+                content: Some(fallback_code.to_string()),
+                ..context
+            })
+        }
     }
 }
 

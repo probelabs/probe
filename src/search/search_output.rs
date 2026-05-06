@@ -9,9 +9,9 @@ use probe_code::models::SearchResult;
 use probe_code::search::query::QueryPlan;
 use probe_code::search::search_tokens::sum_tokens_with_deduplication;
 use probe_code::semantic_context::{
-    build_search_owner_context, classify_scope_from_node, classify_text_matches_in_block,
-    extract_owner_symbol_from_source, language_name_for_path, leading_comments_from_block,
-    EnclosingCall, EnclosingSymbol, SourceComment, SourceMatch,
+    classify_scope_from_node, classify_text_matches_in_block, extract_owner_symbol_from_source,
+    language_name_for_path, leading_comments_from_block, EnclosingCall, EnclosingSymbol,
+    ParsedSourceContext, SourceComment, SourceMatch,
 };
 
 /// Create a cache of file contents for outline formatters to avoid redundant I/O
@@ -627,6 +627,11 @@ fn format_and_print_json_results(
         all: usize,
     }
 
+    let mut parsed_files: std::collections::HashMap<
+        std::path::PathBuf,
+        Option<ParsedSourceContext>,
+    > = std::collections::HashMap::new();
+
     let json_results: Vec<JsonResult> = results
         .iter()
         .map(|r| {
@@ -651,8 +656,14 @@ fn format_and_print_json_results(
                 is_test.is_some(),
             );
             let owner = extract_owner_symbol(&r.code, &r.node_type);
-            let owner_context =
-                build_search_owner_context(file_path, r.lines.0, r.lines.1, &r.code);
+            let owner_context = {
+                let parsed = parsed_files
+                    .entry(file_path.to_path_buf())
+                    .or_insert_with(|| ParsedSourceContext::parse(file_path));
+                parsed
+                    .as_ref()
+                    .and_then(|parsed| parsed.search_owner_context(r.lines.0, r.lines.1, &r.code))
+            };
             let leading_comments = leading_comments_from_block(&r.code, r.lines.0);
             let matches = classify_text_matches_in_block(
                 &r.code,
@@ -671,11 +682,10 @@ fn format_and_print_json_results(
                 is_test,
                 is_doc: if doc { Some(true) } else { None },
                 is_example: if fenced_example { Some(true) } else { None },
-                owner_symbol: owner.or_else(|| {
-                    owner_context
-                        .as_ref()
-                        .and_then(|context| context.symbol.clone())
-                }),
+                owner_symbol: owner_context
+                    .as_ref()
+                    .and_then(|context| context.symbol.clone())
+                    .or(owner),
                 owner_qualified_symbol: owner_context
                     .as_ref()
                     .and_then(|context| context.qualified_symbol.clone()),

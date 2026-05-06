@@ -385,12 +385,19 @@ pub fn format_and_print_query_results(
             }
         }
         "json" => {
+            use std::collections::HashMap;
+
             // BATCH TOKENIZATION WITH DEDUPLICATION OPTIMIZATION for query JSON output:
             // Process all matched text in batch to leverage content deduplication
             use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+            use probe_code::semantic_context::ParsedSourceContext;
+
             let matched_texts: Vec<&str> =
                 matches.iter().map(|m| m.matched_text.as_str()).collect();
             let total_tokens = sum_tokens_with_deduplication(&matched_texts);
+
+            let mut parsed_files: HashMap<std::path::PathBuf, Option<ParsedSourceContext>> =
+                HashMap::new();
 
             // Create standardized results
             let json_matches_standardized: Vec<_> = matches
@@ -406,14 +413,12 @@ pub fn format_and_print_query_results(
                     });
 
                     if with_context {
-                        if let Some(context) =
-                            probe_code::semantic_context::build_query_source_context(
-                                &m.file_path,
-                                m.byte_start,
-                                m.byte_end,
-                                &m.matched_text,
-                            )
-                        {
+                        let parsed = parsed_files
+                            .entry(m.file_path.clone())
+                            .or_insert_with(|| ParsedSourceContext::parse(&m.file_path));
+                        if let Some(context) = parsed.as_ref().and_then(|parsed| {
+                            parsed.query_source_context(m.byte_start, m.byte_end, &m.matched_text)
+                        }) {
                             result["language"] = serde_json::json!(context.language);
                             result["pattern"] = serde_json::json!({
                                 "source": pattern,
