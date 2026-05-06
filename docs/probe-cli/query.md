@@ -119,6 +119,7 @@ probe query "go $FUNC($$$ARGS)" ./src -l go
 | `--allow-tests` | Boolean | false | Include test files |
 | `-i`, `--ignore` | String[] | - | Patterns to ignore |
 | `--no-gitignore` | Boolean | false | Don't respect .gitignore |
+| `--with-context`, `--owner-context` | Boolean | false | Include owning source-block context in JSON output |
 
 ### Language Options
 
@@ -156,9 +157,67 @@ probe query "fn $NAME()" ./src --format markdown
 # JSON for tooling
 probe query "fn $NAME()" ./src --format json
 
+# JSON with owning source-block context
+probe query "fetch($$$ARGS)" ./src --language typescript --format json --with-context
+
 # Plain text
 probe query "fn $NAME()" ./src --format plain
 ```
+
+### Owner Context JSON
+
+Use `--with-context` when a structural match is not enough by itself and the caller also needs the source block a human would inspect. This keeps `query` precise while adding neutral source facts such as the owning function, method, class, attached comments, and enclosing calls.
+
+```bash
+probe query "fetch($$$ARGS)" ./src --language typescript --format json --with-context
+```
+
+The default JSON fields remain available. With context enabled, each result can also include:
+
+```json
+{
+  "schema_version": "probe.query.context.v1",
+  "results": [
+    {
+      "file": "src/api.ts",
+      "lines": [4, 4],
+      "node_type": "match",
+      "content": "fetch(url)",
+      "column_start": 10,
+      "column_end": 20,
+      "language": "typescript",
+      "pattern": {
+        "source": "fetch($$$ARGS)",
+        "id": null
+      },
+      "match": {
+        "node_type": "call_expression",
+        "content": "fetch(url)",
+        "lines": [4, 4],
+        "columns": [10, 20]
+      },
+      "owner": {
+        "symbol": "loadProfile",
+        "qualified_symbol": "loadProfile",
+        "node_type": "function_declaration",
+        "scope": "function",
+        "lines": [2, 5],
+        "columns": [1, 2],
+        "comments": [
+          {
+            "kind": "leading",
+            "start_line": 1,
+            "end_line": 1,
+            "text": "// Network boundary: user profile API client."
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+Probe does not interpret comment contents or apply domain policy. Downstream tools decide whether a comment is a requirement, security annotation, checklist marker, or ordinary text.
 
 ---
 

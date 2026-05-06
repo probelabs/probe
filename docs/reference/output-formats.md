@@ -125,6 +125,61 @@ The `query` command's JSON output is similar to the search command but includes 
 }
 ```
 
+When `--with-context` or `--owner-context` is used with `--format json`, Probe keeps the compatible result fields and adds source-block context for each structural match:
+
+```json
+{
+  "schema_version": "probe.query.context.v1",
+  "results": [
+    {
+      "file": "/path/to/api.ts",
+      "lines": [4, 4],
+      "node_type": "match",
+      "content": "fetch(url)",
+      "column_start": 10,
+      "column_end": 20,
+      "language": "typescript",
+      "pattern": {
+        "source": "fetch($$$ARGS)",
+        "id": null
+      },
+      "match": {
+        "node_type": "call_expression",
+        "content": "fetch(url)",
+        "lines": [4, 4],
+        "columns": [10, 20]
+      },
+      "owner": {
+        "symbol": "requestJSON",
+        "qualified_symbol": "requestJSON",
+        "node_type": "function_declaration",
+        "scope": "function",
+        "lines": [1, 5],
+        "columns": [1, 2],
+        "comments": [
+          {
+            "kind": "leading",
+            "start_line": 1,
+            "end_line": 1,
+            "text": "// Handles outbound API calls."
+          }
+        ],
+        "enclosing_symbols": [],
+        "enclosing_calls": []
+      }
+    }
+  ],
+  "summary": {
+    "count": 1,
+    "total_bytes": 10,
+    "total_tokens": 3
+  },
+  "version": "0.0.0"
+}
+```
+
+The context fields are intentionally source facts only. Probe reports owner, match, comment, symbol, and enclosing-call metadata; it does not interpret requirements, policies, test frameworks, or annotation formats.
+
 #### Example: Query JSON Output
 
 ```bash
