@@ -83,11 +83,13 @@
 //! let options = QueryOptions {
 //!     path: Path::new("."),
 //!     pattern: "fn $NAME($$$PARAMS) { $$$BODY }",
-//!     language: Some("rust".to_string()),
+//!     language: Some("rust"),
 //!     ignore: &[],
 //!     allow_tests: false,
 //!     max_results: None,
-//!     format: "text".to_string(),
+//!     with_context: false,
+//!     format: "text",
+//!     no_gitignore: false,
 //! };
 //!
 //! let matches = perform_query(&options).unwrap();
@@ -108,6 +110,7 @@ pub mod path_safety;
 pub mod query;
 pub mod ranking;
 pub mod search;
+pub mod semantic_context;
 pub mod simd_ranking;
 pub mod simd_test;
 pub mod utils;

@@ -106,22 +106,23 @@ fn collect_symbols(
         }
 
         if lang.is_symbol_node(&child) {
+            let semantic_child = semantic_symbol_node(&child, lang, source).unwrap_or(child);
             let signature = lang
                 .get_symbol_signature(&child, source)
                 .unwrap_or_else(|| {
                     // Fallback: use the first line of the node text
-                    let text = child.utf8_text(source).unwrap_or("");
+                    let text = semantic_child.utf8_text(source).unwrap_or("");
                     text.lines().next().unwrap_or("").trim().to_string()
                 });
 
-            let name = extract_symbol_name(&child, source);
-            let kind = normalize_kind(child.kind());
-            let start_line = child.start_position().row + 1;
-            let end_line = child.end_position().row + 1;
+            let name = extract_symbol_name(&semantic_child, source);
+            let kind = normalize_kind(semantic_child.kind());
+            let start_line = semantic_child.start_position().row + 1;
+            let end_line = semantic_child.end_position().row + 1;
 
             // Recursively collect children for container nodes
-            let children = if is_container_node(child.kind()) && depth < MAX_SYMBOL_DEPTH {
-                collect_children_symbols(&child, source, lang, allow_tests, depth + 1)
+            let children = if is_container_node(semantic_child.kind()) && depth < MAX_SYMBOL_DEPTH {
+                collect_children_symbols(&semantic_child, source, lang, allow_tests, depth + 1)
             } else {
                 Vec::new()
             };
@@ -138,6 +139,24 @@ fn collect_symbols(
     }
 
     symbols
+}
+
+/// Return the actual declaration represented by wrapper nodes such as
+/// TypeScript/JavaScript `export_statement`.
+fn semantic_symbol_node<'a>(
+    node: &Node<'a>,
+    lang: &dyn crate::language::language_trait::LanguageImpl,
+    source: &[u8],
+) -> Option<Node<'a>> {
+    if !matches!(node.kind(), "export_statement" | "declare_statement") {
+        return None;
+    }
+
+    let mut cursor = node.walk();
+    let found = node.children(&mut cursor).find(|child| {
+        lang.is_symbol_node(child) && extract_symbol_name(child, source) != child.kind()
+    });
+    found
 }
 
 /// Collect child symbols from inside a container node's body.
@@ -608,6 +627,46 @@ func (c *Config) Validate() bool {
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("\"kind\":\"function\""));
         assert!(json.contains("\"name\":\"hello\""));
+    }
+
+    #[test]
+    fn test_exported_typescript_symbols_use_inner_declaration_names() {
+        let content = r#"
+export class PolicyService {
+    async evaluatePolicy(input: string): Promise<boolean> {
+        return input.length > 0;
+    }
+}
+
+export const normalizeDecision = (raw: string) => {
+    return raw.trim().toLowerCase();
+};
+"#;
+        let file = create_temp_file(content, "ts");
+        let result = extract_symbols(file.path(), false).unwrap();
+        let names: Vec<&str> = result.symbols.iter().map(|s| s.name.as_str()).collect();
+        let kinds: Vec<&str> = result.symbols.iter().map(|s| s.kind.as_str()).collect();
+
+        assert!(
+            names.contains(&"PolicyService"),
+            "exported class should use class name, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"normalizeDecision"),
+            "exported const arrow should use variable name, got: {:?}",
+            names
+        );
+        assert!(
+            !names.contains(&"export_statement"),
+            "export wrappers should not leak as symbol names: {:?}",
+            names
+        );
+        assert!(
+            kinds.contains(&"class") && kinds.contains(&"variable"),
+            "expected semantic kinds for exported declarations, got: {:?}",
+            kinds
+        );
     }
 
     #[test]

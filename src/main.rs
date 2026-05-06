@@ -846,6 +846,7 @@ async fn main() -> Result<()> {
             ignore,
             allow_tests,
             max_results,
+            with_context,
             format,
             no_gitignore,
         }) => probe_code::query::handle_query(
@@ -870,6 +871,7 @@ async fn main() -> Result<()> {
             max_results,
             &format,
             no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
+            with_context,
         )?,
         Some(Commands::Benchmark {
             bench,

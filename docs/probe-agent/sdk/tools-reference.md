@@ -163,6 +163,7 @@ AST-based structural queries using tree-sitter patterns.
 | `path` | string | No | Directory to search |
 | `language` | string | No | Programming language |
 | `limit` | number | No | Maximum results |
+| `with_context` | boolean | No | Include owning source-block context in JSON output |
 
 **Example AI Usage:**
 ```xml
@@ -170,6 +171,17 @@ AST-based structural queries using tree-sitter patterns.
   <pattern>fn $NAME($PARAMS) { $$$BODY }</pattern>
   <language>rust</language>
   <path>./src</path>
+</query>
+```
+
+Use `with_context` when the exact AST match needs its enclosing function, method, class, attached comments, or call context for downstream analysis:
+
+```xml
+<query>
+  <pattern>fetch($$$ARGS)</pattern>
+  <language>typescript</language>
+  <path>./src</path>
+  <with_context>true</with_context>
 </query>
 ```
 

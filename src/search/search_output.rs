@@ -8,6 +8,11 @@ use probe_code::language::is_test_file;
 use probe_code::models::SearchResult;
 use probe_code::search::query::QueryPlan;
 use probe_code::search::search_tokens::sum_tokens_with_deduplication;
+use probe_code::semantic_context::{
+    classify_scope_from_node, classify_text_matches_in_block, extract_owner_symbol_from_source,
+    language_name_for_path, leading_comments_from_block, EnclosingCall, EnclosingSymbol,
+    ParsedSourceContext, SourceComment, SourceMatch,
+};
 
 /// Create a cache of file contents for outline formatters to avoid redundant I/O
 pub fn create_file_content_cache(results: &[&SearchResult]) -> HashMap<PathBuf, Arc<String>> {
@@ -569,6 +574,8 @@ fn format_and_print_json_results(
     #[derive(serde::Serialize)]
     struct JsonResult<'a> {
         file: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        language: Option<&'static str>,
         lines: [usize; 2],
         node_type: &'a str,
         code: &'a str,
@@ -586,6 +593,20 @@ fn format_and_print_json_results(
         // The owning symbol name (function, class, method) for this block
         #[serde(skip_serializing_if = "Option::is_none")]
         owner_symbol: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        owner_qualified_symbol: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        enclosing_symbols: Vec<EnclosingSymbol>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enclosing_call: Option<EnclosingCall>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        enclosing_calls: Vec<EnclosingCall>,
+        // Raw source comments attached at the start of this block.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        leading_comments: Vec<SourceComment>,
+        // Classified textual match locations within this returned block.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        matches: Vec<SourceMatch>,
         // Symbol signature (when symbols flag is used)
         symbol_signature: Option<&'a String>,
         // Include other relevant fields
@@ -605,6 +626,11 @@ fn format_and_print_json_results(
         uniq: usize,
         all: usize,
     }
+
+    let mut parsed_files: std::collections::HashMap<
+        std::path::PathBuf,
+        Option<ParsedSourceContext>,
+    > = std::collections::HashMap::new();
 
     let json_results: Vec<JsonResult> = results
         .iter()
@@ -630,9 +656,25 @@ fn format_and_print_json_results(
                 is_test.is_some(),
             );
             let owner = extract_owner_symbol(&r.code, &r.node_type);
+            let owner_context = {
+                let parsed = parsed_files
+                    .entry(file_path.to_path_buf())
+                    .or_insert_with(|| ParsedSourceContext::parse(file_path));
+                parsed
+                    .as_ref()
+                    .and_then(|parsed| parsed.search_owner_context(r.lines.0, r.lines.1, &r.code))
+            };
+            let leading_comments = leading_comments_from_block(&r.code, r.lines.0);
+            let matches = classify_text_matches_in_block(
+                &r.code,
+                r.lines.0,
+                r.matched_keywords.as_ref(),
+                &leading_comments,
+            );
 
             JsonResult {
                 file: &r.file,
+                language: language_name_for_path(file_path),
                 lines: [r.lines.0, r.lines.1],
                 node_type: &r.node_type,
                 code: &r.code,
@@ -640,7 +682,26 @@ fn format_and_print_json_results(
                 is_test,
                 is_doc: if doc { Some(true) } else { None },
                 is_example: if fenced_example { Some(true) } else { None },
-                owner_symbol: owner,
+                owner_symbol: owner_context
+                    .as_ref()
+                    .and_then(|context| context.symbol.clone())
+                    .or(owner),
+                owner_qualified_symbol: owner_context
+                    .as_ref()
+                    .and_then(|context| context.qualified_symbol.clone()),
+                enclosing_symbols: owner_context
+                    .as_ref()
+                    .map(|context| context.enclosing_symbols.clone())
+                    .unwrap_or_default(),
+                enclosing_call: owner_context
+                    .as_ref()
+                    .and_then(|context| context.enclosing_call.clone()),
+                enclosing_calls: owner_context
+                    .as_ref()
+                    .map(|context| context.enclosing_calls.clone())
+                    .unwrap_or_default(),
+                leading_comments,
+                matches,
                 symbol_signature: r.symbol_signature.as_ref(),
                 matched_keywords: r.matched_keywords.as_ref(),
                 score: r.score,
@@ -818,51 +879,9 @@ fn classify_scope<'a>(
     is_example: bool,
     is_test: bool,
 ) -> &'a str {
-    if is_test {
-        return "test";
-    }
-    if is_example {
-        return "example";
-    }
-    if is_doc {
-        return "doc";
-    }
-
-    // Function-like blocks
-    if node_type.contains("function")
-        || node_type.contains("method")
-        || node_type.contains("fn")
-        || node_type.contains("func")
-        || node_type.contains("arrow_function")
-        || node_type.contains("closure")
-    {
-        return "function";
-    }
-
-    // Module/package level
-    if node_type.contains("module")
-        || node_type == "program"
-        || node_type == "source_file"
-        || node_type == "compilation_unit"
-        || node_type.contains("package")
-        || node_type.contains("namespace")
-    {
-        return "module";
-    }
-
-    // Declaration-level (types, structs, classes, interfaces, enums, consts)
-    if node_type.contains("class")
-        || node_type.contains("struct")
-        || node_type.contains("type_declaration")
-        || node_type.contains("interface")
-        || node_type.contains("enum")
-        || node_type.contains("impl")
-        || node_type.contains("trait")
-        || node_type.contains("const")
-        || node_type.contains("var_declaration")
-        || node_type.contains("lexical_declaration")
-    {
-        return "declaration";
+    let shared_scope = classify_scope_from_node(node_type, code, is_doc, is_example, is_test);
+    if shared_scope != "declaration" {
+        return shared_scope;
     }
 
     // Comment blocks attached to functions — check code content for function signature
@@ -894,6 +913,10 @@ fn extract_owner_symbol(code: &str, node_type: &str) -> Option<String> {
         || node_type == "heading"
     {
         return None;
+    }
+
+    if let Some(owner) = extract_owner_symbol_from_source(code, node_type) {
+        return Some(owner);
     }
 
     for line in code.lines().take(15) {
@@ -3668,6 +3691,24 @@ mod tests {
         assert_eq!(
             extract_owner_symbol("async function fetchData() {}", "function_declaration"),
             Some("fetchData".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_owner_ts_method_and_exported_arrow() {
+        assert_eq!(
+            extract_owner_symbol(
+                "  // Implements: SYS-REQ-424\n  async evaluatePolicy(input: string): Promise<boolean> {\n    return true;\n  }",
+                "method_definition"
+            ),
+            Some("evaluatePolicy".to_string())
+        );
+        assert_eq!(
+            extract_owner_symbol(
+                "// Implements: SYS-REQ-425\nexport const normalizeDecision = (raw: string) => {\n  return raw.trim();\n};",
+                "export_statement"
+            ),
+            Some("normalizeDecision".to_string())
         );
     }
 
