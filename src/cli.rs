@@ -370,6 +370,10 @@ pub enum Commands {
         #[arg(long = "max-results")]
         max_results: Option<usize>,
 
+        /// Include owning source-block context in JSON output
+        #[arg(long = "with-context", alias = "owner-context")]
+        with_context: bool,
+
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data
         #[arg(short = 'o', long = "format", default_value = "color", value_parser = ["markdown", "plain", "json", "xml", "color", "outline-xml"])]

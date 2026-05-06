@@ -12,6 +12,8 @@ use std::time::Instant;
 /// Represents a match found by ast-grep
 pub struct AstMatch {
     pub file_path: PathBuf,
+    pub byte_start: usize,
+    pub byte_end: usize,
     pub line_start: usize,
     pub line_end: usize,
     pub column_start: usize,
@@ -27,6 +29,7 @@ pub struct QueryOptions<'a> {
     pub ignore: &'a [String],
     pub allow_tests: bool,
     pub max_results: Option<usize>,
+    pub with_context: bool,
     #[allow(dead_code)]
     pub format: &'a str,
     pub no_gitignore: bool,
@@ -204,6 +207,8 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
 
         ast_matches.push(AstMatch {
             file_path: file_path.to_path_buf(),
+            byte_start: range.start,
+            byte_end: range.end,
             line_start,
             line_end,
             column_start,
@@ -322,7 +327,12 @@ fn escape_xml(s: &str) -> String {
 }
 
 /// Format and print the query results
-pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Result<()> {
+pub fn format_and_print_query_results(
+    matches: &[AstMatch],
+    format: &str,
+    pattern: &str,
+    with_context: bool,
+) -> Result<()> {
     match format {
         "color" | "terminal" => {
             for m in matches {
@@ -386,19 +396,42 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
             let json_matches_standardized: Vec<_> = matches
                 .iter()
                 .map(|m| {
-                    serde_json::json!({
+                    let mut result = serde_json::json!({
                         "file": m.file_path.to_string_lossy(),
                         "lines": [m.line_start, m.line_end],
                         "node_type": "match",
                         "content": m.matched_text,
                         "column_start": m.column_start,
                         "column_end": m.column_end
-                    })
+                    });
+
+                    if with_context {
+                        if let Some(context) =
+                            probe_code::semantic_context::build_query_source_context(
+                                &m.file_path,
+                                m.byte_start,
+                                m.byte_end,
+                                &m.matched_text,
+                            )
+                        {
+                            result["language"] = serde_json::json!(context.language);
+                            result["pattern"] = serde_json::json!({
+                                "source": pattern,
+                                "id": serde_json::Value::Null,
+                            });
+                            result["match"] = serde_json::json!(context.r#match);
+                            if let Some(owner) = context.owner {
+                                result["owner"] = serde_json::json!(owner);
+                            }
+                        }
+                    }
+
+                    result
                 })
                 .collect();
 
             // Create the wrapper object
-            let wrapper = serde_json::json!({
+            let mut wrapper = serde_json::json!({
                 "results": json_matches_standardized,
                 "summary": {
                     "count": matches.len(),
@@ -407,6 +440,9 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
                 },
                 "version": probe_code::version::get_version()
             });
+            if with_context {
+                wrapper["schema_version"] = serde_json::json!("probe.query.context.v1");
+            }
 
             println!("{}", serde_json::to_string_pretty(&wrapper)?);
         }
@@ -455,7 +491,7 @@ pub fn format_and_print_query_results(matches: &[AstMatch], format: &str) -> Res
         }
         _ => {
             // Default to color format
-            format_and_print_query_results(matches, "color")?;
+            format_and_print_query_results(matches, "color", pattern, with_context)?;
         }
     }
 
@@ -473,6 +509,7 @@ pub fn handle_query(
     max_results: Option<usize>,
     format: &str,
     no_gitignore: bool,
+    with_context: bool,
 ) -> Result<()> {
     // Print version at the start for text-based formats
     if format != "json" && format != "xml" {
@@ -521,6 +558,7 @@ pub fn handle_query(
         ignore,
         allow_tests,
         max_results,
+        with_context,
         format,
         no_gitignore,
     };
@@ -533,7 +571,7 @@ pub fn handle_query(
     if matches.is_empty() {
         // For JSON and XML formats, still call format_and_print_query_results
         if format == "json" || format == "xml" {
-            format_and_print_query_results(&matches, format)?;
+            format_and_print_query_results(&matches, format, pattern, with_context)?;
         } else {
             // For other formats, print the "No results found" message
             println!("{}", "No results found.".yellow().bold());
@@ -546,7 +584,7 @@ pub fn handle_query(
             println!();
         }
 
-        format_and_print_query_results(&matches, format)?;
+        format_and_print_query_results(&matches, format, pattern, with_context)?;
 
         // Skip summary for JSON and XML formats
         if format != "json" && format != "xml" {

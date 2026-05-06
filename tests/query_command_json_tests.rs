@@ -312,6 +312,90 @@ fn test_query_json_output_with_special_characters() {
 }
 
 #[test]
+fn test_query_json_with_context_reports_owner_block() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let ts_content = r#"
+// Verifies: APP-REQ-123
+// Handles timeout behavior for outbound calls.
+export async function requestJSON(url: string) {
+  return fetch(url, { signal: AbortSignal.timeout(1000) });
+}
+"#;
+    create_test_file(&temp_dir, "src/api.ts", ts_content);
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--",
+            "query",
+            "fetch($$$ARGS)",
+            temp_dir.path().to_str().unwrap(),
+            "--language",
+            "typescript",
+            "--format",
+            "json",
+            "--with-context",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json_str = extract_json_from_output(&stdout);
+    let json_result: Value = serde_json::from_str(json_str).expect("Failed to parse JSON output");
+
+    assert_eq!(
+        json_result.get("schema_version").and_then(Value::as_str),
+        Some("probe.query.context.v1")
+    );
+
+    let result = &json_result.get("results").unwrap().as_array().unwrap()[0];
+    assert_eq!(
+        result.get("language").and_then(Value::as_str),
+        Some("typescript")
+    );
+    assert_eq!(
+        result
+            .get("match")
+            .and_then(|m| m.get("node_type"))
+            .and_then(Value::as_str),
+        Some("call_expression")
+    );
+
+    let owner = result
+        .get("owner")
+        .expect("owner context should be present");
+    assert_eq!(
+        owner.get("symbol").and_then(Value::as_str),
+        Some("requestJSON")
+    );
+    assert_eq!(
+        owner.get("node_type").and_then(Value::as_str),
+        Some("function_declaration")
+    );
+    assert_eq!(owner.get("scope").and_then(Value::as_str), Some("function"));
+    assert!(
+        owner
+            .get("comments")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .any(|comment| comment
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .contains("APP-REQ-123")),
+        "owner comments should include leading source comments"
+    );
+}
+
+#[test]
 fn test_query_json_output_with_multiple_languages() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_test_directory_structure(&temp_dir);

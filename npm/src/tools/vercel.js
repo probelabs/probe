@@ -936,7 +936,7 @@ export const queryTool = (options = {}) => {
 		name: 'query',
 		description: queryDescription,
 		inputSchema: querySchema,
-		execute: async ({ pattern, path, language, allow_tests }) => {
+		execute: async ({ pattern, path, language, allow_tests, with_context }) => {
 			try {
 				// Parse and resolve paths (supports comma-separated and relative paths)
 				let queryPaths;
@@ -962,6 +962,7 @@ export const queryTool = (options = {}) => {
 					cwd: options.cwd, // Working directory for resolving relative paths
 					language,
 					allowTests: allow_tests ?? true,
+					withContext: with_context ?? false,
 					json: false
 				});
 

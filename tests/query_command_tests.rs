@@ -30,6 +30,7 @@ fn add(a: i32, b: i32) -> i32 {
         ignore: &[],
         allow_tests: true,
         max_results: None,
+        with_context: false,
         format: "plain",
         no_gitignore: false,
     };
@@ -82,6 +83,7 @@ const multiply = (a, b) => a * b;
         ignore: &[],
         allow_tests: true,
         max_results: None,
+        with_context: false,
         format: "plain",
         no_gitignore: false,
     };
@@ -102,6 +104,7 @@ const multiply = (a, b) => a * b;
         ignore: &[],
         allow_tests: true,
         max_results: None,
+        with_context: false,
         format: "plain",
         no_gitignore: false,
     };
@@ -142,6 +145,7 @@ fn func5() {}
         ignore: &[],
         allow_tests: true,
         max_results: Some(3),
+        with_context: false,
         format: "plain",
         no_gitignore: false,
     };
@@ -179,6 +183,7 @@ fn test_query_ignore_patterns() -> Result<()> {
         ignore: &["test".to_string()],
         allow_tests: false,
         max_results: None,
+        with_context: false,
         format: "plain",
         no_gitignore: false,
     };
@@ -217,6 +222,7 @@ fn auto_detected_function() {
         ignore: &[],
         allow_tests: true,
         max_results: None,
+        with_context: false,
         format: "plain",
         no_gitignore: false,
     };

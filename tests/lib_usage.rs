@@ -48,6 +48,7 @@ mod tests {
             ignore: &[],
             allow_tests: true,
             max_results: Some(5),
+            with_context: false,
             format: "text",
             no_gitignore: false,
         };
