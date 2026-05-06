@@ -141,8 +141,15 @@ const CODE_SEARCH_SCHEMA = {
  * Returns: { action: 'allow'|'block'|'rewrite', rewritten?: string, reason: string }
  */
 async function checkDelegateDedup(newQuery, previousQueries, model, debug) {
-	if (!model || previousQueries.length === 0) {
+	if (previousQueries.length === 0) {
 		return { action: 'allow', reason: 'no previous queries' };
+	}
+	if (!model) {
+		return {
+			action: 'allow',
+			reason: 'dedup model unavailable',
+			error: 'dedup_model_unavailable'
+		};
 	}
 
 	const previousList = previousQueries
@@ -203,11 +210,18 @@ Examples:
 			return { action: 'block', reason: parts[1]?.trim() || 'duplicate query' };
 		} else if (action === 'rewrite' && parts[2]) {
 			return { action: 'rewrite', reason: parts[1]?.trim() || 'refined query', rewritten: parts[2].trim() };
+		} else if (action === 'allow') {
+			return { action: 'allow', reason: parts[1]?.trim() || 'new concept' };
 		}
-		return { action: 'allow', reason: parts[1]?.trim() || 'new concept' };
+		return {
+			action: 'allow',
+			reason: 'dedup returned unparseable response',
+			error: `unexpected_response:${line.slice(0, 200)}`
+		};
 	} catch (err) {
-		if (debug) console.error('[DEDUP-LLM] Error:', err.message);
-		return { action: 'allow', reason: 'dedup check failed, allowing' };
+		const errorMessage = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+		if (debug) console.error('[DEDUP-LLM] Error:', errorMessage);
+		return { action: 'allow', reason: 'dedup check failed', error: errorMessage };
 	}
 }
 
@@ -702,7 +716,7 @@ export const searchTool = (options = {}) => {
 				}
 			}
 
-			// ── Delegate-level semantic dedup ────────────────────────────
+				// ── Delegate-level semantic dedup ────────────────────────────
 				// Each delegate is a full flash agent session (minutes, not seconds).
 				// Use LLM to detect semantic duplicates and suggest rewrites.
 				// Compare against ALL previous delegations (not filtered by path) because
@@ -713,10 +727,10 @@ export const searchTool = (options = {}) => {
 				let effectiveQuery = searchQuery;
 
 				if (previousDelegations.length > 0) {
+					const dedupProvider = options.searchDelegateProvider || process.env.PROBE_SEARCH_DELEGATE_PROVIDER || options.provider || process.env.FORCE_PROVIDER || null;
+					const dedupModelName = options.searchDelegateModel || process.env.PROBE_SEARCH_DELEGATE_MODEL || options.model || process.env.MODEL_NAME || null;
 					// Lazily create the dedup model (same provider/model as delegate)
 					if (cachedDedupModel === undefined) {
-						const dedupProvider = options.searchDelegateProvider || process.env.PROBE_SEARCH_DELEGATE_PROVIDER || options.provider || process.env.FORCE_PROVIDER || null;
-						const dedupModelName = options.searchDelegateModel || process.env.PROBE_SEARCH_DELEGATE_MODEL || options.model || process.env.MODEL_NAME || null;
 						if (debug) {
 							console.error(`[DEDUP-LLM] Creating model: provider=${dedupProvider}, model=${dedupModelName}`);
 						}
@@ -730,6 +744,9 @@ export const searchTool = (options = {}) => {
 						'dedup.query': searchQuery,
 						'dedup.previous_count': String(previousDelegations.length),
 						'dedup.previous_queries': previousDelegations.map(d => d.query).join(' | '),
+						'dedup.provider': dedupProvider || '',
+						'dedup.model': dedupModelName || '',
+						'dedup.model_available': cachedDedupModel ? 'true' : 'false',
 					};
 
 					const dedup = options.tracer?.withSpan
@@ -740,6 +757,7 @@ export const searchTool = (options = {}) => {
 								'dedup.action': result.action,
 								'dedup.reason': result.reason || '',
 								'dedup.rewritten': result.rewritten || '',
+								'dedup.error': result.error || '',
 							});
 						})
 						: await checkDelegateDedup(searchQuery, previousDelegations, cachedDedupModel, debug);
