@@ -9,8 +9,9 @@ use probe_code::models::SearchResult;
 use probe_code::search::query::QueryPlan;
 use probe_code::search::search_tokens::sum_tokens_with_deduplication;
 use probe_code::semantic_context::{
-    classify_scope_from_node, classify_text_matches_in_block, extract_owner_symbol_from_source,
-    language_name_for_path, leading_comments_from_block, SourceComment, SourceMatch,
+    build_search_owner_context, classify_scope_from_node, classify_text_matches_in_block,
+    extract_owner_symbol_from_source, language_name_for_path, leading_comments_from_block,
+    EnclosingCall, EnclosingSymbol, SourceComment, SourceMatch,
 };
 
 /// Create a cache of file contents for outline formatters to avoid redundant I/O
@@ -592,6 +593,14 @@ fn format_and_print_json_results(
         // The owning symbol name (function, class, method) for this block
         #[serde(skip_serializing_if = "Option::is_none")]
         owner_symbol: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        owner_qualified_symbol: Option<String>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        enclosing_symbols: Vec<EnclosingSymbol>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enclosing_call: Option<EnclosingCall>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        enclosing_calls: Vec<EnclosingCall>,
         // Raw source comments attached at the start of this block.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         leading_comments: Vec<SourceComment>,
@@ -642,6 +651,8 @@ fn format_and_print_json_results(
                 is_test.is_some(),
             );
             let owner = extract_owner_symbol(&r.code, &r.node_type);
+            let owner_context =
+                build_search_owner_context(file_path, r.lines.0, r.lines.1, &r.code);
             let leading_comments = leading_comments_from_block(&r.code, r.lines.0);
             let matches = classify_text_matches_in_block(
                 &r.code,
@@ -660,7 +671,25 @@ fn format_and_print_json_results(
                 is_test,
                 is_doc: if doc { Some(true) } else { None },
                 is_example: if fenced_example { Some(true) } else { None },
-                owner_symbol: owner,
+                owner_symbol: owner.or_else(|| {
+                    owner_context
+                        .as_ref()
+                        .and_then(|context| context.symbol.clone())
+                }),
+                owner_qualified_symbol: owner_context
+                    .as_ref()
+                    .and_then(|context| context.qualified_symbol.clone()),
+                enclosing_symbols: owner_context
+                    .as_ref()
+                    .map(|context| context.enclosing_symbols.clone())
+                    .unwrap_or_default(),
+                enclosing_call: owner_context
+                    .as_ref()
+                    .and_then(|context| context.enclosing_call.clone()),
+                enclosing_calls: owner_context
+                    .as_ref()
+                    .map(|context| context.enclosing_calls.clone())
+                    .unwrap_or_default(),
                 leading_comments,
                 matches,
                 symbol_signature: r.symbol_signature.as_ref(),

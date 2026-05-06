@@ -323,6 +323,24 @@ fn test_search_json_no_merge_reports_req_id_source_metadata() {
         Some("evaluatePolicy")
     );
     assert_eq!(
+        method_result
+            .get("owner_qualified_symbol")
+            .and_then(Value::as_str),
+        Some("PolicyService.evaluatePolicy")
+    );
+    let enclosing_symbols = method_result
+        .get("enclosing_symbols")
+        .and_then(Value::as_array)
+        .expect("method result should expose containing symbols");
+    assert_eq!(
+        enclosing_symbols[0].get("kind").and_then(Value::as_str),
+        Some("class")
+    );
+    assert_eq!(
+        enclosing_symbols[0].get("name").and_then(Value::as_str),
+        Some("PolicyService")
+    );
+    assert_eq!(
         method_result.get("scope").and_then(Value::as_str),
         Some("function")
     );
@@ -339,6 +357,12 @@ fn test_search_json_no_merge_reports_req_id_source_metadata() {
     );
     assert_eq!(
         arrow_result.get("owner_symbol").and_then(Value::as_str),
+        Some("normalizeDecision")
+    );
+    assert_eq!(
+        arrow_result
+            .get("owner_qualified_symbol")
+            .and_then(Value::as_str),
         Some("normalizeDecision")
     );
     assert_eq!(
@@ -363,6 +387,20 @@ fn test_search_json_no_merge_reports_req_id_source_metadata() {
     assert_eq!(
         callback_result.get("is_test").and_then(Value::as_bool),
         Some(true)
+    );
+    let enclosing_calls = callback_result
+        .get("enclosing_calls")
+        .and_then(Value::as_array)
+        .expect("callback result should expose enclosing call context");
+    assert_eq!(
+        enclosing_calls[0].get("callee").and_then(Value::as_str),
+        Some("test")
+    );
+    assert_eq!(
+        enclosing_calls[0]
+            .get("first_arg_literal")
+            .and_then(Value::as_str),
+        Some("accepts valid policy")
     );
 
     let leading_comments = callback_result
@@ -389,6 +427,131 @@ fn test_search_json_no_merge_reports_req_id_source_metadata() {
     assert_eq!(
         matches[0].get("comment_role").and_then(Value::as_str),
         Some("leading")
+    );
+
+    let nested_callback_result = find_result(results, |result| {
+        result
+            .get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|code| code.contains("it(\"normalizes decisions\""))
+    });
+    let nested_calls = nested_callback_result
+        .get("enclosing_calls")
+        .and_then(Value::as_array)
+        .expect("nested callback result should expose enclosing call chain");
+    assert_eq!(
+        nested_calls[0].get("callee").and_then(Value::as_str),
+        Some("describe")
+    );
+    assert_eq!(
+        nested_calls[0]
+            .get("first_arg_literal")
+            .and_then(Value::as_str),
+        Some("normalization")
+    );
+    assert_eq!(
+        nested_calls[1].get("callee").and_then(Value::as_str),
+        Some("it")
+    );
+    assert_eq!(
+        nested_calls[1]
+            .get("first_arg_literal")
+            .and_then(Value::as_str),
+        Some("normalizes decisions")
+    );
+}
+
+#[test]
+fn test_search_json_classifies_req_id_noise_without_policy_interpretation() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    create_requirement_fixture(&temp_dir);
+
+    let output = Command::new("cargo")
+        .args([
+            "run",
+            "--quiet",
+            "--",
+            "search",
+            "--allow-tests",
+            "--strict-elastic-syntax",
+            "--max-results",
+            "20",
+            "--no-merge",
+            "--format",
+            "json",
+            r#""SYS-REQ-427" OR "SYS-REQ-428" OR "SYS-REQ-429""#,
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    assert!(
+        output.status.success(),
+        "search command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json_str = extract_json_from_output(&stdout);
+    let json_result: Value = serde_json::from_str(json_str).expect("Failed to parse JSON output");
+    let results = json_result
+        .get("results")
+        .and_then(Value::as_array)
+        .expect("results should be an array");
+
+    let literal_result = find_result(results, |result| {
+        result
+            .get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|code| code.contains("SYS-REQ-427"))
+    });
+    let literal_matches = literal_result
+        .get("matches")
+        .and_then(Value::as_array)
+        .expect("literal result should expose classified matches");
+    assert_eq!(
+        literal_matches[0].get("kind").and_then(Value::as_str),
+        Some("string")
+    );
+
+    let string_return_result = find_result(results, |result| {
+        result
+            .get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|code| code.contains("SYS-REQ-428"))
+    });
+    let string_return_matches = string_return_result
+        .get("matches")
+        .and_then(Value::as_array)
+        .expect("string return result should expose classified matches");
+    assert_eq!(
+        string_return_matches[0].get("kind").and_then(Value::as_str),
+        Some("string")
+    );
+
+    let loose_comment_result = find_result(results, |result| {
+        result
+            .get("code")
+            .and_then(Value::as_str)
+            .is_some_and(|code| code.contains("SYS-REQ-429"))
+    });
+    let loose_comment_matches = loose_comment_result
+        .get("matches")
+        .and_then(Value::as_array)
+        .expect("loose comment result should expose classified matches");
+    assert_eq!(
+        loose_comment_matches[0].get("kind").and_then(Value::as_str),
+        Some("comment")
+    );
+    assert_eq!(
+        loose_comment_matches[0]
+            .get("comment_role")
+            .and_then(Value::as_str),
+        Some("leading")
+    );
+    assert!(
+        loose_comment_result.get("requirement_policy").is_none(),
+        "Probe should not add domain-specific requirement interpretation"
     );
 }
 

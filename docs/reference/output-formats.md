@@ -56,6 +56,29 @@ The `search` command's JSON output includes the following fields for each result
       "lines": [10, 20],                // Start and end line numbers
       "node_type": "function",          // Type of code block (function, class, struct, etc.)
       "code": "fn example() { ... }",   // The actual code content
+      "language": "rust",               // Inferred language when available
+      "scope": "function",              // Generic block scope classification
+      "owner_symbol": "example",        // Owning symbol when available
+      "owner_qualified_symbol": "mod.example", // Qualified owner when available
+      "enclosing_symbols": [            // Containing classes/modules/impls when available
+        { "kind": "module", "name": "mod", "line": 1 }
+      ],
+      "enclosing_calls": [              // Generic call chain for callbacks/call contexts
+        { "callee": "it", "first_arg_literal": "works", "line": 12 }
+      ],
+      "leading_comments": [             // Raw leading comments attached to the block
+        { "kind": "leading", "start_line": 9, "end_line": 9, "text": "// ..." }
+      ],
+      "matches": [                      // Classified textual matches in this result block
+        {
+          "text": "example",
+          "start_line": 10,
+          "start_column": 4,
+          "end_line": 10,
+          "end_column": 11,
+          "kind": "code"
+        }
+      ],
       "matched_keywords": [             // Keywords that matched (if available)
         "example",
         "function"
@@ -72,6 +95,8 @@ The `search` command's JSON output includes the following fields for each result
   }
 }
 ```
+
+Search context fields are source facts only. For example, a match inside a string literal is reported as `matches[].kind == "string"`, and a match in a leading comment is reported as `matches[].kind == "comment"` with `comment_role == "leading"`. Probe does not interpret requirement IDs, test framework names, policy annotations, or comment semantics.
 
 #### Example: Search JSON Output
 

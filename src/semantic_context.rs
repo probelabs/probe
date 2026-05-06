@@ -150,6 +150,36 @@ pub fn build_query_source_context(
     Some(context)
 }
 
+pub fn build_search_owner_context(
+    path: &Path,
+    start_line: usize,
+    end_line: usize,
+    fallback_code: &str,
+) -> Option<OwnerContext> {
+    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    let source = std::fs::read_to_string(path).ok()?;
+    let source_bytes = source.as_bytes();
+
+    let _language_impl = get_language_impl(extension)?;
+    let mut parser = get_pooled_parser(extension).ok()?;
+    let tree = parser.parse(&source, None)?;
+    let root = tree.root_node();
+    let owner = find_search_owner_node(root, start_line, end_line);
+    let context = owner.map(|owner| build_owner_context(owner, owner, &source, source_bytes));
+
+    return_pooled_parser(extension, parser);
+
+    let context = context?;
+    if context.content.is_some() {
+        Some(context)
+    } else {
+        Some(OwnerContext {
+            content: Some(fallback_code.to_string()),
+            ..context
+        })
+    }
+}
+
 pub fn extract_owner_symbol_from_source(code: &str, node_type: &str) -> Option<String> {
     if matches!(node_type, "section" | "document" | "paragraph" | "heading") {
         return None;
@@ -470,6 +500,49 @@ fn find_owner_node<'a>(node: Node<'a>) -> Option<Node<'a>> {
         current = candidate.parent();
     }
     None
+}
+
+fn find_search_owner_node<'a>(
+    root: Node<'a>,
+    start_line: usize,
+    end_line: usize,
+) -> Option<Node<'a>> {
+    let mut candidates = Vec::new();
+    collect_owner_nodes_in_line_range(root, start_line, end_line, &mut candidates);
+
+    candidates
+        .into_iter()
+        .min_by_key(|node| {
+            let line_span = node
+                .end_position()
+                .row
+                .saturating_sub(node.start_position().row);
+            (line_span, node.end_byte().saturating_sub(node.start_byte()))
+        })
+        .map(normalize_owner_node)
+}
+
+fn collect_owner_nodes_in_line_range<'a>(
+    node: Node<'a>,
+    start_line: usize,
+    end_line: usize,
+    candidates: &mut Vec<Node<'a>>,
+) {
+    let node_start = node.start_position().row + 1;
+    let node_end = node.end_position().row + 1;
+
+    if node_end < start_line || node_start > end_line {
+        return;
+    }
+
+    if is_owner_node(node) && node_start >= start_line && node_end <= end_line {
+        candidates.push(node);
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_owner_nodes_in_line_range(child, start_line, end_line, candidates);
+    }
 }
 
 fn normalize_owner_node(node: Node) -> Node {
