@@ -1,0 +1,43 @@
+id: SYS-REQ-002
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: the lsp_daemon shall always satisfy server_pool_available & no_zombie_processes
+description: >-
+    LSP daemon: long-running server pool for language servers; lsp-daemon/src/*.
+formalization_strategy: fretish
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+parent: STK-REQ-001
+component: lsp_daemon
+rationale: ""
+tags:
+    - lsp
+    - network
+    - concurrent
+variables: []
+traces:
+    verified_by_extra:
+        - tests/lsp_integration_tests.rs
+        - tests/lsp_comprehensive_tests.rs
+    implemented_by_extra:
+        - lsp-daemon/src/daemon.rs
+        - lsp-daemon/src/pool.rs
+        - lsp-daemon/src/server_manager.rs
+verification:
+    assurance_level: E
+    formalization_status: valid
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T06:34:10Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T06:34:37Z"

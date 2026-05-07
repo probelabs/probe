@@ -1,0 +1,38 @@
+id: SYS-REQ-003
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: the fs_traversal shall always satisfy gitignore_respected & path_safety_enforced
+description: Filesystem traversal with gitignore awareness; src/path_safety.rs, src/grep.rs, ignore::* / walkdir.
+formalization_strategy: fretish
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+parent: STK-REQ-001
+component: fs_traversal
+rationale: ""
+tags:
+    - fs_io
+variables: []
+traces:
+    verified_by_extra:
+        - tests/path_resolver_tests.rs
+    implemented_by_extra:
+        - src/path_safety.rs
+        - src/grep.rs
+verification:
+    assurance_level: E
+    formalization_status: valid
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T06:34:10Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T06:34:37Z"
