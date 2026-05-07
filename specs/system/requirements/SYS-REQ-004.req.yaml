@@ -37,4 +37,54 @@ history:
     created_by: human:cli
     created_at: "2026-05-07T06:34:10Z"
     last_modified_by: human:cli
-    last_modified_at: "2026-05-07T06:34:37Z"
+    last_modified_at: "2026-05-07T07:28:52Z"
+stakeholder:
+    obligation_suppressions:
+        - id: binary_data_preserved
+          reason: String::from_utf8_lossy / .to_string_lossy() in path_resolver render diagnostic / display strings only; the underlying PathBuf/Vec<u8> dependency lists preserve binary path bytes for matching.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:52Z"
+          framework_refs:
+            - CWE CWE-176,CWE-1007
+            - OWASP-ASVS-v4 V5.2.1,V5.2.3
+        - id: external_call_concurrency_bounded
+          reason: Path resolver runs once per process at search init; not an outbound concurrent dependency.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:52Z"
+          framework_refs:
+            - CWE CWE-410,CWE-770
+            - IEC-62443 CR-7.1
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: external_call_failure_observable
+          reason: Local fs errors in dep-graph reading propagate as PathResolveError; failure is loud and surfaced to the search orchestrator.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:52Z"
+          framework_refs:
+            - CWE CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1
+        - id: external_call_timeout_bounded
+          reason: fs::read_dir / fs::write in path_resolver run once per project-init for dep-graph building; local-only, bounded by project filetree size.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:51Z"
+          framework_refs:
+            - CWE CWE-1088,CWE-400
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: panic_free_input_handling
+          reason: Slice indexing in path_resolver/{rust,go,javascript}.rs is on parser output (Cargo.toml deps, package.json deps, go.mod requires) whose minimum length is asserted by the parser before slicing; out-of-bounds is structurally unreachable on parsed input.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:51Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1
+        - id: upstream_budget_coordinated
+          reason: Path resolution is part of the SYS-REQ-001 search startup budget; no separate upstream chain.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:52Z"
+          framework_refs:
+            - CWE CWE-1088
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4

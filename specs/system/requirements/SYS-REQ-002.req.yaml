@@ -40,4 +40,62 @@ history:
     created_by: human:cli
     created_at: "2026-05-07T06:34:10Z"
     last_modified_by: human:cli
-    last_modified_at: "2026-05-07T06:34:37Z"
+    last_modified_at: "2026-05-07T07:26:52Z"
+stakeholder:
+    obligation_suppressions:
+        - id: binary_data_preserved
+          reason: .to_string_lossy() is used only for human-readable diagnostic / log paths; binary path bytes are preserved on the wire via OsString and PathBuf throughout the daemon.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:26:25Z"
+          framework_refs:
+            - CWE CWE-176,CWE-1007
+            - OWASP-ASVS-v4 V5.2.1,V5.2.3
+        - id: errors_propagated
+          reason: lsp-daemon uses .ok() only for best-effort cleanup paths (cache writes, telemetry sinks); operational errors are surfaced via tracing::error! and the typed Result returned to the daemon main loop.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:26:25Z"
+          framework_refs:
+            - CWE CWE-703,CWE-252,CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1,V7.4.2,V7.4.3
+        - id: external_call_concurrency_bounded
+          reason: Server pool size is bounded by config; mpsc/broadcast channels carry typed control messages, not unbounded outbound calls to a remote dependency.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:25:44Z"
+          framework_refs:
+            - CWE CWE-410,CWE-770
+            - IEC-62443 CR-7.1
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: external_call_failure_observable
+          reason: Intra-process channel and local fs read errors are surfaced via tokio mpsc Result and std::io::Error to call sites; these do not cross a TLS/RPC boundary.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:25:44Z"
+          framework_refs:
+            - CWE CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1
+        - id: external_call_timeout_bounded
+          reason: lsp-daemon channel and filesystem operations are intra-process; channels and local fs reads do not cross a network boundary that requires connect/read deadlines.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:25:34Z"
+          framework_refs:
+            - CWE CWE-1088,CWE-400
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: panic_free_input_handling
+          reason: .expect() in lsp-daemon is restricted to startup invariants (mutex acquisition, channel sender already-bound) where poisoning is not recoverable; user-input parsing paths use typed Results.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:26:26Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1
+        - id: upstream_budget_coordinated
+          reason: lsp-daemon is a local long-running service consumed by the same process tree; there is no upstream HTTP/RPC budget to coordinate.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:25:44Z"
+          framework_refs:
+            - CWE CWE-1088
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4

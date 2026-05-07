@@ -21,7 +21,6 @@ traces:
     verified_by_extra:
         - tests/cache_validation_tests.rs
     implemented_by_extra:
-        - src/main.rs
         - src/lsp_integration/client.rs
         - src/lsp_integration/management.rs
 verification:
@@ -36,4 +35,71 @@ history:
     created_by: human:cli
     created_at: "2026-05-07T06:34:19Z"
     last_modified_by: human:cli
-    last_modified_at: "2026-05-07T06:34:47Z"
+    last_modified_at: "2026-05-07T07:28:24Z"
+stakeholder:
+    obligation_suppressions:
+        - id: binary_data_preserved
+          reason: .to_string_lossy() in lsp_integration is used only for error/log diagnostic strings; on-wire path data is preserved as PathBuf/OsString.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:24Z"
+          framework_refs:
+            - CWE CWE-176,CWE-1007
+            - OWASP-ASVS-v4 V5.2.1,V5.2.3
+        - id: errors_propagated
+          reason: lsp_integration/client.rs and management.rs use .ok() / let _ = only for best-effort cleanup paths (cache invalidation, log sinks, post-shutdown notifications); operational errors are surfaced via tracing::error! and the typed Result returned to the LSP request handler.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:23Z"
+          framework_refs:
+            - CWE CWE-703,CWE-252,CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1,V7.4.2,V7.4.3
+        - id: external_call_concurrency_bounded
+          reason: Symbol cache fs operations are bounded by the LSP request rate; per-LSP-server concurrency is governed by SYS-REQ-010 task lifecycle bounds.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:24Z"
+          framework_refs:
+            - CWE CWE-410,CWE-770
+            - IEC-62443 CR-7.1
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: external_call_failure_observable
+          reason: Local fs errors propagate via std::io::Error wrapped in CacheError; failure is loud, not silently dropped.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:24Z"
+          framework_refs:
+            - CWE CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1
+        - id: external_call_timeout_bounded
+          reason: tokio::fs::read_dir / fs::remove_file are local filesystem operations on the symbol cache directory; no network boundary to bound.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:24Z"
+          framework_refs:
+            - CWE CWE-1088,CWE-400
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: filesystem_operations_use_handle
+          reason: >-
+            remove_file followed by use is a cache-invalidation pattern: removal is a one-shot effect, the subsequent use is a fresh path resolution against a recreated cache file. TOCTOU race is benign — worst case is re-creating the same file.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:24Z"
+          framework_refs:
+            - CWE CWE-367,CWE-362,CWE-59
+            - NIST-800-53 SI-10
+            - OWASP-ASVS-v4 V12.3.1,V12.3.2
+        - id: panic_free_input_handling
+          reason: Slice indexing in lsp_integration is on protocol-validated LSP request fields whose length is enforced by the upstream JSON-RPC parser before slicing; out-of-bounds is structurally unreachable on validated input.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:24Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1
+        - id: upstream_budget_coordinated
+          reason: Cache fs ops sit below the LSP request handler whose budget is governed by the LSP client deadline; no separate upstream budget exists.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:24Z"
+          framework_refs:
+            - CWE CWE-1088
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4

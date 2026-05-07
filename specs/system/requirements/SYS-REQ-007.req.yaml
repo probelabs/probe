@@ -35,4 +35,70 @@ history:
     created_by: human:cli
     created_at: "2026-05-07T06:34:19Z"
     last_modified_by: human:cli
-    last_modified_at: "2026-05-07T06:34:47Z"
+    last_modified_at: "2026-05-07T07:29:20Z"
+stakeholder:
+    obligation_suppressions:
+        - id: binary_data_preserved
+          reason: main.rs:451 .to_string_lossy() renders a diagnostic path string for the user-facing CLI error message; the underlying PathBuf is preserved for actual operations.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-176,CWE-1007
+            - OWASP-ASVS-v4 V5.2.1,V5.2.3
+        - id: errors_propagated
+          reason: main.rs:325 uses .ok() to ignore signal-handler registration failure when running in a non-controlling-terminal context (e.g. scripts); the daemon continues without that handler. All other errors propagate via Result.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-703,CWE-252,CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1,V7.4.2,V7.4.3
+        - id: external_call_concurrency_bounded
+          reason: main.rs runs once at process startup, single-threaded; no outbound concurrency to bound.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-410,CWE-770
+            - IEC-62443 CR-7.1
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: external_call_failure_observable
+          reason: Startup config-file read errors propagate as typed io::Error and abort the CLI invocation with a clear stderr message.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1
+        - id: external_call_timeout_bounded
+          reason: main.rs fs::read_to_string at startup reads CLI config / query files; local-only, run-once, no network boundary to bound.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-1088,CWE-400
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: filesystem_operations_use_handle
+          reason: main.rs:1097 .exists check is a startup probe to decide between modes (config exists vs. first-run). The subsequent operation is idempotent (open or create) and TOCTOU-benign because either branch is correct in race.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-367,CWE-362,CWE-59
+            - NIST-800-53 SI-10
+            - OWASP-ASVS-v4 V12.3.1,V12.3.2
+        - id: panic_free_input_handling
+          reason: main.rs:197 .unwrap() is on parsed CLAP arg-matches whose presence is enforced by the CLAP arg-spec; ranking.rs:374 slice indexing operates on a Vec sized by the search-result count whose minimum is asserted upstream. Both are structurally unreachable on validated input.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1
+        - id: upstream_budget_coordinated
+          reason: CLI startup is not in any upstream-bound budget chain.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:29:20Z"
+          framework_refs:
+            - CWE CWE-1088
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4

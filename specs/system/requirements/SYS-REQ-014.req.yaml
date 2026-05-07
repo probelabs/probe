@@ -1,0 +1,40 @@
+id: SYS-REQ-014
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: ""
+description: Threads spawned by the bert_reranker (std::thread::spawn for batch parallelism) shall complete before the reranker returns and shall not leak if the reranker is dropped mid-flight.
+formalization_strategy: informal
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+component: bert_reranker_concurrency
+rationale: bert_reranker spawns std::thread for parallel scoring; lifetimes must be bound to caller.
+tags:
+    - concurrent
+    - thread_lifecycle
+variables: []
+traces:
+    satisfies:
+        - SYS-REQ-009
+    verified_by_extra:
+        - src/bert_reranker.rs
+    implemented_by_extra:
+        - src/bert_reranker.rs
+verification:
+    assurance_level: E
+    formalization_status: none
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T07:27:15Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T07:27:15Z"
+obligation_class: concurrent

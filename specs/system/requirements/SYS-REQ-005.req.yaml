@@ -35,4 +35,14 @@ history:
     created_by: human:cli
     created_at: "2026-05-07T06:34:10Z"
     last_modified_by: human:cli
-    last_modified_at: "2026-05-07T06:34:46Z"
+    last_modified_at: "2026-05-07T07:28:51Z"
+stakeholder:
+    obligation_suppressions:
+        - id: panic_free_input_handling
+          reason: .unwrap() in tree_cache.rs operates on Mutex acquisitions where poisoning is documented as unrecoverable (process should crash on poisoned tree-cache lock — there is no safe recovery path).
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:28:51Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1

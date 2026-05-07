@@ -25,7 +25,6 @@ traces:
         - tests/search_determinism_tests.rs
     implemented_by_extra:
         - src/search/mod.rs
-        - src/ranking.rs
 verification:
     assurance_level: E
     formalization_status: valid

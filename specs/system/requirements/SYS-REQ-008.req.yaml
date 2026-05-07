@@ -36,4 +36,55 @@ history:
     created_by: human:cli
     created_at: "2026-05-07T06:34:19Z"
     last_modified_by: human:cli
-    last_modified_at: "2026-05-07T06:34:47Z"
+    last_modified_at: "2026-05-07T07:27:38Z"
+stakeholder:
+    obligation_suppressions:
+        - id: external_call_concurrency_bounded
+          reason: Config loader runs once at process startup, single-threaded; no concurrency to bound.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:37Z"
+          framework_refs:
+            - CWE CWE-410,CWE-770
+            - IEC-62443 CR-7.1
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: external_call_failure_observable
+          reason: Local config-dir creation errors propagate via typed io::Error wrapped in ConfigError; failure is loud.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:37Z"
+          framework_refs:
+            - CWE CWE-754
+            - NIST-800-53 SI-11
+            - OWASP-ASVS-v4 V7.4.1
+        - id: external_call_timeout_bounded
+          reason: create_dir_all in config loader runs once at startup against the local config directory; no network boundary, no remote latency.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:37Z"
+          framework_refs:
+            - CWE CWE-1088,CWE-400
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: filesystem_operations_use_handle
+          reason: config.rs .exists check is a startup probe to decide between create-default vs. load; the subsequent create_dir_all is idempotent (mkdir -p semantics) and safe under TOCTOU race because the worst case is a redundant succeeded mkdir.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:38Z"
+          framework_refs:
+            - CWE CWE-367,CWE-362,CWE-59
+            - NIST-800-53 SI-10
+            - OWASP-ASVS-v4 V12.3.1,V12.3.2
+        - id: panic_free_input_handling
+          reason: Slice indexing in config.rs operates on TOML key-paths whose length is validated by the parser before slicing; out-of-bounds is structurally unreachable on parsed config.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:38Z"
+          framework_refs:
+            - CWE CWE-248,CWE-754
+            - MISRA-C Rule 17.2
+            - OWASP-ASVS-v4 V7.4.1
+        - id: upstream_budget_coordinated
+          reason: Config load runs before any user request; not part of any upstream-bound budget chain.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:38Z"
+          framework_refs:
+            - CWE CWE-1088
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
