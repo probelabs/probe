@@ -24,7 +24,6 @@ uninlined_format_args = "allow"
 ahash = "0.8.6"  # Fast, non-cryptographic hash function
 dashmap = "5.5.3"  # Thread-safe concurrent HashMap
 anyhow = "1.0"
-atty = "0.2.13"
 colored = "3.0.0"
 dirs = "5.0.1"
 ignore = "0.4"
