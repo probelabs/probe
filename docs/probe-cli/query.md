@@ -138,6 +138,7 @@ Required for accurate parsing:
 | Ruby | `ruby`, `rb` | .rb |
 | PHP | `php` | .php |
 | Swift | `swift` | .swift |
+| Solidity | `solidity`, `sol` | .sol |
 | C# | `csharp`, `cs` | .cs |
 
 ```bash

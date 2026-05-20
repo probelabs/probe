@@ -243,6 +243,7 @@ impl Default for WorkspaceConfig {
                 "java".to_string(),
                 "c".to_string(),
                 "cpp".to_string(),
+                "solidity".to_string(),
             ],
             git_integration: true,
             incremental_indexing: true,

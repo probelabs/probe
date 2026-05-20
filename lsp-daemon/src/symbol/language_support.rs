@@ -294,6 +294,43 @@ impl LanguageRules {
         }
     }
 
+    /// Create rules for Solidity
+    pub fn solidity() -> Self {
+        Self {
+            scope_separator: ".".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::RemoveParameterNames,
+            visibility_affects_uid: false,
+            default_visibility: "internal".to_string(),
+            file_extensions: vec!["sol".to_string()],
+            signature_keywords: vec![
+                "contract".to_string(),
+                "interface".to_string(),
+                "library".to_string(),
+                "function".to_string(),
+                "constructor".to_string(),
+                "modifier".to_string(),
+                "event".to_string(),
+                "error".to_string(),
+                "public".to_string(),
+                "external".to_string(),
+                "internal".to_string(),
+                "private".to_string(),
+                "view".to_string(),
+                "pure".to_string(),
+                "payable".to_string(),
+                "virtual".to_string(),
+                "override".to_string(),
+            ],
+            type_aliases: vec![
+                ("uint".to_string(), "uint256".to_string()),
+                ("int".to_string(), "int256".to_string()),
+            ],
+        }
+    }
+
     /// Check if this language supports a specific feature
     pub fn supports_feature(&self, feature: &str) -> bool {
         match feature {
@@ -483,6 +520,7 @@ impl LanguageRulesFactory {
             "java" => Some(LanguageRules::java()),
             "c" => Some(LanguageRules::c()),
             "cpp" | "c++" | "cxx" => Some(LanguageRules::cpp()),
+            "solidity" | "sol" => Some(LanguageRules::solidity()),
             _ => None,
         }
     }
@@ -498,6 +536,7 @@ impl LanguageRulesFactory {
             "java".to_string(),
             "c".to_string(),
             "cpp".to_string(),
+            "solidity".to_string(),
         ]
     }
 

@@ -13,6 +13,7 @@ extern crate tree_sitter_php;
 extern crate tree_sitter_python;
 extern crate tree_sitter_ruby;
 extern crate tree_sitter_rust;
+extern crate tree_sitter_solidity;
 extern crate tree_sitter_swift;
 extern crate tree_sitter_typescript;
 
@@ -31,6 +32,7 @@ fn get_language(extension: &str) -> Option<Language> {
         "rb" => Some(tree_sitter_ruby::LANGUAGE.into()),
         "swift" => Some(tree_sitter_swift::LANGUAGE.into()),
         "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        "sol" => Some(tree_sitter_solidity::LANGUAGE.into()),
         // It seems tree_sitter_php::LANGUAGE doesn't exist, so we'll return None for PHP
         "php" => None,
         _ => None,
@@ -55,11 +57,27 @@ fn test_get_language() {
     assert!(get_language("rb").is_some()); // Ruby
     assert!(get_language("swift").is_some()); // Swift
     assert!(get_language("cs").is_some()); // C#
+    assert!(get_language("sol").is_some()); // Solidity
     assert!(get_language("php").is_none()); // PHP (not supported in current tree-sitter version)
 
     // Test unsupported language
     assert!(get_language("txt").is_none());
     assert!(get_language("").is_none());
+}
+
+#[test]
+fn test_solidity_language_implementation() {
+    let solidity_impl = get_language_impl("sol");
+    assert!(
+        solidity_impl.is_some(),
+        "Should be able to get Solidity language implementation"
+    );
+
+    let language = get_language("sol");
+    assert!(
+        language.is_some(),
+        "Should be able to get Solidity tree-sitter language"
+    );
 }
 
 #[test]

@@ -208,7 +208,7 @@ probe search "api" ./ --reranker ms-marco-tinybert --question "How is the REST A
 | `-l`, `--language` | String | auto | Limit to programming language |
 
 **Supported Languages:**
-`rust`, `javascript`, `typescript`, `python`, `go`, `c`, `cpp`, `java`, `ruby`, `php`, `swift`, `csharp`, `yaml`, `html`, `markdown`
+`rust`, `javascript`, `typescript`, `python`, `go`, `c`, `cpp`, `java`, `ruby`, `php`, `swift`, `solidity`, `csharp`, `yaml`, `html`, `markdown`
 
 ```bash
 # Search only Python files

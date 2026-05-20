@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use ast_grep_core::language::{Language, TSLanguage};
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
@@ -35,21 +36,37 @@ pub struct QueryOptions<'a> {
     pub no_gitignore: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ProbeQueryLang {
+    Builtin(SupportLang),
+    Solidity,
+}
+
+impl Language for ProbeQueryLang {
+    fn get_ts_language(&self) -> TSLanguage {
+        match self {
+            ProbeQueryLang::Builtin(lang) => lang.get_ts_language(),
+            ProbeQueryLang::Solidity => tree_sitter_solidity::LANGUAGE.into(),
+        }
+    }
+}
+
 /// Convert a language string to the corresponding SupportLang
-fn get_language(lang: &str) -> Option<SupportLang> {
+fn get_language(lang: &str) -> Option<ProbeQueryLang> {
     match lang.to_lowercase().as_str() {
-        "rust" => Some(SupportLang::Rust),
-        "javascript" => Some(SupportLang::JavaScript),
-        "typescript" => Some(SupportLang::TypeScript),
-        "python" => Some(SupportLang::Python),
-        "go" => Some(SupportLang::Go),
-        "c" => Some(SupportLang::C),
-        "cpp" => Some(SupportLang::Cpp),
-        "java" => Some(SupportLang::Java),
-        "ruby" => Some(SupportLang::Ruby),
-        "php" => Some(SupportLang::Php),
-        "swift" => Some(SupportLang::Swift),
-        "csharp" => Some(SupportLang::CSharp),
+        "rust" => Some(ProbeQueryLang::Builtin(SupportLang::Rust)),
+        "javascript" => Some(ProbeQueryLang::Builtin(SupportLang::JavaScript)),
+        "typescript" => Some(ProbeQueryLang::Builtin(SupportLang::TypeScript)),
+        "python" => Some(ProbeQueryLang::Builtin(SupportLang::Python)),
+        "go" => Some(ProbeQueryLang::Builtin(SupportLang::Go)),
+        "c" => Some(ProbeQueryLang::Builtin(SupportLang::C)),
+        "cpp" => Some(ProbeQueryLang::Builtin(SupportLang::Cpp)),
+        "java" => Some(ProbeQueryLang::Builtin(SupportLang::Java)),
+        "ruby" => Some(ProbeQueryLang::Builtin(SupportLang::Ruby)),
+        "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
+        "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
+        "solidity" | "sol" => Some(ProbeQueryLang::Solidity),
+        "csharp" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
         _ => None,
     }
 }
@@ -68,6 +85,7 @@ fn get_file_extension(lang: &str) -> Vec<&str> {
         "ruby" => vec![".rb"],
         "php" => vec![".php"],
         "swift" => vec![".swift"],
+        "solidity" | "sol" => vec![".sol"],
         "csharp" => vec![".cs"],
         _ => vec![],
     }
@@ -130,18 +148,21 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
     } else {
         // If language is not specified, try to infer from file extension
         let inferred_lang = match file_ext {
-            "rs" => Some(SupportLang::Rust),
-            "js" | "jsx" | "mjs" => Some(SupportLang::JavaScript),
-            "ts" | "tsx" => Some(SupportLang::TypeScript),
-            "py" => Some(SupportLang::Python),
-            "go" => Some(SupportLang::Go),
-            "c" | "h" => Some(SupportLang::C),
-            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => Some(SupportLang::Cpp),
-            "java" => Some(SupportLang::Java),
-            "rb" => Some(SupportLang::Ruby),
-            "php" => Some(SupportLang::Php),
-            "swift" => Some(SupportLang::Swift),
-            "cs" => Some(SupportLang::CSharp),
+            "rs" => Some(ProbeQueryLang::Builtin(SupportLang::Rust)),
+            "js" | "jsx" | "mjs" => Some(ProbeQueryLang::Builtin(SupportLang::JavaScript)),
+            "ts" | "tsx" => Some(ProbeQueryLang::Builtin(SupportLang::TypeScript)),
+            "py" => Some(ProbeQueryLang::Builtin(SupportLang::Python)),
+            "go" => Some(ProbeQueryLang::Builtin(SupportLang::Go)),
+            "c" | "h" => Some(ProbeQueryLang::Builtin(SupportLang::C)),
+            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => {
+                Some(ProbeQueryLang::Builtin(SupportLang::Cpp))
+            }
+            "java" => Some(ProbeQueryLang::Builtin(SupportLang::Java)),
+            "rb" => Some(ProbeQueryLang::Builtin(SupportLang::Ruby)),
+            "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
+            "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
+            "sol" => Some(ProbeQueryLang::Solidity),
+            "cs" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
             _ => None, // Unsupported extension
         };
 
@@ -610,4 +631,47 @@ pub fn handle_query(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_solidity_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("Counter.sol");
+        fs::write(
+            &file,
+            r#"
+contract Counter {
+    uint256 private _value;
+
+    function increment() public {
+        _value += 1;
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "function $NAME() public { $$$BODY }",
+            language: Some("solidity"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            with_context: false,
+            format: "json",
+            no_gitignore: true,
+        };
+
+        let matches = perform_query(&options).expect("Solidity query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("function increment()"));
+    }
 }

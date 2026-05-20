@@ -80,8 +80,12 @@ fn is_container_node(kind: &str) -> bool {
             | "interface_declaration"
             | "namespace_declaration"
             | "module_declaration"
+            | "contract_declaration"
+            | "library_declaration"
             | "enum_declaration"
             | "enum_item"
+            | "struct_declaration"
+            | "contract_body"
             | "declaration_list"
             | "class_body"
             | "block"
@@ -185,6 +189,8 @@ fn collect_children_symbols(
                 | "block"
                 | "field_declaration_list"
                 | "enum_body"
+                | "struct_body"
+                | "contract_body"
                 | "object_type"
                 | "interface_body"
                 | "statement_block"
@@ -228,6 +234,20 @@ fn extract_symbol_name(node: &Node, source: &[u8]) -> String {
         }
     }
 
+    if node.kind() == "constructor_definition" {
+        return "constructor".to_string();
+    }
+
+    if node.kind() == "fallback_receive_definition" {
+        if let Ok(text) = node.utf8_text(source) {
+            let trimmed = text.trim_start();
+            if trimmed.starts_with("receive") {
+                return "receive".to_string();
+            }
+        }
+        return "fallback".to_string();
+    }
+
     // For variable declarations/const, try to find the identifier
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -262,16 +282,23 @@ fn normalize_kind(kind: &str) -> String {
         | "function_expression"
         | "arrow_function" => "function",
         "method_declaration" | "method_definition" => "method",
-        "struct_item" | "struct_type" => "struct",
+        "struct_item" | "struct_type" | "struct_declaration" => "struct",
         "impl_item" => "impl",
         "trait_item" => "trait",
         "enum_item" | "enum_declaration" => "enum",
         "mod_item" | "module_declaration" | "namespace_declaration" => "module",
+        "contract_declaration" => "contract",
+        "library_declaration" => "library",
         "class_declaration" | "class_definition" => "class",
         "interface_declaration" => "interface",
         "const_item" | "const_declaration" => "const",
+        "state_variable_declaration" => "variable",
         "static_item" => "static",
-        "type_item" | "type_alias_declaration" | "type_declaration" | "type_spec" => "type",
+        "type_item"
+        | "type_alias_declaration"
+        | "type_declaration"
+        | "type_spec"
+        | "user_defined_type_definition" => "type",
         "macro_definition" => "macro",
         "use_declaration" => "use",
         "variable_declarator"
@@ -284,6 +311,11 @@ fn normalize_kind(kind: &str) -> String {
         "export_statement" => "export",
         "declare_statement" => "declare",
         "constructor_declaration" => "constructor",
+        "constructor_definition" => "constructor",
+        "modifier_definition" => "modifier",
+        "fallback_receive_definition" => "function",
+        "event_definition" => "event",
+        "error_declaration" => "error",
         "field_declaration" => "field",
         other => other,
     }

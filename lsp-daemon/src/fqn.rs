@@ -44,6 +44,7 @@ pub fn get_fqn_from_ast_with_content(
         "go" => Some(tree_sitter_go::LANGUAGE),
         "c" => Some(tree_sitter_c::LANGUAGE),
         "cpp" | "cc" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
+        "sol" => Some(tree_sitter_solidity::LANGUAGE),
         _ => None,
     };
 
@@ -360,7 +361,7 @@ fn find_declaration_in_descendants<'a>(
 fn get_language_separator(extension: &str) -> &str {
     match extension {
         "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" => ".",
+        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" => ".",
         "php" => "\\",
         _ => "::", // Default to Rust-style for unknown languages
     }
@@ -381,6 +382,13 @@ fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
         "java" | "cs" => kind == "method_declaration",
         "go" => kind == "function_declaration",
         "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
+        "sol" => matches!(
+            kind,
+            "function_definition"
+                | "constructor_definition"
+                | "modifier_definition"
+                | "fallback_receive_definition"
+        ),
         _ => kind.contains("function") || kind.contains("method"),
     }
 }
@@ -402,6 +410,14 @@ fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
         "cpp" | "cc" | "cxx" => matches!(
             kind,
             "class_specifier" | "struct_specifier" | "namespace_definition"
+        ),
+        "sol" => matches!(
+            kind,
+            "contract_declaration"
+                | "interface_declaration"
+                | "library_declaration"
+                | "struct_declaration"
+                | "enum_declaration"
         ),
         _ => {
             // Fallback for unknown languages: try to detect common node types

@@ -506,6 +506,7 @@ fn get_language_extensions(language: &str) -> Vec<String> {
         "ruby" => vec![".rb".to_string(), ".rake".to_string()],
         "php" => vec![".php".to_string()],
         "swift" => vec![".swift".to_string()],
+        "solidity" => vec![".sol".to_string()],
         "csharp" => vec![".cs".to_string()],
         "markdown" => vec![".md".to_string(), ".markdown".to_string()],
         "yaml" => vec![".yaml".to_string(), ".yml".to_string()],

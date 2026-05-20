@@ -95,7 +95,7 @@ Add to language completion lists (2 locations):
 ### File 10: `npm/src/mcp/index.ts`
 Add to supported languages description:
 ```rust
-'Supported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, csharp, yourlang.',
+'Supported languages: rust, javascript, typescript, python, go, c, cpp, java, ruby, php, swift, solidity, csharp, yourlang.',
 ```
 
 ## Step 4: Documentation

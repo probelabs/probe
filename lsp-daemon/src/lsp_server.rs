@@ -2345,6 +2345,7 @@ impl LspServer {
             Some("rb") => "ruby",
             Some("php") => "php",
             Some("swift") => "swift",
+            Some("sol") => "solidity",
             Some("kt") | Some("kts") => "kotlin",
             Some("scala") | Some("sc") => "scala",
             Some("hs") => "haskell",

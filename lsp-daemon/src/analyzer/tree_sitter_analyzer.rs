@@ -31,6 +31,7 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "php" => Some("php"),
         "swift" => Some("swift"),
         "cs" => Some("csharp"),
+        "sol" => Some("solidity"),
         _ => None,
     }
 }
@@ -98,6 +99,7 @@ impl ParserPool {
             "java" => Some(tree_sitter_java::LANGUAGE),
             "c" => Some(tree_sitter_c::LANGUAGE),
             "cpp" | "c++" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
+            "solidity" | "sol" => Some(tree_sitter_solidity::LANGUAGE),
             _ => None,
         };
 

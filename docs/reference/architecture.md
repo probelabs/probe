@@ -104,7 +104,7 @@ pub trait LanguageImpl {
 }
 ```
 
-**Supported:** Rust, JavaScript, TypeScript, Python, Go, C, C++, Java, Ruby, PHP, Swift, C#, HTML, Markdown, YAML
+**Supported:** Rust, JavaScript, TypeScript, Python, Go, C, C++, Java, Ruby, PHP, Swift, Solidity, C#, HTML, Markdown, YAML
 
 ### Performance Optimizations
 
@@ -418,4 +418,3 @@ agent.events.on('toolCall', (event) => {
 - [API Reference](../probe-agent/sdk/api-reference.md) - SDK API
 - [MCP Protocol](../probe-agent/protocols/mcp.md) - MCP integration
 - [Performance](../probe-cli/performance.md) - Optimization guide
-

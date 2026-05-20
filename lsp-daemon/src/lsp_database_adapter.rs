@@ -822,6 +822,10 @@ impl LspDatabaseAdapter {
                     debug!("[TREE_SITTER] Using tree-sitter-cpp");
                     Some(tree_sitter_cpp::LANGUAGE.into())
                 }
+                "solidity" | "sol" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-solidity");
+                    Some(tree_sitter_solidity::LANGUAGE.into())
+                }
                 "php" => {
                     debug!("[TREE_SITTER] Using tree-sitter-php");
                     Some(tree_sitter_php::LANGUAGE_PHP.into())
@@ -2400,7 +2404,7 @@ impl LspDatabaseAdapter {
     fn get_language_separator(extension: &str) -> &str {
         match extension {
             "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" => ".",
+            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" => ".",
             "php" => "\\",
             _ => "::", // Default to Rust-style for unknown languages
         }
@@ -2419,6 +2423,13 @@ impl LspDatabaseAdapter {
             "java" | "cs" => kind == "method_declaration",
             "go" => kind == "function_declaration",
             "cpp" | "cc" | "cxx" => matches!(kind, "function_definition" | "method_declaration"),
+            "sol" => matches!(
+                kind,
+                "function_definition"
+                    | "constructor_definition"
+                    | "modifier_definition"
+                    | "fallback_receive_definition"
+            ),
             _ => kind.contains("function") || kind.contains("method"),
         }
     }
@@ -2441,6 +2452,14 @@ impl LspDatabaseAdapter {
             "cpp" | "cc" | "cxx" => matches!(
                 kind,
                 "class_specifier" | "struct_specifier" | "namespace_definition"
+            ),
+            "sol" => matches!(
+                kind,
+                "contract_declaration"
+                    | "interface_declaration"
+                    | "library_declaration"
+                    | "struct_declaration"
+                    | "enum_declaration"
             ),
             _ => {
                 kind.contains("class")

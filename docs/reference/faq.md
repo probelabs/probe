@@ -62,7 +62,7 @@ Yes, Probe is open source under the Apache 2.0 license.
 
 ### What languages does Probe support?
 
-Probe supports 15+ languages including Rust, JavaScript, TypeScript, Python, Go, C, C++, Java, Ruby, PHP, Swift, C#, HTML, Markdown, and YAML. See [Supported Languages](../supported-languages.md).
+Probe supports 15+ languages including Rust, JavaScript, TypeScript, Python, Go, C, C++, Java, Ruby, PHP, Swift, Solidity, C#, HTML, Markdown, and YAML. See [Supported Languages](../supported-languages.md).
 
 ---
 

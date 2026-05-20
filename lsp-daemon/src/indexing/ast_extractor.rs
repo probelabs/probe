@@ -697,6 +697,9 @@ impl AstSymbolExtractor {
             crate::language_detector::Language::Java => Ok(tree_sitter_java::LANGUAGE.into()),
             crate::language_detector::Language::C => Ok(tree_sitter_c::LANGUAGE.into()),
             crate::language_detector::Language::Cpp => Ok(tree_sitter_cpp::LANGUAGE.into()),
+            crate::language_detector::Language::Solidity => {
+                Ok(tree_sitter_solidity::LANGUAGE.into())
+            }
             _ => Err(anyhow::anyhow!("Unsupported language: {:?}", language)),
         }
     }
@@ -834,6 +837,20 @@ impl AstSymbolExtractor {
                 "field_declaration" => (SymbolKind::Variable, true),
                 _ => (SymbolKind::Function, false),
             },
+            crate::language_detector::Language::Solidity => match node_kind {
+                "function_definition" | "fallback_receive_definition" => {
+                    (SymbolKind::Function, true)
+                }
+                "constructor_definition" | "modifier_definition" => (SymbolKind::Method, true),
+                "contract_declaration" | "library_declaration" => (SymbolKind::Class, true),
+                "interface_declaration" => (SymbolKind::Interface, true),
+                "struct_declaration" => (SymbolKind::Struct, true),
+                "enum_declaration" => (SymbolKind::Enum, true),
+                "event_definition" | "error_declaration" => (SymbolKind::Type, true),
+                "state_variable_declaration" => (SymbolKind::Variable, true),
+                "user_defined_type_definition" => (SymbolKind::Type, true),
+                _ => (SymbolKind::Function, false),
+            },
             _ => {
                 // For other languages, try some common patterns
                 match node_kind {
@@ -933,7 +950,17 @@ impl AstSymbolExtractor {
             }
         }
 
-        None
+        match node.kind() {
+            "constructor_definition" => Some("constructor".to_string()),
+            "fallback_receive_definition" => node.utf8_text(content).ok().map(|text| {
+                if text.trim_start().starts_with("receive") {
+                    "receive".to_string()
+                } else {
+                    "fallback".to_string()
+                }
+            }),
+            _ => None,
+        }
     }
 }
 

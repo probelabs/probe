@@ -44,7 +44,7 @@ lazy_static::lazy_static! {
             let critical_languages = ["rs", "js", "ts", "py", "go", "java"];
 
             // Tier 2: Common languages - warm with lower priority
-            let common_languages = ["cpp", "c", "jsx", "tsx", "rb", "php", "cs"];
+            let common_languages = ["cpp", "c", "jsx", "tsx", "rb", "php", "cs", "sol"];
 
             // Tier 3: Specialized languages - warm last
             let specialized_languages = ["swift", "h", "cc", "cxx", "hpp", "hxx"];
@@ -137,7 +137,7 @@ pub fn smart_warm_parser_pool_for_directory(path: &Path) {
     let priority_order = [
         "rs", "js", "ts", "py", "go", "java", // Tier 1: Critical
         "cpp", "c", "jsx", "tsx", "rb", "php", "cs", // Tier 2: Common
-        "swift", "h", "cc", "cxx", "hpp", "hxx", // Tier 3: Specialized
+        "swift", "sol", "h", "cc", "cxx", "hpp", "hxx", // Tier 3: Specialized
     ];
 
     // Warm detected languages in priority order

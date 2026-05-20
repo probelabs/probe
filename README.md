@@ -143,7 +143,7 @@ npx -y @probelabs/probe@latest agent "Refactor the login function" --allow-edit
 - **Smart Ranking**: BM25, TF-IDF, and hybrid algorithms with optional BERT reranking
 - **Token-Aware**: `--max-tokens` budget, session-based dedup to avoid repeating context
 - **Built-in Agent**: Multi-provider (Anthropic, OpenAI, Google, Bedrock) with retry, fallback, and context compaction
-- **Multi-Language**: Rust, Python, JavaScript, TypeScript, Go, C/C++, Java, Ruby, PHP, Swift, C#, and more
+- **Multi-Language**: Rust, Python, JavaScript, TypeScript, Go, C/C++, Java, Ruby, PHP, Swift, Solidity, C#, and more
 
 ---
 
@@ -468,6 +468,7 @@ cargo install --path .
 | Ruby | `.rb` |
 | PHP | `.php` |
 | Swift | `.swift` |
+| Solidity | `.sol` |
 | C# | `.cs` |
 | Markdown | `.md` |
 
