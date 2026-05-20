@@ -168,6 +168,7 @@ pub enum Commands {
             "ruby", "rb",
             "php",
             "swift",
+            "solidity", "sol",
             "csharp", "cs",
             "yaml", "yml"
         ])]
@@ -349,6 +350,7 @@ pub enum Commands {
             "ruby", "rb",
             "php",
             "swift",
+            "solidity", "sol",
             "csharp", "cs",
             "yaml", "yml"
         ])]

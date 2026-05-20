@@ -503,6 +503,7 @@ impl LspRegistry {
                         "ruby" => Language::Ruby,
                         "php" => Language::Php,
                         "swift" => Language::Swift,
+                        "solidity" => Language::Solidity,
                         "kotlin" => Language::Kotlin,
                         "scala" => Language::Scala,
                         "haskell" => Language::Haskell,

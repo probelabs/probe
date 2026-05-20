@@ -331,6 +331,7 @@ fn format_and_print_color_results(
             "java" => "java",
             "rb" => "ruby",
             "php" => "php",
+            "sol" => "solidity",
             "sh" => "bash",
             "md" => "markdown",
             "json" => "json",
@@ -848,10 +849,10 @@ fn is_test_code_block(code: &str, node_type: &str) -> bool {
         return true;
     }
 
-    // JS/TS: test(', describe(', it(', expect(
-    if first_lines.contains("test(")
-        || first_lines.contains("describe(")
-        || first_lines.contains("it(")
+    // JS/TS: test(...), describe(...), it(...)
+    if contains_call_name(&first_lines, "test")
+        || contains_call_name(&first_lines, "describe")
+        || contains_call_name(&first_lines, "it")
     {
         return true;
     }
@@ -864,6 +865,30 @@ fn is_test_code_block(code: &str, node_type: &str) -> bool {
     // Java/C#: @Test
     if first_lines.contains("@Test") {
         return true;
+    }
+
+    false
+}
+
+fn contains_call_name(code: &str, name: &str) -> bool {
+    let bytes = code.as_bytes();
+    let mut offset = 0;
+
+    while let Some(relative) = code[offset..].find(name) {
+        let start = offset + relative;
+        let end = start + name.len();
+        let before = start.checked_sub(1).map(|index| bytes[index]);
+        let after = bytes.get(end).copied();
+
+        let valid_before = before
+            .map(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'))
+            .unwrap_or(true);
+
+        if valid_before && after == Some(b'(') {
+            return true;
+        }
+
+        offset = end;
     }
 
     false
@@ -2319,7 +2344,7 @@ fn get_comment_prefix(extension: &str) -> &'static str {
     match extension {
         // C-style comments
         "rs" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "java" | "js" | "jsx" | "ts"
-        | "tsx" | "cs" | "swift" | "go" | "php" => "//",
+        | "tsx" | "cs" | "swift" | "go" | "php" | "sol" => "//",
 
         // Python-style comments
         "py" | "rb" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
@@ -3420,6 +3445,10 @@ mod tests {
         assert!(is_test_code_block(
             "it('should work', () => {})",
             "call_expression"
+        ));
+        assert!(!is_test_code_block(
+            "function quorumNumerator() public view returns (uint256) {\n    return history.latest();\n}",
+            "function_definition"
         ));
     }
 

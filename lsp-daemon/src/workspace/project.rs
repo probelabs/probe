@@ -553,6 +553,7 @@ where
                         "php" => Some("php"),
                         "rb" => Some("ruby"),
                         "swift" => Some("swift"),
+                        "sol" => Some("solidity"),
                         "kt" => Some("kotlin"),
                         "cs" => Some("csharp"),
                         "scala" => Some("scala"),

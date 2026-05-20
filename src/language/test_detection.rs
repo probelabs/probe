@@ -102,6 +102,17 @@ pub fn is_test_file(path: &Path) -> bool {
             }
             return true;
         }
+
+        // Solidity/Foundry: *.t.sol, *Test.sol, Test*.sol
+        if file_name.ends_with(".t.sol")
+            || file_name.ends_with("Test.sol")
+            || file_name.starts_with("Test") && file_name.ends_with(".sol")
+        {
+            if _debug_mode {
+                println!("DEBUG: Test file detected (Solidity pattern): {file_name}");
+            }
+            return true;
+        }
     }
 
     // Check directory patterns

@@ -18,6 +18,7 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | Ruby | `.rb` | ✅ | ✅ |
 | PHP | `.php` | ✅ | ✅ |
 | Swift | `.swift` | ✅ | ✅ |
+| Solidity | `.sol` | ✅ | ✅ |
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
 | YAML | `.yaml`, `.yml` | ✅ | ✅ |
@@ -127,6 +128,14 @@ Go also implements special handling for nested struct types.
 - **Namespace Awareness**: Understands C# namespaces
 - **Attribute Handling**: Properly handles C# attributes
 - **Test Detection**: Identifies test classes and methods using NUnit, MSTest, or xUnit conventions
+
+### Solidity
+
+- **Contract Extraction**: Extracts contracts, interfaces, and libraries
+- **Function Extraction**: Extracts functions, constructors, fallback/receive functions, and modifiers
+- **Type Extraction**: Extracts structs, enums, user-defined value types, events, and custom errors
+- **Comment Handling**: Associates NatSpec and regular comments with Solidity code blocks
+- **Test Detection**: Identifies Foundry-style `.t.sol` files, `*Test.sol` contracts, `setUp`, `test*`, and `invariant_*` functions
 
 ### Markdown
 

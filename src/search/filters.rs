@@ -473,6 +473,7 @@ fn normalize_language_name(lang: &str) -> String {
         "py" => "python".to_string(),
         "rb" => "ruby".to_string(),
         "cs" => "csharp".to_string(),
+        "sol" => "solidity".to_string(),
         "cpp" | "cc" | "cxx" => "cpp".to_string(),
         "h" | "hpp" | "hxx" => "c".to_string(),
         other => other.to_string(),
@@ -528,6 +529,9 @@ fn get_extensions_for_type(file_type: &str) -> Option<HashSet<String>> {
         }
         "swift" => {
             extensions.insert("swift".to_string());
+        }
+        "solidity" | "sol" => {
+            extensions.insert("sol".to_string());
         }
         "kotlin" => {
             extensions.insert("kt".to_string());

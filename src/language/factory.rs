@@ -11,6 +11,7 @@ use probe_code::language::php::PhpLanguage;
 use probe_code::language::python::PythonLanguage;
 use probe_code::language::ruby::RubyLanguage;
 use probe_code::language::rust::RustLanguage;
+use probe_code::language::solidity::SolidityLanguage;
 use probe_code::language::swift::SwiftLanguage;
 use probe_code::language::typescript::TypeScriptLanguage;
 use probe_code::language::yaml::YamlLanguage;
@@ -31,6 +32,7 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         "php" => Some(Box::new(PhpLanguage::new())),
         "swift" => Some(Box::new(SwiftLanguage::new())),
         "cs" => Some(Box::new(CSharpLanguage::new())),
+        "sol" => Some(Box::new(SolidityLanguage::new())),
         "html" | "htm" => Some(Box::new(HtmlLanguage::new())),
         "md" | "markdown" => Some(Box::new(MarkdownLanguage::new())),
         "yaml" | "yml" => Some(Box::new(YamlLanguage::new())),

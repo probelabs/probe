@@ -150,6 +150,7 @@ fn get_language_name(language: &TSLanguage) -> &str {
         _ if format!("{language:?}").contains("ruby") => "Ruby",
         _ if format!("{language:?}").contains("php") => "PHP",
         _ if format!("{language:?}").contains("swift") => "Swift",
+        _ if format!("{language:?}").contains("solidity") => "Solidity",
         _ if format!("{language:?}").contains("csharp") => "C#",
         _ => "Unknown",
     }

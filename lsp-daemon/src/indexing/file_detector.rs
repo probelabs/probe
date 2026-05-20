@@ -122,6 +122,7 @@ impl Default for DetectionConfig {
             "rb",
             "php",
             "swift",
+            "sol",
             "cs",
             "kt",
             "scala",
@@ -384,9 +385,9 @@ impl FileChangeDetector {
             // Check if this extension is supported based on our known languages
             let supported_languages = [
                 "rs", "js", "jsx", "ts", "tsx", "py", "go", "c", "h", "cpp", "cc", "cxx", "hpp",
-                "hxx", "java", "rb", "php", "swift", "cs", "kt", "scala", "clj", "ex", "exs",
-                "erl", "hrl", "hs", "lhs", "ml", "mli", "fs", "fsx", "fsi", "dart", "jl", "r", "R",
-                "m", "mm", "pl", "pm", "sh", "bash", "zsh", "fish", "lua", "vim", "sql",
+                "hxx", "java", "rb", "php", "swift", "sol", "cs", "kt", "scala", "clj", "ex",
+                "exs", "erl", "hrl", "hs", "lhs", "ml", "mli", "fs", "fsx", "fsi", "dart", "jl",
+                "r", "R", "m", "mm", "pl", "pm", "sh", "bash", "zsh", "fish", "lua", "vim", "sql",
             ];
 
             if supported_languages.contains(&extension) {

@@ -1401,6 +1401,7 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
         Language::Java,
         Language::C,
         Language::Cpp,
+        Language::Solidity,
     ] {
         let lang_str = format!("{language:?}").to_uppercase();
         let mut config = LanguageIndexConfig::default();
@@ -1498,6 +1499,11 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
                         features.set_language_feature("extract_namespaces".to_string(), true);
                         features.set_language_feature("extract_classes".to_string(), true);
                     }
+                    Language::Solidity => {
+                        features.set_language_feature("extract_contracts".to_string(), true);
+                        features.set_language_feature("extract_events".to_string(), true);
+                        features.set_language_feature("extract_modifiers".to_string(), true);
+                    }
                     _ => {}
                 }
 
@@ -1540,6 +1546,7 @@ fn default_extensions_for_language(language: Language) -> Vec<String> {
             "hpp".to_string(),
             "hxx".to_string(),
         ],
+        Language::Solidity => vec!["sol".to_string()],
         _ => vec![],
     }
 }
@@ -1557,6 +1564,7 @@ impl FromStr for Language {
             "java" => Ok(Language::Java),
             "c" => Ok(Language::C),
             "cpp" | "c++" => Ok(Language::Cpp),
+            "solidity" | "sol" => Ok(Language::Solidity),
             _ => Err(anyhow!("Unknown language: {}", s)),
         }
     }

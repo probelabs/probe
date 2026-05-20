@@ -7217,6 +7217,12 @@ impl LspDaemon {
                     .ok()?;
                 Some(())
             }
+            "sol" => {
+                parser
+                    .set_language(&tree_sitter_solidity::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
             _ => None,
         }?;
 
