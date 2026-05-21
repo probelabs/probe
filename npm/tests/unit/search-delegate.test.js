@@ -111,6 +111,67 @@ describe('searchDelegate behavior', () => {
     expect(dedupSpan.resultAttrs['dedup.error']).not.toBe('');
   });
 
+  test('scopes delegate semantic dedup to the same path', async () => {
+    mockCreateLanguageModel.mockResolvedValue(null);
+    mockDelegate.mockResolvedValue(JSON.stringify({
+      targets: ['crypto/fips.js#validateFips']
+    }));
+
+    const spans = [];
+    const tracer = {
+      withSpan: jest.fn(async (name, fn, attrs, onResult) => {
+        const result = await fn();
+        const span = {
+          attrs: {},
+          setAttributes(values) {
+            this.attrs = { ...this.attrs, ...values };
+          }
+        };
+        if (onResult) onResult(span, result);
+        spans.push({ name, attrs, resultAttrs: span.attrs });
+        return result;
+      })
+    };
+
+    const tool = searchTool({
+      searchDelegate: true,
+      cwd: '/workspace',
+      allowedFolders: ['/workspace'],
+      provider: 'google',
+      model: 'gemini-3-flash-preview',
+      tracer
+    });
+
+    const first = await tool.execute({ query: 'FIPS validation', path: '/workspace/repo-a' });
+    const second = await tool.execute({ query: 'FIPS validation', path: '/workspace/repo-b' });
+
+    expect(first).not.toContain('DELEGATE BLOCKED');
+    expect(second).not.toContain('DELEGATE BLOCKED');
+    expect(mockDelegate).toHaveBeenCalledTimes(2);
+    expect(spans.filter(s => s.name === 'search.delegate.dedup')).toHaveLength(0);
+
+    const third = await tool.execute({ query: 'FIPS validation', path: '/workspace/repo-a' });
+
+    expect(third).not.toContain('DELEGATE BLOCKED');
+    expect(mockDelegate).toHaveBeenCalledTimes(3);
+    expect(mockGenerateText).not.toHaveBeenCalled();
+
+    const dedupSpan = spans.find(s => s.name === 'search.delegate.dedup');
+    expect(dedupSpan).toBeDefined();
+    expect(dedupSpan.attrs).toEqual(
+      expect.objectContaining({
+        'dedup.previous_count': '1',
+        'dedup.previous_queries': 'FIPS validation'
+      })
+    );
+    expect(dedupSpan.resultAttrs).toEqual(
+      expect.objectContaining({
+        'dedup.action': 'allow',
+        'dedup.reason': 'dedup model unavailable'
+      })
+    );
+  });
+
   test('delegates search and returns structured JSON when searchDelegate=true', async () => {
     // Delegate returns paths relative to the search directory (searchPaths[0]),
     // not relative to cwd
