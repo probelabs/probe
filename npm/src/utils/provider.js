@@ -85,8 +85,31 @@ export function resolveApiKey(providerName) {
 }
 
 /**
+ * Resolve base URL for a provider from environment variables.
+ * Mirrors the env-var resolution in ProbeAgent and FallbackManager so that
+ * lightweight LLM calls (dedup, etc.) route through the same API gateway.
+ * @param {string} providerName
+ * @returns {string|undefined}
+ */
+export function resolveBaseUrl(providerName) {
+	const llmBaseUrl = process.env.LLM_BASE_URL;
+	switch (providerName) {
+		case 'anthropic':
+			return process.env.ANTHROPIC_API_URL || process.env.ANTHROPIC_BASE_URL || llmBaseUrl;
+		case 'openai':
+			return process.env.OPENAI_API_URL || llmBaseUrl;
+		case 'google':
+			return process.env.GOOGLE_API_URL || llmBaseUrl;
+		case 'bedrock':
+			return process.env.AWS_BEDROCK_BASE_URL || llmBaseUrl;
+		default:
+			return llmBaseUrl;
+	}
+}
+
+/**
  * Create a language model instance from provider name + model name.
- * Resolves API keys from environment automatically.
+ * Resolves API keys and base URLs from environment automatically.
  * Returns null on failure (graceful degradation for optional features).
  * @param {string} providerName - 'anthropic' | 'openai' | 'google' | 'bedrock'
  * @param {string} modelName - Model identifier (e.g., 'gemini-2.0-flash')
@@ -98,7 +121,8 @@ export async function createLanguageModel(providerName, modelName) {
 	if (!resolvedModel) return null;
 	try {
 		const apiKey = resolveApiKey(providerName);
-		const provider = createProviderInstance({ provider: providerName, ...(apiKey ? { apiKey } : {}) });
+		const baseURL = resolveBaseUrl(providerName);
+		const provider = createProviderInstance({ provider: providerName, ...(apiKey ? { apiKey } : {}), ...(baseURL ? { baseURL } : {}) });
 		return provider(resolvedModel);
 	} catch {
 		return null;
