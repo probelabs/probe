@@ -6,7 +6,7 @@ use ignore::WalkBuilder;
 use regex::{Regex, RegexBuilder};
 use std::collections::VecDeque;
 use std::fs;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -52,7 +52,7 @@ impl GrepConfig {
         let use_color = match params.color.as_str() {
             "always" => true,
             "never" => false,
-            _ => atty::is(atty::Stream::Stdout),
+            _ => io::stdout().is_terminal(),
         };
 
         Ok(Self {

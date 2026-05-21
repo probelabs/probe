@@ -31,7 +31,7 @@ use anyhow::{anyhow, Result};
 use probe_code::extract::file_paths::{set_custom_ignores, FilePathInfo};
 use probe_code::models::SearchResult;
 use std::collections::HashSet;
-use std::io::Read;
+use std::io::{IsTerminal, Read};
 use std::ops::Deref;
 #[allow(unused_imports)]
 use std::path::PathBuf;
@@ -347,7 +347,7 @@ pub fn handle_extract(options: ExtractOptions) -> Result<()> {
         }
     } else if options.files.is_empty() {
         // Check if stdin is available (not a terminal)
-        let is_stdin_available = !atty::is(atty::Stream::Stdin);
+        let is_stdin_available = !std::io::stdin().is_terminal();
 
         if is_stdin_available {
             // Read from stdin
