@@ -719,14 +719,12 @@ export const searchTool = (options = {}) => {
 				// ── Delegate-level semantic dedup ────────────────────────────
 				// Each delegate is a full flash agent session (minutes, not seconds).
 				// Use LLM to detect semantic duplicates and suggest rewrites.
-				// Compare against ALL previous delegations (not filtered by path) because
-				// the parent model often narrows the path while asking the same concept
-				// (e.g., "dedup" at /src → "deduplicate" at /src/search.js).
 				const delegatePath = searchPath || '';
+				const samePathDelegations = previousDelegations.filter(d => d.path === delegatePath);
 
 				let effectiveQuery = searchQuery;
 
-				if (previousDelegations.length > 0) {
+				if (samePathDelegations.length > 0) {
 					const dedupProvider = options.searchDelegateProvider || process.env.PROBE_SEARCH_DELEGATE_PROVIDER || options.provider || process.env.FORCE_PROVIDER || null;
 					const dedupModelName = options.searchDelegateModel || process.env.PROBE_SEARCH_DELEGATE_MODEL || options.model || process.env.MODEL_NAME || null;
 					// Lazily create the dedup model (same provider/model as delegate)
@@ -742,8 +740,8 @@ export const searchTool = (options = {}) => {
 
 					const dedupSpanAttrs = {
 						'dedup.query': searchQuery,
-						'dedup.previous_count': String(previousDelegations.length),
-						'dedup.previous_queries': previousDelegations.map(d => d.query).join(' | '),
+						'dedup.previous_count': String(samePathDelegations.length),
+						'dedup.previous_queries': samePathDelegations.map(d => d.query).join(' | '),
 						'dedup.provider': dedupProvider || '',
 						'dedup.model': dedupModelName || '',
 						'dedup.model_available': cachedDedupModel ? 'true' : 'false',
@@ -751,7 +749,7 @@ export const searchTool = (options = {}) => {
 
 					const dedup = options.tracer?.withSpan
 						? await options.tracer.withSpan('search.delegate.dedup', async () => {
-							return await checkDelegateDedup(searchQuery, previousDelegations, cachedDedupModel, debug);
+							return await checkDelegateDedup(searchQuery, samePathDelegations, cachedDedupModel, debug);
 						}, dedupSpanAttrs, (span, result) => {
 							span.setAttributes({
 								'dedup.action': result.action,
@@ -760,14 +758,14 @@ export const searchTool = (options = {}) => {
 								'dedup.error': result.error || '',
 							});
 						})
-						: await checkDelegateDedup(searchQuery, previousDelegations, cachedDedupModel, debug);
+						: await checkDelegateDedup(searchQuery, samePathDelegations, cachedDedupModel, debug);
 
 					if (debug) {
 						console.error(`[DEDUP-LLM] Query: "${searchQuery}" → ${dedup.action}: ${dedup.reason}${dedup.rewritten ? ` → "${dedup.rewritten}"` : ''}`);
 					}
 
 					if (dedup.action === 'block') {
-						const prevQueries = previousDelegations.map(d => `"${d.query}"`).join(', ');
+						const prevQueries = samePathDelegations.map(d => `"${d.query}"`).join(', ');
 						return `DELEGATE BLOCKED: "${searchQuery}" is semantically duplicate of previous delegation(s) [${prevQueries}]. ${dedup.reason}\n\nDo NOT re-delegate the same concept. Use extract() on files already found, or synthesize your answer from existing results.`;
 					}
 
