@@ -1,0 +1,12 @@
+project:
+    name: probe
+    specs:
+        - path: specs/stakeholder
+          prefix: STK-REQ
+          type: stakeholder
+        - path: specs/system
+          prefix: SYS-REQ
+          type: system
+    checks:
+        code_signal_obligations_reviewed:
+            enabled: true
