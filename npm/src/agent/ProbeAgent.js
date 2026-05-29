@@ -147,6 +147,77 @@ export function debugLogToolResults(toolResults) {
   }
 }
 
+function isPlainJsonSchemaObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) && !value._def;
+}
+
+function sanitizeRequiredFieldsInJsonSchema(schema) {
+  if (!isPlainJsonSchemaObject(schema)) {
+    return;
+  }
+
+  if (Array.isArray(schema.required) && isPlainJsonSchemaObject(schema.properties)) {
+    const propertyNames = new Set(Object.keys(schema.properties));
+    const filteredRequired = schema.required.filter((name) => propertyNames.has(name));
+    if (filteredRequired.length > 0) {
+      schema.required = filteredRequired;
+    } else {
+      delete schema.required;
+    }
+  }
+
+  const visitSchemaMap = (schemaMap) => {
+    if (!isPlainJsonSchemaObject(schemaMap)) return;
+    for (const childSchema of Object.values(schemaMap)) {
+      sanitizeRequiredFieldsInJsonSchema(childSchema);
+    }
+  };
+
+  visitSchemaMap(schema.properties);
+  visitSchemaMap(schema.patternProperties);
+  visitSchemaMap(schema.definitions);
+  visitSchemaMap(schema.$defs);
+  visitSchemaMap(schema.dependentSchemas);
+
+  if (isPlainJsonSchemaObject(schema.items)) {
+    sanitizeRequiredFieldsInJsonSchema(schema.items);
+  } else if (Array.isArray(schema.items)) {
+    for (const itemSchema of schema.items) {
+      sanitizeRequiredFieldsInJsonSchema(itemSchema);
+    }
+  }
+
+  for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
+    if (Array.isArray(schema[keyword])) {
+      for (const childSchema of schema[keyword]) {
+        sanitizeRequiredFieldsInJsonSchema(childSchema);
+      }
+    }
+  }
+
+  if (isPlainJsonSchemaObject(schema.not)) {
+    sanitizeRequiredFieldsInJsonSchema(schema.not);
+  }
+
+  if (isPlainJsonSchemaObject(schema.additionalProperties)) {
+    sanitizeRequiredFieldsInJsonSchema(schema.additionalProperties);
+  }
+}
+
+export function sanitizeToolInputSchema(schema) {
+  if (!isPlainJsonSchemaObject(schema)) {
+    return schema;
+  }
+
+  try {
+    const clonedSchema = JSON.parse(JSON.stringify(schema));
+    sanitizeRequiredFieldsInJsonSchema(clonedSchema);
+    return clonedSchema;
+  } catch {
+    return schema;
+  }
+}
+
 /**
  * ProbeAgent class to handle AI interactions with code search capabilities
  */
@@ -1888,7 +1959,8 @@ export class ProbeAgent {
     const wrapTool = (toolName, schema, description, executeFn) => {
       // Auto-wrap plain JSON Schema objects with jsonSchema() for AI SDK 5 compatibility
       // Zod schemas have a _def property; plain objects need wrapping
-      const resolvedSchema = schema && schema._def ? schema : jsonSchema(schema);
+      const sanitizedSchema = sanitizeToolInputSchema(schema);
+      const resolvedSchema = sanitizedSchema && sanitizedSchema._def ? sanitizedSchema : jsonSchema(sanitizedSchema);
       return tool({
         description,
         inputSchema: resolvedSchema,
@@ -2090,8 +2162,9 @@ export class ProbeAgent {
       for (const [name, mcpTool] of Object.entries(mcpTools)) {
         // MCP tools have raw JSON Schema inputSchema that must be wrapped with jsonSchema()
         // for the Vercel AI SDK. Without wrapping, asSchema() misidentifies them as Zod schemas.
-        const mcpSchema = mcpTool.inputSchema || mcpTool.parameters;
-        const wrappedSchema = mcpSchema && mcpSchema._def ? mcpSchema : jsonSchema(mcpSchema || { type: 'object', properties: {} });
+        const mcpSchema = mcpTool.inputSchema || mcpTool.parameters || { type: 'object', properties: {} };
+        const sanitizedSchema = sanitizeToolInputSchema(mcpSchema);
+        const wrappedSchema = sanitizedSchema && sanitizedSchema._def ? sanitizedSchema : jsonSchema(sanitizedSchema);
         nativeTools[name] = tool({
           description: mcpTool.description || `MCP tool: ${name}`,
           inputSchema: wrappedSchema,
