@@ -44,6 +44,7 @@ tree-sitter-html = "0.23.2"
 tree-sitter-md = "0.3.2"
 tree-sitter-yaml = "0.6.1"
 tree-sitter-solidity = "=1.2.10"
+tree-sitter-crystal = { git = "https://github.com/crystal-lang-tools/tree-sitter-crystal", rev = "f71f4ca62ac0" }
 ast-grep-core = "0.36.1"
 ast-grep-language = "0.36.1"
 clap = { version = "4.3", features = ["derive"] }

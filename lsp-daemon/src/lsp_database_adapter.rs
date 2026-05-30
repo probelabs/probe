@@ -826,6 +826,10 @@ impl LspDatabaseAdapter {
                     debug!("[TREE_SITTER] Using tree-sitter-solidity");
                     Some(tree_sitter_solidity::LANGUAGE.into())
                 }
+                "crystal" | "cr" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-crystal");
+                    Some(tree_sitter_crystal::LANGUAGE.into())
+                }
                 "php" => {
                     debug!("[TREE_SITTER] Using tree-sitter-php");
                     Some(tree_sitter_php::LANGUAGE_PHP.into())
@@ -954,6 +958,10 @@ impl LspDatabaseAdapter {
             "constructor_declaration" => true,
             // C/C++ symbols (function_declarator is unique to C/C++)
             "function_declarator" | "struct_specifier" | "enum_specifier" => true,
+            // Crystal symbols
+            "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
+            | "method_def" | "abstract_method_def" | "macro_def" | "fun_def" | "alias"
+            | "annotation_def" | "type_def" => true,
             _ => false,
         }
     }
@@ -1173,7 +1181,11 @@ impl LspDatabaseAdapter {
     fn is_identifier_node(&self, node: &tree_sitter::Node) -> bool {
         matches!(
             node.kind(),
-            "identifier" | "type_identifier" | "field_identifier" | "property_identifier"
+            "identifier"
+                | "type_identifier"
+                | "field_identifier"
+                | "property_identifier"
+                | "constant"
         )
     }
 
@@ -1230,16 +1242,25 @@ impl LspDatabaseAdapter {
             | "function_declaration"
             | "function_definition"
             | "func_declaration" => SymbolKind::Function,
-            "method_definition" | "method_declaration" => SymbolKind::Method,
+            "method_definition" | "method_declaration" | "method_def" | "abstract_method_def" => {
+                SymbolKind::Method
+            }
+            "macro_def" => SymbolKind::Macro,
+            "fun_def" => SymbolKind::Function,
             "constructor_declaration" => SymbolKind::Constructor,
-            "class_declaration" | "class_definition" => SymbolKind::Class,
-            "struct_item" | "struct_specifier" => SymbolKind::Struct,
-            "enum_item" | "enum_specifier" | "enum_declaration" => SymbolKind::Enum,
+            "class_declaration" | "class_definition" | "class_def" => SymbolKind::Class,
+            "struct_item" | "struct_specifier" | "struct_def" => SymbolKind::Struct,
+            "enum_item" | "enum_specifier" | "enum_declaration" | "enum_def" => SymbolKind::Enum,
             "trait_item" => SymbolKind::Trait,
-            "interface_declaration" => SymbolKind::Interface,
+            "interface_declaration" | "lib_def" => SymbolKind::Interface,
             "impl_item" => SymbolKind::Impl,
-            "mod_item" | "namespace" => SymbolKind::Module,
-            "type_declaration" | "type_alias_declaration" => SymbolKind::Type,
+            "mod_item" | "namespace" | "module_def" => SymbolKind::Module,
+            "type_declaration"
+            | "type_alias_declaration"
+            | "alias"
+            | "annotation_def"
+            | "type_def"
+            | "union_def" => SymbolKind::Type,
             "variable_declarator" | "variable_declaration" => SymbolKind::Variable,
             "field_declaration" => SymbolKind::Field,
             _ => SymbolKind::Function, // Default fallback
@@ -2304,6 +2325,7 @@ impl LspDatabaseAdapter {
             "go" => "go",
             "c++" | "cpp" => "cpp",
             "c" => "c",
+            "crystal" => "cr",
             _ => language, // Fallback to original if no mapping
         }
     }
@@ -2405,6 +2427,7 @@ impl LspDatabaseAdapter {
         match extension {
             "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
             "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" => ".",
+            "cr" => "::",
             "php" => "\\",
             _ => "::", // Default to Rust-style for unknown languages
         }
@@ -2429,6 +2452,10 @@ impl LspDatabaseAdapter {
                     | "constructor_definition"
                     | "modifier_definition"
                     | "fallback_receive_definition"
+            ),
+            "cr" => matches!(
+                kind,
+                "method_def" | "abstract_method_def" | "macro_def" | "fun_def"
             ),
             _ => kind.contains("function") || kind.contains("method"),
         }
@@ -2461,6 +2488,10 @@ impl LspDatabaseAdapter {
                     | "struct_declaration"
                     | "enum_declaration"
             ),
+            "cr" => matches!(
+                kind,
+                "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
+            ),
             _ => {
                 kind.contains("class")
                     || kind.contains("struct")
@@ -2472,10 +2503,19 @@ impl LspDatabaseAdapter {
 
     /// Extract name from a tree-sitter node
     fn extract_node_name(node: tree_sitter::Node, content: &[u8]) -> Option<String> {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if let Ok(text) = name_node.utf8_text(content) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+
         // Try to find identifier child node
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
-            if child.kind() == "identifier" || child.kind() == "name" {
+            if matches!(child.kind(), "identifier" | "name" | "constant") {
                 return Some(child.utf8_text(content).unwrap_or("").to_string());
             }
         }
@@ -2767,6 +2807,35 @@ mod tests {
             .persist(&path)
             .expect("Failed to persist temp file");
         path
+    }
+
+    #[test]
+    fn test_find_symbol_at_position_uses_crystal_tree_sitter() {
+        let adapter = create_test_adapter();
+        let crystal_code = r#"
+module Demo
+  class User
+    def active? : Bool
+      true
+    end
+  end
+end
+"#;
+        let file_path = PathBuf::from("sample.cr");
+
+        let class_symbol = adapter
+            .find_symbol_at_position(crystal_code, &file_path, 2, 10, "crystal")
+            .expect("Crystal tree-sitter symbol lookup should parse")
+            .expect("class position should resolve to a Crystal symbol");
+        assert_eq!(class_symbol.name, "User");
+        assert_eq!(class_symbol.kind, SymbolKind::Class);
+
+        let method_symbol = adapter
+            .find_symbol_at_position(crystal_code, &file_path, 4, 6, "cr")
+            .expect("Crystal alias should select the tree-sitter parser")
+            .expect("method body position should resolve to enclosing method");
+        assert_eq!(method_symbol.name, "active?");
+        assert_eq!(method_symbol.kind, SymbolKind::Method);
     }
 
     #[tokio::test]

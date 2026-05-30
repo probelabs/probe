@@ -32,6 +32,7 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "swift" => Some("swift"),
         "cs" => Some("csharp"),
         "sol" => Some("solidity"),
+        "cr" => Some("crystal"),
         _ => None,
     }
 }
@@ -100,6 +101,7 @@ impl ParserPool {
             "c" => Some(tree_sitter_c::LANGUAGE),
             "cpp" | "c++" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
             "solidity" | "sol" => Some(tree_sitter_solidity::LANGUAGE),
+            "crystal" | "cr" => Some(tree_sitter_crystal::LANGUAGE),
             _ => None,
         };
 
@@ -447,6 +449,7 @@ impl TreeSitterAnalyzer {
             "go" => self.map_go_node_to_symbol(node_kind),
             "java" => self.map_java_node_to_symbol(node_kind),
             "c" | "cpp" | "c++" => self.map_c_node_to_symbol(node_kind),
+            "crystal" | "cr" => self.map_crystal_node_to_symbol(node_kind),
             _ => self.map_generic_node_to_symbol(node_kind),
         };
 
@@ -574,6 +577,21 @@ impl TreeSitterAnalyzer {
         }
     }
 
+    /// Map Crystal node kinds to symbol kinds
+    fn map_crystal_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "method_def" | "abstract_method_def" | "fun_def" => Some(SymbolKind::Function),
+            "macro_def" => Some(SymbolKind::Macro),
+            "class_def" => Some(SymbolKind::Class),
+            "module_def" => Some(SymbolKind::Module),
+            "struct_def" => Some(SymbolKind::Struct),
+            "enum_def" => Some(SymbolKind::Enum),
+            "lib_def" => Some(SymbolKind::Interface),
+            "alias" | "annotation_def" | "type_def" | "union_def" => Some(SymbolKind::Type),
+            _ => None,
+        }
+    }
+
     /// Generic node mapping for unknown languages
     fn map_generic_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
         if node_kind.contains("function") {
@@ -616,6 +634,7 @@ impl TreeSitterAnalyzer {
                     | "class_name"
                     | "module_name"
                     | "parameter_name"
+                    | "constant"
             ) {
                 let start_byte = child.start_byte();
                 let end_byte = child.end_byte();
@@ -627,14 +646,19 @@ impl TreeSitterAnalyzer {
                                 message: format!("Invalid UTF-8 in symbol name: {}", e),
                             }
                         })?;
-                    return Ok(name.to_string());
+                    if !self.is_keyword_or_invalid(name) {
+                        return Ok(name.to_string());
+                    }
                 }
             }
 
             // Recursively search in nested nodes for complex patterns
             if let Ok(nested_name) = self.extract_symbol_name(child, content) {
                 if !nested_name.is_empty()
-                    && nested_name.chars().all(|c| c.is_alphanumeric() || c == '_')
+                    && !self.is_keyword_or_invalid(&nested_name)
+                    && nested_name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '?' || c == '!')
                 {
                     return Ok(nested_name);
                 }
@@ -676,11 +700,14 @@ impl TreeSitterAnalyzer {
                     text.split_whitespace()
                         .find(|word| {
                             !word.is_empty()
+                                && !self.is_keyword_or_invalid(word)
                                 && word
                                     .chars()
                                     .next()
                                     .map_or(false, |c| c.is_alphabetic() || c == '_')
-                                && word.chars().all(|c| c.is_alphanumeric() || c == '_')
+                                && word.chars().all(|c| {
+                                    c.is_alphanumeric() || c == '_' || c == '?' || c == '!'
+                                })
                         })
                         .unwrap_or("")
                         .to_string()
@@ -693,6 +720,52 @@ impl TreeSitterAnalyzer {
         }
 
         Ok(String::new())
+    }
+
+    /// Check if text is a keyword or invalid identifier.
+    fn is_keyword_or_invalid(&self, text: &str) -> bool {
+        matches!(
+            text,
+            "function"
+                | "fn"
+                | "def"
+                | "class"
+                | "struct"
+                | "enum"
+                | "trait"
+                | "interface"
+                | "impl"
+                | "mod"
+                | "module"
+                | "namespace"
+                | "package"
+                | "import"
+                | "export"
+                | "const"
+                | "let"
+                | "var"
+                | "static"
+                | "async"
+                | "await"
+                | "return"
+                | "if"
+                | "else"
+                | "for"
+                | "while"
+                | "match"
+                | "switch"
+                | "case"
+                | "default"
+                | "break"
+                | "continue"
+                | "pub"
+                | "private"
+                | "protected"
+                | "public"
+                | "override"
+                | "virtual"
+                | "abstract"
+        ) || text.is_empty()
     }
 
     /// Extract function signature from AST node
@@ -797,6 +870,19 @@ impl TreeSitterAnalyzer {
                     | "union_specifier"
                     | "function_definition"
                     | "compound_statement"
+            ),
+            "crystal" | "cr" => matches!(
+                node_kind,
+                "class_def"
+                    | "module_def"
+                    | "struct_def"
+                    | "enum_def"
+                    | "lib_def"
+                    | "union_def"
+                    | "method_def"
+                    | "abstract_method_def"
+                    | "macro_def"
+                    | "fun_def"
             ),
             _ => false,
         }
@@ -942,6 +1028,7 @@ impl CodeAnalyzer for TreeSitterAnalyzer {
             "java".to_string(),
             "c".to_string(),
             "cpp".to_string(),
+            "crystal".to_string(),
         ]
     }
 
@@ -1009,7 +1096,7 @@ impl CodeAnalyzer for TreeSitterAnalyzer {
 mod tests {
     use super::*;
     use crate::symbol::SymbolUIDGenerator;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn create_test_analyzer() -> TreeSitterAnalyzer {
         let uid_generator = Arc::new(SymbolUIDGenerator::new());
@@ -1090,6 +1177,95 @@ mod tests {
             Some(SymbolKind::Interface)
         );
         assert_eq!(analyzer.map_typescript_node_to_symbol("unknown_node"), None);
+    }
+
+    #[test]
+    fn test_crystal_parser_pool_and_node_mapping() {
+        let analyzer = create_test_analyzer();
+        let mut pool = ParserPool::new();
+
+        assert!(
+            pool.get_parser("crystal").is_some(),
+            "Crystal parser should be available by language name"
+        );
+        assert!(
+            pool.get_parser("cr").is_some(),
+            "Crystal parser should be available by extension alias"
+        );
+        assert_eq!(
+            analyzer.map_crystal_node_to_symbol("class_def"),
+            Some(SymbolKind::Class)
+        );
+        assert_eq!(
+            analyzer.map_crystal_node_to_symbol("module_def"),
+            Some(SymbolKind::Module)
+        );
+        assert_eq!(
+            analyzer.map_crystal_node_to_symbol("method_def"),
+            Some(SymbolKind::Function)
+        );
+        assert_eq!(
+            analyzer.map_crystal_node_to_symbol("macro_def"),
+            Some(SymbolKind::Macro)
+        );
+        assert!(analyzer.creates_scope("class_def", "crystal"));
+        assert!(analyzer.creates_scope("method_def", "cr"));
+    }
+
+    #[tokio::test]
+    async fn test_crystal_symbol_extraction_uses_parser_pool() {
+        let analyzer = create_test_analyzer();
+        let uid_generator = Arc::new(SymbolUIDGenerator::new());
+        let context = AnalysisContext::new(
+            1,
+            2,
+            "crystal".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("sample.cr"),
+            uid_generator,
+        );
+        let crystal_code = r#"
+module Demo
+  class User
+    def active? : Bool
+      true
+    end
+  end
+end
+"#;
+
+        let result = analyzer
+            .analyze_file(crystal_code, Path::new("sample.cr"), "crystal", &context)
+            .await
+            .expect("Crystal analysis should use the parser pool");
+
+        let symbols = result
+            .symbols
+            .iter()
+            .map(|symbol| format!("{}:{:?}", symbol.name, symbol.kind))
+            .collect::<Vec<_>>();
+
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "Demo" && symbol.kind == SymbolKind::Module),
+            "expected Demo module in symbols: {symbols:?}"
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "User" && symbol.kind == SymbolKind::Class),
+            "expected User class in symbols: {symbols:?}"
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "active?" && symbol.kind == SymbolKind::Function),
+            "expected active? method in symbols: {symbols:?}"
+        );
     }
 
     #[test]

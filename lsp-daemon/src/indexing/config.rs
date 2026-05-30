@@ -1402,6 +1402,7 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
         Language::C,
         Language::Cpp,
         Language::Solidity,
+        Language::Crystal,
     ] {
         let lang_str = format!("{language:?}").to_uppercase();
         let mut config = LanguageIndexConfig::default();
@@ -1504,6 +1505,10 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
                         features.set_language_feature("extract_events".to_string(), true);
                         features.set_language_feature("extract_modifiers".to_string(), true);
                     }
+                    Language::Crystal => {
+                        features.set_language_feature("extract_macros".to_string(), true);
+                        features.set_language_feature("extract_modules".to_string(), true);
+                    }
                     _ => {}
                 }
 
@@ -1547,6 +1552,7 @@ fn default_extensions_for_language(language: Language) -> Vec<String> {
             "hxx".to_string(),
         ],
         Language::Solidity => vec!["sol".to_string()],
+        Language::Crystal => vec!["cr".to_string()],
         _ => vec![],
     }
 }
@@ -1565,6 +1571,7 @@ impl FromStr for Language {
             "c" => Ok(Language::C),
             "cpp" | "c++" => Ok(Language::Cpp),
             "solidity" | "sol" => Ok(Language::Solidity),
+            "crystal" | "cr" => Ok(Language::Crystal),
             _ => Err(anyhow!("Unknown language: {}", s)),
         }
     }

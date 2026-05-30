@@ -913,6 +913,7 @@ impl LspClient {
                         "php" => Some(Language::Php),
                         "swift" => Some(Language::Swift),
                         "solidity" | "sol" => Some(Language::Solidity),
+                        "crystal" | "cr" => Some(Language::Crystal),
                         "kotlin" | "kt" => Some(Language::Kotlin),
                         "scala" => Some(Language::Scala),
                         "haskell" | "hs" => Some(Language::Haskell),

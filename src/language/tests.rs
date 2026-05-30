@@ -6,6 +6,7 @@ use tree_sitter::Language;
 extern crate tree_sitter_c;
 extern crate tree_sitter_c_sharp;
 extern crate tree_sitter_cpp;
+extern crate tree_sitter_crystal;
 extern crate tree_sitter_go;
 extern crate tree_sitter_java;
 extern crate tree_sitter_javascript;
@@ -33,6 +34,7 @@ fn get_language(extension: &str) -> Option<Language> {
         "swift" => Some(tree_sitter_swift::LANGUAGE.into()),
         "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
         "sol" => Some(tree_sitter_solidity::LANGUAGE.into()),
+        "cr" => Some(tree_sitter_crystal::LANGUAGE.into()),
         // It seems tree_sitter_php::LANGUAGE doesn't exist, so we'll return None for PHP
         "php" => None,
         _ => None,
@@ -58,11 +60,27 @@ fn test_get_language() {
     assert!(get_language("swift").is_some()); // Swift
     assert!(get_language("cs").is_some()); // C#
     assert!(get_language("sol").is_some()); // Solidity
+    assert!(get_language("cr").is_some()); // Crystal
     assert!(get_language("php").is_none()); // PHP (not supported in current tree-sitter version)
 
     // Test unsupported language
     assert!(get_language("txt").is_none());
     assert!(get_language("").is_none());
+}
+
+#[test]
+fn test_crystal_language_implementation() {
+    let crystal_impl = get_language_impl("cr");
+    assert!(
+        crystal_impl.is_some(),
+        "Should be able to get Crystal language implementation"
+    );
+
+    let language = get_language("cr");
+    assert!(
+        language.is_some(),
+        "Should be able to get Crystal tree-sitter language"
+    );
 }
 
 #[test]

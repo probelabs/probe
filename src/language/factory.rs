@@ -1,5 +1,6 @@
 use probe_code::language::c::CLanguage;
 use probe_code::language::cpp::CppLanguage;
+use probe_code::language::crystal::CrystalLanguage;
 use probe_code::language::csharp::CSharpLanguage;
 use probe_code::language::go::GoLanguage;
 use probe_code::language::html::HtmlLanguage;
@@ -33,6 +34,7 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         "swift" => Some(Box::new(SwiftLanguage::new())),
         "cs" => Some(Box::new(CSharpLanguage::new())),
         "sol" => Some(Box::new(SolidityLanguage::new())),
+        "cr" => Some(Box::new(CrystalLanguage::new())),
         "html" | "htm" => Some(Box::new(HtmlLanguage::new())),
         "md" | "markdown" => Some(Box::new(MarkdownLanguage::new())),
         "yaml" | "yml" => Some(Box::new(YamlLanguage::new())),

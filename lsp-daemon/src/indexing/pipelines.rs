@@ -81,6 +81,12 @@ impl PipelineConfig {
                 features.set_language_feature("extract_receivers".to_string(), true);
                 (vec!["go".to_string()], features)
             }
+            Language::Crystal => {
+                let mut features = IndexingFeatures::default();
+                features.set_language_feature("extract_macros".to_string(), true);
+                features.set_language_feature("extract_modules".to_string(), true);
+                (vec!["cr".to_string()], features)
+            }
             Language::Java => {
                 let mut features = IndexingFeatures::default();
                 features.set_language_feature("extract_annotations".to_string(), true);

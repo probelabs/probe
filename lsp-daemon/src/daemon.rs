@@ -7223,6 +7223,12 @@ impl LspDaemon {
                     .ok()?;
                 Some(())
             }
+            "cr" => {
+                parser
+                    .set_language(&tree_sitter_crystal::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
             _ => None,
         }?;
 

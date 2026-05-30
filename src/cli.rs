@@ -169,6 +169,7 @@ pub enum Commands {
             "php",
             "swift",
             "solidity", "sol",
+            "crystal", "cr",
             "csharp", "cs",
             "yaml", "yml"
         ])]
@@ -351,6 +352,7 @@ pub enum Commands {
             "php",
             "swift",
             "solidity", "sol",
+            "crystal", "cr",
             "csharp", "cs",
             "yaml", "yml"
         ])]

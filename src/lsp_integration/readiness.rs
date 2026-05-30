@@ -262,6 +262,7 @@ fn determine_language_from_path(file_path: &Path) -> Option<String> {
                 "php" => "php",
                 "swift" => "swift",
                 "sol" => "solidity",
+                "cr" => "crystal",
                 _ => extension, // fallback to extension
             };
             return Some(language_name.to_string());

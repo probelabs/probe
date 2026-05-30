@@ -1995,6 +1995,7 @@ fn normalize_language_alias(lang: &str) -> &str {
         "rb" => "ruby",
         "cs" => "csharp",
         "sol" => "solidity",
+        "cr" => "crystal",
         _ => lang, // Return the original language if no alias is found
     }
 }

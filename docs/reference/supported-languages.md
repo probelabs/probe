@@ -19,6 +19,7 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | PHP | `.php` | ✅ | ✅ |
 | Swift | `.swift` | ✅ | ✅ |
 | Solidity | `.sol` | ✅ | ✅ |
+| Crystal | `.cr` | ✅ | ✅ |
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
 | YAML | `.yaml`, `.yml` | ✅ | ✅ |
@@ -136,6 +137,14 @@ Go also implements special handling for nested struct types.
 - **Type Extraction**: Extracts structs, enums, user-defined value types, events, and custom errors
 - **Comment Handling**: Associates NatSpec and regular comments with Solidity code blocks
 - **Test Detection**: Identifies Foundry-style `.t.sol` files, `*Test.sol` contracts, `setUp`, `test*`, and `invariant_*` functions
+
+### Crystal
+
+- **Module/Class Extraction**: Extracts modules, classes, structs, enums, libraries, and unions
+- **Method Extraction**: Extracts instance methods, class methods, abstract methods, macros, and C binding functions
+- **Type Extraction**: Extracts aliases, type definitions, and annotation definitions
+- **Comment Handling**: Uses Crystal's `#` comments when formatting contextual output
+- **Test Detection**: Identifies Crystal spec files such as `*_spec.cr` and common spec DSL blocks
 
 ### Markdown
 

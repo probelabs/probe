@@ -244,6 +244,7 @@ impl Default for WorkspaceConfig {
                 "c".to_string(),
                 "cpp".to_string(),
                 "solidity".to_string(),
+                "crystal".to_string(),
             ],
             git_integration: true,
             incremental_indexing: true,

@@ -134,6 +134,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                     "rb" => "ruby",
                     "php" => "php",
                     "sol" => "solidity",
+                    "cr" => "crystal",
                     "sh" => "bash",
                     "md" => "markdown",
                     "json" => "json",

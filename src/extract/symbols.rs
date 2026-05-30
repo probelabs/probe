@@ -82,6 +82,12 @@ fn is_container_node(kind: &str) -> bool {
             | "module_declaration"
             | "contract_declaration"
             | "library_declaration"
+            | "class_def"
+            | "module_def"
+            | "struct_def"
+            | "enum_def"
+            | "lib_def"
+            | "union_def"
             | "enum_declaration"
             | "enum_item"
             | "struct_declaration"
@@ -191,6 +197,7 @@ fn collect_children_symbols(
                 | "enum_body"
                 | "struct_body"
                 | "contract_body"
+                | "expressions"
                 | "object_type"
                 | "interface_body"
                 | "statement_block"
@@ -281,15 +288,17 @@ fn normalize_kind(kind: &str) -> String {
         | "function_definition"
         | "function_expression"
         | "arrow_function" => "function",
-        "method_declaration" | "method_definition" => "method",
-        "struct_item" | "struct_type" | "struct_declaration" => "struct",
+        "method_declaration" | "method_definition" | "method_def" | "abstract_method_def" => {
+            "method"
+        }
+        "struct_item" | "struct_type" | "struct_declaration" | "struct_def" => "struct",
         "impl_item" => "impl",
         "trait_item" => "trait",
-        "enum_item" | "enum_declaration" => "enum",
-        "mod_item" | "module_declaration" | "namespace_declaration" => "module",
+        "enum_item" | "enum_declaration" | "enum_def" => "enum",
+        "mod_item" | "module_declaration" | "namespace_declaration" | "module_def" => "module",
         "contract_declaration" => "contract",
         "library_declaration" => "library",
-        "class_declaration" | "class_definition" => "class",
+        "class_declaration" | "class_definition" | "class_def" => "class",
         "interface_declaration" => "interface",
         "const_item" | "const_declaration" => "const",
         "state_variable_declaration" => "variable",
@@ -298,8 +307,14 @@ fn normalize_kind(kind: &str) -> String {
         | "type_alias_declaration"
         | "type_declaration"
         | "type_spec"
-        | "user_defined_type_definition" => "type",
-        "macro_definition" => "macro",
+        | "user_defined_type_definition"
+        | "type_def"
+        | "union_def" => "type",
+        "macro_definition" | "macro_def" => "macro",
+        "lib_def" => "library",
+        "fun_def" => "function",
+        "alias" => "alias",
+        "annotation_def" => "annotation",
         "use_declaration" => "use",
         "variable_declarator"
         | "lexical_declaration"
