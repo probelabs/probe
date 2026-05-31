@@ -1,10 +1,13 @@
 # Adding Support for New Languages
 
-This guide lists the exact files you must modify to add a new language to Probe.
+This guide lists the main files you must audit to add a new language to Probe.
 
 ## Required File Modifications
 
-Adding a new language requires modifying exactly **11 files**. Missing any of these will result in incomplete language support.
+Adding a new language requires auditing every language map that affects parsing,
+search, extraction, query, CLI validation, docs, and LSP/indexing behavior.
+The list below covers the core Probe CLI path; LSP daemon support adds
+additional maps under `lsp-daemon/src`.
 
 ### Step 1: Core Language Implementation (4 files)
 ### Step 2: Search & Extract Integration (4 files)

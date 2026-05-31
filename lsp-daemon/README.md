@@ -230,6 +230,7 @@ class LspDaemonClient:
 | Ruby | solargraph | ✅ Configured |
 | PHP | intelephense | ✅ Configured |
 | Swift | sourcekit-lsp | ✅ Configured |
+| Crystal | crystalline | ⚠️ Configured; install required |
 | Kotlin | kotlin-language-server | ✅ Configured |
 | Scala | metals | ✅ Configured |
 | Haskell | haskell-language-server | ✅ Configured |

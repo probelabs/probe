@@ -1053,6 +1053,7 @@ pub fn get_language_from_extension(extension: &str) -> &'static str {
         "swift" => "swift",
         "cs" => "csharp",
         "sol" => "solidity",
+        "cr" => "crystal",
         "scala" => "scala",
         "dart" => "dart",
         "ex" | "exs" => "elixir",

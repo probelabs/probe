@@ -295,6 +295,21 @@ impl LspRegistry {
             },
         });
 
+        // Crystal
+        self.register(LspServerConfig {
+            language: Language::Crystal,
+            command: "crystalline".to_string(),
+            args: vec![],
+            initialization_options: None,
+            root_markers: vec!["shard.yml".to_string(), "shard.lock".to_string()],
+            initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
+        });
+
         // Kotlin
         self.register(LspServerConfig {
             language: Language::Kotlin,
@@ -504,6 +519,7 @@ impl LspRegistry {
                         "php" => Language::Php,
                         "swift" => Language::Swift,
                         "solidity" => Language::Solidity,
+                        "crystal" => Language::Crystal,
                         "kotlin" => Language::Kotlin,
                         "scala" => Language::Scala,
                         "haskell" => Language::Haskell,

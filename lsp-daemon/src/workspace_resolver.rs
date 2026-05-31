@@ -250,6 +250,7 @@ impl WorkspaceResolver {
             Language::Php => vec!["composer.json", "composer.lock"],
             Language::Swift => vec!["Package.swift", "*.xcodeproj"],
             Language::Solidity => vec!["foundry.toml", "hardhat.config.js", "hardhat.config.ts"],
+            Language::Crystal => vec!["shard.yml", "shard.lock"],
             Language::Kotlin => vec!["build.gradle.kts", "build.gradle"],
             Language::Scala => vec!["build.sbt", "build.sc"],
             Language::Haskell => vec!["stack.yaml", "*.cabal", "cabal.project"],

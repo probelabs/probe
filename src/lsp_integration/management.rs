@@ -5757,6 +5757,7 @@ impl LspManager {
             "ruby" | "rb" => Ok(Language::Ruby),
             "swift" => Ok(Language::Swift),
             "solidity" | "sol" => Ok(Language::Solidity),
+            "crystal" | "cr" => Ok(Language::Crystal),
             "kotlin" | "kt" => Ok(Language::Kotlin),
             "scala" => Ok(Language::Scala),
             _ => Err(anyhow::anyhow!("Unsupported language: {}", lang_str)),

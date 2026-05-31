@@ -4,6 +4,7 @@
 // Import submodules
 pub mod block_handling;
 pub mod common;
+pub mod crystal;
 pub mod factory;
 pub mod language_trait;
 pub mod parser;

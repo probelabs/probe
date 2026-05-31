@@ -82,6 +82,7 @@ tree-sitter-ruby = "0.23.1"
 tree-sitter-swift = "0.7.0"
 tree-sitter-php = "0.23.11"
 tree-sitter-solidity = "=1.2.10"
+tree-sitter-crystal = { git = "https://github.com/crystal-lang-tools/tree-sitter-crystal", rev = "f71f4ca62ac0" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

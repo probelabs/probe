@@ -93,6 +93,14 @@ pub fn is_test_file(path: &Path) -> bool {
             return true;
         }
 
+        // Crystal: spec files conventionally use *_spec.cr
+        if file_name.ends_with("_spec.cr") {
+            if _debug_mode {
+                println!("DEBUG: Test file detected (Crystal pattern): {file_name}");
+            }
+            return true;
+        }
+
         // PHP: *Test.php, Test*.php
         if file_name.ends_with("Test.php")
             || file_name.starts_with("Test") && file_name.ends_with(".php")

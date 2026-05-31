@@ -332,6 +332,7 @@ fn format_and_print_color_results(
             "rb" => "ruby",
             "php" => "php",
             "sol" => "solidity",
+            "cr" => "crystal",
             "sh" => "bash",
             "md" => "markdown",
             "json" => "json",
@@ -2347,7 +2348,7 @@ fn get_comment_prefix(extension: &str) -> &'static str {
         | "tsx" | "cs" | "swift" | "go" | "php" | "sol" => "//",
 
         // Python-style comments
-        "py" | "rb" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
+        "py" | "rb" | "cr" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
 
         // HTML-style comments
         "md" | "markdown" => "<!--",

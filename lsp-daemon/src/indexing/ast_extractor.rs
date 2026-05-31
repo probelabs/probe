@@ -700,6 +700,7 @@ impl AstSymbolExtractor {
             crate::language_detector::Language::Solidity => {
                 Ok(tree_sitter_solidity::LANGUAGE.into())
             }
+            crate::language_detector::Language::Crystal => Ok(tree_sitter_crystal::LANGUAGE.into()),
             _ => Err(anyhow::anyhow!("Unsupported language: {:?}", language)),
         }
     }
@@ -851,6 +852,18 @@ impl AstSymbolExtractor {
                 "user_defined_type_definition" => (SymbolKind::Type, true),
                 _ => (SymbolKind::Function, false),
             },
+            crate::language_detector::Language::Crystal => match node_kind {
+                "method_def" | "abstract_method_def" | "macro_def" | "fun_def" => {
+                    (SymbolKind::Function, true)
+                }
+                "class_def" => (SymbolKind::Class, true),
+                "module_def" => (SymbolKind::Module, true),
+                "struct_def" => (SymbolKind::Struct, true),
+                "enum_def" => (SymbolKind::Enum, true),
+                "lib_def" => (SymbolKind::Interface, true),
+                "alias" | "annotation_def" | "type_def" | "union_def" => (SymbolKind::Type, true),
+                _ => (SymbolKind::Function, false),
+            },
             _ => {
                 // For other languages, try some common patterns
                 match node_kind {
@@ -935,12 +948,21 @@ impl AstSymbolExtractor {
 
     /// Extract symbol name from a tree-sitter node
     fn extract_symbol_name(&self, node: tree_sitter::Node, content: &[u8]) -> Option<String> {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if let Ok(text) = name_node.utf8_text(content) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+
         let mut cursor = node.walk();
 
         // Look for identifier nodes in the children
         for child in node.children(&mut cursor) {
             match child.kind() {
-                "identifier" | "type_identifier" | "field_identifier" => {
+                "identifier" | "type_identifier" | "field_identifier" | "constant" => {
                     let name = child.utf8_text(content).unwrap_or("");
                     if !name.is_empty() {
                         return Some(name.to_string());

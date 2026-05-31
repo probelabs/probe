@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use colored::Colorize;
 use std::path::Path;
-use tree_sitter::{Language as TSLanguage, Node, Parser as TSParser};
+use tree_sitter::{Node, Parser as TSParser};
 
 use probe_code::language::factory::get_language_impl;
 
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
         "{}",
         format!(
             "Language: {} (extension: {})",
-            get_language_name(&language),
+            get_language_name(extension),
             extension
         )
         .cyan()
@@ -137,21 +137,22 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn get_language_name(language: &TSLanguage) -> &str {
-    let version = language.version();
-    match version {
-        _ if format!("{language:?}").contains("rust") => "Rust",
-        _ if format!("{language:?}").contains("javascript") => "JavaScript",
-        _ if format!("{language:?}").contains("typescript") => "TypeScript",
-        _ if format!("{language:?}").contains("python") => "Python",
-        _ if format!("{language:?}").contains("go") => "Go",
-        _ if format!("{language:?}").contains("java") => "Java",
-        _ if format!("{language:?}").contains("c") => "C/C++",
-        _ if format!("{language:?}").contains("ruby") => "Ruby",
-        _ if format!("{language:?}").contains("php") => "PHP",
-        _ if format!("{language:?}").contains("swift") => "Swift",
-        _ if format!("{language:?}").contains("solidity") => "Solidity",
-        _ if format!("{language:?}").contains("csharp") => "C#",
+fn get_language_name(extension: &str) -> &str {
+    match extension {
+        "rs" => "Rust",
+        "js" | "jsx" => "JavaScript",
+        "ts" | "tsx" => "TypeScript",
+        "py" => "Python",
+        "go" => "Go",
+        "java" => "Java",
+        "c" | "h" => "C",
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => "C++",
+        "rb" => "Ruby",
+        "php" => "PHP",
+        "swift" => "Swift",
+        "sol" => "Solidity",
+        "cr" => "Crystal",
+        "cs" => "C#",
         _ => "Unknown",
     }
 }
@@ -231,6 +232,21 @@ fn extract_symbol_info(
         // Java (method_declaration handled above)
         "constructor_declaration" => ("constructor", vec!["identifier"]),
         "field_declaration" => ("field", vec!["identifier"]),
+
+        // Crystal
+        "class_def" => ("class", vec!["constant", "identifier"]),
+        "module_def" => ("module", vec!["constant", "identifier"]),
+        "struct_def" => ("struct", vec!["constant", "identifier"]),
+        "enum_def" => ("enum", vec!["constant", "identifier"]),
+        "method_def" | "abstract_method_def" => {
+            ("method", vec!["identifier", "constant", "operator"])
+        }
+        "macro_def" => ("macro", vec!["identifier", "constant"]),
+        "lib_def" => ("library", vec!["constant", "identifier"]),
+        "fun_def" => ("function", vec!["identifier", "constant"]),
+        "alias" => ("alias", vec!["constant", "identifier"]),
+        "annotation_def" => ("annotation", vec!["constant", "identifier"]),
+        "type_def" | "union_def" => ("type", vec!["constant", "identifier"]),
 
         _ => return None,
     };
@@ -499,5 +515,37 @@ const arrow = (x, y) => x + y;
         assert!(symbols
             .iter()
             .any(|s| s.name == "getValue" && s.symbol_kind == "method"));
+    }
+
+    #[test]
+    fn test_crystal_symbol_detection() {
+        let crystal_code = r#"
+module ProbeFixture
+  class Calculator
+    def add(left : Int32, right : Int32) : Int32
+      left + right
+    end
+  end
+end
+"#;
+
+        let language_impl = get_language_impl("cr").unwrap();
+        let language = language_impl.get_tree_sitter_language();
+        let mut parser = TSParser::new();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(crystal_code, None).unwrap();
+
+        let symbols = find_all_symbols(tree.root_node(), crystal_code.as_bytes(), false);
+
+        assert!(!symbols.is_empty());
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "ProbeFixture" && s.symbol_kind == "module"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Calculator" && s.symbol_kind == "class"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "add" && s.symbol_kind == "method"));
     }
 }

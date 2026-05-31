@@ -554,6 +554,7 @@ where
                         "rb" => Some("ruby"),
                         "swift" => Some("swift"),
                         "sol" => Some("solidity"),
+                        "cr" => Some("crystal"),
                         "kt" => Some("kotlin"),
                         "cs" => Some("csharp"),
                         "scala" => Some("scala"),

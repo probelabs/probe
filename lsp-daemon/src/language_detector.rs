@@ -21,6 +21,7 @@ pub enum Language {
     Php,
     Swift,
     Solidity,
+    Crystal,
     Kotlin,
     Scala,
     Haskell,
@@ -47,6 +48,7 @@ impl Language {
             Language::Php => "php",
             Language::Swift => "swift",
             Language::Solidity => "solidity",
+            Language::Crystal => "crystal",
             Language::Kotlin => "kotlin",
             Language::Scala => "scala",
             Language::Haskell => "haskell",
@@ -75,6 +77,7 @@ impl Language {
             "php" => Some(Language::Php),
             "swift" => Some(Language::Swift),
             "solidity" | "sol" => Some(Language::Solidity),
+            "crystal" | "cr" => Some(Language::Crystal),
             "kotlin" => Some(Language::Kotlin),
             "scala" => Some(Language::Scala),
             "haskell" => Some(Language::Haskell),
@@ -151,6 +154,9 @@ impl LanguageDetector {
 
         // Solidity
         extension_map.insert("sol".to_string(), Language::Solidity);
+
+        // Crystal
+        extension_map.insert("cr".to_string(), Language::Crystal);
 
         // Kotlin
         extension_map.insert("kt".to_string(), Language::Kotlin);

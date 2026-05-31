@@ -331,6 +331,36 @@ impl LanguageRules {
         }
     }
 
+    /// Create rules for Crystal
+    pub fn crystal() -> Self {
+        Self {
+            scope_separator: "::".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::RemoveParameterNames,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["cr".to_string()],
+            signature_keywords: vec![
+                "module".to_string(),
+                "class".to_string(),
+                "struct".to_string(),
+                "enum".to_string(),
+                "def".to_string(),
+                "macro".to_string(),
+                "abstract".to_string(),
+                "private".to_string(),
+                "protected".to_string(),
+                "alias".to_string(),
+                "annotation".to_string(),
+                "lib".to_string(),
+                "fun".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
     /// Check if this language supports a specific feature
     pub fn supports_feature(&self, feature: &str) -> bool {
         match feature {
@@ -521,6 +551,7 @@ impl LanguageRulesFactory {
             "c" => Some(LanguageRules::c()),
             "cpp" | "c++" | "cxx" => Some(LanguageRules::cpp()),
             "solidity" | "sol" => Some(LanguageRules::solidity()),
+            "crystal" | "cr" => Some(LanguageRules::crystal()),
             _ => None,
         }
     }
@@ -537,6 +568,7 @@ impl LanguageRulesFactory {
             "c".to_string(),
             "cpp".to_string(),
             "solidity".to_string(),
+            "crystal".to_string(),
         ]
     }
 

@@ -697,6 +697,32 @@ fn test_quoted_strings() {
         }
     );
 
+    let namespaced = parse_query_test("HTTP::Server AND lang:crystal").unwrap();
+    match namespaced {
+        Expr::And(left, right) => {
+            match *left {
+                Expr::Term {
+                    keywords, field, ..
+                } => {
+                    assert_eq!(field, None);
+                    assert_eq!(keywords, vec!["http".to_string(), "server".to_string()]);
+                }
+                other => panic!("expected namespaced term on left, got {other:?}"),
+            }
+
+            match *right {
+                Expr::Term {
+                    keywords, field, ..
+                } => {
+                    assert_eq!(field, Some("lang".to_string()));
+                    assert_eq!(keywords, vec!["crystal".to_string()]);
+                }
+                other => panic!("expected lang field term on right, got {other:?}"),
+            }
+        }
+        other => panic!("expected AND expression for namespaced query, got {other:?}"),
+    }
+
     // Quoted string with escaped quotes
     let keywords11 = vec!["function_with_\"quotes\"".to_string()];
     assert_parse_eq(

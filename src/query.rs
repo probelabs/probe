@@ -40,6 +40,7 @@ pub struct QueryOptions<'a> {
 enum ProbeQueryLang {
     Builtin(SupportLang),
     Solidity,
+    Crystal,
 }
 
 impl Language for ProbeQueryLang {
@@ -47,6 +48,7 @@ impl Language for ProbeQueryLang {
         match self {
             ProbeQueryLang::Builtin(lang) => lang.get_ts_language(),
             ProbeQueryLang::Solidity => tree_sitter_solidity::LANGUAGE.into(),
+            ProbeQueryLang::Crystal => tree_sitter_crystal::LANGUAGE.into(),
         }
     }
 }
@@ -66,6 +68,7 @@ fn get_language(lang: &str) -> Option<ProbeQueryLang> {
         "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
         "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
         "solidity" | "sol" => Some(ProbeQueryLang::Solidity),
+        "crystal" | "cr" => Some(ProbeQueryLang::Crystal),
         "csharp" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
         _ => None,
     }
@@ -86,6 +89,7 @@ fn get_file_extension(lang: &str) -> Vec<&str> {
         "php" => vec![".php"],
         "swift" => vec![".swift"],
         "solidity" | "sol" => vec![".sol"],
+        "crystal" | "cr" => vec![".cr"],
         "csharp" => vec![".cs"],
         _ => vec![],
     }
@@ -162,6 +166,7 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
             "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
             "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
             "sol" => Some(ProbeQueryLang::Solidity),
+            "cr" => Some(ProbeQueryLang::Crystal),
             "cs" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
             _ => None, // Unsupported extension
         };
@@ -673,5 +678,39 @@ contract Counter {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].file_path, file);
         assert!(matches[0].matched_text.contains("function increment()"));
+    }
+
+    #[test]
+    fn test_crystal_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("counter.cr");
+        fs::write(
+            &file,
+            r#"
+class Counter
+  def increment : Int32
+    1
+  end
+end
+"#,
+        )
+        .unwrap();
+
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "def increment : Int32",
+            language: Some("crystal"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            with_context: false,
+            format: "json",
+            no_gitignore: true,
+        };
+
+        let matches = perform_query(&options).expect("Crystal query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("def increment"));
     }
 }

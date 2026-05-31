@@ -2614,6 +2614,7 @@ impl LspEnrichmentWorkerPool {
             "rb" => Language::Ruby,
             "php" => Language::Php,
             "swift" => Language::Swift,
+            "cr" => Language::Crystal,
             "kt" => Language::Kotlin,
             "scala" => Language::Scala,
             "hs" => Language::Haskell,
