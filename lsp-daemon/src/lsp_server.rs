@@ -2349,7 +2349,7 @@ impl LspServer {
             Some("cr") => "crystal",
             Some("kt") | Some("kts") => "kotlin",
             Some("scala") | Some("sc") => "scala",
-            Some("hs") => "haskell",
+            Some("hs") | Some("lhs") => "haskell",
             Some("ex") | Some("exs") => "elixir",
             Some("clj") | Some("cljs") => "clojure",
             Some("lua") => "lua",

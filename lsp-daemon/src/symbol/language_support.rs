@@ -361,6 +361,33 @@ impl LanguageRules {
         }
     }
 
+    /// Create rules for Haskell
+    pub fn haskell() -> Self {
+        Self {
+            scope_separator: ".".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::None,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["hs".to_string(), "lhs".to_string()],
+            signature_keywords: vec![
+                "module".to_string(),
+                "import".to_string(),
+                "data".to_string(),
+                "newtype".to_string(),
+                "type".to_string(),
+                "class".to_string(),
+                "instance".to_string(),
+                "where".to_string(),
+                "foreign".to_string(),
+                "pattern".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
     /// Check if this language supports a specific feature
     pub fn supports_feature(&self, feature: &str) -> bool {
         match feature {
@@ -552,6 +579,7 @@ impl LanguageRulesFactory {
             "cpp" | "c++" | "cxx" => Some(LanguageRules::cpp()),
             "solidity" | "sol" => Some(LanguageRules::solidity()),
             "crystal" | "cr" => Some(LanguageRules::crystal()),
+            "haskell" | "hs" | "lhs" => Some(LanguageRules::haskell()),
             _ => None,
         }
     }
@@ -569,6 +597,7 @@ impl LanguageRulesFactory {
             "cpp".to_string(),
             "solidity".to_string(),
             "crystal".to_string(),
+            "haskell".to_string(),
         ]
     }
 

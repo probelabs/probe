@@ -88,6 +88,10 @@ fn is_container_node(kind: &str) -> bool {
             | "enum_def"
             | "lib_def"
             | "union_def"
+            | "class"
+            | "instance"
+            | "class_declarations"
+            | "instance_declarations"
             | "enum_declaration"
             | "enum_item"
             | "struct_declaration"
@@ -145,6 +149,11 @@ fn collect_symbols(
                 end_line,
                 children,
             });
+        } else if matches!(
+            child.kind(),
+            "header" | "declarations" | "class_declarations" | "instance_declarations" | "ERROR"
+        ) {
+            symbols.extend(collect_symbols(&child, source, lang, allow_tests, depth));
         }
     }
 
@@ -201,6 +210,9 @@ fn collect_children_symbols(
                 | "object_type"
                 | "interface_body"
                 | "statement_block"
+                | "class_declarations"
+                | "instance_declarations"
+                | "declarations"
         ) {
             return collect_symbols(&child, source, lang, allow_tests, depth);
         }
@@ -260,7 +272,14 @@ fn extract_symbol_name(node: &Node, source: &[u8]) -> String {
     for child in node.children(&mut cursor) {
         if matches!(
             child.kind(),
-            "identifier" | "type_identifier" | "property_identifier"
+            "identifier"
+                | "type_identifier"
+                | "property_identifier"
+                | "name"
+                | "variable"
+                | "constructor"
+                | "module_id"
+                | "field_name"
         ) {
             if let Ok(text) = child.utf8_text(source) {
                 return text.to_string();
@@ -296,6 +315,7 @@ fn normalize_kind(kind: &str) -> String {
         "trait_item" => "trait",
         "enum_item" | "enum_declaration" | "enum_def" => "enum",
         "mod_item" | "module_declaration" | "namespace_declaration" | "module_def" => "module",
+        "module" => "module",
         "contract_declaration" => "contract",
         "library_declaration" => "library",
         "class_declaration" | "class_definition" | "class_def" => "class",
@@ -309,8 +329,21 @@ fn normalize_kind(kind: &str) -> String {
         | "type_spec"
         | "user_defined_type_definition"
         | "type_def"
-        | "union_def" => "type",
+        | "union_def"
+        | "data_type"
+        | "newtype"
+        | "type_synomym"
+        | "type_family"
+        | "type_instance"
+        | "data_family"
+        | "data_instance"
+        | "kind_signature" => "type",
         "macro_definition" | "macro_def" => "macro",
+        "function" | "bind" | "foreign_import" | "foreign_export" => "function",
+        "signature" | "default_signature" => "signature",
+        "class" => "class",
+        "instance" => "instance",
+        "pattern_synonym" => "pattern",
         "lib_def" => "library",
         "fun_def" => "function",
         "alias" => "alias",

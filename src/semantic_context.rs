@@ -98,6 +98,7 @@ pub fn language_name_for_path(path: &Path) -> Option<&'static str> {
         "swift" => Some("swift"),
         "sol" => Some("solidity"),
         "cr" => Some("crystal"),
+        "hs" | "lhs" => Some("haskell"),
         "cs" => Some("csharp"),
         "html" | "htm" => Some("html"),
         "md" | "markdown" => Some("markdown"),

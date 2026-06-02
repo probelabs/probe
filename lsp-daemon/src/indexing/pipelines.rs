@@ -87,6 +87,13 @@ impl PipelineConfig {
                 features.set_language_feature("extract_modules".to_string(), true);
                 (vec!["cr".to_string()], features)
             }
+            Language::Haskell => {
+                let mut features = IndexingFeatures::default();
+                features.set_language_feature("extract_typeclasses".to_string(), true);
+                features.set_language_feature("extract_instances".to_string(), true);
+                features.set_language_feature("extract_signatures".to_string(), true);
+                (vec!["hs".to_string(), "lhs".to_string()], features)
+            }
             Language::Java => {
                 let mut features = IndexingFeatures::default();
                 features.set_language_feature("extract_annotations".to_string(), true);

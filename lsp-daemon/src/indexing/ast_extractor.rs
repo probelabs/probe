@@ -701,6 +701,7 @@ impl AstSymbolExtractor {
                 Ok(tree_sitter_solidity::LANGUAGE.into())
             }
             crate::language_detector::Language::Crystal => Ok(tree_sitter_crystal::LANGUAGE.into()),
+            crate::language_detector::Language::Haskell => Ok(tree_sitter_haskell::LANGUAGE.into()),
             _ => Err(anyhow::anyhow!("Unsupported language: {:?}", language)),
         }
     }
@@ -862,6 +863,16 @@ impl AstSymbolExtractor {
                 "enum_def" => (SymbolKind::Enum, true),
                 "lib_def" => (SymbolKind::Interface, true),
                 "alias" | "annotation_def" | "type_def" | "union_def" => (SymbolKind::Type, true),
+                _ => (SymbolKind::Function, false),
+            },
+            crate::language_detector::Language::Haskell => match node_kind {
+                "function" | "bind" | "signature" | "default_signature" | "foreign_import"
+                | "foreign_export" => (SymbolKind::Function, true),
+                "data_type" | "newtype" | "type_synomym" | "type_family" | "type_instance"
+                | "data_family" | "data_instance" | "kind_signature" => (SymbolKind::Type, true),
+                "class" => (SymbolKind::Class, true),
+                "instance" => (SymbolKind::TraitImpl, true),
+                "pattern_synonym" => (SymbolKind::Constant, true),
                 _ => (SymbolKind::Function, false),
             },
             _ => {

@@ -916,7 +916,7 @@ impl LspClient {
                         "crystal" | "cr" => Some(Language::Crystal),
                         "kotlin" | "kt" => Some(Language::Kotlin),
                         "scala" => Some(Language::Scala),
-                        "haskell" | "hs" => Some(Language::Haskell),
+                        "haskell" | "hs" | "lhs" => Some(Language::Haskell),
                         "elixir" | "ex" => Some(Language::Elixir),
                         "clojure" | "clj" => Some(Language::Clojure),
                         "lua" => Some(Language::Lua),

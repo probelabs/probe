@@ -170,6 +170,7 @@ pub enum Commands {
             "swift",
             "solidity", "sol",
             "crystal", "cr",
+            "haskell", "hs", "lhs",
             "csharp", "cs",
             "yaml", "yml"
         ])]
@@ -353,6 +354,7 @@ pub enum Commands {
             "swift",
             "solidity", "sol",
             "crystal", "cr",
+            "haskell", "hs", "lhs",
             "csharp", "cs",
             "yaml", "yml"
         ])]

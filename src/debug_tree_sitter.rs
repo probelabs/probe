@@ -152,6 +152,7 @@ fn get_language_name(extension: &str) -> &str {
         "swift" => "Swift",
         "sol" => "Solidity",
         "cr" => "Crystal",
+        "hs" | "lhs" => "Haskell",
         "cs" => "C#",
         _ => "Unknown",
     }
@@ -247,6 +248,18 @@ fn extract_symbol_info(
         "alias" => ("alias", vec!["constant", "identifier"]),
         "annotation_def" => ("annotation", vec!["constant", "identifier"]),
         "type_def" | "union_def" => ("type", vec!["constant", "identifier"]),
+
+        // Haskell
+        "function" | "bind" => ("function", vec!["variable", "prefix_id"]),
+        "signature" | "default_signature" => ("signature", vec!["variable", "prefix_id"]),
+        "data_type" | "newtype" => ("type", vec!["name", "prefix_id"]),
+        "type_synomym" | "type_family" | "type_instance" | "data_family" | "data_instance"
+        | "kind_signature" => ("type", vec!["name", "prefix_id"]),
+        "class" => ("class", vec!["name", "prefix_id"]),
+        "instance" => ("instance", vec!["name", "prefix_id"]),
+        "module" => ("module", vec!["module_id"]),
+        "foreign_import" | "foreign_export" => ("function", vec!["variable", "prefix_id"]),
+        "pattern_synonym" => ("pattern", vec!["constructor", "variable", "prefix_id"]),
 
         _ => return None,
     };

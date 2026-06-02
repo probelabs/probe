@@ -1996,6 +1996,7 @@ fn normalize_language_alias(lang: &str) -> &str {
         "cs" => "csharp",
         "sol" => "solidity",
         "cr" => "crystal",
+        "hs" | "lhs" => "haskell",
         _ => lang, // Return the original language if no alias is found
     }
 }

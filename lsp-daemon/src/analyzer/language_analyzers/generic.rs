@@ -295,7 +295,7 @@ impl GenericAnalyzer {
                     "jl" => {
                         detected.insert("Julia");
                     }
-                    "hs" => {
+                    "hs" | "lhs" => {
                         detected.insert("Haskell");
                     }
                     "ml" => {

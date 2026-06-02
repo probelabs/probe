@@ -101,6 +101,20 @@ pub fn is_test_file(path: &Path) -> bool {
             return true;
         }
 
+        // Haskell: common Hspec/Tasty/QuickCheck test naming conventions
+        if file_name.ends_with("Spec.hs")
+            || file_name.ends_with("Spec.lhs")
+            || file_name.ends_with("Test.hs")
+            || file_name.ends_with("Test.lhs")
+            || file_name.starts_with("Test")
+                && (file_name.ends_with(".hs") || file_name.ends_with(".lhs"))
+        {
+            if _debug_mode {
+                println!("DEBUG: Test file detected (Haskell pattern): {file_name}");
+            }
+            return true;
+        }
+
         // PHP: *Test.php, Test*.php
         if file_name.ends_with("Test.php")
             || file_name.starts_with("Test") && file_name.ends_with(".php")

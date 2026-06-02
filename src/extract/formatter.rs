@@ -1057,7 +1057,7 @@ pub fn get_language_from_extension(extension: &str) -> &'static str {
         "scala" => "scala",
         "dart" => "dart",
         "ex" | "exs" => "elixir",
-        "hs" => "haskell",
+        "hs" | "lhs" => "haskell",
         "clj" => "clojure",
         "lua" => "lua",
         "r" => "r",

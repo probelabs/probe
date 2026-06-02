@@ -865,6 +865,7 @@ async fn main() -> Result<()> {
                     "cs" => "csharp",
                     "sol" => "solidity",
                     "cr" => "crystal",
+                    "hs" | "lhs" => "haskell",
                     _ => lang, // Return the original language if no alias is found
                 }
             }),

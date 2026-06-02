@@ -561,6 +561,7 @@ fn get_language_extensions(language: &str) -> Vec<String> {
         "swift" => vec![".swift".to_string()],
         "solidity" => vec![".sol".to_string()],
         "crystal" => vec![".cr".to_string()],
+        "haskell" => vec![".hs".to_string(), ".lhs".to_string()],
         "csharp" => vec![".cs".to_string()],
         "markdown" => vec![".md".to_string(), ".markdown".to_string()],
         "yaml" => vec![".yaml".to_string(), ".yml".to_string()],

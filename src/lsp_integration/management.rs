@@ -5760,6 +5760,7 @@ impl LspManager {
             "crystal" | "cr" => Ok(Language::Crystal),
             "kotlin" | "kt" => Ok(Language::Kotlin),
             "scala" => Ok(Language::Scala),
+            "haskell" | "hs" | "lhs" => Ok(Language::Haskell),
             _ => Err(anyhow::anyhow!("Unsupported language: {}", lang_str)),
         }
     }

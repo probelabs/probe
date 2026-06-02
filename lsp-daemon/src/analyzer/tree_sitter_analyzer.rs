@@ -33,6 +33,7 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "cs" => Some("csharp"),
         "sol" => Some("solidity"),
         "cr" => Some("crystal"),
+        "hs" | "lhs" => Some("haskell"),
         _ => None,
     }
 }
@@ -102,6 +103,7 @@ impl ParserPool {
             "cpp" | "c++" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
             "solidity" | "sol" => Some(tree_sitter_solidity::LANGUAGE),
             "crystal" | "cr" => Some(tree_sitter_crystal::LANGUAGE),
+            "haskell" | "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE),
             _ => None,
         };
 
@@ -450,6 +452,7 @@ impl TreeSitterAnalyzer {
             "java" => self.map_java_node_to_symbol(node_kind),
             "c" | "cpp" | "c++" => self.map_c_node_to_symbol(node_kind),
             "crystal" | "cr" => self.map_crystal_node_to_symbol(node_kind),
+            "haskell" | "hs" | "lhs" => self.map_haskell_node_to_symbol(node_kind),
             _ => self.map_generic_node_to_symbol(node_kind),
         };
 
@@ -592,6 +595,21 @@ impl TreeSitterAnalyzer {
         }
     }
 
+    /// Map Haskell node kinds to symbol kinds
+    fn map_haskell_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "function" | "bind" | "foreign_import" | "foreign_export" => Some(SymbolKind::Function),
+            "signature" | "default_signature" => Some(SymbolKind::Function),
+            "data_type" | "newtype" => Some(SymbolKind::Type),
+            "type_synomym" | "type_family" | "type_instance" | "data_family" | "data_instance"
+            | "kind_signature" => Some(SymbolKind::Type),
+            "class" => Some(SymbolKind::Class),
+            "instance" => Some(SymbolKind::TraitImpl),
+            "pattern_synonym" => Some(SymbolKind::Constant),
+            _ => None,
+        }
+    }
+
     /// Generic node mapping for unknown languages
     fn map_generic_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
         if node_kind.contains("function") {
@@ -635,6 +653,11 @@ impl TreeSitterAnalyzer {
                     | "module_name"
                     | "parameter_name"
                     | "constant"
+                    | "name"
+                    | "variable"
+                    | "constructor"
+                    | "module_id"
+                    | "field_name"
             ) {
                 let start_byte = child.start_byte();
                 let end_byte = child.end_byte();
@@ -656,9 +679,9 @@ impl TreeSitterAnalyzer {
             if let Ok(nested_name) = self.extract_symbol_name(child, content) {
                 if !nested_name.is_empty()
                     && !self.is_keyword_or_invalid(&nested_name)
-                    && nested_name
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == '?' || c == '!')
+                    && nested_name.chars().all(|c| {
+                        c.is_alphanumeric() || c == '_' || c == '?' || c == '!' || c == '\''
+                    })
                 {
                     return Ok(nested_name);
                 }
@@ -706,7 +729,11 @@ impl TreeSitterAnalyzer {
                                     .next()
                                     .map_or(false, |c| c.is_alphabetic() || c == '_')
                                 && word.chars().all(|c| {
-                                    c.is_alphanumeric() || c == '_' || c == '?' || c == '!'
+                                    c.is_alphanumeric()
+                                        || c == '_'
+                                        || c == '?'
+                                        || c == '!'
+                                        || c == '\''
                                 })
                         })
                         .unwrap_or("")
@@ -765,6 +792,11 @@ impl TreeSitterAnalyzer {
                 | "override"
                 | "virtual"
                 | "abstract"
+                | "data"
+                | "newtype"
+                | "type"
+                | "where"
+                | "instance"
         ) || text.is_empty()
     }
 
@@ -883,6 +915,23 @@ impl TreeSitterAnalyzer {
                     | "abstract_method_def"
                     | "macro_def"
                     | "fun_def"
+            ),
+            "haskell" | "hs" | "lhs" => matches!(
+                node_kind,
+                "module"
+                    | "class"
+                    | "instance"
+                    | "class_declarations"
+                    | "instance_declarations"
+                    | "function"
+                    | "bind"
+                    | "signature"
+                    | "data_type"
+                    | "newtype"
+                    | "type_synomym"
+                    | "type_family"
+                    | "data_family"
+                    | "pattern_synonym"
             ),
             _ => false,
         }
@@ -1029,6 +1078,7 @@ impl CodeAnalyzer for TreeSitterAnalyzer {
             "c".to_string(),
             "cpp".to_string(),
             "crystal".to_string(),
+            "haskell".to_string(),
         ]
     }
 
@@ -1265,6 +1315,101 @@ end
                 .iter()
                 .any(|symbol| symbol.name == "active?" && symbol.kind == SymbolKind::Function),
             "expected active? method in symbols: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn test_haskell_parser_pool_and_node_mapping() {
+        let analyzer = create_test_analyzer();
+        let mut pool = ParserPool::new();
+
+        assert!(
+            pool.get_parser("haskell").is_some(),
+            "Haskell parser should be available by language name"
+        );
+        assert!(
+            pool.get_parser("hs").is_some(),
+            "Haskell parser should be available by extension alias"
+        );
+        assert!(
+            pool.get_parser("lhs").is_some(),
+            "Literate Haskell parser should be available by extension alias"
+        );
+        assert_eq!(
+            analyzer.map_haskell_node_to_symbol("function"),
+            Some(SymbolKind::Function)
+        );
+        assert_eq!(
+            analyzer.map_haskell_node_to_symbol("data_type"),
+            Some(SymbolKind::Type)
+        );
+        assert_eq!(
+            analyzer.map_haskell_node_to_symbol("class"),
+            Some(SymbolKind::Class)
+        );
+        assert_eq!(
+            analyzer.map_haskell_node_to_symbol("instance"),
+            Some(SymbolKind::TraitImpl)
+        );
+        assert!(analyzer.creates_scope("class", "haskell"));
+        assert!(analyzer.creates_scope("function", "hs"));
+    }
+
+    #[tokio::test]
+    async fn test_haskell_symbol_extraction_uses_parser_pool() {
+        let analyzer = create_test_analyzer();
+        let uid_generator = Arc::new(SymbolUIDGenerator::new());
+        let context = AnalysisContext::new(
+            1,
+            2,
+            "haskell".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("Sample.hs"),
+            uid_generator,
+        );
+        let haskell_code = r#"
+module Demo.Sample where
+
+data User = User { userName :: String }
+
+class Serializable a where
+  serialize :: a -> String
+
+active :: User -> Bool
+active user = True
+"#;
+
+        let result = analyzer
+            .analyze_file(haskell_code, Path::new("Sample.hs"), "haskell", &context)
+            .await
+            .expect("Haskell analysis should use the parser pool");
+
+        let symbols = result
+            .symbols
+            .iter()
+            .map(|symbol| format!("{}:{:?}", symbol.name, symbol.kind))
+            .collect::<Vec<_>>();
+
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "User" && symbol.kind == SymbolKind::Type),
+            "expected User type in symbols: {symbols:?}"
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "Serializable" && symbol.kind == SymbolKind::Class),
+            "expected Serializable class in symbols: {symbols:?}"
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "active" && symbol.kind == SymbolKind::Function),
+            "expected active function in symbols: {symbols:?}"
         );
     }
 

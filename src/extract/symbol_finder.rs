@@ -80,6 +80,10 @@ fn find_all_symbol_nodes<'a>(
                 || child.kind() == "type_identifier"
                 || child.kind() == "property_identifier"
                 || child.kind() == "name"
+                || child.kind() == "variable"
+                || child.kind() == "constructor"
+                || child.kind() == "module_id"
+                || child.kind() == "field_name"
             // PHP uses "name" for identifiers
             {
                 if let Ok(name) = child.utf8_text(content) {

@@ -69,6 +69,7 @@ impl RelationshipParserPool {
             "cpp" | "c++" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
             "solidity" | "sol" => Some(tree_sitter_solidity::LANGUAGE),
             "crystal" | "cr" => Some(tree_sitter_crystal::LANGUAGE),
+            "haskell" | "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE),
             _ => None,
         };
 
