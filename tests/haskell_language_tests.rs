@@ -90,6 +90,45 @@ fn test_haskell_extraction_by_line_target() {
 }
 
 #[test]
+fn test_haskell_operator_symbol_extraction_uses_tree_sitter() {
+    let plus = process_file_for_extraction(
+        &sample_file(),
+        None,
+        None,
+        Some("(<+>)"),
+        true,
+        0,
+        None,
+        false,
+        false,
+    )
+    .expect("extract should find Haskell prefix operator definition");
+
+    assert_eq!(plus.node_type, "bind");
+    assert!(plus.code.contains("(<+>) = (++)"), "code: {}", plus.code);
+
+    let arrow = process_file_for_extraction(
+        &sample_file(),
+        None,
+        None,
+        Some("(-->)"),
+        true,
+        0,
+        None,
+        false,
+        false,
+    )
+    .expect("extract should find Haskell infix operator signature");
+
+    assert_eq!(arrow.node_type, "signature");
+    assert!(
+        arrow.code.contains("(-->) :: Bool -> a -> Maybe a"),
+        "code: {}",
+        arrow.code
+    );
+}
+
+#[test]
 fn test_haskell_query_support() {
     let options = QueryOptions {
         path: &fixture_root(),

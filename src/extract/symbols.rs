@@ -280,6 +280,7 @@ fn extract_symbol_name(node: &Node, source: &[u8]) -> String {
                 | "constructor"
                 | "module_id"
                 | "field_name"
+                | "prefix_id"
         ) {
             if let Ok(text) = child.utf8_text(source) {
                 return text.to_string();

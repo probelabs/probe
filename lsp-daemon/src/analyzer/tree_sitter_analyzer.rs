@@ -658,6 +658,7 @@ impl TreeSitterAnalyzer {
                     | "constructor"
                     | "module_id"
                     | "field_name"
+                    | "prefix_id"
             ) {
                 let start_byte = child.start_byte();
                 let end_byte = child.end_byte();

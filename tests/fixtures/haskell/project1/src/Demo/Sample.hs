@@ -40,5 +40,12 @@ active user = userRole user /= Guest
 loadUser :: UserId -> IO User
 loadUser uid = pure (User uid "Ada" Admin)
 
+(<+>) :: [a] -> [a] -> [a]
+(<+>) = (++)
+
+(-->) :: Bool -> a -> Maybe a
+True --> value = Just value
+False --> _ = Nothing
+
 pattern GuestUser :: User
 pattern GuestUser = User 0 "guest" Guest

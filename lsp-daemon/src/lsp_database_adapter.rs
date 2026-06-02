@@ -1200,6 +1200,7 @@ impl LspDatabaseAdapter {
                 | "constructor"
                 | "module_id"
                 | "field_name"
+                | "prefix_id"
         )
     }
 
