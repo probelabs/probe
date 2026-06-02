@@ -1403,6 +1403,7 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
         Language::Cpp,
         Language::Solidity,
         Language::Crystal,
+        Language::Haskell,
     ] {
         let lang_str = format!("{language:?}").to_uppercase();
         let mut config = LanguageIndexConfig::default();
@@ -1509,6 +1510,11 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
                         features.set_language_feature("extract_macros".to_string(), true);
                         features.set_language_feature("extract_modules".to_string(), true);
                     }
+                    Language::Haskell => {
+                        features.set_language_feature("extract_typeclasses".to_string(), true);
+                        features.set_language_feature("extract_instances".to_string(), true);
+                        features.set_language_feature("extract_signatures".to_string(), true);
+                    }
                     _ => {}
                 }
 
@@ -1553,6 +1559,7 @@ fn default_extensions_for_language(language: Language) -> Vec<String> {
         ],
         Language::Solidity => vec!["sol".to_string()],
         Language::Crystal => vec!["cr".to_string()],
+        Language::Haskell => vec!["hs".to_string(), "lhs".to_string()],
         _ => vec![],
     }
 }
@@ -1572,6 +1579,7 @@ impl FromStr for Language {
             "cpp" | "c++" => Ok(Language::Cpp),
             "solidity" | "sol" => Ok(Language::Solidity),
             "crystal" | "cr" => Ok(Language::Crystal),
+            "haskell" | "hs" | "lhs" => Ok(Language::Haskell),
             _ => Err(anyhow!("Unknown language: {}", s)),
         }
     }

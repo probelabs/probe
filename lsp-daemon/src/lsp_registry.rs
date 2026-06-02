@@ -522,7 +522,7 @@ impl LspRegistry {
                         "crystal" => Language::Crystal,
                         "kotlin" => Language::Kotlin,
                         "scala" => Language::Scala,
-                        "haskell" => Language::Haskell,
+                        "haskell" | "hs" | "lhs" => Language::Haskell,
                         "elixir" => Language::Elixir,
                         "clojure" => Language::Clojure,
                         "lua" => Language::Lua,

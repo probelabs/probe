@@ -2617,7 +2617,7 @@ impl LspEnrichmentWorkerPool {
             "cr" => Language::Crystal,
             "kt" => Language::Kotlin,
             "scala" => Language::Scala,
-            "hs" => Language::Haskell,
+            "hs" | "lhs" => Language::Haskell,
             "ex" | "exs" => Language::Elixir,
             "clj" | "cljs" => Language::Clojure,
             "lua" => Language::Lua,

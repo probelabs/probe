@@ -20,6 +20,7 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | Swift | `.swift` | ✅ | ✅ |
 | Solidity | `.sol` | ✅ | ✅ |
 | Crystal | `.cr` | ✅ | ✅ |
+| Haskell | `.hs`, `.lhs` | ✅ | ✅ |
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
 | YAML | `.yaml`, `.yml` | ✅ | ✅ |
@@ -145,6 +146,13 @@ Go also implements special handling for nested struct types.
 - **Type Extraction**: Extracts aliases, type definitions, and annotation definitions
 - **Comment Handling**: Uses Crystal's `#` comments when formatting contextual output
 - **Test Detection**: Identifies Crystal spec files such as `*_spec.cr` and common spec DSL blocks
+
+### Haskell
+
+- **Type/Class Extraction**: Extracts data types, newtypes, type synonyms, type families, type classes, and instances
+- **Function Extraction**: Extracts top-level functions, bindings, signatures, foreign imports/exports, and pattern synonyms
+- **Comment Handling**: Uses Haskell's `--` comments when formatting contextual output
+- **Test Detection**: Identifies common Hspec/Tasty/QuickCheck files such as `*Spec.hs`, `*Test.hs`, and literate `.lhs` variants
 
 ### Markdown
 

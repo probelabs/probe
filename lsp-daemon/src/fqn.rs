@@ -46,6 +46,7 @@ pub fn get_fqn_from_ast_with_content(
         "cpp" | "cc" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
         "sol" => Some(tree_sitter_solidity::LANGUAGE),
         "cr" => Some(tree_sitter_crystal::LANGUAGE),
+        "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE),
         _ => None,
     };
 
@@ -105,6 +106,7 @@ fn language_to_extension(language: &str) -> Option<&'static str> {
         "cpp" | "c++" | "cxx" => Some("cpp"),
         "solidity" | "sol" => Some("sol"),
         "crystal" | "cr" => Some("cr"),
+        "haskell" | "hs" | "lhs" => Some("hs"),
         _ => None,
     }
 }
@@ -364,7 +366,7 @@ fn find_declaration_in_descendants<'a>(
 fn get_language_separator(extension: &str) -> &str {
     match extension {
         "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" => ".",
+        "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs" => ".",
         "cr" => "::",
         "php" => "\\",
         _ => "::", // Default to Rust-style for unknown languages
@@ -396,6 +398,15 @@ fn is_method_node(node: &tree_sitter::Node, extension: &str) -> bool {
         "cr" => matches!(
             kind,
             "method_def" | "abstract_method_def" | "macro_def" | "fun_def"
+        ),
+        "hs" | "lhs" => matches!(
+            kind,
+            "function"
+                | "bind"
+                | "signature"
+                | "default_signature"
+                | "foreign_import"
+                | "foreign_export"
         ),
         _ => kind.contains("function") || kind.contains("method"),
     }
@@ -430,6 +441,16 @@ fn is_namespace_node(node: &tree_sitter::Node, extension: &str) -> bool {
         "cr" => matches!(
             kind,
             "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
+        ),
+        "hs" | "lhs" => matches!(
+            kind,
+            "class"
+                | "instance"
+                | "data_type"
+                | "newtype"
+                | "type_synomym"
+                | "type_family"
+                | "data_family"
         ),
         _ => {
             // Fallback for unknown languages: try to detect common node types

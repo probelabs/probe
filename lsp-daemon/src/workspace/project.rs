@@ -555,6 +555,7 @@ where
                         "swift" => Some("swift"),
                         "sol" => Some("solidity"),
                         "cr" => Some("crystal"),
+                        "hs" | "lhs" => Some("haskell"),
                         "kt" => Some("kotlin"),
                         "cs" => Some("csharp"),
                         "scala" => Some("scala"),

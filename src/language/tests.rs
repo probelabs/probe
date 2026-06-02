@@ -8,6 +8,7 @@ extern crate tree_sitter_c_sharp;
 extern crate tree_sitter_cpp;
 extern crate tree_sitter_crystal;
 extern crate tree_sitter_go;
+extern crate tree_sitter_haskell;
 extern crate tree_sitter_java;
 extern crate tree_sitter_javascript;
 extern crate tree_sitter_php;
@@ -35,6 +36,7 @@ fn get_language(extension: &str) -> Option<Language> {
         "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
         "sol" => Some(tree_sitter_solidity::LANGUAGE.into()),
         "cr" => Some(tree_sitter_crystal::LANGUAGE.into()),
+        "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE.into()),
         // It seems tree_sitter_php::LANGUAGE doesn't exist, so we'll return None for PHP
         "php" => None,
         _ => None,
@@ -61,11 +63,27 @@ fn test_get_language() {
     assert!(get_language("cs").is_some()); // C#
     assert!(get_language("sol").is_some()); // Solidity
     assert!(get_language("cr").is_some()); // Crystal
+    assert!(get_language("hs").is_some()); // Haskell
     assert!(get_language("php").is_none()); // PHP (not supported in current tree-sitter version)
 
     // Test unsupported language
     assert!(get_language("txt").is_none());
     assert!(get_language("").is_none());
+}
+
+#[test]
+fn test_haskell_language_implementation() {
+    let haskell_impl = get_language_impl("hs");
+    assert!(
+        haskell_impl.is_some(),
+        "Should be able to get Haskell language implementation"
+    );
+
+    let language = get_language("hs");
+    assert!(
+        language.is_some(),
+        "Should be able to get Haskell tree-sitter language"
+    );
 }
 
 #[test]

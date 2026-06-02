@@ -80,7 +80,7 @@ impl Language {
             "crystal" | "cr" => Some(Language::Crystal),
             "kotlin" => Some(Language::Kotlin),
             "scala" => Some(Language::Scala),
-            "haskell" => Some(Language::Haskell),
+            "haskell" | "hs" | "lhs" => Some(Language::Haskell),
             "elixir" => Some(Language::Elixir),
             "clojure" => Some(Language::Clojure),
             "lua" => Some(Language::Lua),

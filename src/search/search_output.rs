@@ -345,7 +345,7 @@ fn format_and_print_color_results(
             "scala" => "scala",
             "dart" => "dart",
             "ex" | "exs" => "elixir",
-            "hs" => "haskell",
+            "hs" | "lhs" => "haskell",
             "clj" => "clojure",
             "lua" => "lua",
             "r" => "r",
@@ -2349,6 +2349,7 @@ fn get_comment_prefix(extension: &str) -> &'static str {
 
         // Python-style comments
         "py" | "rb" | "cr" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
+        "hs" | "lhs" => "--",
 
         // HTML-style comments
         "md" | "markdown" => "<!--",

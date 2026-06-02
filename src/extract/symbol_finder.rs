@@ -54,14 +54,19 @@ fn find_all_symbol_nodes<'a>(
     language_impl: &dyn crate::language::language_trait::LanguageImpl,
     content: &'a [u8],
     debug_mode: bool,
+    include_symbol_nodes: bool,
     matches: &mut Vec<tree_sitter::Node<'a>>,
 ) {
     let current_symbol = symbol_parts[0];
     let is_nested = symbol_parts.len() > 1;
     let mut found_here = false;
 
-    // Check if this node is an acceptable parent (function, struct, class, etc.)
-    if language_impl.is_acceptable_parent(&node) {
+    // Check if this node is an acceptable parent (function, struct, class, etc.).
+    // Haskell operator definitions can be represented only by a signature node,
+    // so Haskell callers also opt into language-level symbol nodes.
+    if language_impl.is_acceptable_parent(&node)
+        || (include_symbol_nodes && language_impl.is_symbol_node(&node))
+    {
         if debug_mode {
             println!(
                 "[DEBUG] [find_all] Checking node type '{}' at {}:{} for symbol '{}'",
@@ -80,6 +85,11 @@ fn find_all_symbol_nodes<'a>(
                 || child.kind() == "type_identifier"
                 || child.kind() == "property_identifier"
                 || child.kind() == "name"
+                || child.kind() == "variable"
+                || child.kind() == "constructor"
+                || child.kind() == "module_id"
+                || child.kind() == "field_name"
+                || child.kind() == "prefix_id"
             // PHP uses "name" for identifiers
             {
                 if let Ok(name) = child.utf8_text(content) {
@@ -107,6 +117,7 @@ fn find_all_symbol_nodes<'a>(
                                     language_impl,
                                     content,
                                     debug_mode,
+                                    include_symbol_nodes,
                                     matches,
                                 );
                             }
@@ -148,6 +159,7 @@ fn find_all_symbol_nodes<'a>(
                                             language_impl,
                                             content,
                                             debug_mode,
+                                            include_symbol_nodes,
                                             matches,
                                         );
                                     }
@@ -179,6 +191,7 @@ fn find_all_symbol_nodes<'a>(
                 language_impl,
                 content,
                 debug_mode,
+                include_symbol_nodes,
                 matches,
             );
         }
@@ -412,6 +425,7 @@ pub fn find_all_symbols_in_file(
     crate::language::return_pooled_parser(extension, parser);
 
     let root_node = tree.root_node();
+    let include_symbol_nodes = matches!(extension, "hs" | "lhs");
 
     if debug_mode {
         println!("[DEBUG] File parsed successfully");
@@ -427,6 +441,7 @@ pub fn find_all_symbols_in_file(
         language_impl.as_ref(),
         content.as_bytes(),
         debug_mode,
+        include_symbol_nodes,
         &mut matched_nodes,
     );
 
@@ -496,6 +511,14 @@ pub fn find_all_symbols_in_file(
     // If no AST matches, fall back to text search
     if matched_nodes.is_empty() {
         return text_search_fallback(path, symbol, content, context_lines, debug_mode);
+    }
+
+    if include_symbol_nodes
+        && matched_nodes
+            .iter()
+            .any(|node| !matches!(node.kind(), "signature" | "default_signature"))
+    {
+        matched_nodes.retain(|node| !matches!(node.kind(), "signature" | "default_signature"));
     }
 
     // Build SearchResults with qualified names for disambiguation

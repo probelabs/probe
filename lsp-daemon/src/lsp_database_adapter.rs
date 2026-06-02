@@ -830,6 +830,10 @@ impl LspDatabaseAdapter {
                     debug!("[TREE_SITTER] Using tree-sitter-crystal");
                     Some(tree_sitter_crystal::LANGUAGE.into())
                 }
+                "haskell" | "hs" | "lhs" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-haskell");
+                    Some(tree_sitter_haskell::LANGUAGE.into())
+                }
                 "php" => {
                     debug!("[TREE_SITTER] Using tree-sitter-php");
                     Some(tree_sitter_php::LANGUAGE_PHP.into())
@@ -962,6 +966,11 @@ impl LspDatabaseAdapter {
             "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
             | "method_def" | "abstract_method_def" | "macro_def" | "fun_def" | "alias"
             | "annotation_def" | "type_def" => true,
+            // Haskell symbols
+            "function" | "bind" | "signature" | "default_signature" | "data_type" | "newtype"
+            | "class" | "instance" | "type_synomym" | "type_family" | "type_instance"
+            | "data_family" | "data_instance" | "kind_signature" | "foreign_import"
+            | "foreign_export" | "pattern_synonym" => true,
             _ => false,
         }
     }
@@ -1186,6 +1195,12 @@ impl LspDatabaseAdapter {
                 | "field_identifier"
                 | "property_identifier"
                 | "constant"
+                | "name"
+                | "variable"
+                | "constructor"
+                | "module_id"
+                | "field_name"
+                | "prefix_id"
         )
     }
 
@@ -1204,6 +1219,7 @@ impl LspDatabaseAdapter {
                 | "interface"
                 | "impl"
                 | "mod"
+                | "module"
                 | "namespace"
                 | "package"
                 | "import"
@@ -1232,6 +1248,11 @@ impl LspDatabaseAdapter {
                 | "override"
                 | "virtual"
                 | "abstract"
+                | "data"
+                | "newtype"
+                | "type"
+                | "where"
+                | "instance"
         ) || text.is_empty()
     }
 
@@ -1245,10 +1266,12 @@ impl LspDatabaseAdapter {
             "method_definition" | "method_declaration" | "method_def" | "abstract_method_def" => {
                 SymbolKind::Method
             }
+            "function" | "bind" | "signature" | "default_signature" | "foreign_import"
+            | "foreign_export" => SymbolKind::Function,
             "macro_def" => SymbolKind::Macro,
             "fun_def" => SymbolKind::Function,
             "constructor_declaration" => SymbolKind::Constructor,
-            "class_declaration" | "class_definition" | "class_def" => SymbolKind::Class,
+            "class_declaration" | "class_definition" | "class_def" | "class" => SymbolKind::Class,
             "struct_item" | "struct_specifier" | "struct_def" => SymbolKind::Struct,
             "enum_item" | "enum_specifier" | "enum_declaration" | "enum_def" => SymbolKind::Enum,
             "trait_item" => SymbolKind::Trait,
@@ -1260,7 +1283,17 @@ impl LspDatabaseAdapter {
             | "alias"
             | "annotation_def"
             | "type_def"
-            | "union_def" => SymbolKind::Type,
+            | "union_def"
+            | "data_type"
+            | "newtype"
+            | "type_synomym"
+            | "type_family"
+            | "type_instance"
+            | "data_family"
+            | "data_instance"
+            | "kind_signature" => SymbolKind::Type,
+            "instance" => SymbolKind::TraitImpl,
+            "pattern_synonym" => SymbolKind::Constant,
             "variable_declarator" | "variable_declaration" => SymbolKind::Variable,
             "field_declaration" => SymbolKind::Field,
             _ => SymbolKind::Function, // Default fallback
@@ -2326,6 +2359,7 @@ impl LspDatabaseAdapter {
             "c++" | "cpp" => "cpp",
             "c" => "c",
             "crystal" => "cr",
+            "haskell" => "hs",
             _ => language, // Fallback to original if no mapping
         }
     }
@@ -2426,7 +2460,7 @@ impl LspDatabaseAdapter {
     fn get_language_separator(extension: &str) -> &str {
         match extension {
             "rs" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb" => "::",
-            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" => ".",
+            "py" | "js" | "ts" | "jsx" | "tsx" | "java" | "go" | "cs" | "sol" | "hs" | "lhs" => ".",
             "cr" => "::",
             "php" => "\\",
             _ => "::", // Default to Rust-style for unknown languages
@@ -2456,6 +2490,15 @@ impl LspDatabaseAdapter {
             "cr" => matches!(
                 kind,
                 "method_def" | "abstract_method_def" | "macro_def" | "fun_def"
+            ),
+            "hs" | "lhs" => matches!(
+                kind,
+                "function"
+                    | "bind"
+                    | "signature"
+                    | "default_signature"
+                    | "foreign_import"
+                    | "foreign_export"
             ),
             _ => kind.contains("function") || kind.contains("method"),
         }
@@ -2491,6 +2534,16 @@ impl LspDatabaseAdapter {
             "cr" => matches!(
                 kind,
                 "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
+            ),
+            "hs" | "lhs" => matches!(
+                kind,
+                "class"
+                    | "instance"
+                    | "data_type"
+                    | "newtype"
+                    | "type_synomym"
+                    | "type_family"
+                    | "data_family"
             ),
             _ => {
                 kind.contains("class")
@@ -2836,6 +2889,34 @@ end
             .expect("method body position should resolve to enclosing method");
         assert_eq!(method_symbol.name, "active?");
         assert_eq!(method_symbol.kind, SymbolKind::Method);
+    }
+
+    #[test]
+    fn test_find_symbol_at_position_uses_haskell_tree_sitter() {
+        let adapter = create_test_adapter();
+        let haskell_code = r#"
+module Demo.Sample where
+
+data User = User { userName :: String }
+
+active :: User -> Bool
+active user = True
+"#;
+        let file_path = PathBuf::from("Sample.hs");
+
+        let type_symbol = adapter
+            .find_symbol_at_position(haskell_code, &file_path, 3, 6, "haskell")
+            .expect("Haskell tree-sitter symbol lookup should parse")
+            .expect("data type position should resolve to a Haskell symbol");
+        assert_eq!(type_symbol.name, "User");
+        assert_eq!(type_symbol.kind, SymbolKind::Type);
+
+        let function_symbol = adapter
+            .find_symbol_at_position(haskell_code, &file_path, 6, 5, "hs")
+            .expect("Haskell alias should select the tree-sitter parser")
+            .expect("function body position should resolve to enclosing function");
+        assert_eq!(function_symbol.name, "active");
+        assert_eq!(function_symbol.kind, SymbolKind::Function);
     }
 
     #[tokio::test]

@@ -147,7 +147,7 @@ pub fn format_and_print_search_results(results: &[SearchResult], dry_run: bool) 
                     "scala" => "scala",
                     "dart" => "dart",
                     "ex" | "exs" => "elixir",
-                    "hs" => "haskell",
+                    "hs" | "lhs" => "haskell",
                     "clj" => "clojure",
                     "lua" => "lua",
                     "r" => "r",

@@ -29,6 +29,7 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "cs" => Some("csharp"),
         "sol" => Some("solidity"),
         "cr" => Some("crystal"),
+        "hs" | "lhs" => Some("haskell"),
         _ => None,
     }
 }
@@ -105,6 +106,7 @@ impl SymbolUIDGenerator {
         rules.insert("c++".to_string(), LanguageRules::cpp());
         rules.insert("solidity".to_string(), LanguageRules::solidity());
         rules.insert("crystal".to_string(), LanguageRules::crystal());
+        rules.insert("haskell".to_string(), LanguageRules::haskell());
 
         rules
     }

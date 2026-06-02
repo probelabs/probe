@@ -7229,6 +7229,12 @@ impl LspDaemon {
                     .ok()?;
                 Some(())
             }
+            "hs" | "lhs" => {
+                parser
+                    .set_language(&tree_sitter_haskell::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
             _ => None,
         }?;
 
@@ -7281,6 +7287,10 @@ impl LspDaemon {
             | "interface_type" => true,
             // Java
             "constructor_declaration" | "enum_declaration" => true,
+            // Haskell
+            "function" | "bind" | "signature" | "default_signature" | "data_type" | "newtype"
+            | "class" | "instance" | "type_synomym" | "type_family" | "data_family"
+            | "foreign_import" | "foreign_export" | "pattern_synonym" => true,
             _ => false,
         };
 
@@ -7327,7 +7337,12 @@ impl LspDaemon {
                 | "field_identifier"
                 | "type_identifier"
                 | "property_identifier"
-                | "function_declarator" => {
+                | "function_declarator"
+                | "name"
+                | "variable"
+                | "constructor"
+                | "module_id"
+                | "field_name" => {
                     let name = child.utf8_text(content).unwrap_or("");
                     if !name.is_empty() {
                         return Some(name.to_string());
