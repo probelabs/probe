@@ -529,7 +529,7 @@ pub fn rank_documents_simd(params: &RankingParams) -> Vec<(usize, f64)> {
     let scores = simd_params.score_all_documents();
 
     if debug_mode {
-        println!("DEBUG: SIMD BM25 scoring completed");
+        eprintln!("DEBUG: SIMD BM25 scoring completed");
     }
 
     // 8) Apply boolean query logic efficiently with SIMD scores

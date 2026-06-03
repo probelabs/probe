@@ -448,7 +448,7 @@ fn handle_bert_reranking(
             Ok(inner_result) => inner_result,
             Err(_) => {
                 eprintln!("BERT reranking thread panicked");
-                println!("Falling back to BM25 ranking...");
+                eprintln!("Falling back to BM25 ranking...");
                 fallback_to_bm25_ranking(results, queries, debug_mode, start_time);
                 return;
             }
@@ -473,7 +473,7 @@ fn handle_bert_reranking(
             }
             Err(e) => {
                 eprintln!("BERT reranking failed: {e}");
-                println!("Falling back to BM25 ranking...");
+                eprintln!("Falling back to BM25 ranking...");
                 fallback_to_bm25_ranking(results, queries, debug_mode, start_time);
             }
         }
@@ -483,7 +483,7 @@ fn handle_bert_reranking(
     {
         eprintln!("BERT reranker '{reranker}' is not available.");
         eprintln!("To enable BERT reranking, build with: cargo build --features bert-reranker");
-        println!("Falling back to BM25 ranking...");
+        eprintln!("Falling back to BM25 ranking...");
         fallback_to_bm25_ranking(results, queries, debug_mode, start_time);
     }
 }
@@ -534,12 +534,12 @@ fn fallback_to_bm25_ranking(
     let use_simd = std::env::var("DISABLE_SIMD_RANKING").unwrap_or_default() != "1";
     let ranked_indices = if use_simd {
         if debug_mode {
-            println!("DEBUG: Using SIMD-optimized BM25 ranking (fallback)");
+            eprintln!("DEBUG: Using SIMD-optimized BM25 ranking (fallback)");
         }
         ranking::rank_documents_simd(&ranking_params)
     } else {
         if debug_mode {
-            println!("DEBUG: Using traditional BM25 ranking (fallback)");
+            eprintln!("DEBUG: Using traditional BM25 ranking (fallback)");
         }
         ranking::rank_documents(&ranking_params)
     };

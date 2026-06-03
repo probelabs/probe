@@ -192,7 +192,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
 
     let use_frequency = params.frequency_search;
 
-    println!("{} {}", "Pattern:".bold().green(), params.pattern);
+    if params.format != "json" && params.format != "xml" {
+        println!("{} {}", "Pattern:".bold().green(), params.pattern);
+    }
     // Normalize the search root early. Some downstream code paths are stricter about absolute paths.
     let raw_root = params.paths.first().unwrap();
 
@@ -228,7 +230,9 @@ fn handle_search(params: SearchParams) -> Result<()> {
     } else {
         raw_root.clone()
     };
-    println!("{} {}", "Path:".bold().green(), canonical_root.display());
+    if params.format != "json" && params.format != "xml" {
+        println!("{} {}", "Path:".bold().green(), canonical_root.display());
+    }
 
     // Show advanced options if they differ from defaults
     let mut advanced_options = Vec::<String>::new();
