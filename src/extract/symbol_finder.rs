@@ -25,6 +25,7 @@ fn get_qualified_name<'a>(
                 if child.kind() == "identifier"
                     || child.kind() == "type_identifier"
                     || child.kind() == "field_identifier"
+                    || child.kind() == "constant"
                     || child.kind() == "name"
                 {
                     if let Ok(name) = child.utf8_text(content) {
@@ -84,6 +85,7 @@ fn find_all_symbol_nodes<'a>(
                 || child.kind() == "field_identifier"
                 || child.kind() == "type_identifier"
                 || child.kind() == "property_identifier"
+                || child.kind() == "constant"
                 || child.kind() == "name"
                 || child.kind() == "variable"
                 || child.kind() == "constructor"
@@ -830,6 +832,49 @@ fn test_function() {
         }
 
         // Clean up
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_ruby_class_and_nested_method_extraction() {
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_ruby_nested_symbols.rb");
+
+        let content = r#"module RuboCop
+  module Cop
+    class Base
+      def self.documentation_url(config = nil)
+        Documentation.url_for(self, config)
+      end
+
+      def add_offense(node_or_range, message: nil, severity: nil, &block)
+        current_offenses << node_or_range
+      end
+    end
+  end
+end
+"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{content}").unwrap();
+
+        let class_result = find_symbol_in_file(&test_file, "Base", content, true, 0)
+            .expect("Ruby class lookup should use AST instead of text fallback");
+        assert_eq!(class_result.node_type, "class");
+        assert!(class_result.code.contains("class Base"));
+
+        let method_result = find_symbol_in_file(&test_file, "Base.add_offense", content, true, 0)
+            .expect("Ruby nested method lookup should resolve inside class");
+        assert_eq!(method_result.node_type, "method");
+        assert!(method_result.code.contains("def add_offense"));
+        assert!(method_result.code.contains("current_offenses"));
+
+        let singleton_result =
+            find_symbol_in_file(&test_file, "Base.documentation_url", content, true, 0)
+                .expect("Ruby singleton method lookup should resolve inside class");
+        assert_eq!(singleton_result.node_type, "singleton_method");
+        assert!(singleton_result.code.contains("def self.documentation_url"));
+
         let _ = fs::remove_file(&test_file);
     }
 

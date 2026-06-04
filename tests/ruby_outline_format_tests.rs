@@ -941,7 +941,7 @@ end
 #[test]
 fn test_ruby_outline_keyword_highlighting() -> Result<()> {
     let temp_dir = TempDir::new()?;
-    let test_file = temp_dir.path().join("keyword_test.rb");
+    let test_file = temp_dir.path().join("keyword_highlighting.rb");
 
     let content = r#"class UserService
   def initialize

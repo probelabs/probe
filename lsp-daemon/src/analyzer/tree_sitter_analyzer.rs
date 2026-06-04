@@ -104,6 +104,7 @@ impl ParserPool {
             "solidity" | "sol" => Some(tree_sitter_solidity::LANGUAGE),
             "crystal" | "cr" => Some(tree_sitter_crystal::LANGUAGE),
             "haskell" | "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE),
+            "ruby" | "rb" => Some(tree_sitter_ruby::LANGUAGE),
             _ => None,
         };
 
@@ -453,6 +454,7 @@ impl TreeSitterAnalyzer {
             "c" | "cpp" | "c++" => self.map_c_node_to_symbol(node_kind),
             "crystal" | "cr" => self.map_crystal_node_to_symbol(node_kind),
             "haskell" | "hs" | "lhs" => self.map_haskell_node_to_symbol(node_kind),
+            "ruby" | "rb" => self.map_ruby_node_to_symbol(node_kind),
             _ => self.map_generic_node_to_symbol(node_kind),
         };
 
@@ -606,6 +608,17 @@ impl TreeSitterAnalyzer {
             "class" => Some(SymbolKind::Class),
             "instance" => Some(SymbolKind::TraitImpl),
             "pattern_synonym" => Some(SymbolKind::Constant),
+            _ => None,
+        }
+    }
+
+    /// Map Ruby node kinds to symbol kinds
+    fn map_ruby_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "method" => Some(SymbolKind::Method),
+            "singleton_method" => Some(SymbolKind::Method),
+            "class" => Some(SymbolKind::Class),
+            "module" => Some(SymbolKind::Module),
             _ => None,
         }
     }
@@ -933,6 +946,10 @@ impl TreeSitterAnalyzer {
                     | "type_family"
                     | "data_family"
                     | "pattern_synonym"
+            ),
+            "ruby" | "rb" => matches!(
+                node_kind,
+                "module" | "class" | "method" | "singleton_method"
             ),
             _ => false,
         }
@@ -1315,6 +1332,99 @@ end
                 .symbols
                 .iter()
                 .any(|symbol| symbol.name == "active?" && symbol.kind == SymbolKind::Function),
+            "expected active? method in symbols: {symbols:?}"
+        );
+    }
+
+    #[test]
+    fn test_ruby_parser_pool_and_node_mapping() {
+        let analyzer = create_test_analyzer();
+        let mut pool = ParserPool::new();
+
+        assert!(
+            pool.get_parser("ruby").is_some(),
+            "Ruby parser should be available by language name"
+        );
+        assert!(
+            pool.get_parser("rb").is_some(),
+            "Ruby parser should be available by extension alias"
+        );
+        assert_eq!(
+            analyzer.map_ruby_node_to_symbol("module"),
+            Some(SymbolKind::Module)
+        );
+        assert_eq!(
+            analyzer.map_ruby_node_to_symbol("class"),
+            Some(SymbolKind::Class)
+        );
+        assert_eq!(
+            analyzer.map_ruby_node_to_symbol("method"),
+            Some(SymbolKind::Method)
+        );
+        assert_eq!(
+            analyzer.map_ruby_node_to_symbol("singleton_method"),
+            Some(SymbolKind::Method)
+        );
+        assert!(analyzer.creates_scope("class", "ruby"));
+        assert!(analyzer.creates_scope("method", "rb"));
+    }
+
+    #[tokio::test]
+    async fn test_ruby_symbol_extraction_uses_parser_pool() {
+        let analyzer = create_test_analyzer();
+        let uid_generator = Arc::new(SymbolUIDGenerator::new());
+        let context = AnalysisContext::new(
+            1,
+            2,
+            "ruby".to_string(),
+            PathBuf::from("."),
+            PathBuf::from("sample.rb"),
+            uid_generator,
+        );
+        let ruby_code = r#"
+module Demo
+  class User
+    def self.build
+      new
+    end
+
+    def active?
+      true
+    end
+  end
+end
+"#;
+
+        let result = analyzer
+            .analyze_file(ruby_code, Path::new("sample.rb"), "ruby", &context)
+            .await
+            .expect("Ruby analysis should use the parser pool");
+
+        let symbols = result
+            .symbols
+            .iter()
+            .map(|symbol| format!("{}:{:?}", symbol.name, symbol.kind))
+            .collect::<Vec<_>>();
+
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "Demo" && symbol.kind == SymbolKind::Module),
+            "expected Demo module in symbols: {symbols:?}"
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "User" && symbol.kind == SymbolKind::Class),
+            "expected User class in symbols: {symbols:?}"
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "active?" && symbol.kind == SymbolKind::Method),
             "expected active? method in symbols: {symbols:?}"
         );
     }

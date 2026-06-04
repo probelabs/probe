@@ -94,6 +94,9 @@ impl SymbolUIDGenerator {
         // Python
         rules.insert("python".to_string(), LanguageRules::python());
 
+        // Ruby
+        rules.insert("ruby".to_string(), LanguageRules::ruby());
+
         // Go
         rules.insert("go".to_string(), LanguageRules::go());
 

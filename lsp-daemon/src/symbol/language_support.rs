@@ -165,6 +165,30 @@ impl LanguageRules {
         }
     }
 
+    /// Create rules for Ruby
+    pub fn ruby() -> Self {
+        Self {
+            scope_separator: "::".to_string(),
+            anonymous_prefix: "anon".to_string(),
+            supports_overloading: false,
+            case_sensitive: true,
+            signature_normalization: SignatureNormalization::RemoveParameterNames,
+            visibility_affects_uid: false,
+            default_visibility: "public".to_string(),
+            file_extensions: vec!["rb".to_string(), "rake".to_string()],
+            signature_keywords: vec![
+                "def".to_string(),
+                "self".to_string(),
+                "class".to_string(),
+                "module".to_string(),
+                "private".to_string(),
+                "protected".to_string(),
+                "public".to_string(),
+            ],
+            type_aliases: vec![],
+        }
+    }
+
     /// Create rules for Go
     pub fn go() -> Self {
         Self {
@@ -573,6 +597,7 @@ impl LanguageRulesFactory {
             "typescript" | "ts" => Some(LanguageRules::typescript()),
             "javascript" | "js" => Some(LanguageRules::javascript()),
             "python" | "py" => Some(LanguageRules::python()),
+            "ruby" | "rb" => Some(LanguageRules::ruby()),
             "go" => Some(LanguageRules::go()),
             "java" => Some(LanguageRules::java()),
             "c" => Some(LanguageRules::c()),
@@ -591,6 +616,7 @@ impl LanguageRulesFactory {
             "typescript".to_string(),
             "javascript".to_string(),
             "python".to_string(),
+            "ruby".to_string(),
             "go".to_string(),
             "java".to_string(),
             "c".to_string(),
