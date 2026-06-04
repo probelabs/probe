@@ -80,6 +80,7 @@ fn is_container_node(kind: &str) -> bool {
             | "interface_declaration"
             | "namespace_declaration"
             | "module_declaration"
+            | "module"
             | "contract_declaration"
             | "library_declaration"
             | "class_def"
@@ -98,6 +99,7 @@ fn is_container_node(kind: &str) -> bool {
             | "contract_body"
             | "declaration_list"
             | "class_body"
+            | "body_statement"
             | "block"
     )
 }
@@ -149,10 +151,7 @@ fn collect_symbols(
                 end_line,
                 children,
             });
-        } else if matches!(
-            child.kind(),
-            "header" | "declarations" | "class_declarations" | "instance_declarations" | "ERROR"
-        ) {
+        } else if child.child_count() > 0 {
             symbols.extend(collect_symbols(&child, source, lang, allow_tests, depth));
         }
     }
@@ -191,7 +190,10 @@ fn collect_children_symbols(
         .child_by_field_name("body")
         .or_else(|| node.child_by_field_name("members"))
     {
-        return collect_symbols(&body, source, lang, allow_tests, depth);
+        let symbols = collect_symbols(&body, source, lang, allow_tests, depth);
+        if !symbols.is_empty() {
+            return symbols;
+        }
     }
 
     // Try finding a body node among direct children
@@ -213,8 +215,12 @@ fn collect_children_symbols(
                 | "class_declarations"
                 | "instance_declarations"
                 | "declarations"
+                | "body_statement"
         ) {
-            return collect_symbols(&child, source, lang, allow_tests, depth);
+            let symbols = collect_symbols(&child, source, lang, allow_tests, depth);
+            if !symbols.is_empty() {
+                return symbols;
+            }
         }
     }
 
@@ -275,6 +281,7 @@ fn extract_symbol_name(node: &Node, source: &[u8]) -> String {
             "identifier"
                 | "type_identifier"
                 | "property_identifier"
+                | "constant"
                 | "name"
                 | "variable"
                 | "constructor"
@@ -308,9 +315,12 @@ fn normalize_kind(kind: &str) -> String {
         | "function_definition"
         | "function_expression"
         | "arrow_function" => "function",
-        "method_declaration" | "method_definition" | "method_def" | "abstract_method_def" => {
-            "method"
-        }
+        "method"
+        | "singleton_method"
+        | "method_declaration"
+        | "method_definition"
+        | "method_def"
+        | "abstract_method_def" => "method",
         "struct_item" | "struct_type" | "struct_declaration" | "struct_def" => "struct",
         "impl_item" => "impl",
         "trait_item" => "trait",
@@ -624,6 +634,57 @@ func (c *Config) Validate() bool {
             names.contains(&"main"),
             "missing function main, got: {:?}",
             names
+        );
+    }
+
+    #[test]
+    fn test_extract_nested_ruby_symbols() {
+        let content = r#"
+module RuboCop
+  module Cop
+    class Base
+      def self.documentation_url(config = nil)
+        Documentation.url_for(self, config)
+      end
+
+      def add_offense(node_or_range, message: nil, severity: nil, &block)
+        current_offenses << node_or_range
+      end
+    end
+  end
+end
+"#;
+        let file = create_temp_file(content, "rb");
+        let result = extract_symbols(file.path(), false).unwrap();
+
+        let rubocop = result
+            .symbols
+            .iter()
+            .find(|s| s.name == "RuboCop")
+            .expect("RuboCop module should be collected");
+        let cop = rubocop
+            .children
+            .iter()
+            .find(|s| s.name == "Cop")
+            .expect("nested Cop module should be collected");
+        let base = cop
+            .children
+            .iter()
+            .find(|s| s.name == "Base")
+            .expect("nested Base class should be collected");
+
+        let child_names = base
+            .children
+            .iter()
+            .map(|s| s.name.as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            child_names.contains(&"documentation_url"),
+            "singleton method should be collected, got: {child_names:?}"
+        );
+        assert!(
+            child_names.contains(&"add_offense"),
+            "instance method should be collected, got: {child_names:?}"
         );
     }
 

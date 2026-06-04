@@ -918,6 +918,48 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_ruby_test_files_respect_allow_tests() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let app_file = root.join("user_service.rb");
+        let test_file = root.join("user_service_test.rb");
+        let spec_file = root.join("user_service_spec.rb");
+
+        std::fs::write(&app_file, "class UserService; end").unwrap();
+        std::fs::write(&test_file, "class UserServiceTest; end").unwrap();
+        std::fs::write(&spec_file, "RSpec.describe UserService; end").unwrap();
+
+        let without_tests = build_file_list(root, false, &[], false).unwrap();
+        assert!(
+            without_tests.files.iter().any(|f| f == &app_file),
+            "non-test Ruby file should be included"
+        );
+        assert!(
+            !without_tests.files.iter().any(|f| f == &test_file),
+            "_test.rb Ruby file should be excluded without allow_tests"
+        );
+        assert!(
+            !without_tests.files.iter().any(|f| f == &spec_file),
+            "_spec.rb Ruby file should be excluded without allow_tests"
+        );
+
+        let with_tests = build_file_list(root, true, &[], false).unwrap();
+        assert!(
+            with_tests.files.iter().any(|f| f == &app_file),
+            "non-test Ruby file should still be included"
+        );
+        assert!(
+            with_tests.files.iter().any(|f| f == &test_file),
+            "_test.rb Ruby file should be included with allow_tests"
+        );
+        assert!(
+            with_tests.files.iter().any(|f| f == &spec_file),
+            "_spec.rb Ruby file should be included with allow_tests"
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn test_file_list_follows_symlinked_directories() {

@@ -838,6 +838,10 @@ impl LspDatabaseAdapter {
                     debug!("[TREE_SITTER] Using tree-sitter-php");
                     Some(tree_sitter_php::LANGUAGE_PHP.into())
                 }
+                "ruby" | "rb" => {
+                    debug!("[TREE_SITTER] Using tree-sitter-ruby");
+                    Some(tree_sitter_ruby::LANGUAGE.into())
+                }
                 _ => {
                     debug!(
                         "[TREE_SITTER] No parser available for language: {}",
@@ -971,6 +975,8 @@ impl LspDatabaseAdapter {
             | "class" | "instance" | "type_synomym" | "type_family" | "type_instance"
             | "data_family" | "data_instance" | "kind_signature" | "foreign_import"
             | "foreign_export" | "pattern_synonym" => true,
+            // Ruby symbols
+            "module" | "method" | "singleton_method" => true,
             _ => false,
         }
     }
@@ -1263,9 +1269,12 @@ impl LspDatabaseAdapter {
             | "function_declaration"
             | "function_definition"
             | "func_declaration" => SymbolKind::Function,
-            "method_definition" | "method_declaration" | "method_def" | "abstract_method_def" => {
-                SymbolKind::Method
-            }
+            "method"
+            | "singleton_method"
+            | "method_definition"
+            | "method_declaration"
+            | "method_def"
+            | "abstract_method_def" => SymbolKind::Method,
             "function" | "bind" | "signature" | "default_signature" | "foreign_import"
             | "foreign_export" => SymbolKind::Function,
             "macro_def" => SymbolKind::Macro,
@@ -1277,7 +1286,7 @@ impl LspDatabaseAdapter {
             "trait_item" => SymbolKind::Trait,
             "interface_declaration" | "lib_def" => SymbolKind::Interface,
             "impl_item" => SymbolKind::Impl,
-            "mod_item" | "namespace" | "module_def" => SymbolKind::Module,
+            "mod_item" | "namespace" | "module" | "module_def" => SymbolKind::Module,
             "type_declaration"
             | "type_alias_declaration"
             | "alias"
@@ -2491,6 +2500,7 @@ impl LspDatabaseAdapter {
                 kind,
                 "method_def" | "abstract_method_def" | "macro_def" | "fun_def"
             ),
+            "ruby" | "rb" => matches!(kind, "method" | "singleton_method"),
             "hs" | "lhs" => matches!(
                 kind,
                 "function"
@@ -2535,6 +2545,7 @@ impl LspDatabaseAdapter {
                 kind,
                 "class_def" | "module_def" | "struct_def" | "enum_def" | "lib_def" | "union_def"
             ),
+            "ruby" | "rb" => matches!(kind, "class" | "module"),
             "hs" | "lhs" => matches!(
                 kind,
                 "class"
@@ -3251,7 +3262,7 @@ pub fn test_function() -> i32 {
         );
         assert_eq!(
             adapter.node_kind_to_symbol_kind("impl_item"),
-            SymbolKind::Class
+            SymbolKind::Impl
         );
 
         // Test Python mappings
@@ -3281,6 +3292,21 @@ pub fn test_function() -> i32 {
             adapter.node_kind_to_symbol_kind("interface_declaration"),
             SymbolKind::Interface
         );
+
+        // Test Ruby mappings
+        assert_eq!(
+            adapter.node_kind_to_symbol_kind("method"),
+            SymbolKind::Method
+        );
+        assert_eq!(
+            adapter.node_kind_to_symbol_kind("singleton_method"),
+            SymbolKind::Method
+        );
+        assert_eq!(
+            adapter.node_kind_to_symbol_kind("module"),
+            SymbolKind::Module
+        );
+        assert_eq!(adapter.node_kind_to_symbol_kind("class"), SymbolKind::Class);
 
         // Test fallback
         assert_eq!(
