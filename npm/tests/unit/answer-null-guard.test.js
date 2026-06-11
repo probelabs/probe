@@ -29,8 +29,17 @@ describe('answer() null-guard (#533)', () => {
     agent.provider = null;
   });
 
-  test('returns empty string when schema output and finalText are both null', async () => {
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => ({
+  test('retries and fails when non-schema stream has no steps and no text', async () => {
+    agent.retryConfig = {
+      ...agent.retryConfig,
+      maxRetries: 1,
+      initialDelay: 0,
+      maxDelay: 0,
+      backoffFactor: 1,
+      jitter: false,
+    };
+
+    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => ({
       text: Promise.resolve(''),
       finishReason: Promise.resolve('stop'),
       usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
@@ -40,8 +49,10 @@ describe('answer() null-guard (#533)', () => {
       // No output property — simulates no structured output
     }));
 
-    const result = await agent.answer('test question');
-    expect(typeof result).toBe('string');
+    await expect(agent.answer('test question'))
+      .rejects
+      .toThrow('Failed to get response from AI model. No output generated.');
+    expect(streamSpy).toHaveBeenCalledTimes(2);
   });
 
   test('returns empty string when schema present but outputObject is null', async () => {

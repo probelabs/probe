@@ -25,6 +25,12 @@ describe('ProbeAgent finalText uses last step text (no planning preamble)', () =
     };
   }
 
+  function createNoOutputError() {
+    const error = new Error('No output generated. Check the stream for errors.');
+    error.name = 'AI_NoOutputGeneratedError';
+    return error;
+  }
+
   test('single-step response uses result.text as-is', async () => {
     const agent = createMockedAgent();
     const singleStep = [{ text: 'The final answer.', toolCalls: [], finishReason: 'stop' }];
@@ -86,6 +92,90 @@ describe('ProbeAgent finalText uses last step text (no planning preamble)', () =
 
     const result = await agent.answer('Simple question');
     expect(result).toBe('Direct answer');
+    jest.restoreAllMocks();
+  });
+
+  test('retries when result.steps rejects with NoOutputGeneratedError', async () => {
+    const agent = createMockedAgent({
+      retry: {
+        maxRetries: 2,
+        initialDelay: 0,
+        maxDelay: 0,
+        backoffFactor: 1,
+        jitter: false,
+      },
+    });
+    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback')
+      .mockResolvedValueOnce({
+        text: Promise.resolve(''),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.reject(createNoOutputError()),
+      })
+      .mockResolvedValueOnce(
+        createMockStreamResult('Recovered answer', [
+          { text: 'Recovered answer', toolCalls: [], finishReason: 'stop' },
+        ])
+      );
+
+    const result = await agent.answer('Simple greeting');
+
+    expect(result).toBe('Recovered answer');
+    expect(streamSpy).toHaveBeenCalledTimes(2);
+    jest.restoreAllMocks();
+  });
+
+  test('retries when provider resolves empty steps and empty text', async () => {
+    const agent = createMockedAgent({
+      retry: {
+        maxRetries: 2,
+        initialDelay: 0,
+        maxDelay: 0,
+        backoffFactor: 1,
+        jitter: false,
+      },
+    });
+    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback')
+      .mockResolvedValueOnce(
+        createMockStreamResult('', [])
+      )
+      .mockResolvedValueOnce(
+        createMockStreamResult('Recovered from empty stream', [
+          { text: 'Recovered from empty stream', toolCalls: [], finishReason: 'stop' },
+        ])
+      );
+
+    const result = await agent.answer('Simple greeting');
+
+    expect(result).toBe('Recovered from empty stream');
+    expect(streamSpy).toHaveBeenCalledTimes(2);
+    jest.restoreAllMocks();
+  });
+
+  test('stops retrying NoOutputGeneratedError after retry budget is exhausted', async () => {
+    const agent = createMockedAgent({
+      retry: {
+        maxRetries: 1,
+        initialDelay: 0,
+        maxDelay: 0,
+        backoffFactor: 1,
+        jitter: false,
+      },
+    });
+    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback')
+      .mockResolvedValue({
+        text: Promise.resolve(''),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.reject(createNoOutputError()),
+      });
+
+    await expect(agent.answer('Simple greeting')).rejects.toThrow(
+      'Failed to get response from AI model. No output generated.'
+    );
+    expect(streamSpy).toHaveBeenCalledTimes(2);
     jest.restoreAllMocks();
   });
 });

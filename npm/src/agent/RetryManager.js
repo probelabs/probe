@@ -25,7 +25,9 @@ const DEFAULT_RETRYABLE_ERRORS = [
   'ECONNRESET',
   'ETIMEDOUT',
   'ENOTFOUND',
-  'api_error'
+  'api_error',
+  'No output generated',
+  'AI_NoOutputGeneratedError'
 ];
 
 /**

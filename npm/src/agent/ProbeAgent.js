@@ -1469,6 +1469,7 @@ export class ProbeAgent {
         maxDelay: this.retryConfig.maxDelay ?? 30000,
         backoffFactor: this.retryConfig.backoffFactor ?? 2,
         retryableErrors: this.retryConfig.retryableErrors,
+        jitter: this.retryConfig.jitter,
         debug: this.debug
       });
     }
@@ -1516,6 +1517,7 @@ export class ProbeAgent {
           maxDelay: this.retryConfig.maxDelay ?? 30000,
           backoffFactor: this.retryConfig.backoffFactor ?? 2,
           retryableErrors: this.retryConfig.retryableErrors,
+          jitter: this.retryConfig.jitter,
           debug: this.debug
         });
 
@@ -4475,6 +4477,12 @@ Double-check your response based on the criteria above. If everything looks good
                 finalText = await result.text;
               }
 
+              if (!options.schema && (!steps || steps.length === 0) && (!finalText || !finalText.trim())) {
+                const noOutputError = new Error('No output generated. Check the stream for errors.');
+                noOutputError.name = 'AI_NoOutputGeneratedError';
+                throw noOutputError;
+              }
+
               if (this.debug) {
                 console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
               }
@@ -4502,11 +4510,33 @@ Double-check your response based on the criteria above. If everything looks good
             }
           };
 
+          const executeAIRequestWithPostStreamRetry = async () => {
+            const postStreamRetryManager = new RetryManager({
+              maxRetries: this.retryConfig.maxRetries ?? 3,
+              initialDelay: this.retryConfig.initialDelay ?? 1000,
+              maxDelay: this.retryConfig.maxDelay ?? 30000,
+              backoffFactor: this.retryConfig.backoffFactor ?? 2,
+              retryableErrors: this.retryConfig.retryableErrors,
+              jitter: this.retryConfig.jitter,
+              debug: this.debug
+            });
+
+            return await postStreamRetryManager.executeWithRetry(
+              executeAIRequest,
+              {
+                provider: this.clientApiProvider || this.apiType,
+                model: this.model,
+                phase: 'stream-consumption',
+                signal: this._abortController?.signal
+              }
+            );
+          };
+
           let aiResult;
           if (this.tracer) {
             const inputPreview = truncateForSpan(message, 4096);
 
-            aiResult = await this.tracer.withSpan('ai.request', executeAIRequest, {
+            aiResult = await this.tracer.withSpan('ai.request', executeAIRequestWithPostStreamRetry, {
               'ai.model': this.model,
               'ai.provider': this.clientApiProvider || 'auto',
               'ai.input': inputPreview,
@@ -4523,7 +4553,7 @@ Double-check your response based on the criteria above. If everything looks good
               });
             });
           } else {
-            aiResult = await executeAIRequest();
+            aiResult = await executeAIRequestWithPostStreamRetry();
           }
 
           // Try native JSON schema output first — Output.object() is set when no tools are active

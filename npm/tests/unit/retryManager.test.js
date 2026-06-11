@@ -81,6 +81,15 @@ describe('RetryManager', () => {
       error.type = 'api_error';
       expect(isRetryableError(error)).toBe(true);
     });
+
+    test('should identify Vercel AI SDK empty output errors', () => {
+      const messageError = new Error('No output generated. Check the stream for errors.');
+      expect(isRetryableError(messageError)).toBe(true);
+
+      const namedError = new Error('stream ended without output');
+      namedError.name = 'AI_NoOutputGeneratedError';
+      expect(isRetryableError(namedError)).toBe(true);
+    });
   });
 
   describe('executeWithRetry', () => {
