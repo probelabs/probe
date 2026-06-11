@@ -2,6 +2,9 @@ import { describe, test, expect, jest, beforeEach } from '@jest/globals';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 describe('ProbeAgent finalText uses last step text (no planning preamble)', () => {
+  const RECOVER_AFTER_ONE_RETRY = 1;
+  const EXHAUST_AFTER_ONE_RETRY = 1;
+
   function createMockedAgent(options = {}) {
     const agent = new ProbeAgent({
       path: process.cwd(),
@@ -31,13 +34,34 @@ describe('ProbeAgent finalText uses last step text (no planning preamble)', () =
     return error;
   }
 
+  function mockStreamText(agent, result) {
+    return jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (_options, consumeResult) => {
+      return consumeResult ? await consumeResult(result) : result;
+    });
+  }
+
+  function mockStreamTextWithRetry(agent, results) {
+    let attempts = 0;
+    const retryManager = agent._createRetryManager();
+    const spy = jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (_options, consumeResult) => {
+      return await retryManager.executeWithRetry(
+        async () => {
+          const result = results[Math.min(attempts, results.length - 1)];
+          attempts += 1;
+          return consumeResult ? await consumeResult(result) : result;
+        },
+        { provider: 'test', model: 'test-model' }
+      );
+    });
+
+    return { spy, getAttempts: () => attempts };
+  }
+
   test('single-step response uses result.text as-is', async () => {
     const agent = createMockedAgent();
     const singleStep = [{ text: 'The final answer.', toolCalls: [], finishReason: 'stop' }];
 
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockResolvedValue(
-      createMockStreamResult('The final answer.', singleStep)
-    );
+    mockStreamText(agent, createMockStreamResult('The final answer.', singleStep));
 
     const result = await agent.answer('What is this?');
     expect(result).toBe('The final answer.');
@@ -54,9 +78,7 @@ describe('ProbeAgent finalText uses last step text (no planning preamble)', () =
     // result.text concatenates all steps
     const fullText = steps.map(s => s.text).join('');
 
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockResolvedValue(
-      createMockStreamResult(fullText, steps)
-    );
+    mockStreamText(agent, createMockStreamResult(fullText, steps));
 
     const result = await agent.answer('How is rate limiting implemented?');
     // Should only contain the last step's text, not the planning preamble
@@ -73,9 +95,7 @@ describe('ProbeAgent finalText uses last step text (no planning preamble)', () =
       { text: '', toolCalls: [], finishReason: 'stop' },
     ];
 
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockResolvedValue(
-      createMockStreamResult('Searching...', steps)
-    );
+    mockStreamText(agent, createMockStreamResult('Searching...', steps));
 
     const result = await agent.answer('Find something');
     // Falls back to full result.text when last step is empty
@@ -86,9 +106,7 @@ describe('ProbeAgent finalText uses last step text (no planning preamble)', () =
   test('empty steps array uses result.text', async () => {
     const agent = createMockedAgent();
 
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockResolvedValue(
-      createMockStreamResult('Direct answer', [])
-    );
+    mockStreamText(agent, createMockStreamResult('Direct answer', []));
 
     const result = await agent.answer('Simple question');
     expect(result).toBe('Direct answer');
@@ -98,84 +116,84 @@ describe('ProbeAgent finalText uses last step text (no planning preamble)', () =
   test('retries when result.steps rejects with NoOutputGeneratedError', async () => {
     const agent = createMockedAgent({
       retry: {
-        maxRetries: 2,
+        maxRetries: RECOVER_AFTER_ONE_RETRY,
         initialDelay: 0,
         maxDelay: 0,
         backoffFactor: 1,
         jitter: false,
       },
     });
-    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback')
-      .mockResolvedValueOnce({
+    const { spy: streamSpy, getAttempts } = mockStreamTextWithRetry(agent, [
+      {
         text: Promise.resolve(''),
         usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
         response: { messages: Promise.resolve([]) },
         experimental_providerMetadata: undefined,
         steps: Promise.reject(createNoOutputError()),
-      })
-      .mockResolvedValueOnce(
-        createMockStreamResult('Recovered answer', [
-          { text: 'Recovered answer', toolCalls: [], finishReason: 'stop' },
-        ])
-      );
+      },
+      createMockStreamResult('Recovered answer', [
+        { text: 'Recovered answer', toolCalls: [], finishReason: 'stop' },
+      ]),
+    ]);
 
     const result = await agent.answer('Simple greeting');
 
     expect(result).toBe('Recovered answer');
-    expect(streamSpy).toHaveBeenCalledTimes(2);
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    expect(getAttempts()).toBe(2);
     jest.restoreAllMocks();
   });
 
   test('retries when provider resolves empty steps and empty text', async () => {
     const agent = createMockedAgent({
       retry: {
-        maxRetries: 2,
+        maxRetries: RECOVER_AFTER_ONE_RETRY,
         initialDelay: 0,
         maxDelay: 0,
         backoffFactor: 1,
         jitter: false,
       },
     });
-    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback')
-      .mockResolvedValueOnce(
-        createMockStreamResult('', [])
-      )
-      .mockResolvedValueOnce(
-        createMockStreamResult('Recovered from empty stream', [
-          { text: 'Recovered from empty stream', toolCalls: [], finishReason: 'stop' },
-        ])
-      );
+    const { spy: streamSpy, getAttempts } = mockStreamTextWithRetry(agent, [
+      createMockStreamResult('', []),
+      createMockStreamResult('Recovered from empty stream', [
+        { text: 'Recovered from empty stream', toolCalls: [], finishReason: 'stop' },
+      ]),
+    ]);
 
     const result = await agent.answer('Simple greeting');
 
     expect(result).toBe('Recovered from empty stream');
-    expect(streamSpy).toHaveBeenCalledTimes(2);
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    expect(getAttempts()).toBe(2);
     jest.restoreAllMocks();
   });
 
   test('stops retrying NoOutputGeneratedError after retry budget is exhausted', async () => {
     const agent = createMockedAgent({
       retry: {
-        maxRetries: 1,
+        maxRetries: EXHAUST_AFTER_ONE_RETRY,
         initialDelay: 0,
         maxDelay: 0,
         backoffFactor: 1,
         jitter: false,
       },
     });
-    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback')
-      .mockResolvedValue({
+    const { spy: streamSpy, getAttempts } = mockStreamTextWithRetry(agent, [
+      {
         text: Promise.resolve(''),
         usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
         response: { messages: Promise.resolve([]) },
         experimental_providerMetadata: undefined,
         steps: Promise.reject(createNoOutputError()),
-      });
+      },
+    ]);
 
     await expect(agent.answer('Simple greeting')).rejects.toThrow(
       'Failed to get response from AI model. No output generated.'
     );
-    expect(streamSpy).toHaveBeenCalledTimes(2);
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    expect(getAttempts()).toBe(2);
     jest.restoreAllMocks();
   });
 });

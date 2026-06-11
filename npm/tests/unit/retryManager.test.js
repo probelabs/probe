@@ -18,6 +18,7 @@ describe('RetryManager', () => {
       expect(retry.maxDelay).toBe(30000);
       expect(retry.backoffFactor).toBe(2);
       expect(retry.debug).toBe(false);
+      expect(retry.jitter).toBe(true);
     });
 
     test('should accept custom configuration', () => {
@@ -34,6 +35,12 @@ describe('RetryManager', () => {
       expect(retry.maxDelay).toBe(10000);
       expect(retry.backoffFactor).toBe(3);
       expect(retry.debug).toBe(true);
+    });
+
+    test('should normalize jitter to a boolean', () => {
+      expect(new RetryManager({ jitter: false }).jitter).toBe(false);
+      expect(new RetryManager({ jitter: 'false' }).jitter).toBe(true);
+      expect(new RetryManager({ jitter: undefined }).jitter).toBe(true);
     });
   });
 

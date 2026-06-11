@@ -19,6 +19,7 @@ function createAgent(opts = {}) {
 }
 
 describe('answer() null-guard (#533)', () => {
+  const EXHAUST_AFTER_ONE_RETRY = 1;
   let agent;
 
   beforeEach(() => {
@@ -32,43 +33,54 @@ describe('answer() null-guard (#533)', () => {
   test('retries and fails when non-schema stream has no steps and no text', async () => {
     agent.retryConfig = {
       ...agent.retryConfig,
-      maxRetries: 1,
+      maxRetries: EXHAUST_AFTER_ONE_RETRY,
       initialDelay: 0,
       maxDelay: 0,
       backoffFactor: 1,
       jitter: false,
     };
 
-    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => ({
-      text: Promise.resolve(''),
-      finishReason: Promise.resolve('stop'),
-      usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
-      response: { messages: Promise.resolve([]) },
-      experimental_providerMetadata: undefined,
-      steps: Promise.resolve([]),
-      // No output property — simulates no structured output
-    }));
+    let attempts = 0;
+    const retryManager = agent._createRetryManager();
+    const streamSpy = jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (_opts, consumeResult) => {
+      return await retryManager.executeWithRetry(
+        async () => {
+          attempts += 1;
+          return await consumeResult({
+            text: Promise.resolve(''),
+            finishReason: Promise.resolve('stop'),
+            usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
+            response: { messages: Promise.resolve([]) },
+            experimental_providerMetadata: undefined,
+            steps: Promise.resolve([]),
+            // No output property — simulates no structured output
+          });
+        },
+        { provider: 'test', model: 'test-model' }
+      );
+    });
 
     await expect(agent.answer('test question'))
       .rejects
       .toThrow('Failed to get response from AI model. No output generated.');
-    expect(streamSpy).toHaveBeenCalledTimes(2);
+    expect(streamSpy).toHaveBeenCalledTimes(1);
+    expect(attempts).toBe(2);
   });
 
   test('returns empty string when schema present but outputObject is null', async () => {
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => ({
-      text: Promise.resolve(''),
-      finishReason: Promise.resolve('stop'),
-      usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
-      response: { messages: Promise.resolve([]) },
-      experimental_providerMetadata: undefined,
-      steps: Promise.resolve([]),
-      result: {
-        output: Promise.resolve(null),
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (_opts, consumeResult) => {
+      const result = {
         text: Promise.resolve(''),
+        finishReason: Promise.resolve('stop'),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
         steps: Promise.resolve([]),
-      },
-    }));
+        output: Promise.resolve(null),
+      };
+
+      return consumeResult ? await consumeResult(result) : result;
+    });
 
     // Pass a schema to trigger the schema code path
     const { z } = await import('zod');
@@ -79,7 +91,7 @@ describe('answer() null-guard (#533)', () => {
   });
 
   test('returns empty string when schema output throws and finalText is empty', async () => {
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (opts) => {
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (_opts, consumeResult) => {
       // Create the rejection lazily to avoid unhandled-rejection before await
       const outputPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('NoObjectGeneratedError')), 0);
@@ -87,19 +99,17 @@ describe('answer() null-guard (#533)', () => {
       // Attach a no-op catch so Node doesn't report unhandled rejection
       outputPromise.catch(() => {});
 
-      return {
+      const result = {
         text: Promise.resolve(''),
         finishReason: Promise.resolve('stop'),
         usage: Promise.resolve({ promptTokens: 10, completionTokens: 0 }),
         response: { messages: Promise.resolve([]) },
         experimental_providerMetadata: undefined,
         steps: Promise.resolve([]),
-        result: {
-          output: outputPromise,
-          text: Promise.resolve(''),
-          steps: Promise.resolve([]),
-        },
+        output: outputPromise,
       };
+
+      return consumeResult ? await consumeResult(result) : result;
     });
 
     const { z } = await import('zod');
@@ -110,14 +120,18 @@ describe('answer() null-guard (#533)', () => {
   });
 
   test('returns actual text when finalText is available', async () => {
-    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async () => ({
-      text: Promise.resolve('here is my answer'),
-      finishReason: Promise.resolve('stop'),
-      usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
-      response: { messages: Promise.resolve([]) },
-      experimental_providerMetadata: undefined,
-      steps: Promise.resolve([]),
-    }));
+    jest.spyOn(agent, 'streamTextWithRetryAndFallback').mockImplementation(async (_opts, consumeResult) => {
+      const result = {
+        text: Promise.resolve('here is my answer'),
+        finishReason: Promise.resolve('stop'),
+        usage: Promise.resolve({ promptTokens: 10, completionTokens: 5 }),
+        response: { messages: Promise.resolve([]) },
+        experimental_providerMetadata: undefined,
+        steps: Promise.resolve([]),
+      };
+
+      return consumeResult ? await consumeResult(result) : result;
+    });
 
     const result = await agent.answer('test question');
     expect(result).toBe('here is my answer');

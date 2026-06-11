@@ -41,6 +41,7 @@ function isRetryableError(error, retryableErrors = DEFAULT_RETRYABLE_ERRORS) {
 
   const errorString = error.toString().toLowerCase();
   const errorMessage = (error.message || '').toLowerCase();
+  const errorName = (error.name || error.constructor?.name || '').toLowerCase();
   const errorCode = (error.code || '').toLowerCase();
   const errorType = (error.type || '').toLowerCase();
   const statusCode = error.statusCode || error.status;
@@ -51,6 +52,7 @@ function isRetryableError(error, retryableErrors = DEFAULT_RETRYABLE_ERRORS) {
 
     if (errorString.includes(lowerPattern) ||
         errorMessage.includes(lowerPattern) ||
+        errorName.includes(lowerPattern) ||
         errorCode.includes(lowerPattern) ||
         errorType.includes(lowerPattern) ||
         statusCode?.toString() === pattern) {
@@ -108,7 +110,7 @@ export class RetryManager {
     this.backoffFactor = this._validateNumber(options.backoffFactor, 2, 'backoffFactor', 1, 10);
     this.retryableErrors = options.retryableErrors || DEFAULT_RETRYABLE_ERRORS;
     this.debug = options.debug ?? false;
-    this.jitter = options.jitter ?? true; // Add random jitter by default
+    this.jitter = typeof options.jitter === 'boolean' ? options.jitter : true; // Add random jitter by default
 
     // Validate that maxDelay >= initialDelay
     if (this.maxDelay < this.initialDelay) {
