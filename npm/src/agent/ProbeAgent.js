@@ -1454,29 +1454,44 @@ export class ProbeAgent {
   }
 
   /**
+   * Create a RetryManager from the agent's retry configuration.
+   * @param {Object} [overrides={}] - Retry option overrides
+   * @returns {RetryManager}
+   * @private
+   */
+  _createRetryManager(overrides = {}) {
+    return new RetryManager({
+      maxRetries: overrides.maxRetries ?? this.retryConfig.maxRetries ?? 3,
+      initialDelay: overrides.initialDelay ?? this.retryConfig.initialDelay ?? 1000,
+      maxDelay: overrides.maxDelay ?? this.retryConfig.maxDelay ?? 30000,
+      backoffFactor: overrides.backoffFactor ?? this.retryConfig.backoffFactor ?? 2,
+      retryableErrors: overrides.retryableErrors ?? this.retryConfig.retryableErrors,
+      jitter: overrides.jitter ?? this.retryConfig.jitter,
+      debug: overrides.debug ?? this.debug
+    });
+  }
+
+  /**
    * Execute streamText with Vercel AI SDK using retry/fallback logic
    * @param {Object} options - streamText options
    * @param {AbortController} controller - Abort controller for the operation
+   * @param {Function} [consumeResult] - Optional callback to consume the stream result inside the same retry budget
    * @returns {Promise<Object>} - Stream result
    * @private
    */
-  async _executeWithVercelProvider(options, controller) {
+  async _executeWithVercelProvider(options, controller, consumeResult) {
     // Initialize retry manager if not already created
     if (!this.retryManager) {
-      this.retryManager = new RetryManager({
-        maxRetries: this.retryConfig.maxRetries ?? 3,
-        initialDelay: this.retryConfig.initialDelay ?? 1000,
-        maxDelay: this.retryConfig.maxDelay ?? 30000,
-        backoffFactor: this.retryConfig.backoffFactor ?? 2,
-        retryableErrors: this.retryConfig.retryableErrors,
-        debug: this.debug
-      });
+      this.retryManager = this._createRetryManager();
     }
 
     // If no fallback manager, just use retry with current provider
     if (!this.fallbackManager) {
       return await this.retryManager.executeWithRetry(
-        () => streamText({ ...options, abortSignal: controller.signal }),
+        async () => {
+          const result = streamText({ ...options, abortSignal: controller.signal });
+          return consumeResult ? await consumeResult(result) : result;
+        },
         {
           provider: this.apiType,
           model: this.model,
@@ -1510,17 +1525,15 @@ export class ProbeAgent {
           }
         }
 
-        const providerRetryManager = new RetryManager({
-          maxRetries: config.maxRetries ?? this.retryConfig.maxRetries ?? 3,
-          initialDelay: this.retryConfig.initialDelay ?? 1000,
-          maxDelay: this.retryConfig.maxDelay ?? 30000,
-          backoffFactor: this.retryConfig.backoffFactor ?? 2,
-          retryableErrors: this.retryConfig.retryableErrors,
-          debug: this.debug
+        const providerRetryManager = this._createRetryManager({
+          maxRetries: config.maxRetries ?? this.retryConfig.maxRetries
         });
 
         return await providerRetryManager.executeWithRetry(
-          () => streamText(fallbackOptions),
+          async () => {
+            const result = streamText(fallbackOptions);
+            return consumeResult ? await consumeResult(result) : result;
+          },
           {
             provider: config.provider,
             model: model,
@@ -1671,10 +1684,11 @@ export class ProbeAgent {
   /**
    * Execute streamText with retry and fallback support
    * @param {Object} options - streamText options
-   * @returns {Promise<Object>} - streamText result
+   * @param {Function} [consumeResult] - Optional callback to consume the result inside the same retry attempt
+   * @returns {Promise<Object>} - streamText result or consumer result
    * @private
    */
-  async streamTextWithRetryAndFallback(options) {
+  async streamTextWithRetryAndFallback(options, consumeResult) {
     // Wrap the model with per-call concurrency gating if limiter is configured.
     // This acquires/releases the slot around each individual LLM API call (doStream/doGenerate)
     // instead of holding it for the entire multi-step agent session.
@@ -1727,6 +1741,7 @@ export class ProbeAgent {
       const useCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
 
       let result;
+      let usedVercelProvider = false;
       if (useClaudeCode || useCodex) {
         try {
           result = await this._tryEngineStreamPath(options, controller, timeoutState);
@@ -1747,7 +1762,12 @@ export class ProbeAgent {
 
       if (!result) {
         // Use Vercel AI SDK with retry/fallback
-        result = await this._executeWithVercelProvider(options, controller);
+        usedVercelProvider = true;
+        result = await this._executeWithVercelProvider(options, controller, consumeResult);
+      }
+
+      if (!usedVercelProvider && result && consumeResult) {
+        return await consumeResult(result);
       }
 
       return result;
@@ -3763,8 +3783,6 @@ Follow these instructions carefully:
           activeTools.delete(key);
         }
       };
-      this.events.on('toolCall', onToolCall);
-
       // Timeout observer: separate LLM call that decides whether to extend.
       // Runs independently of the main agent loop — works even when blocked by delegates.
       const runTimeoutObserver = async () => {
@@ -4426,80 +4444,92 @@ Double-check your response based on the criteria above. If everything looks good
           }
 
           const executeAIRequest = async () => {
-            const result = await this.streamTextWithRetryAndFallback(streamOptions);
+            return await this.streamTextWithRetryAndFallback(streamOptions, async (result) => {
+              this.events.on('toolCall', onToolCall);
 
-            // Set up timeout timer now that streamText is running.
-            // streamText() returns immediately — the actual tool loop runs asynchronously
-            // and completes when we await result.steps/result.text below.
-            let gracefulTimeoutId = null;
-            let hardAbortTimeoutId = null;
-            if (this.timeoutBehavior === 'graceful' && gracefulTimeoutState && this.maxOperationTimeout > 0) {
-              gracefulTimeoutId = setTimeout(() => {
-                gracefulTimeoutState.triggered = true;
-                if (this.debug) {
-                  console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — entering wind-down mode (${gracefulTimeoutState.bonusStepsMax} bonus steps)`);
-                }
-                // Safety net: hard abort after 60s if wind-down doesn't complete
-                hardAbortTimeoutId = setTimeout(() => {
-                  if (this._abortController) {
-                    this._abortController.abort();
-                  }
+              // Set up timeout timer now that streamText is running.
+              // streamText() returns immediately — the actual tool loop runs asynchronously
+              // and completes when we await result.steps/result.text below.
+              let gracefulTimeoutId = null;
+              let hardAbortTimeoutId = null;
+              if (this.timeoutBehavior === 'graceful' && gracefulTimeoutState && this.maxOperationTimeout > 0) {
+                gracefulTimeoutId = setTimeout(() => {
+                  gracefulTimeoutState.triggered = true;
                   if (this.debug) {
-                    console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
+                    console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — entering wind-down mode (${gracefulTimeoutState.bonusStepsMax} bonus steps)`);
                   }
-                }, 60000);
-              }, this.maxOperationTimeout);
-            }
+                  // Safety net: hard abort after 60s if wind-down doesn't complete
+                  hardAbortTimeoutId = setTimeout(() => {
+                    if (this._abortController) {
+                      this._abortController.abort();
+                    }
+                    if (this.debug) {
+                      console.log(`[DEBUG] Hard abort — wind-down safety net expired after 60s`);
+                    }
+                  }, 60000);
+                }, this.maxOperationTimeout);
+              }
 
-            // Negotiated timeout: run the timeout observer (separate LLM call)
-            if (this.timeoutBehavior === 'negotiated' && this.maxOperationTimeout > 0) {
-              negotiatedTimeoutState.softTimeoutId = setTimeout(() => {
-                if (this.debug) {
-                  console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — invoking timeout observer`);
+              // Negotiated timeout: run the timeout observer (separate LLM call)
+              if (this.timeoutBehavior === 'negotiated' && this.maxOperationTimeout > 0) {
+                negotiatedTimeoutState.softTimeoutId = setTimeout(() => {
+                  if (this.debug) {
+                    console.log(`[DEBUG] Soft timeout after ${this.maxOperationTimeout}ms — invoking timeout observer`);
+                  }
+                  runTimeoutObserver();
+                }, this.maxOperationTimeout);
+              }
+
+              try {
+                // Use only the last step's text as the final answer.
+                // result.text concatenates ALL steps (including intermediate planning text),
+                // but the user should only see the final answer from the last step.
+                const steps = await result.steps;
+                let finalText;
+                if (steps && steps.length > 1) {
+                  // Multi-step: use last step's text (the actual answer after tool calls)
+                  const lastStepText = steps[steps.length - 1].text;
+                  finalText = lastStepText || await result.text;
+                } else {
+                  finalText = await result.text;
                 }
-                runTimeoutObserver();
-              }, this.maxOperationTimeout);
-            }
 
-            try {
-              // Use only the last step's text as the final answer.
-              // result.text concatenates ALL steps (including intermediate planning text),
-              // but the user should only see the final answer from the last step.
-              const steps = await result.steps;
-              let finalText;
-              if (steps && steps.length > 1) {
-                // Multi-step: use last step's text (the actual answer after tool calls)
-                const lastStepText = steps[steps.length - 1].text;
-                finalText = lastStepText || await result.text;
-              } else {
-                finalText = await result.text;
-              }
+                // Native schema responses can legitimately carry their payload in result.output
+                // while text and steps stay empty. Plain text answers with no steps and no
+                // text are empty streams and should be retried by the active retry manager.
+                if (!options.schema && (!steps || steps.length === 0) && (!finalText || !finalText.trim())) {
+                  throw Object.assign(
+                    new Error('No output generated. Check the stream for errors.'),
+                    { name: 'AI_NoOutputGeneratedError' }
+                  );
+                }
 
-              if (this.debug) {
-                console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
-              }
+                if (this.debug) {
+                  console.log(`[DEBUG] streamText completed: ${steps?.length || 0} steps, finalText=${finalText?.length || 0} chars`);
+                }
 
-              // Record final token usage
-              const usage = await result.usage;
-              if (usage) {
-                this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
-              }
+                // Record final token usage
+                const usage = await result.usage;
+                if (usage) {
+                  this.tokenCounter.recordUsage(usage, result.experimental_providerMetadata);
+                }
 
-              return { finalText, result };
-            } finally {
-              // Clean up graceful timeout timers
-              if (gracefulTimeoutId) clearTimeout(gracefulTimeoutId);
-              if (hardAbortTimeoutId) clearTimeout(hardAbortTimeoutId);
-              // Clean up negotiated timeout timer
-              if (negotiatedTimeoutState.softTimeoutId) clearTimeout(negotiatedTimeoutState.softTimeoutId);
-              // Clean up graceful stop hard abort timer
-              if (this._gracefulStopHardAbortId) {
-                clearTimeout(this._gracefulStopHardAbortId);
-                this._gracefulStopHardAbortId = null;
+                return { finalText, result };
+              } finally {
+                // Clean up graceful timeout timers
+                if (gracefulTimeoutId) clearTimeout(gracefulTimeoutId);
+                if (hardAbortTimeoutId) clearTimeout(hardAbortTimeoutId);
+                // Clean up negotiated timeout timer
+                if (negotiatedTimeoutState.softTimeoutId) clearTimeout(negotiatedTimeoutState.softTimeoutId);
+                // Clean up graceful stop hard abort timer
+                if (this._gracefulStopHardAbortId) {
+                  clearTimeout(this._gracefulStopHardAbortId);
+                  this._gracefulStopHardAbortId = null;
+                }
+                // Remove in-flight tool tracker
+                this.events.removeListener('toolCall', onToolCall);
               }
-              // Remove in-flight tool tracker
-              this.events.removeListener('toolCall', onToolCall);
-            }
+            });
           };
 
           let aiResult;
