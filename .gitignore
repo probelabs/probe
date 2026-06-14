@@ -19,6 +19,10 @@ Cargo.lock
 # Exception for GitHub workflows
 !.github/workflows/*.yml
 !.github/workflows/*.yaml
+# Exception for ReqProof spec files (project-rooted YAML manifest + spec tree)
+!proof.yaml
+!specs/**/*.yaml
+!specs/**/*.yml
 
 # Node.js specific ignores
 node_modules
@@ -134,3 +138,8 @@ examples/reranker/cross_encoder_test_results.json
 
 # PID files (daemon/tests)
 *.pid
+# ReqProof state directory: ignore everything except dogfood artifacts
+.proof/*
+!.proof/dogfood-first-audit.txt
+!.proof/dogfood-code-signal.txt
+!.proof/dogfood-finding-inventory.md

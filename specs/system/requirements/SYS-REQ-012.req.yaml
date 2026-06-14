@@ -1,0 +1,61 @@
+id: SYS-REQ-012
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: ""
+description: All read queries against the Turso/libsql symbol cache (lsp-daemon and main symbol_cache) shall be constructed with parameter binding via libsql's params! macro; user-derived input shall not be concatenated into SQL strings.
+formalization_strategy: informal
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+component: symbol_cache_query_safety
+rationale: Symbol cache queries take user-supplied identifiers and paths; SQL injection is the realistic attack surface.
+tags:
+    - database
+    - db_read
+    - sql_injection_safe
+variables: []
+traces:
+    satisfies:
+        - SYS-REQ-006
+    verified_by_extra:
+        - tests/lsp_integration_tests.rs
+    implemented_by_extra:
+        - lsp-daemon/src/daemon.rs
+        - src/lsp_integration/management.rs:run_query
+verification:
+    assurance_level: E
+    formalization_status: none
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T07:27:03Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T07:27:04Z"
+obligation_class: parameterized_only_read
+stakeholder:
+    obligation_suppressions:
+        - id: query_timeout_bounded
+          reason: Symbol cache is local libsql/Turso-embedded; queries hit on-disk SQLite-compat store. Runaway queries are bounded by libsql_core::limits and the embedded store size; remote turso paths are not in this signal.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:04Z"
+          framework_refs:
+            - CWE CWE-400
+            - NIST-800-53 SC-5
+            - OWASP-ASVS-v4 V11.1.4
+        - id: read_committed_minimum
+          reason: libsql/Turso embedded mode provides serializable reads via SQLite WAL; weaker isolation is not configurable in the embedded path.
+          suppressed_by: leonidbugaev
+          suppressed_at: "2026-05-07T07:27:04Z"
+          framework_refs:
+            - CWE CWE-362
+            - ISO-26262 Part 6 §7.4.13
+            - NIST-800-53 SI-7
+            - OWASP-ASVS-v4 V11.1.5
