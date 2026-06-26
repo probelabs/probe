@@ -1,3 +1,4 @@
+use crate::extract::symbols::{is_c_like_extension, recover_c_like_functions};
 use anyhow::{Context, Result};
 use ast_grep_core::language::{Language, TSLanguage};
 use ast_grep_core::AstGrep;
@@ -6,6 +7,7 @@ use colored::*;
 use ignore::WalkBuilder;
 use probe_code::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -246,7 +248,115 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
         });
     }
 
+    supplement_c_like_function_matches(
+        &mut ast_matches,
+        &content,
+        file_path,
+        options.pattern,
+        options.language,
+        file_ext,
+    );
+
     Ok(ast_matches)
+}
+
+fn supplement_c_like_function_matches(
+    ast_matches: &mut Vec<AstMatch>,
+    content: &str,
+    file_path: &Path,
+    pattern: &str,
+    language: Option<&str>,
+    file_ext: &str,
+) {
+    if !should_recover_c_like_functions(pattern, language, file_ext) {
+        return;
+    }
+
+    let required_prefix = c_like_required_prefix(pattern);
+    let mut existing_lines: HashSet<usize> = ast_matches.iter().map(|m| m.line_start).collect();
+
+    for recovered in recover_c_like_functions(content.as_bytes()) {
+        if existing_lines.contains(&recovered.line) {
+            continue;
+        }
+        if let Some(prefix) = &required_prefix {
+            if !normalize_c_like_signature(&recovered.signature).starts_with(prefix) {
+                continue;
+            }
+        }
+
+        let matched_text = content[recovered.byte_start..recovered.byte_end].to_string();
+        let (line_start, column_start) = byte_to_line_column(content, recovered.byte_start);
+        let (line_end, column_end) = byte_to_line_column(content, recovered.byte_end);
+
+        existing_lines.insert(line_start);
+        ast_matches.push(AstMatch {
+            file_path: file_path.to_path_buf(),
+            byte_start: recovered.byte_start,
+            byte_end: recovered.byte_end,
+            line_start,
+            line_end,
+            column_start,
+            column_end,
+            matched_text,
+        });
+    }
+
+    ast_matches.sort_by_key(|m| (m.file_path.clone(), m.byte_start));
+}
+
+fn should_recover_c_like_functions(pattern: &str, language: Option<&str>, file_ext: &str) -> bool {
+    if !language
+        .map(is_c_like_language)
+        .unwrap_or_else(|| is_c_like_extension(file_ext))
+    {
+        return false;
+    }
+
+    let trimmed = pattern.trim();
+    trimmed == "function_definition"
+        || (trimmed.contains("$NAME")
+            && trimmed.contains("$$$BODY")
+            && trimmed.contains('(')
+            && trimmed.contains(')')
+            && trimmed.contains('{')
+            && trimmed.contains('}'))
+}
+
+fn is_c_like_language(language: &str) -> bool {
+    matches!(
+        language.to_lowercase().as_str(),
+        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx"
+    )
+}
+
+fn c_like_required_prefix(pattern: &str) -> Option<String> {
+    let prefix = pattern.split("$NAME").next()?.trim();
+    if prefix.is_empty() || prefix.contains('$') {
+        return None;
+    }
+    Some(normalize_c_like_signature(prefix))
+}
+
+fn normalize_c_like_signature(signature: &str) -> String {
+    signature.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn byte_to_line_column(content: &str, byte: usize) -> (usize, usize) {
+    let mut line = 1;
+    let mut column = 1;
+    for (i, ch) in content.char_indices() {
+        if i >= byte {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            column = 1;
+        } else {
+            column += 1;
+        }
+    }
+    (line, column)
 }
 
 pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
