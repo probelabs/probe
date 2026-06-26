@@ -121,6 +121,111 @@ const multiply = (a, b) => a * b;
 }
 
 #[test]
+fn test_query_c_function_inside_preprocessor_heavy_body() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let temp_path = temp_dir.path();
+
+    let c_file_path = temp_path.join("acls_like.c");
+    let c_content = r#"
+typedef int mode_t;
+typedef int SMB_ACL_T;
+typedef int rsync_acl;
+
+#ifndef HAVE_OSX_ACLS
+static mode_t change_sacl_perms(SMB_ACL_T sacl, rsync_acl *racl, mode_t old_mode, mode_t mode)
+{
+    if (mode) {
+#ifdef SMB_ACL_LOSES_SPECIAL_MODE_BITS
+        if (mode & 01000)
+            mode &= ~0077;
+#else
+        if (mode & 01000 && !(old_mode & 01000))
+            mode &= ~0077;
+    } else {
+        if ((old_mode & 04000 && !(mode & 04000))
+         || (old_mode & 02000 && !(mode & 02000)))
+            mode &= ~0077;
+#endif
+    }
+
+    return mode;
+}
+#endif
+"#;
+    fs::write(&c_file_path, c_content)?;
+
+    let options = QueryOptions {
+        path: temp_path,
+        pattern: "$RET $NAME($$$PARAMS) { $$$BODY }",
+        language: Some("c"),
+        ignore: &[],
+        allow_tests: true,
+        max_results: None,
+        with_context: false,
+        format: "plain",
+        no_gitignore: false,
+    };
+
+    let matches = perform_query(&options)?;
+
+    assert!(
+        matches
+            .iter()
+            .any(|m| m.matched_text.contains("change_sacl_perms")),
+        "missing preprocessor-heavy C function in query results"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_query_c_recovery_does_not_widen_body_specific_patterns() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let temp_path = temp_dir.path();
+
+    let c_file_path = temp_path.join("body_specific.c");
+    let c_content = r#"
+static int change_sacl_perms(int mode)
+{
+#ifdef FEATURE
+    if (mode)
+        return mode;
+#endif
+    return mode;
+}
+
+int exact_return(void)
+{
+    return 7;
+}
+"#;
+    fs::write(&c_file_path, c_content)?;
+
+    let options = QueryOptions {
+        path: temp_path,
+        pattern: "int $NAME($$$PARAMS) { return 7; }",
+        language: Some("c"),
+        ignore: &[],
+        allow_tests: true,
+        max_results: None,
+        with_context: false,
+        format: "plain",
+        no_gitignore: false,
+    };
+
+    let matches = perform_query(&options)?;
+
+    assert!(
+        matches
+            .iter()
+            .all(|m| !m.matched_text.contains("change_sacl_perms")),
+        "C recovery should not add functions that do not satisfy a body-specific query"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn test_query_with_max_results() -> Result<()> {
     // Create a temporary directory for our test files
     let temp_dir = tempdir()?;

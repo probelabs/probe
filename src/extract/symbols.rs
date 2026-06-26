@@ -5,6 +5,7 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
+use std::collections::HashSet;
 use std::path::Path;
 use tree_sitter::Node;
 
@@ -58,7 +59,10 @@ pub fn extract_symbols(path: &Path, allow_tests: bool) -> Result<FileSymbols> {
     let root = tree.root_node();
     let source = content.as_bytes();
 
-    let symbols = collect_symbols(&root, source, language_impl.as_ref(), allow_tests, 0);
+    let mut symbols = collect_symbols(&root, source, language_impl.as_ref(), allow_tests, 0);
+    if is_c_like_extension(extension) {
+        merge_recovered_c_like_functions(&mut symbols, source);
+    }
 
     return_pooled_parser(extension, parser);
 
@@ -230,6 +234,12 @@ fn collect_children_symbols(
 
 /// Extract a symbol name from an AST node.
 fn extract_symbol_name(node: &Node, source: &[u8]) -> String {
+    if node.kind() == "function_definition" {
+        if let Some(name) = extract_c_like_function_name(node, source) {
+            return name;
+        }
+    }
+
     // Try common field names for the symbol's name
     if let Some(name_node) = node
         .child_by_field_name("name")
@@ -305,6 +315,283 @@ fn extract_symbol_name(node: &Node, source: &[u8]) -> String {
 
     // Fallback: use node kind
     node.kind().to_string()
+}
+
+fn extract_c_like_function_name(node: &Node, source: &[u8]) -> Option<String> {
+    let declarator = node
+        .child_by_field_name("declarator")
+        .or_else(|| find_child_by_kind(node, "function_declarator"))?;
+    extract_identifier_from_declarator(&declarator, source)
+}
+
+fn find_child_by_kind<'a>(node: &Node<'a>, kind: &str) -> Option<Node<'a>> {
+    let mut cursor = node.walk();
+    let found = node
+        .children(&mut cursor)
+        .find(|child| child.kind() == kind);
+    found
+}
+
+fn extract_identifier_from_declarator(node: &Node, source: &[u8]) -> Option<String> {
+    if matches!(
+        node.kind(),
+        "identifier" | "field_identifier" | "qualified_identifier"
+    ) {
+        return node.utf8_text(source).ok().map(String::from);
+    }
+
+    if let Some(declarator) = node.child_by_field_name("declarator") {
+        if let Some(name) = extract_identifier_from_declarator(&declarator, source) {
+            return Some(name);
+        }
+    }
+
+    if let Some(name) = node.child_by_field_name("name") {
+        if let Ok(text) = name.utf8_text(source) {
+            return Some(text.to_string());
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "parameter_list" {
+            continue;
+        }
+        if let Some(name) = extract_identifier_from_declarator(&child, source) {
+            return Some(name);
+        }
+    }
+
+    None
+}
+
+pub(crate) struct RecoveredCLikeFunction {
+    pub(crate) name: String,
+    pub(crate) signature: String,
+    pub(crate) line: usize,
+    pub(crate) end_line: usize,
+    pub(crate) byte_start: usize,
+    pub(crate) byte_end: usize,
+}
+
+pub(crate) fn is_c_like_extension(extension: &str) -> bool {
+    matches!(extension, "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx")
+}
+
+fn merge_recovered_c_like_functions(symbols: &mut Vec<SymbolNode>, source: &[u8]) {
+    let mut existing = HashSet::new();
+    collect_function_keys(symbols, &mut existing);
+
+    for recovered in recover_c_like_functions(source)
+        .into_iter()
+        .map(RecoveredCLikeFunction::into_symbol)
+    {
+        if existing.insert((recovered.name.clone(), recovered.line)) {
+            symbols.push(recovered);
+        }
+    }
+
+    symbols.sort_by_key(|symbol| (symbol.line, symbol.end_line, symbol.name.clone()));
+}
+
+fn collect_function_keys(symbols: &[SymbolNode], keys: &mut HashSet<(String, usize)>) {
+    for symbol in symbols {
+        if symbol.kind == "function" {
+            keys.insert((symbol.name.clone(), symbol.line));
+        }
+        collect_function_keys(&symbol.children, keys);
+    }
+}
+
+impl RecoveredCLikeFunction {
+    fn into_symbol(self) -> SymbolNode {
+        SymbolNode {
+            name: self.name,
+            kind: "function".to_string(),
+            signature: self.signature,
+            line: self.line,
+            end_line: self.end_line,
+            children: Vec::new(),
+        }
+    }
+}
+
+pub(crate) fn recover_c_like_functions(source: &[u8]) -> Vec<RecoveredCLikeFunction> {
+    let Ok(text) = std::str::from_utf8(source) else {
+        return Vec::new();
+    };
+
+    let function_re = regex::Regex::new(
+        r"(?ms)^[ \t]*(?P<header>(?:(?:[A-Za-z_]\w*|\*)[\s*]+)+(?P<name>[A-Za-z_]\w*)\s*\([^;{}]*\)\s*(?:__attribute__\s*\(\([^)]*\)\)\s*)?)\{",
+    )
+    .expect("valid C-like function recovery regex");
+
+    let mut recovered = Vec::new();
+    for caps in function_re.captures_iter(text) {
+        let Some(matched) = caps.get(0) else {
+            continue;
+        };
+        let Some(header) = caps.name("header") else {
+            continue;
+        };
+        let Some(name) = caps.name("name") else {
+            continue;
+        };
+
+        let header_text = header.as_str().trim();
+        if is_c_like_control_header(header_text)
+            || is_c_like_comment_header(header_text)
+            || header_text.contains('=')
+            || header_text.contains('#')
+            || is_c_like_keyword(name.as_str())
+        {
+            continue;
+        }
+
+        let open_brace = matched.end() - 1;
+        let Some(close_brace) = find_matching_brace(text.as_bytes(), open_brace) else {
+            continue;
+        };
+
+        recovered.push(RecoveredCLikeFunction {
+            name: name.as_str().to_string(),
+            signature: header_text.to_string(),
+            line: byte_to_line(source, matched.start()),
+            end_line: byte_to_line(source, close_brace),
+            byte_start: matched.start(),
+            byte_end: close_brace + 1,
+        });
+    }
+
+    recovered
+}
+
+fn is_c_like_control_header(header: &str) -> bool {
+    header
+        .split_whitespace()
+        .next()
+        .is_some_and(|word| matches!(word, "if" | "for" | "while" | "switch" | "return"))
+}
+
+fn is_c_like_comment_header(header: &str) -> bool {
+    header.contains("/*")
+        || header.contains("*/")
+        || header
+            .lines()
+            .any(|line| matches!(line.trim_start().chars().next(), Some('*' | '/')))
+}
+
+fn is_c_like_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "if" | "else"
+            | "for"
+            | "while"
+            | "switch"
+            | "case"
+            | "do"
+            | "return"
+            | "sizeof"
+            | "typedef"
+            | "struct"
+            | "union"
+            | "enum"
+    )
+}
+
+fn byte_to_line(source: &[u8], byte: usize) -> usize {
+    source[..byte.min(source.len())]
+        .iter()
+        .filter(|&&b| b == b'\n')
+        .count()
+        + 1
+}
+
+fn find_matching_brace(source: &[u8], open_brace: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = open_brace;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut in_string = false;
+    let mut in_char = false;
+    let mut escaped = false;
+
+    while i < source.len() {
+        let b = source[i];
+        let next = source.get(i + 1).copied();
+
+        if in_line_comment {
+            if b == b'\n' {
+                in_line_comment = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_block_comment {
+            if b == b'*' && next == Some(b'/') {
+                in_block_comment = false;
+                i += 2;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'"' {
+                in_string = false;
+            }
+            i += 1;
+            continue;
+        }
+        if in_char {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == b'\'' {
+                in_char = false;
+            }
+            i += 1;
+            continue;
+        }
+
+        match (b, next) {
+            (b'/', Some(b'/')) => {
+                in_line_comment = true;
+                i += 2;
+            }
+            (b'/', Some(b'*')) => {
+                in_block_comment = true;
+                i += 2;
+            }
+            (b'"', _) => {
+                in_string = true;
+                i += 1;
+            }
+            (b'\'', _) => {
+                in_char = true;
+                i += 1;
+            }
+            (b'{', _) => {
+                depth += 1;
+                i += 1;
+            }
+            (b'}', _) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Some(i);
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+
+    None
 }
 
 /// Normalize tree-sitter node kinds to user-friendly labels.
@@ -553,6 +840,122 @@ MAX_COUNT = 100
         assert!(
             names.contains(&"Animal"),
             "missing class Animal, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_extract_c_function_names_from_declarators() {
+        let content = r#"
+typedef int BOOL;
+#define NORETURN __attribute__((noreturn))
+
+static void check_timeout(BOOL allow_keepalive, int keepalive_flags)
+{
+}
+
+static NORETURN void whine_about_eof(BOOL allow_kluge)
+{
+}
+
+static size_t safe_read(int fd, char *buf, size_t len)
+{
+    return len;
+}
+
+static const char *what_fd_is(int fd)
+{
+    return "fd";
+}
+"#;
+        let file = create_temp_file(content, "c");
+        let result = extract_symbols(file.path(), false).unwrap();
+        let functions: Vec<_> = result
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == "function")
+            .collect();
+        let names: Vec<&str> = functions.iter().map(|s| s.name.as_str()).collect();
+
+        assert!(
+            names.contains(&"check_timeout"),
+            "missing check_timeout, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"whine_about_eof"),
+            "missing whine_about_eof, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"safe_read"),
+            "missing safe_read, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"what_fd_is"),
+            "missing what_fd_is, got: {:?}",
+            names
+        );
+        assert!(
+            !names
+                .iter()
+                .any(|name| matches!(*name, "void" | "NORETURN" | "size_t" | "char")),
+            "function names should not be return types, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_extract_c_function_inside_preprocessor_heavy_body() {
+        let content = r#"
+typedef int mode_t;
+typedef int SMB_ACL_T;
+typedef int rsync_acl;
+
+#ifndef HAVE_OSX_ACLS
+static mode_t change_sacl_perms(SMB_ACL_T sacl, rsync_acl *racl, mode_t old_mode, mode_t mode)
+{
+    if (mode) {
+#ifdef SMB_ACL_LOSES_SPECIAL_MODE_BITS
+        if (mode & 01000)
+            mode &= ~0077;
+#else
+        if (mode & 01000 && !(old_mode & 01000))
+            mode &= ~0077;
+    } else {
+        if ((old_mode & 04000 && !(mode & 04000))
+         || (old_mode & 02000 && !(mode & 02000)))
+            mode &= ~0077;
+#endif
+    }
+
+    return mode;
+}
+#endif
+
+int set_acl(void)
+{
+    return 0;
+}
+"#;
+        let file = create_temp_file(content, "c");
+        let result = extract_symbols(file.path(), false).unwrap();
+        let names: Vec<&str> = result
+            .symbols
+            .iter()
+            .filter(|symbol| symbol.kind == "function")
+            .map(|symbol| symbol.name.as_str())
+            .collect();
+
+        assert!(
+            names.contains(&"change_sacl_perms"),
+            "missing preprocessor-heavy C function, got: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"set_acl"),
+            "missing set_acl, got: {:?}",
             names
         );
     }
