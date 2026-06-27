@@ -41,6 +41,9 @@
 //!     dry_run: false,
 //!     session: None,
 //!     timeout: 30,
+//!     question: None,
+//!     no_gitignore: false,
+//!     lsp: false,
 //! };
 //!
 //! let results = perform_probe(&options).unwrap();
@@ -90,6 +93,8 @@
 //!     with_context: false,
 //!     format: "text",
 //!     no_gitignore: false,
+//!     strict: false,
+//!     text_extensions: &[],
 //! };
 //!
 //! let matches = perform_query(&options).unwrap();

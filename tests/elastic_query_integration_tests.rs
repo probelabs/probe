@@ -16,6 +16,7 @@ fn create_test_files(temp_dir: &Path) {
     let file1_path = temp_dir.join("file1.rs");
     let file1_content = r#"
 // This file contains keywordAlpha and keywordBeta
+// Plain markers: alpha beta
 fn test_function() {
     // This is keywordAlpha
     let x = 1;
@@ -31,6 +32,7 @@ fn test_function() {
     let file2_path = temp_dir.join("file2.rs");
     let file2_content = r#"
 // This file contains keywordAlpha and keywordGamma
+// Plain markers: alpha gamma
 fn another_function() {
     // This is keywordAlpha
     let x = 1;
@@ -46,6 +48,7 @@ fn another_function() {
     let file3_path = temp_dir.join("file3.rs");
     let file3_content = r#"
 // This file contains keywordBeta and keywordGamma
+// Plain markers: beta gamma
 fn third_function() {
     // This is keywordBeta
     let y = 2;
@@ -61,6 +64,7 @@ fn third_function() {
     let file4_path = temp_dir.join("file4.rs");
     let file4_content = r#"
 // This file contains keywordAlpha, keywordBeta, and keywordGamma
+// Plain markers: alpha beta gamma
 fn all_keywords_function() {
     // This is keywordAlpha
     let x = 1;
@@ -193,8 +197,8 @@ fn test_excluded_term_query() {
     // Create test files with different content
     create_test_files(temp_path);
 
-    // Create search query with an excluded term
-    let queries = vec!["(key OR word OR keyword) -keywordGamma".to_string()];
+    // Create search query with an excluded term using plain marker tokens.
+    let queries = vec!["(alpha OR beta) -gamma".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
     // Print the test files for debugging
@@ -253,7 +257,7 @@ fn test_excluded_term_query() {
         "Search should return results"
     );
 
-    // We should find files with (key OR word OR keyword) -keywordGamma
+    // We should find files with (alpha OR beta) -gamma
     let file_names: Vec<&str> = search_results
         .results
         .iter()
@@ -269,10 +273,10 @@ fn test_excluded_term_query() {
         println!("  File: {}", result.file);
     }
 
-    // Check that we found file1 (has key OR word OR keyword but not keywordGamma)
+    // Check that we found file1 (has alpha/beta but not gamma)
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
-        "Should find file1 which contains key OR word OR keyword but not keywordGamma"
+        "Should find file1 which contains alpha/beta but not gamma"
     );
 
     // Check that we don't find file2, file3, and file4 (they have keywordGamma)
@@ -508,7 +512,7 @@ fn test_complex_query_exclusion() {
     create_test_files(temp_path);
 
     // Test with exclusion
-    let queries = vec!["\"keywordAlpha\" -keywordGamma".to_string()];
+    let queries = vec!["alpha -gamma".to_string()];
     let custom_ignores: Vec<String> = vec![];
 
     // Create SearchOptions
@@ -559,27 +563,27 @@ fn test_complex_query_exclusion() {
         .collect();
 
     // Debug output to see what files were found
-    println!("Found files with 'keywordAlpha -keywordGamma':");
+    println!("Found files with 'alpha -gamma':");
     for name in &file_names {
         println!("  {name}");
     }
 
-    // Should find file1 (has keywordAlpha and no keywordGamma)
+    // Should find file1 (has alpha and no gamma)
     assert!(
         file_names.iter().any(|&name| name.contains("file1")),
-        "Should find file1 which has keywordAlpha but no keywordGamma"
+        "Should find file1 which has alpha but no gamma"
     );
 
-    // Should NOT find file2 (has keywordAlpha but also has keywordGamma)
+    // Should NOT find file2 (has alpha but also has gamma)
     assert!(
         !file_names.iter().any(|&name| name.contains("file2")),
-        "Should not find file2 which has keywordGamma"
+        "Should not find file2 which has gamma"
     );
 
-    // Should NOT find file4 (has keywordAlpha but also has keywordGamma)
+    // Should NOT find file4 (has alpha but also has gamma)
     assert!(
         !file_names.iter().any(|&name| name.contains("file4")),
-        "Should not find file4 which has keywordGamma"
+        "Should not find file4 which has gamma"
     );
 }
 

@@ -1,14 +1,27 @@
 #[cfg(test)]
 mod tests {
     use probe_code::search::{perform_probe, SearchOptions};
-    use std::path::Path;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_search_functionality() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("sample.rs");
+        fs::write(
+            &file_path,
+            r#"
+fn lib_usage_search_sample() {
+    // unique_library_search_marker
+}
+"#,
+        )
+        .unwrap();
+
         // Create search options
         let options = SearchOptions {
-            path: Path::new("."),
-            queries: &["function".to_string()],
+            path: temp_dir.path(),
+            queries: &["unique_library_search_marker".to_string()],
             files_only: false,
             custom_ignores: &[],
             exclude_filenames: false,
@@ -41,9 +54,21 @@ mod tests {
     fn test_query_functionality() {
         use probe_code::query::{perform_query, QueryOptions};
 
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("sample.rs");
+        fs::write(
+            &file_path,
+            r#"
+fn lib_usage_query_sample(value: i32) -> i32 {
+    value + 1
+}
+"#,
+        )
+        .unwrap();
+
         let options = QueryOptions {
-            path: Path::new("."),
-            pattern: "fn",
+            path: temp_dir.path(),
+            pattern: "fn $NAME($$$PARAMS) $$$BODY",
             language: Some("rust"),
             ignore: &[],
             allow_tests: true,
@@ -51,6 +76,8 @@ mod tests {
             with_context: false,
             format: "text",
             no_gitignore: false,
+            strict: false,
+            text_extensions: &[],
         };
 
         let matches = perform_query(&options).unwrap();

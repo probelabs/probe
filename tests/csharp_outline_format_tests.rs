@@ -922,10 +922,11 @@ namespace ArrayTruncation
         output
     );
 
-    // Should show truncation with ellipsis
+    // Should be rendered through the outline formatter. Truncation is only shown when
+    // the renderer hides a gap.
     assert!(
-        output.contains("...") || output.contains("/*"),
-        "Should show array truncation - output: {}",
+        output.contains("---") && output.contains("File:"),
+        "Should show outline framing - output: {}",
         output
     );
 

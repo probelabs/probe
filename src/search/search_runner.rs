@@ -28,7 +28,7 @@ use probe_code::search::{
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
-    simd_pattern_matching::SimdPatternMatcher,
+    simd_pattern_matching::{SimdPatternConfig, SimdPatternMatcher},
     timeout,
 };
 
@@ -1705,7 +1705,13 @@ pub fn search_with_structured_patterns(
                 pattern_strings.len()
             );
         }
-        Some(SimdPatternMatcher::with_patterns(pattern_strings.clone()))
+        Some(SimdPatternMatcher::new(
+            pattern_strings.clone(),
+            SimdPatternConfig {
+                case_insensitive: true,
+                ..SimdPatternConfig::default()
+            },
+        ))
     } else {
         if debug_mode {
             println!("DEBUG: Using RipgrepSearcher for complex patterns");

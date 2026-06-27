@@ -1079,6 +1079,7 @@ fn format_and_print_xml_results(
     skipped_files: Option<&[SearchResult]>,
     limits: Option<&probe_code::models::SearchLimits>,
 ) -> Result<()> {
+    println!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
     println!("<probe_results>");
 
     for result in results {
@@ -1131,7 +1132,10 @@ fn format_and_print_xml_results(
             println!("    <block_total_matches>{block_total_matches}</block_total_matches>");
         }
 
-        println!("    <code>{}</code>", result.code);
+        println!(
+            "    <code><![CDATA[{}]]></code>",
+            result.code.replace("]]>", "]]]]><![CDATA[>")
+        );
         println!("  </result>");
     }
 

@@ -92,10 +92,8 @@ fn test_query_xml_output_rust_functions() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "fn $NAME($$$PARAMS) $$$BODY", // Pattern to search for Rust functions
             temp_dir.path().to_str().unwrap(),
@@ -241,10 +239,8 @@ fn test_query_xml_output_javascript_functions() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "function $NAME($$$PARAMS) $$$BODY", // Pattern to search for JavaScript functions
             temp_dir.path().to_str().unwrap(),
@@ -301,10 +297,8 @@ fn test_query_xml_output_with_special_characters() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format, searching for the escape function
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "function escapeTest", // Pattern to search for the escape function
             temp_dir.path().to_str().unwrap(),
@@ -404,10 +398,8 @@ fn test_query_xml_output_with_multiple_languages() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format, searching for Python functions
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "def $NAME($$$PARAMS): $$$BODY", // Pattern to search for Python functions
             temp_dir.path().to_str().unwrap(),
@@ -480,10 +472,8 @@ fn test_query_xml_output_with_no_results() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with XML output format, searching for a pattern that doesn't exist
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "class $NAME { $$$METHODS }", // Pattern that doesn't match any file
             temp_dir.path().to_str().unwrap(),

@@ -148,6 +148,15 @@ fn run_probe_command(args: &[&str]) -> (String, String, bool) {
 
 /// Helper function to run probe command in a specific directory
 fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String, String, bool) {
+    run_probe_command_at_with_env(args, dir, &[])
+}
+
+/// Helper function to run probe command in a specific directory with child-only env overrides.
+fn run_probe_command_at_with_env(
+    args: &[&str],
+    dir: Option<&std::path::Path>,
+    envs: &[(&str, &str)],
+) -> (String, String, bool) {
     use std::io::Read;
     use std::process::Command;
     use std::sync::mpsc;
@@ -274,6 +283,9 @@ fn run_probe_command_at(args: &[&str], dir: Option<&std::path::Path>) -> (String
 
     // Set test environment variables
     cmd.env("CI", "1");
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
 
     // Helpful for diagnosing any remaining issues
     #[cfg(target_os = "windows")]
@@ -969,22 +981,17 @@ fn test_environment_variable_override() {
     let temp_dir = make_safe_tempdir();
     create_test_directory_structure(&temp_dir);
 
-    // Set environment variables and run command
-    std::env::set_var("PROBE_DEBUG", "1");
-    std::env::set_var("PROBE_ENABLE_LSP", "true");
-    std::env::set_var("PROBE_INDEXING_ENABLED", "false");
-    std::env::set_var("PROBE_INDEXING_WATCH_FILES", "false");
-
-    let (stdout, stderr, success) = run_probe_command_at(
+    let envs = [
+        ("PROBE_DEBUG", "1"),
+        ("PROBE_ENABLE_LSP", "true"),
+        ("PROBE_INDEXING_ENABLED", "false"),
+        ("PROBE_INDEXING_WATCH_FILES", "false"),
+    ];
+    let (stdout, stderr, success) = run_probe_command_at_with_env(
         &["config", "show", "--format", "json"],
         Some(temp_dir.path()),
+        &envs,
     );
-
-    // Clean up environment variables
-    std::env::remove_var("PROBE_DEBUG");
-    std::env::remove_var("PROBE_ENABLE_LSP");
-    std::env::remove_var("PROBE_INDEXING_ENABLED");
-    std::env::remove_var("PROBE_INDEXING_WATCH_FILES");
 
     assert!(
         success,

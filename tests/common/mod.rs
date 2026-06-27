@@ -23,10 +23,7 @@ impl TestContext {
     }
 
     pub fn run_probe(&self, args: &[&str]) -> Result<String> {
-        let output = Command::new("cargo")
-            .args(["run", "--"])
-            .args(args)
-            .output()?;
+        let output = probe_cmd_base(None).args(args).output()?;
 
         if !output.status.success() {
             anyhow::bail!(
@@ -315,19 +312,7 @@ pub fn cleanup_test_namespace(socket_path: &Path) {
 
 /// Get base probe command with test-specific configuration
 fn probe_cmd_base(socket_path: Option<&Path>) -> Command {
-    // Use the same logic as cli_tests.rs to get the probe binary path
-    let probe_path = if let Ok(path) = std::env::var("CARGO_BIN_EXE_probe") {
-        PathBuf::from(path)
-    } else {
-        // Construct the path to the debug binary
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.push("target");
-        path.push("debug");
-        path.push(if cfg!(windows) { "probe.exe" } else { "probe" });
-        path
-    };
-
-    let mut cmd = Command::new(probe_path);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_probe"));
 
     // Set test-specific environment variables
     if let Some(socket) = socket_path {
@@ -1671,8 +1656,12 @@ impl Drop for LspTestGuard {
 fn count_lsp_processes() -> usize {
     let output = std::process::Command::new("sh")
         .arg("-c")
-        // Count probe lsp commands and lsp-daemon, but exclude the test runner itself
-        .arg("ps aux | grep -E 'probe.*lsp|lsp-daemon' | grep -v grep | grep -v lsp_integration_tests | wc -l")
+        // Count actual probe lsp commands and lsp-daemon processes. Keep the
+        // match anchored to executable path segments so test binaries such as
+        // lsp_comprehensive_tests under a checkout named "probe" are not
+        // counted as leaks. Include child language-server processes because
+        // some servers can outlive their daemon parent after test shutdown.
+        .arg("ps -eo args= | grep -E '(^|/)probe[[:space:]]+lsp([[:space:]]|$)|(^|/)lsp-daemon([[:space:]]|$)|(^|/)gopls([[:space:]]|$)|(^|/)typescript-language-server([[:space:]]|$)|(^|/)phpactor[[:space:]]+language-server([[:space:]]|$)|(^|/)rust-analyzer([[:space:]]|$)|(^|/)pylsp([[:space:]]|$)' | grep -v grep | wc -l")
         .output();
 
     match output {
@@ -1700,6 +1689,19 @@ fn cleanup_leaked_lsp_processes() {
         .args(["-f", "lsp-daemon"])
         .output();
 
+    // Clean up child language-server processes that may survive daemon exit.
+    for pattern in [
+        "gopls",
+        "typescript-language-server",
+        "phpactor language-server",
+        "rust-analyzer",
+        "pylsp",
+    ] {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", pattern])
+            .output();
+    }
+
     // Give processes time to exit
     std::thread::sleep(std::time::Duration::from_millis(100));
 }
@@ -1717,6 +1719,18 @@ fn force_kill_lsp_processes() {
     let _ = std::process::Command::new("pkill")
         .args(["-9", "-f", "lsp-daemon"])
         .output();
+
+    for pattern in [
+        "gopls",
+        "typescript-language-server",
+        "phpactor language-server",
+        "rust-analyzer",
+        "pylsp",
+    ] {
+        let _ = std::process::Command::new("pkill")
+            .args(["-9", "-f", pattern])
+            .output();
+    }
 
     // Give the OS time to clean up
     std::thread::sleep(std::time::Duration::from_millis(500));

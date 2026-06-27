@@ -842,7 +842,17 @@ async fn main() -> Result<()> {
             files,
             format,
             allow_tests,
-        }) => probe_code::extract::symbols::handle_symbols(files, &format, allow_tests)?,
+            strict,
+            text_extensions,
+        }) => probe_code::extract::symbols::handle_symbols(
+            files,
+            &format,
+            probe_code::extract::symbols::SymbolOptions {
+                allow_tests,
+                strict,
+                text_extensions,
+            },
+        )?,
         Some(Commands::Query {
             pattern,
             path,
@@ -851,6 +861,8 @@ async fn main() -> Result<()> {
             allow_tests,
             max_results,
             with_context,
+            strict,
+            text_extensions,
             format,
             no_gitignore,
         }) => probe_code::query::handle_query(
@@ -879,6 +891,8 @@ async fn main() -> Result<()> {
             &format,
             no_gitignore || std::env::var("PROBE_NO_GITIGNORE").unwrap_or_default() == "1",
             with_context,
+            strict,
+            text_extensions,
         )?,
         Some(Commands::Benchmark {
             bench,

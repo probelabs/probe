@@ -1,4 +1,7 @@
-use crate::extract::symbols::{is_c_like_extension, recover_c_like_functions};
+use crate::extract::symbols::{
+    is_c_like_extension, is_standard_text_extension, matches_text_extension,
+    recover_c_like_functions,
+};
 use anyhow::{Context, Result};
 use ast_grep_core::language::{Language, TSLanguage};
 use ast_grep_core::AstGrep;
@@ -11,6 +14,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use tree_sitter::Node;
 
 /// Represents a match found by ast-grep
 pub struct AstMatch {
@@ -22,6 +26,7 @@ pub struct AstMatch {
     pub column_start: usize,
     pub column_end: usize,
     pub matched_text: String,
+    pub node_type: String,
 }
 
 /// Options for the ast-grep query
@@ -36,6 +41,8 @@ pub struct QueryOptions<'a> {
     #[allow(dead_code)]
     pub format: &'a str,
     pub no_gitignore: bool,
+    pub strict: bool,
+    pub text_extensions: &'a [String],
 }
 
 #[derive(Clone, Copy)]
@@ -129,9 +136,13 @@ fn should_ignore_file(file_path: &Path, options: &QueryOptions) -> bool {
 fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>> {
     // Get the file extension
     let file_ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let user_text_extension = matches_text_extension(file_ext, options.text_extensions);
+    let automatic_text_extension =
+        options.language.is_none() && !options.strict && is_standard_text_extension(file_ext);
+    let force_plain_text = user_text_extension || automatic_text_extension;
 
     // If language is provided, check if the file has the correct extension
-    if let Some(language) = options.language {
+    if let Some(language) = options.language.filter(|_| !force_plain_text) {
         let extensions = get_file_extension(language);
         let has_matching_ext = extensions
             .iter()
@@ -145,6 +156,10 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
     // Read the file content
     let content = fs::read_to_string(file_path)
         .with_context(|| format!("Failed to read file: {}", file_path.display()))?;
+
+    if force_plain_text {
+        return Ok(query_plain_text_file(file_path, &content, options.pattern));
+    }
 
     // Get the language for ast-grep
     let lang = if let Some(language) = options.language {
@@ -178,7 +193,13 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
 
         match inferred_lang {
             Some(lang) => lang,
-            None => return Ok(vec![]), // Skip files with unsupported extensions
+            None => {
+                return if options.strict {
+                    Ok(vec![])
+                } else {
+                    Ok(query_plain_text_file(file_path, &content, options.pattern))
+                };
+            }
         }
     };
 
@@ -245,6 +266,7 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
             column_start,
             column_end,
             matched_text: node.text().to_string(),
+            node_type: "match".to_string(),
         });
     }
 
@@ -256,8 +278,51 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
         options.language,
         file_ext,
     );
+    supplement_rust_function_matches(
+        &mut ast_matches,
+        &content,
+        file_path,
+        options.pattern,
+        options.language,
+        file_ext,
+    );
+    supplement_python_function_matches(
+        &mut ast_matches,
+        &content,
+        file_path,
+        options.pattern,
+        options.language,
+        file_ext,
+    );
 
     Ok(ast_matches)
+}
+
+fn query_plain_text_file(file_path: &Path, content: &str, pattern: &str) -> Vec<AstMatch> {
+    let mut matches = Vec::new();
+    let mut byte_offset = 0usize;
+
+    for (idx, line) in content.lines().enumerate() {
+        if let Some(match_start) = line.find(pattern) {
+            let line_start = idx + 1;
+            let byte_start = byte_offset + match_start;
+            let byte_end = byte_offset + line.len();
+            matches.push(AstMatch {
+                file_path: file_path.to_path_buf(),
+                byte_start,
+                byte_end,
+                line_start,
+                line_end: line_start,
+                column_start: match_start + 1,
+                column_end: line.len() + 1,
+                matched_text: line.to_string(),
+                node_type: "text".to_string(),
+            });
+        }
+        byte_offset += line.len() + 1;
+    }
+
+    matches
 }
 
 fn supplement_c_like_function_matches(
@@ -299,10 +364,163 @@ fn supplement_c_like_function_matches(
             column_start,
             column_end,
             matched_text,
+            node_type: "match".to_string(),
         });
     }
 
     ast_matches.sort_by_key(|m| (m.file_path.clone(), m.byte_start));
+}
+
+fn supplement_rust_function_matches(
+    ast_matches: &mut Vec<AstMatch>,
+    content: &str,
+    file_path: &Path,
+    pattern: &str,
+    language: Option<&str>,
+    file_ext: &str,
+) {
+    if !should_recover_rust_functions(pattern, language, file_ext) {
+        return;
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .is_err()
+    {
+        return;
+    }
+
+    let Some(tree) = parser.parse(content, None) else {
+        return;
+    };
+
+    let mut existing_lines: HashSet<usize> = ast_matches.iter().map(|m| m.line_start).collect();
+    collect_rust_function_matches(
+        tree.root_node(),
+        content,
+        file_path,
+        ast_matches,
+        &mut existing_lines,
+    );
+    ast_matches.sort_by_key(|m| (m.file_path.clone(), m.byte_start));
+}
+
+fn should_recover_rust_functions(pattern: &str, language: Option<&str>, file_ext: &str) -> bool {
+    let is_rust = language
+        .map(|lang| matches!(lang.to_lowercase().as_str(), "rust" | "rs"))
+        .unwrap_or(file_ext == "rs");
+    if !is_rust {
+        return false;
+    }
+
+    let normalized = pattern.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized == "fn $NAME($$$PARAMS) $$$BODY"
+}
+
+fn supplement_python_function_matches(
+    ast_matches: &mut Vec<AstMatch>,
+    content: &str,
+    file_path: &Path,
+    pattern: &str,
+    language: Option<&str>,
+    file_ext: &str,
+) {
+    if !should_recover_python_functions(pattern, language, file_ext) {
+        return;
+    }
+
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_python::LANGUAGE.into())
+        .is_err()
+    {
+        return;
+    }
+
+    let Some(tree) = parser.parse(content, None) else {
+        return;
+    };
+
+    let mut existing_lines: HashSet<usize> = ast_matches.iter().map(|m| m.line_start).collect();
+    collect_function_node_matches(
+        tree.root_node(),
+        "function_definition",
+        content,
+        file_path,
+        ast_matches,
+        &mut existing_lines,
+    );
+    ast_matches.sort_by_key(|m| (m.file_path.clone(), m.byte_start));
+}
+
+fn should_recover_python_functions(pattern: &str, language: Option<&str>, file_ext: &str) -> bool {
+    let is_python = language
+        .map(|lang| matches!(lang.to_lowercase().as_str(), "python" | "py"))
+        .unwrap_or(file_ext == "py");
+    if !is_python {
+        return false;
+    }
+
+    let normalized = pattern.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized == "def $NAME($$$PARAMS): $$$BODY"
+}
+
+fn collect_rust_function_matches(
+    node: Node,
+    content: &str,
+    file_path: &Path,
+    matches: &mut Vec<AstMatch>,
+    existing_lines: &mut HashSet<usize>,
+) {
+    collect_function_node_matches(
+        node,
+        "function_item",
+        content,
+        file_path,
+        matches,
+        existing_lines,
+    );
+}
+
+fn collect_function_node_matches(
+    node: Node,
+    target_kind: &str,
+    content: &str,
+    file_path: &Path,
+    matches: &mut Vec<AstMatch>,
+    existing_lines: &mut HashSet<usize>,
+) {
+    if node.kind() == target_kind {
+        let line_start = node.start_position().row + 1;
+        if existing_lines.insert(line_start) {
+            let byte_start = node.start_byte();
+            let byte_end = node.end_byte();
+            matches.push(AstMatch {
+                file_path: file_path.to_path_buf(),
+                byte_start,
+                byte_end,
+                line_start,
+                line_end: node.end_position().row + 1,
+                column_start: node.start_position().column + 1,
+                column_end: node.end_position().column + 1,
+                matched_text: content[byte_start..byte_end].to_string(),
+                node_type: "match".to_string(),
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_function_node_matches(
+            child,
+            target_kind,
+            content,
+            file_path,
+            matches,
+            existing_lines,
+        );
+    }
 }
 
 fn should_recover_c_like_functions(pattern: &str, language: Option<&str>, file_ext: &str) -> bool {
@@ -545,7 +763,7 @@ pub fn format_and_print_query_results(
                     let mut result = serde_json::json!({
                         "file": m.file_path.to_string_lossy(),
                         "lines": [m.line_start, m.line_end],
-                        "node_type": "match",
+                        "node_type": m.node_type,
                         "content": m.matched_text,
                         "column_start": m.column_start,
                         "column_end": m.column_end
@@ -601,7 +819,7 @@ pub fn format_and_print_query_results(
                     escape_xml(&m.file_path.to_string_lossy())
                 );
                 println!("    <lines>{}-{}</lines>", m.line_start, m.line_end);
-                println!("    <node_type>match</node_type>");
+                println!("    <node_type>{}</node_type>", escape_xml(&m.node_type));
                 println!("    <column_start>{}</column_start>", m.column_start);
                 println!("    <column_end>{}</column_end>", m.column_end);
                 println!("    <code><![CDATA[{}]]></code>", m.matched_text.trim());
@@ -612,7 +830,7 @@ pub fn format_and_print_query_results(
             println!("  <summary>");
             println!("    <count>{}</count>", matches.len());
             println!(
-                "    <total_bytes>{}",
+                "    <total_bytes>{}</total_bytes>",
                 matches.iter().map(|m| m.matched_text.len()).sum::<usize>()
             );
 
@@ -623,7 +841,7 @@ pub fn format_and_print_query_results(
                 matches.iter().map(|m| m.matched_text.as_str()).collect();
             let total_tokens = sum_tokens_with_deduplication(&matched_texts);
 
-            println!("    <total_tokens>{total_tokens}");
+            println!("    <total_tokens>{total_tokens}</total_tokens>");
             println!("  </summary>");
 
             println!(
@@ -654,6 +872,8 @@ pub fn handle_query(
     format: &str,
     no_gitignore: bool,
     with_context: bool,
+    strict: bool,
+    text_extensions: Vec<String>,
 ) -> Result<()> {
     // Print version at the start for text-based formats
     if format != "json" && format != "xml" {
@@ -705,6 +925,8 @@ pub fn handle_query(
         with_context,
         format,
         no_gitignore,
+        strict,
+        text_extensions: &text_extensions,
     };
 
     let matches = perform_query(&options)?;
@@ -785,6 +1007,8 @@ contract Counter {
             with_context: false,
             format: "json",
             no_gitignore: true,
+            strict: false,
+            text_extensions: &[],
         };
 
         let matches = perform_query(&options).expect("Solidity query should run");
@@ -819,6 +1043,8 @@ end
             with_context: false,
             format: "json",
             no_gitignore: true,
+            strict: false,
+            text_extensions: &[],
         };
 
         let matches = perform_query(&options).expect("Crystal query should run");

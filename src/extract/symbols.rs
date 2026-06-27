@@ -35,8 +35,26 @@ pub struct FileSymbols {
     pub symbols: Vec<SymbolNode>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SymbolOptions {
+    pub allow_tests: bool,
+    pub strict: bool,
+    pub text_extensions: Vec<String>,
+}
+
 /// Extract the symbol tree from a file.
 pub fn extract_symbols(path: &Path, allow_tests: bool) -> Result<FileSymbols> {
+    extract_symbols_with_options(
+        path,
+        &SymbolOptions {
+            allow_tests,
+            ..SymbolOptions::default()
+        },
+    )
+}
+
+/// Extract the symbol tree from a file with configurable fallback behavior.
+pub fn extract_symbols_with_options(path: &Path, options: &SymbolOptions) -> Result<FileSymbols> {
     if !path.exists() {
         return Err(anyhow::anyhow!("File does not exist: {:?}", path));
     }
@@ -46,8 +64,20 @@ pub fn extract_symbols(path: &Path, allow_tests: bool) -> Result<FileSymbols> {
 
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
-    let language_impl = get_language_impl(extension)
-        .ok_or_else(|| anyhow::anyhow!("Unsupported file extension: {}", extension))?;
+    let language_impl = get_language_impl(extension);
+    let user_text_extension = matches_text_extension(extension, &options.text_extensions);
+    let automatic_text_extension = is_standard_text_extension(extension);
+    if user_text_extension || (!options.strict && automatic_text_extension) {
+        return Ok(extract_plain_text_symbols(path, &content));
+    }
+    if language_impl.is_none() {
+        if options.strict {
+            return Err(anyhow::anyhow!("Unsupported file extension: {}", extension));
+        }
+        return Ok(extract_plain_text_symbols(path, &content));
+    }
+
+    let language_impl = language_impl.expect("checked language implementation presence");
 
     let mut parser = get_pooled_parser(extension)
         .map_err(|_| anyhow::anyhow!("Failed to get parser for extension: {}", extension))?;
@@ -59,7 +89,13 @@ pub fn extract_symbols(path: &Path, allow_tests: bool) -> Result<FileSymbols> {
     let root = tree.root_node();
     let source = content.as_bytes();
 
-    let mut symbols = collect_symbols(&root, source, language_impl.as_ref(), allow_tests, 0);
+    let mut symbols = collect_symbols(
+        &root,
+        source,
+        language_impl.as_ref(),
+        options.allow_tests,
+        0,
+    );
     if is_c_like_extension(extension) {
         merge_recovered_c_like_functions(&mut symbols, source);
     }
@@ -70,6 +106,48 @@ pub fn extract_symbols(path: &Path, allow_tests: bool) -> Result<FileSymbols> {
         file: path.to_string_lossy().to_string(),
         symbols,
     })
+}
+
+fn extract_plain_text_symbols(path: &Path, content: &str) -> FileSymbols {
+    let symbols = content
+        .lines()
+        .enumerate()
+        .map(|(idx, line)| SymbolNode {
+            name: String::new(),
+            kind: "text".to_string(),
+            signature: line.to_string(),
+            line: idx + 1,
+            end_line: idx + 1,
+            children: Vec::new(),
+        })
+        .collect();
+
+    FileSymbols {
+        file: path.to_string_lossy().to_string(),
+        symbols,
+    }
+}
+
+pub(crate) fn normalize_extension(extension: &str) -> String {
+    extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase()
+}
+
+pub(crate) fn is_standard_text_extension(extension: &str) -> bool {
+    matches!(
+        normalize_extension(extension).as_str(),
+        "1" | "5" | "txt" | "conf" | "tex" | "sh" | "json"
+    )
+}
+
+pub(crate) fn matches_text_extension(extension: &str, text_extensions: &[String]) -> bool {
+    let extension = normalize_extension(extension);
+    text_extensions
+        .iter()
+        .map(|ext| normalize_extension(ext))
+        .any(|ext| ext == extension)
 }
 
 /// Container node kinds that can have child symbols.
@@ -127,13 +205,17 @@ fn collect_symbols(
 
         if lang.is_symbol_node(&child) {
             let semantic_child = semantic_symbol_node(&child, lang, source).unwrap_or(child);
-            let signature = lang
-                .get_symbol_signature(&child, source)
-                .unwrap_or_else(|| {
+            let signature = if let Some(signature) = lang.get_symbol_signature(&child, source) {
+                signature
+            } else if lang.allow_symbol_signature_fallback(&child) {
+                {
                     // Fallback: use the first line of the node text
                     let text = semantic_child.utf8_text(source).unwrap_or("");
                     text.lines().next().unwrap_or("").trim().to_string()
-                });
+                }
+            } else {
+                continue;
+            };
 
             let name = extract_symbol_name(&semantic_child, source);
             let kind = normalize_kind(semantic_child.kind());
@@ -700,12 +782,12 @@ fn format_symbol_list(symbols: &[SymbolNode], output: &mut String, indent: usize
 }
 
 /// Handle the `symbols` CLI command.
-pub fn handle_symbols(files: Vec<String>, format: &str, allow_tests: bool) -> Result<()> {
+pub fn handle_symbols(files: Vec<String>, format: &str, options: SymbolOptions) -> Result<()> {
     let mut all_symbols = Vec::new();
 
     for file in &files {
         let path = Path::new(file);
-        match extract_symbols(path, allow_tests) {
+        match extract_symbols_with_options(path, &options) {
             Ok(fs) => all_symbols.push(fs),
             Err(e) => eprintln!("Warning: {}: {}", file, e),
         }
@@ -1106,9 +1188,71 @@ end
 
     #[test]
     fn test_symbols_unsupported_extension() {
+        let file = create_temp_file("hello world\nreqproof:documents SW-REQ-1", "xyz");
+        let result = extract_symbols(file.path(), false).unwrap();
+
+        assert_eq!(result.symbols.len(), 2);
+        assert_eq!(result.symbols[0].kind, "text");
+        assert_eq!(result.symbols[0].signature, "hello world");
+        assert_eq!(result.symbols[0].line, 1);
+        assert_eq!(result.symbols[1].signature, "reqproof:documents SW-REQ-1");
+        assert_eq!(result.symbols[1].line, 2);
+    }
+
+    #[test]
+    fn test_symbols_strict_unsupported_extension_errors() {
         let file = create_temp_file("hello world", "xyz");
-        let result = extract_symbols(file.path(), false);
+        let result = extract_symbols_with_options(
+            file.path(),
+            &SymbolOptions {
+                strict: true,
+                ..SymbolOptions::default()
+            },
+        );
+
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_symbols_standard_text_extensions_use_text_mode() {
+        let file = create_temp_file(".TH rsync 1\n.SH NAME", "1");
+        let result = extract_symbols(file.path(), false).unwrap();
+
+        assert_eq!(result.symbols.len(), 2);
+        assert!(result.symbols.iter().all(|symbol| symbol.kind == "text"));
+        assert_eq!(result.symbols[0].signature, ".TH rsync 1");
+        assert_eq!(result.symbols[1].signature, ".SH NAME");
+    }
+
+    #[test]
+    fn test_symbols_strict_standard_text_extension_errors_without_override() {
+        let file = create_temp_file(".TH rsync 1", "1");
+        let result = extract_symbols_with_options(
+            file.path(),
+            &SymbolOptions {
+                strict: true,
+                ..SymbolOptions::default()
+            },
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_symbols_custom_text_extension_forces_text_mode() {
+        let file = create_temp_file("fn not_a_symbol() {}\nplain text", "rs");
+        let result = extract_symbols_with_options(
+            file.path(),
+            &SymbolOptions {
+                text_extensions: vec!["rs".to_string()],
+                ..SymbolOptions::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result.symbols.len(), 2);
+        assert!(result.symbols.iter().all(|symbol| symbol.kind == "text"));
+        assert_eq!(result.symbols[0].signature, "fn not_a_symbol() {}");
     }
 
     #[test]

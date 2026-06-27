@@ -30,6 +30,12 @@ pub trait LanguageImpl {
         None
     }
 
+    /// Whether generic symbol extraction may fall back to the node's first source line
+    /// when get_symbol_signature returns None.
+    fn allow_symbol_signature_fallback(&self, _node: &Node) -> bool {
+        true
+    }
+
     /// Check if a node is a symbol that should appear in a file's symbol tree/TOC.
     /// Broader than is_acceptable_parent — includes constants, type aliases, etc.
     /// Override in language implementations to add language-specific symbol types.

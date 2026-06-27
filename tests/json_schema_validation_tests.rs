@@ -29,6 +29,10 @@ fn create_test_file(dir: &TempDir, filename: &str, content: &str) -> PathBuf {
     file_path
 }
 
+fn json_output_schema_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/schemas/json_output_schema.json")
+}
+
 // Helper function to create a test directory structure with various test files
 fn create_test_directory_structure(root_dir: &TempDir) {
     // Create a source directory
@@ -99,7 +103,7 @@ function validateTerm(term) {
 #[test]
 fn test_json_schema_validation_basic() {
     // Load the JSON schema
-    let schema_path = "tests/schemas/json_output_schema.json";
+    let schema_path = json_output_schema_path();
     let schema_str = fs::read_to_string(schema_path).expect("Failed to read JSON schema file");
 
     let schema_value: Value =
@@ -111,10 +115,8 @@ fn test_json_schema_validation_basic() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -175,7 +177,7 @@ fn test_json_schema_validation_basic() {
 #[test]
 fn test_json_schema_validation_special_characters() {
     // Load the JSON schema
-    let schema_path = "tests/schemas/json_output_schema.json";
+    let schema_path = json_output_schema_path();
     let schema_str = fs::read_to_string(schema_path).expect("Failed to read JSON schema file");
 
     let schema_value: Value =
@@ -187,10 +189,8 @@ fn test_json_schema_validation_special_characters() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format, searching for special characters
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "special", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -261,7 +261,7 @@ fn test_json_schema_validation_special_characters() {
 #[test]
 fn test_json_schema_validation_edge_cases() {
     // Load the JSON schema
-    let schema_path = "tests/schemas/json_output_schema.json";
+    let schema_path = json_output_schema_path();
     let schema_str = fs::read_to_string(schema_path).expect("Failed to read JSON schema file");
 
     let schema_value: Value =
@@ -350,7 +350,7 @@ fn test_json_schema_validation_edge_cases() {
 #[test]
 fn test_json_schema_validation_invalid_cases() {
     // Load the JSON schema
-    let schema_path = "tests/schemas/json_output_schema.json";
+    let schema_path = json_output_schema_path();
     let schema_str = fs::read_to_string(schema_path).expect("Failed to read JSON schema file");
 
     let schema_value: Value =

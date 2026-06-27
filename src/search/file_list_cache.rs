@@ -482,13 +482,14 @@ pub fn find_matching_filenames(
     let mut matching_files = HashMap::new();
 
     for file_path in &file_list.files {
-        // Skip if this file is already in the results
-        if already_found_files.contains(file_path) {
-            continue;
-        }
-
-        // Get the full relative path including directory structure
-        let relative_path = file_path.to_string_lossy().to_string();
+        // Match against the path relative to the requested root. Using the
+        // absolute path makes temp directory names and parent directories part
+        // of filename search, which can create false term matches.
+        let relative_path = file_path
+            .strip_prefix(path)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .to_string();
 
         // Tokenize the full relative path using the standard tokenizer
         let filename_tokens = tokenization::tokenize(&relative_path);
@@ -502,10 +503,16 @@ pub fn find_matching_filenames(
         for (term, &idx) in term_indices {
             let term_tokens = tokenization::tokenize(term);
 
-            // Check if any term token matches any filename token
+            // Check if any term token matches any filename token. Reverse
+            // substring matching is intentionally limited to non-trivial
+            // filename tokens; otherwise short tokens like "rs" or temp-dir
+            // fragments can make unrelated query terms look like filename
+            // matches.
             let matched = term_tokens.iter().any(|term_token| {
                 filename_tokens.iter().any(|filename_token| {
-                    filename_token.contains(term_token) || term_token.contains(filename_token)
+                    filename_token == term_token
+                        || filename_token.contains(term_token)
+                        || (filename_token.len() >= 3 && term_token.contains(filename_token))
                 })
             });
 
@@ -642,6 +649,38 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_filename_matching_does_not_match_query_terms_from_unrelated_path_tokens() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file1 = root.join("file1.rs");
+        let file2 = root.join("file2.rs");
+        fs::write(&file1, "fn one() {}").unwrap();
+        fs::write(&file2, "fn two() {}").unwrap();
+
+        let mut term_indices = HashMap::new();
+        term_indices.insert("keywordalpha".to_string(), 0);
+        term_indices.insert("keywordgamma".to_string(), 1);
+
+        let matches = find_matching_filenames(
+            root,
+            &["\"keywordAlpha\" -keywordGamma".to_string()],
+            &HashSet::new(),
+            &[],
+            true,
+            &term_indices,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert!(
+            matches.is_empty(),
+            "unrelated file names must not inherit query terms from short path tokens: {matches:?}"
+        );
+    }
 
     #[test]
     fn test_underscore_directory_traversal_unix_paths() {

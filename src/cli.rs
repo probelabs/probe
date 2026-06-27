@@ -321,6 +321,14 @@ pub enum Commands {
         /// Include test functions/methods
         #[arg(long = "allow-tests")]
         allow_tests: bool,
+
+        /// Restore strict AST-only behavior for unsupported extensions
+        #[arg(long = "strict")]
+        strict: bool,
+
+        /// Treat the given extension as plain text (repeatable, with or without leading dot)
+        #[arg(long = "text-extension", value_name = "EXT")]
+        text_extensions: Vec<String>,
     },
 
     /// Search code using AST patterns for precise structural matching
@@ -379,6 +387,14 @@ pub enum Commands {
         /// Include owning source-block context in JSON output
         #[arg(long = "with-context", alias = "owner-context")]
         with_context: bool,
+
+        /// Restore strict AST-only behavior for unsupported extensions
+        #[arg(long = "strict")]
+        strict: bool,
+
+        /// Treat the given extension as plain text (repeatable, with or without leading dot)
+        #[arg(long = "text-extension", value_name = "EXT")]
+        text_extensions: Vec<String>,
 
         /// Output format (default: color)
         /// Use 'json' or 'xml' for machine-readable output with structured data

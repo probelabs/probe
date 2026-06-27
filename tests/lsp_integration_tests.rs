@@ -17,7 +17,7 @@ use std::time::Duration;
 
 /// Helper to run probe commands and capture output
 fn run_probe_command(args: &[&str]) -> Result<(String, String, bool)> {
-    let output = Command::new("./target/debug/probe")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -32,7 +32,7 @@ fn run_probe_command(args: &[&str]) -> Result<(String, String, bool)> {
 
 /// Helper to ensure daemon is stopped (cleanup)
 fn ensure_daemon_stopped() {
-    let _ = Command::new("./target/debug/probe")
+    let _ = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args(["lsp", "shutdown"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -45,7 +45,7 @@ fn ensure_daemon_stopped() {
 /// Helper to start daemon and wait for it to be ready
 fn start_daemon_and_wait() -> Result<()> {
     // Start daemon in background
-    let _ = Command::new("./target/debug/probe")
+    let _ = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args(["lsp", "start"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -55,7 +55,7 @@ fn start_daemon_and_wait() -> Result<()> {
     for _ in 0..10 {
         thread::sleep(Duration::from_millis(500));
 
-        let output = Command::new("./target/debug/probe")
+        let output = Command::new(env!("CARGO_BIN_EXE_probe"))
             .args(["lsp", "status"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())

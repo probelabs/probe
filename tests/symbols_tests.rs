@@ -1,14 +1,12 @@
-use probe_code::search::{perform_probe, SearchOptions};
+use probe_code::extract::symbols::extract_symbols;
 use std::fs;
 use tempfile::tempdir;
 
 #[test]
-fn test_symbols_flag_with_rust_code() {
-    // Create a temporary directory and file
+fn test_extract_symbols_with_rust_code() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let test_file = temp_dir.path().join("test.rs");
 
-    // Write Rust code with various symbols
     let rust_code = r#"
 pub struct User {
     pub name: String,
@@ -35,66 +33,36 @@ pub const MAX_USERS: usize = 1000;
 
     fs::write(&test_file, rust_code).expect("Failed to write test file");
 
-    // Test search with symbols flag enabled
-    let options = SearchOptions {
-        path: temp_dir.path(),
-        queries: &["pub fn".to_string()],
-        files_only: false,
-        custom_ignores: &[],
-        exclude_filenames: false,
-        reranker: "bm25",
-        frequency_search: true,
-        exact: false,
-        language: None,
-        max_results: Some(10),
-        max_bytes: None,
-        max_tokens: None,
-        allow_tests: false,
-        no_merge: false,
-        merge_threshold: None,
-        lsp: false,
-        dry_run: false,
-        session: None,
-        timeout: 30,
-        question: None,
-        no_gitignore: true,
-    };
-
-    let results = perform_probe(&options).expect("Search should succeed");
-
-    // Verify we got results
-    assert!(!results.results.is_empty(), "Should find symbol matches");
-
-    // Verify that symbol signatures are populated
-    let has_symbol_signatures = results.results.iter().any(|r| r.symbol_signature.is_some());
-    assert!(
-        has_symbol_signatures,
-        "At least one result should have a symbol signature"
-    );
-
-    // Test with symbols flag disabled
-    let options_no_symbols = SearchOptions { ..options };
-
-    let results_no_symbols = perform_probe(&options_no_symbols).expect("Search should succeed");
-
-    // Verify that symbol signatures are not populated when flag is disabled
-    let has_symbol_signatures = results_no_symbols
-        .results
+    let symbols = extract_symbols(&test_file, false).expect("Symbol extraction should succeed");
+    let signatures: Vec<_> = symbols
+        .symbols
         .iter()
-        .any(|r| r.symbol_signature.is_some());
+        .map(|symbol| symbol.signature.as_str())
+        .collect();
+
     assert!(
-        !has_symbol_signatures,
-        "No results should have symbol signatures when flag is disabled"
+        signatures.iter().any(|sig| sig.contains("struct User")),
+        "Should extract Rust struct signatures: {signatures:?}"
+    );
+    assert!(
+        signatures.iter().any(|sig| sig.contains("impl User")),
+        "Should extract Rust impl signatures: {signatures:?}"
+    );
+    assert!(
+        signatures.iter().any(|sig| sig.contains("pub fn main()")),
+        "Should extract Rust function signatures: {signatures:?}"
+    );
+    assert!(
+        signatures.iter().any(|sig| sig.contains("MAX_USERS")),
+        "Should extract Rust constant signatures: {signatures:?}"
     );
 }
 
 #[test]
-fn test_symbols_flag_with_python_code() {
-    // Create a temporary directory and file
+fn test_extract_symbols_with_python_code() {
     let temp_dir = tempdir().expect("Failed to create temp dir");
     let test_file = temp_dir.path().join("test.py");
 
-    // Write Python code with various symbols
     let python_code = r#"
 class User:
     def __init__(self, name: str, age: int):
@@ -111,58 +79,40 @@ async def async_function(data: list) -> dict:
     return {"length": len(data)}
 
 MAX_USERS = 1000
+add = lambda x, y: x + y
 "#;
 
     fs::write(&test_file, python_code).expect("Failed to write test file");
 
-    // Test search with symbols flag enabled
-    let options = SearchOptions {
-        path: temp_dir.path(),
-        queries: &["def ".to_string()],
-        files_only: false,
-        custom_ignores: &[],
-        exclude_filenames: false,
-        reranker: "bm25",
-        frequency_search: true,
-        exact: false,
-        language: None,
-        max_results: Some(10),
-        max_bytes: None,
-        max_tokens: None,
-        allow_tests: false,
-        no_merge: false,
-        merge_threshold: None,
-        lsp: false,
-        dry_run: false,
-        session: None,
-        timeout: 30,
-        question: None,
-        no_gitignore: true,
-    };
-
-    let results = perform_probe(&options).expect("Search should succeed");
-
-    // Verify we got results
-    assert!(!results.results.is_empty(), "Should find symbol matches");
-
-    // Verify that symbol signatures are populated and contain Python syntax
-    let python_symbols: Vec<_> = results
-        .results
+    let symbols = extract_symbols(&test_file, false).expect("Symbol extraction should succeed");
+    let signatures: Vec<_> = symbols
+        .symbols
         .iter()
-        .filter_map(|r| r.symbol_signature.as_ref())
+        .map(|symbol| symbol.signature.as_str())
         .collect();
 
     assert!(
-        !python_symbols.is_empty(),
-        "Should have Python symbol signatures"
+        signatures.iter().any(|sig| sig.contains("class User")),
+        "Should extract Python class signatures: {signatures:?}"
     );
-
-    // Check that we have recognizable Python function signatures
-    let has_python_function = python_symbols
-        .iter()
-        .any(|sig| sig.contains("def ") && sig.contains("(") && sig.contains(")"));
     assert!(
-        has_python_function,
-        "Should have Python function signatures"
+        signatures
+            .iter()
+            .any(|sig| sig.contains("def create_user(")),
+        "Should extract Python function signatures: {signatures:?}"
+    );
+    assert!(
+        signatures
+            .iter()
+            .any(|sig| sig.contains("async def async_function(")),
+        "Should extract Python async function signatures: {signatures:?}"
+    );
+    assert!(
+        signatures.iter().any(|sig| sig.contains("MAX_USERS = ...")),
+        "Should extract Python constant signatures: {signatures:?}"
+    );
+    assert!(
+        !signatures.iter().any(|sig| sig.contains("lambda")),
+        "Should not extract Python lambda assignments as symbols: {signatures:?}"
     );
 }

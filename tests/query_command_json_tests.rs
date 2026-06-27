@@ -92,10 +92,8 @@ fn test_query_json_output_rust_functions() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "fn $NAME($$$PARAMS) $$$BODY", // Pattern to search for Rust functions
             temp_dir.path().to_str().unwrap(),
@@ -158,15 +156,15 @@ fn test_query_json_output_rust_functions() {
             "Each result should have a 'column_end' field"
         );
         assert!(
-            result.get("code").is_some(),
-            "Each result should have a 'code' field"
+            result.get("content").is_some(),
+            "Each result should have a 'content' field"
         );
 
         // Check that the code contains function code
-        let code = result.get("code").unwrap().as_str().unwrap();
+        let content = result.get("content").unwrap().as_str().unwrap();
         assert!(
-            code.starts_with("fn "),
-            "Function code should start with 'fn '"
+            content.starts_with("fn "),
+            "Function content should start with 'fn '"
         );
     }
 
@@ -201,10 +199,8 @@ fn test_query_json_output_javascript_functions() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "function $NAME($$$PARAMS) $$$BODY", // Pattern to search for JavaScript functions
             temp_dir.path().to_str().unwrap(),
@@ -233,9 +229,13 @@ fn test_query_json_output_javascript_functions() {
     assert!(!results.is_empty(), "'results' array should not be empty");
 
     // Check that we found the JavaScript functions
-    let has_greet = results
-        .iter()
-        .any(|r| r.get("code").unwrap().as_str().unwrap().contains("greet"));
+    let has_greet = results.iter().any(|r| {
+        r.get("content")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("greet")
+    });
 
     assert!(has_greet, "Should find the 'greet' function");
 }
@@ -246,10 +246,8 @@ fn test_query_json_output_with_special_characters() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format, searching for the escape function
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "function escapeTest", // Pattern to search for the escape function
             temp_dir.path().to_str().unwrap(),
@@ -279,7 +277,7 @@ fn test_query_json_output_with_special_characters() {
 
     // Check that we found the escape function
     let escape_result = results.iter().find(|r| {
-        r.get("code")
+        r.get("content")
             .unwrap()
             .as_str()
             .unwrap()
@@ -292,23 +290,23 @@ fn test_query_json_output_with_special_characters() {
     );
 
     // Verify that special characters are properly escaped in the JSON
-    let code = escape_result
+    let content = escape_result
         .unwrap()
-        .get("code")
+        .get("content")
         .unwrap()
         .as_str()
         .unwrap();
 
-    // Print the code content for debugging
-    println!("Code content: {code}");
+    // Print the content for debugging
+    println!("Content: {content}");
 
     // Check for special characters in the function body
     // The function contains special characters in the string literals
-    assert!(code.contains("&lt;"), "Should contain '&lt;'");
-    assert!(code.contains("&gt;"), "Should contain '&gt;'");
-    assert!(code.contains("&amp;"), "Should contain '&amp;'");
-    assert!(code.contains("&quot;"), "Should contain '&quot;'");
-    assert!(code.contains("&#39;"), "Should contain '&#39;'");
+    assert!(content.contains("&lt;"), "Should contain '&lt;'");
+    assert!(content.contains("&gt;"), "Should contain '&gt;'");
+    assert!(content.contains("&amp;"), "Should contain '&amp;'");
+    assert!(content.contains("&quot;"), "Should contain '&quot;'");
+    assert!(content.contains("&#39;"), "Should contain '&#39;'");
 }
 
 #[test]
@@ -324,10 +322,8 @@ export async function requestJSON(url: string) {
 "#;
     create_test_file(&temp_dir, "src/api.ts", ts_content);
 
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "fetch($$$ARGS)",
             temp_dir.path().to_str().unwrap(),
@@ -401,10 +397,8 @@ fn test_query_json_output_with_multiple_languages() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format, without specifying a language
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "def $NAME($$$PARAMS): $$$BODY", // Pattern to search for Python functions
             temp_dir.path().to_str().unwrap(),
@@ -434,7 +428,7 @@ fn test_query_json_output_with_multiple_languages() {
 
     // Check that we found Python functions
     let has_calculate_sum = results.iter().any(|r| {
-        r.get("code")
+        r.get("content")
             .unwrap()
             .as_str()
             .unwrap()
@@ -442,7 +436,7 @@ fn test_query_json_output_with_multiple_languages() {
     });
 
     let has_process_data = results.iter().any(|r| {
-        r.get("code")
+        r.get("content")
             .unwrap()
             .as_str()
             .unwrap()
@@ -462,10 +456,8 @@ fn test_query_json_output_with_no_results() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format, searching for a pattern that doesn't exist
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "query",
             "class $NAME { $$$METHODS }", // Pattern that doesn't match any file
             temp_dir.path().to_str().unwrap(),
