@@ -24,19 +24,9 @@ fn main() {
     )
     .unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with --help to verify the new option exists
-    let help_output = Command::new("cargo")
-        .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
-            "extract",
-            "--help",
-        ])
+    let help_output = Command::new(env!("CARGO_BIN_EXE_probe"))
+        .args(["extract", "--help"])
         .output()
         .expect("Failed to execute help command");
 
@@ -50,20 +40,9 @@ fn main() {
 
 #[test]
 fn test_extract_command_with_nonexistent_input_file() {
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with a nonexistent input file
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
-            "extract",
-            "--input-file",
-            "nonexistent_file.txt",
-        ])
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
+        .args(["extract", "--input-file", "nonexistent_file.txt"])
         .output()
         .expect("Failed to execute command");
 

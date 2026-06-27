@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use lazy_static::lazy_static;
+use probe_code::file_guard;
 use probe_code::search::tokenization;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -231,16 +232,12 @@ fn build_file_list(
         "*.orig",
         "*.DS_Store",
         "Thumbs.db",
-        "*.yml",
-        "*.yaml",
-        "*.json",
-        "*.tconf",
-        "*.conf",
         "go.sum",
     ]
     .into_iter()
     .map(String::from)
     .collect();
+    common_ignores.extend(file_guard::hard_deny_globs());
 
     // Add test file patterns if allow_tests is false
     if !allow_tests {
@@ -349,6 +346,13 @@ fn build_file_list(
         if !allow_tests && is_test_path(path, entry.path()) {
             if debug_mode {
                 println!("DEBUG: Skipping test file: {:?}", entry.path());
+            }
+            continue;
+        }
+
+        if file_guard::is_hard_denied_path(entry.path()) {
+            if debug_mode {
+                println!("DEBUG: Skipping hard-denied file: {:?}", entry.path());
             }
             continue;
         }
@@ -482,13 +486,14 @@ pub fn find_matching_filenames(
     let mut matching_files = HashMap::new();
 
     for file_path in &file_list.files {
-        // Skip if this file is already in the results
-        if already_found_files.contains(file_path) {
-            continue;
-        }
-
-        // Get the full relative path including directory structure
-        let relative_path = file_path.to_string_lossy().to_string();
+        // Match against the path relative to the requested root. Using the
+        // absolute path makes temp directory names and parent directories part
+        // of filename search, which can create false term matches.
+        let relative_path = file_path
+            .strip_prefix(path)
+            .unwrap_or(file_path)
+            .to_string_lossy()
+            .to_string();
 
         // Tokenize the full relative path using the standard tokenizer
         let filename_tokens = tokenization::tokenize(&relative_path);
@@ -502,10 +507,16 @@ pub fn find_matching_filenames(
         for (term, &idx) in term_indices {
             let term_tokens = tokenization::tokenize(term);
 
-            // Check if any term token matches any filename token
+            // Check if any term token matches any filename token. Reverse
+            // substring matching is intentionally limited to non-trivial
+            // filename tokens; otherwise short tokens like "rs" or temp-dir
+            // fragments can make unrelated query terms look like filename
+            // matches.
             let matched = term_tokens.iter().any(|term_token| {
                 filename_tokens.iter().any(|filename_token| {
-                    filename_token.contains(term_token) || term_token.contains(filename_token)
+                    filename_token == term_token
+                        || filename_token.contains(term_token)
+                        || (filename_token.len() >= 3 && term_token.contains(filename_token))
                 })
             });
 
@@ -642,6 +653,76 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_filename_matching_does_not_match_query_terms_from_unrelated_path_tokens() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let file1 = root.join("file1.rs");
+        let file2 = root.join("file2.rs");
+        fs::write(&file1, "fn one() {}").unwrap();
+        fs::write(&file2, "fn two() {}").unwrap();
+
+        let mut term_indices = HashMap::new();
+        term_indices.insert("keywordalpha".to_string(), 0);
+        term_indices.insert("keywordgamma".to_string(), 1);
+
+        let matches = find_matching_filenames(
+            root,
+            &["\"keywordAlpha\" -keywordGamma".to_string()],
+            &HashSet::new(),
+            &[],
+            true,
+            &term_indices,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert!(
+            matches.is_empty(),
+            "unrelated file names must not inherit query terms from short path tokens: {matches:?}"
+        );
+    }
+
+    #[test]
+    fn test_file_list_skips_hard_denied_extensions() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let source_file = root.join("main.rs");
+        let binary_file = root.join("image.png");
+        fs::write(&source_file, "fn main() {}").unwrap();
+        fs::write(&binary_file, "not really an image").unwrap();
+
+        let file_list = build_file_list(root, true, &[], false).unwrap();
+
+        assert!(file_list.files.iter().any(|f| f == &source_file));
+        assert!(
+            !file_list.files.iter().any(|f| f == &binary_file),
+            "hard-denied extensions must not enter the searchable file list"
+        );
+    }
+
+    #[test]
+    fn test_file_list_keeps_standard_text_config_extensions() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let json_file = root.join("settings.json");
+        let conf_file = root.join("probe.conf");
+        let yaml_file = root.join("workflow.yaml");
+        fs::write(&json_file, r#"{"needle": true}"#).unwrap();
+        fs::write(&conf_file, "needle=true").unwrap();
+        fs::write(&yaml_file, "needle: true").unwrap();
+
+        let file_list = build_file_list(root, true, &[], false).unwrap();
+
+        assert!(file_list.files.iter().any(|f| f == &json_file));
+        assert!(file_list.files.iter().any(|f| f == &conf_file));
+        assert!(file_list.files.iter().any(|f| f == &yaml_file));
+    }
 
     #[test]
     fn test_underscore_directory_traversal_unix_paths() {

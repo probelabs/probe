@@ -1325,7 +1325,7 @@ pub fn process_file_with_results(
 
                 // PHASE 3B OPTIMIZATION: Use global tokenization cache
                 let cache_key = compute_content_hash(&full_code, &params.path.to_string_lossy());
-                let block_terms = {
+                let mut block_terms = {
                     let mut cache = TOKENIZATION_CACHE.lock().unwrap();
                     if let Some(cached_terms) = cache.get(&cache_key) {
                         if debug_mode {
@@ -1346,6 +1346,16 @@ pub fn process_file_with_results(
                         terms
                     }
                 };
+
+                // The shared tokenization cache is content-based, but exact query matching is
+                // query-specific. Ensure ranking sees the same literal terms that block filtering
+                // matched, including mixed-case exact terms normalized through term_indices.
+                let full_code_lower = full_code.to_lowercase();
+                for term in params.query_plan.term_indices.keys() {
+                    if full_code_lower.contains(term) && !block_terms.iter().any(|t| t == term) {
+                        block_terms.push(term.clone());
+                    }
+                }
 
                 // End term matching time measurement
                 let term_matching_block_duration = term_matching_start.elapsed();

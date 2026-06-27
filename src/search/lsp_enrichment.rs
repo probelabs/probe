@@ -1,5 +1,5 @@
 use crate::path_safety;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dashmap::DashMap;
 use probe_code::language::factory::get_language_impl;
 use probe_code::language::parser_pool::{get_pooled_parser, return_pooled_parser};
@@ -35,285 +35,15 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
         );
     }
 
-    const MAX_CONCURRENT_LSP_REQUESTS: usize = 3;
-    let lsp_range = results.len();
-
-    if debug_mode {
-        println!("[DEBUG] Processing {lsp_range} results with LSP enrichment");
-    }
-
-    // Build or reuse a runtime ONCE for the whole enrichment pass.
-    // If we're already inside a Tokio runtime, reuse it safely.
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        // Already in a runtime: block the current thread without starving the scheduler.
-        tokio::task::block_in_place(|| {
-            handle.block_on(async {
-                let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
-                let mut set = JoinSet::new();
-
-                // Create a shared LSP client with cache-first approach
-                // Try non-blocking first, fall back to full initialization if daemon not running
-                let shared_client = {
-                    let config = LspConfig {
-                        use_daemon: true,
-                        workspace_hint: None,
-                        timeout_ms: 8000,
-                        include_stdlib: false,
-                        auto_start: true,
-                    };
-
-                    let non_blocking_config = LspConfig {
-                        auto_start: false,
-                        ..config.clone()
-                    };
-
-                    // Fast path: try non-blocking connection to running daemon
-                    if let Some(client) = LspClient::new_non_blocking(non_blocking_config).await {
-                        if debug_mode {
-                            println!("[DEBUG] Connected to running LSP daemon for enrichment (fast path)");
-                        }
-                        Some(Arc::new(AsyncMutex::new(client)))
-                    } else {
-                        // Slow path: start daemon if needed
-                        if debug_mode {
-                            println!("[DEBUG] Starting LSP daemon for enrichment (slow path)");
-                        }
-                        match LspClient::new(config).await {
-                            Ok(client) => {
-                                if debug_mode {
-                                    println!("[DEBUG] LSP daemon started for enrichment");
-                                }
-                                Some(Arc::new(AsyncMutex::new(client)))
-                            }
-                            Err(e) => {
-                                if debug_mode {
-                                    println!("[DEBUG] Failed to start LSP daemon for enrichment: {e}");
-                                }
-                                None
-                            }
-                        }
-                    }
-                };
-
-                // Skip LSP processing if we couldn't create a client
-                let shared_client = match shared_client {
-                    Some(client) => client,
-                    None => {
-                        if debug_mode {
-                            println!(
-                                "[DEBUG] No shared LSP client available, skipping LSP enrichment"
-                            );
-                        }
-                        return;
-                    }
-                };
-
-                // Check LSP server readiness before proceeding with enrichment
-                if debug_mode {
-                    println!("[DEBUG] Checking LSP server readiness before enrichment...");
-                }
-
-                // Use the first result to determine file type for readiness check
-                if let Some(first_result) = results.first() {
-                    let file_path = std::path::Path::new(&first_result.file);
-
-                    // Keep readiness probing short: enrichment is best-effort and should not
-                    // consume most of the per-attempt timeout in CI retry loops.
-                    let readiness_wait_secs = if std::env::var("PROBE_CI").is_ok()
-                        || std::env::var("CI").is_ok()
-                    {
-                        3
-                    } else {
-                        5
-                    };
-                    let readiness_config = crate::lsp_integration::readiness::ReadinessConfig {
-                        max_wait_secs: readiness_wait_secs,
-                        poll_interval_ms: 500,
-                        show_progress: debug_mode,
-                        auto_start_daemon: false, // Don't auto-start during enrichment
-                    };
-
-                    match crate::lsp_integration::readiness::check_lsp_readiness_for_file(file_path, readiness_config).await {
-                        Ok(readiness_result) => {
-                            if !readiness_result.is_ready {
-                                if debug_mode {
-                                    println!("[DEBUG] LSP server not ready for enrichment: {}", readiness_result.status_message);
-                                    println!("[DEBUG] Continuing best-effort enrichment without readiness gate");
-                                }
-                            } else if debug_mode {
-                                println!("[DEBUG] LSP server ready for enrichment");
-                            }
-                        }
-                        Err(e) => {
-                            if debug_mode {
-                                println!("[DEBUG] Failed to check LSP readiness: {}", e);
-                                println!("[DEBUG] Continuing best-effort enrichment without readiness gate");
-                            }
-                        }
-                    }
-                } else {
-                    if debug_mode {
-                        println!("[DEBUG] No results to enrich");
-                    }
-                    return;
-                }
-
-                for (idx, result) in results[..lsp_range].iter().enumerate() {
-                    if result.lsp_info.is_some() {
-                        continue;
-                    }
-                    if !is_lsp_relevant_result(result, debug_mode) {
-                        continue;
-                    }
-                    let symbols =
-                        extract_symbols_from_code_block_with_positions(result, debug_mode);
-                    if symbols.is_empty() {
-                        continue;
-                    }
-
-                    let file_path = result.file.clone();
-                    let node_type = result.node_type.clone();
-                    let sem = semaphore.clone();
-                    let dbg = debug_mode;
-                    let client = shared_client.clone();
-
-                    set.spawn(async move {
-                        let mut collected: Vec<serde_json::Value> = Vec::new();
-                        for symbol_info in symbols.into_iter().take(3) {
-                            if let Some(v) = process_single_symbol_async_with_client(
-                                client.clone(),
-                                file_path.clone(),
-                                node_type.clone(),
-                                symbol_info,
-                                dbg,
-                                sem.clone(),
-                            )
-                            .await
-                            {
-                                collected.push(v);
-                            }
-                        }
-                        let lsp_info = if collected.len() == 1 {
-                            Some(collected.into_iter().next().unwrap())
-                        } else if !collected.is_empty() {
-                            Some(json!({ "merged": true, "symbols": collected }))
-                        } else {
-                            None
-                        };
-                        (idx, lsp_info)
-                    });
-                }
-
-                while let Some(res) = set.join_next().await {
-                    match res {
-                        Ok((idx, lsp_info)) => {
-                            results[idx].lsp_info = lsp_info;
-                        }
-                        Err(e) => {
-                            if debug_mode {
-                                println!("[DEBUG] LSP task failed: {e}");
-                            }
-                        }
-                    }
-                }
-            })
-        });
+    if tokio::runtime::Handle::try_current().is_ok() {
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| run_lsp_enrichment_runtime(results, debug_mode))
+                .join()
+        })
+        .map_err(|_| anyhow!("LSP enrichment runtime thread panicked"))??;
     } else {
-        // No runtime yet: create a lightweight single-threaded runtime once.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        rt.block_on(async {
-            let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
-            let mut set = JoinSet::new();
-
-            // Create a shared LSP client for all symbols to use the daemon connection
-            let shared_client = {
-                let config = LspConfig {
-                    use_daemon: true,
-                    workspace_hint: None,
-                    timeout_ms: 8000,
-                    include_stdlib: false,
-                    auto_start: true,
-                };
-                match LspClient::new(config).await {
-                    Ok(client) => {
-                        if debug_mode {
-                            println!("[DEBUG] Created shared LSP client for enrichment");
-                        }
-                        Some(Arc::new(AsyncMutex::new(client)))
-                    }
-                    Err(e) => {
-                        if debug_mode {
-                            println!("[DEBUG] Failed to create shared LSP client: {e}");
-                        }
-                        None
-                    }
-                }
-            };
-
-            // Skip LSP processing if we couldn't create a client
-            let shared_client = match shared_client {
-                Some(client) => client,
-                None => {
-                    if debug_mode {
-                        println!("[DEBUG] No shared LSP client available, skipping LSP enrichment");
-                    }
-                    return;
-                }
-            };
-
-            for (idx, result) in results[..lsp_range].iter().enumerate() {
-                if result.lsp_info.is_some() {
-                    continue;
-                }
-                if !is_lsp_relevant_result(result, debug_mode) {
-                    continue;
-                }
-                let symbols = extract_symbols_from_code_block_with_positions(result, debug_mode);
-                if symbols.is_empty() {
-                    continue;
-                }
-
-                let file_path = result.file.clone();
-                let node_type = result.node_type.clone();
-                let sem = semaphore.clone();
-                let dbg = debug_mode;
-                let client = shared_client.clone();
-
-                set.spawn(async move {
-                    let mut collected: Vec<serde_json::Value> = Vec::new();
-                    for symbol_info in symbols.into_iter().take(3) {
-                        if let Some(v) = process_single_symbol_async_with_client(
-                            client.clone(),
-                            file_path.clone(),
-                            node_type.clone(),
-                            symbol_info,
-                            dbg,
-                            sem.clone(),
-                        )
-                        .await
-                        {
-                            collected.push(v);
-                        }
-                    }
-                    let lsp_info = if collected.len() == 1 {
-                        Some(collected.into_iter().next().unwrap())
-                    } else if !collected.is_empty() {
-                        Some(json!({ "merged": true, "symbols": collected }))
-                    } else {
-                        None
-                    };
-                    (idx, lsp_info)
-                });
-            }
-
-            while let Some(res) = set.join_next().await {
-                if let Ok((idx, lsp_info)) = res {
-                    results[idx].lsp_info = lsp_info;
-                }
-            }
-        });
+        run_lsp_enrichment_runtime(results, debug_mode)?;
     }
 
     if debug_mode {
@@ -329,6 +59,215 @@ pub fn enrich_results_with_lsp(results: &mut [SearchResult], debug_mode: bool) -
     }
 
     Ok(())
+}
+
+fn run_lsp_enrichment_runtime(results: &mut [SearchResult], debug_mode: bool) -> Result<()> {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(enrich_results_with_lsp_async(results, debug_mode));
+    Ok(())
+}
+
+async fn enrich_results_with_lsp_async(results: &mut [SearchResult], debug_mode: bool) {
+    const MAX_CONCURRENT_LSP_REQUESTS: usize = 3;
+
+    if debug_mode {
+        println!(
+            "[DEBUG] Processing {} results with LSP enrichment",
+            results.len()
+        );
+    }
+
+    let pending = collect_lsp_candidates(results, debug_mode);
+    if pending.is_empty() {
+        if debug_mode {
+            println!("[DEBUG] No LSP-relevant results to enrich");
+        }
+        return;
+    }
+
+    let shared_client = match create_shared_lsp_client(debug_mode).await {
+        Some(client) => client,
+        None => {
+            if debug_mode {
+                println!("[DEBUG] No shared LSP client available, skipping LSP enrichment");
+            }
+            return;
+        }
+    };
+
+    check_first_result_readiness(results, debug_mode).await;
+
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_LSP_REQUESTS));
+    let mut set = JoinSet::new();
+
+    for candidate in pending {
+        let sem = semaphore.clone();
+        let dbg = debug_mode;
+        let client = shared_client.clone();
+
+        set.spawn(async move {
+            let mut collected: Vec<serde_json::Value> = Vec::new();
+            for symbol_info in candidate.symbols.into_iter().take(3) {
+                if let Some(v) = process_single_symbol_async_with_client(
+                    client.clone(),
+                    candidate.file_path.clone(),
+                    candidate.node_type.clone(),
+                    symbol_info,
+                    dbg,
+                    sem.clone(),
+                )
+                .await
+                {
+                    collected.push(v);
+                }
+            }
+            let lsp_info = if collected.len() == 1 {
+                Some(collected.into_iter().next().unwrap())
+            } else if !collected.is_empty() {
+                Some(json!({ "merged": true, "symbols": collected }))
+            } else {
+                None
+            };
+            (candidate.index, lsp_info)
+        });
+    }
+
+    while let Some(res) = set.join_next().await {
+        match res {
+            Ok((idx, lsp_info)) => {
+                results[idx].lsp_info = lsp_info;
+            }
+            Err(e) => {
+                if debug_mode {
+                    println!("[DEBUG] LSP task failed: {e}");
+                }
+            }
+        }
+    }
+}
+
+struct LspCandidate {
+    index: usize,
+    file_path: String,
+    node_type: String,
+    symbols: Vec<SymbolInfo>,
+}
+
+fn collect_lsp_candidates(results: &[SearchResult], debug_mode: bool) -> Vec<LspCandidate> {
+    results
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, result)| {
+            if result.lsp_info.is_some() || !is_lsp_relevant_result(result, debug_mode) {
+                return None;
+            }
+
+            let symbols = extract_symbols_from_code_block_with_positions(result, debug_mode);
+            if symbols.is_empty() {
+                return None;
+            }
+
+            Some(LspCandidate {
+                index: idx,
+                file_path: result.file.clone(),
+                node_type: result.node_type.clone(),
+                symbols,
+            })
+        })
+        .collect()
+}
+
+async fn create_shared_lsp_client(debug_mode: bool) -> Option<Arc<AsyncMutex<LspClient>>> {
+    let config = LspConfig {
+        use_daemon: true,
+        workspace_hint: None,
+        timeout_ms: 8000,
+        include_stdlib: false,
+        auto_start: true,
+    };
+
+    let non_blocking_config = LspConfig {
+        auto_start: false,
+        ..config.clone()
+    };
+
+    if let Some(client) = LspClient::new_non_blocking(non_blocking_config).await {
+        if debug_mode {
+            println!("[DEBUG] Connected to running LSP daemon for enrichment (fast path)");
+        }
+        return Some(Arc::new(AsyncMutex::new(client)));
+    }
+
+    if debug_mode {
+        println!("[DEBUG] Starting LSP daemon for enrichment (slow path)");
+    }
+
+    match LspClient::new(config).await {
+        Ok(client) => {
+            if debug_mode {
+                println!("[DEBUG] LSP daemon started for enrichment");
+            }
+            Some(Arc::new(AsyncMutex::new(client)))
+        }
+        Err(e) => {
+            if debug_mode {
+                println!("[DEBUG] Failed to start LSP daemon for enrichment: {e}");
+            }
+            None
+        }
+    }
+}
+
+async fn check_first_result_readiness(results: &[SearchResult], debug_mode: bool) {
+    if debug_mode {
+        println!("[DEBUG] Checking LSP server readiness before enrichment...");
+    }
+
+    let Some(first_result) = results.first() else {
+        return;
+    };
+
+    let file_path = std::path::Path::new(&first_result.file);
+    let readiness_wait_secs = if std::env::var("PROBE_CI").is_ok() || std::env::var("CI").is_ok() {
+        3
+    } else {
+        5
+    };
+    let readiness_config = crate::lsp_integration::readiness::ReadinessConfig {
+        max_wait_secs: readiness_wait_secs,
+        poll_interval_ms: 500,
+        show_progress: debug_mode,
+        auto_start_daemon: false,
+    };
+
+    match crate::lsp_integration::readiness::check_lsp_readiness_for_file(
+        file_path,
+        readiness_config,
+    )
+    .await
+    {
+        Ok(readiness_result) => {
+            if !readiness_result.is_ready {
+                if debug_mode {
+                    println!(
+                        "[DEBUG] LSP server not ready for enrichment: {}",
+                        readiness_result.status_message
+                    );
+                    println!("[DEBUG] Continuing best-effort enrichment without readiness gate");
+                }
+            } else if debug_mode {
+                println!("[DEBUG] LSP server ready for enrichment");
+            }
+        }
+        Err(e) => {
+            if debug_mode {
+                println!("[DEBUG] Failed to check LSP readiness: {e}");
+                println!("[DEBUG] Continuing best-effort enrichment without readiness gate");
+            }
+        }
+    }
 }
 
 /// Check if a search result is likely to benefit from LSP enrichment

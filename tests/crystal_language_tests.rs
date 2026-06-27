@@ -151,6 +151,8 @@ fn test_crystal_query_support() {
         with_context: false,
         format: "terminal",
         no_gitignore: true,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("Crystal query should run");
@@ -179,6 +181,8 @@ fn test_crystal_query_auto_detect_support() {
         with_context: false,
         format: "terminal",
         no_gitignore: true,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("Crystal query should auto-detect .cr files");

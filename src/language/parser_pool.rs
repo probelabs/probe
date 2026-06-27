@@ -185,8 +185,12 @@ pub fn smart_warm_parser_pool_for_directory(path: &Path) {
 /// # Example
 ///
 /// ```rust
-/// let parser = get_pooled_parser("rs")?;
-/// let tree = parser.parse(rust_code, None)?;
+/// use probe_code::language::{get_pooled_parser, return_pooled_parser};
+///
+/// let rust_code = "fn main() {}";
+/// let mut parser = get_pooled_parser("rs").unwrap();
+/// let tree = parser.parse(rust_code, None).unwrap();
+/// assert!(tree.root_node().is_named());
 /// return_pooled_parser("rs", parser);
 /// ```
 pub fn get_pooled_parser(extension: &str) -> Result<Parser> {

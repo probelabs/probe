@@ -46,10 +46,8 @@ fn test_strict_syntax_rejects_vague_queries() {
     create_test_code_structure(&temp_dir);
 
     // Test with multiple words without operators (should fail)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "error handler", // Vague query - multiple words without AND/OR
             temp_dir.path().to_str().unwrap(),
@@ -84,10 +82,8 @@ fn test_strict_syntax_rejects_unquoted_snake_case() {
     create_test_code_structure(&temp_dir);
 
     // Test with unquoted snake_case (should fail)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "get_user_id", // Unquoted snake_case
             temp_dir.path().to_str().unwrap(),
@@ -122,10 +118,8 @@ fn test_strict_syntax_rejects_unquoted_camel_case() {
     create_test_code_structure(&temp_dir);
 
     // Test with unquoted camelCase (should fail)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "getUserName", // Unquoted camelCase
             temp_dir.path().to_str().unwrap(),
@@ -155,10 +149,8 @@ fn test_strict_syntax_accepts_explicit_operators() {
     create_test_code_structure(&temp_dir);
 
     // Test with explicit AND operator (should succeed)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "(error AND handler)", // Valid query with explicit operator
             temp_dir.path().to_str().unwrap(),
@@ -180,7 +172,7 @@ fn test_strict_syntax_accepts_explicit_operators() {
 
     // Should execute search (may or may not find results, but shouldn't error on syntax)
     assert!(
-        stdout.contains("Probe version") || stdout.contains("Search completed"),
+        stdout.contains("Found ") || stdout.contains("No results found."),
         "Should execute search successfully. stdout: {}",
         stdout
     );
@@ -192,10 +184,8 @@ fn test_strict_syntax_accepts_quoted_snake_case() {
     create_test_code_structure(&temp_dir);
 
     // Test with quoted snake_case (should succeed)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "\"get_user_id\"", // Quoted snake_case
             temp_dir.path().to_str().unwrap(),
@@ -217,7 +207,7 @@ fn test_strict_syntax_accepts_quoted_snake_case() {
 
     // Should execute search
     assert!(
-        stdout.contains("Probe version") || stdout.contains("Search completed"),
+        stdout.contains("Found ") || stdout.contains("No results found."),
         "Should execute search successfully. stdout: {}",
         stdout
     );
@@ -229,10 +219,8 @@ fn test_strict_syntax_accepts_quoted_camel_case() {
     create_test_code_structure(&temp_dir);
 
     // Test with quoted camelCase (should succeed)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "\"getUserName\"", // Quoted camelCase
             temp_dir.path().to_str().unwrap(),
@@ -254,7 +242,7 @@ fn test_strict_syntax_accepts_quoted_camel_case() {
 
     // Should execute search
     assert!(
-        stdout.contains("Probe version") || stdout.contains("Search completed"),
+        stdout.contains("Found ") || stdout.contains("No results found."),
         "Should execute search successfully. stdout: {}",
         stdout
     );
@@ -266,10 +254,8 @@ fn test_strict_syntax_accepts_single_word() {
     create_test_code_structure(&temp_dir);
 
     // Test with single lowercase word (should succeed)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "error", // Single word
             temp_dir.path().to_str().unwrap(),
@@ -291,7 +277,7 @@ fn test_strict_syntax_accepts_single_word() {
 
     // Should execute search
     assert!(
-        stdout.contains("Probe version") || stdout.contains("Search completed"),
+        stdout.contains("Found ") || stdout.contains("No results found."),
         "Should execute search successfully. stdout: {}",
         stdout
     );
@@ -303,10 +289,8 @@ fn test_strict_syntax_accepts_complex_query() {
     create_test_code_structure(&temp_dir);
 
     // Test with complex query using AND, OR, NOT (should succeed)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "(\"get_user_id\" AND NOT test)", // Complex query
             temp_dir.path().to_str().unwrap(),
@@ -328,7 +312,7 @@ fn test_strict_syntax_accepts_complex_query() {
 
     // Should execute search
     assert!(
-        stdout.contains("Probe version") || stdout.contains("Search completed"),
+        stdout.contains("Found ") || stdout.contains("No results found."),
         "Should execute search successfully. stdout: {}",
         stdout
     );
@@ -340,10 +324,8 @@ fn test_without_strict_syntax_flag_allows_vague_queries() {
     create_test_code_structure(&temp_dir);
 
     // Test with vague query but WITHOUT --strict-elastic-syntax flag (should succeed)
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "error handler", // Vague query but flag not enabled
             temp_dir.path().to_str().unwrap(),
@@ -364,7 +346,7 @@ fn test_without_strict_syntax_flag_allows_vague_queries() {
 
     // Should execute search normally
     assert!(
-        stdout.contains("Probe version") || stdout.contains("Search completed"),
+        stdout.contains("Found ") || stdout.contains("No results found."),
         "Should execute search successfully. stdout: {}",
         stdout
     );
@@ -376,10 +358,8 @@ fn test_strict_syntax_error_provides_helpful_examples() {
     create_test_code_structure(&temp_dir);
 
     // Test that error messages include helpful examples
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "error handler",
             temp_dir.path().to_str().unwrap(),

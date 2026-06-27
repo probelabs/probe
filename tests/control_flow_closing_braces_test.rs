@@ -3,7 +3,7 @@ use std::process::Command;
 #[test]
 fn test_control_flow_closing_braces_in_outline_format() {
     // Test that control flow statements show their closing braces in outline format
-    let output = Command::new("./target/release/probe")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
             "search",
             "println",
@@ -15,6 +15,11 @@ fn test_control_flow_closing_braces_in_outline_format() {
         ])
         .output()
         .expect("Failed to execute probe command");
+    assert!(
+        output.status.success(),
+        "probe command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 in output");
 
@@ -58,7 +63,7 @@ fn test_control_flow_closing_braces_in_outline_format() {
 #[test]
 fn test_loop_closing_braces_in_outline_format() {
     // Test that loop statements show their closing braces
-    let output = Command::new("./target/release/probe")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
             "search",
             "loop",
@@ -71,6 +76,11 @@ fn test_loop_closing_braces_in_outline_format() {
         ])
         .output()
         .expect("Failed to execute probe command");
+    assert!(
+        output.status.success(),
+        "probe command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let stdout = String::from_utf8(output.stdout).expect("Invalid UTF-8 in output");
 

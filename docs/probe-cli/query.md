@@ -15,6 +15,9 @@ probe query "useState($INITIAL)" ./src --language javascript
 
 # Find class definitions in Python
 probe query "class $NAME: $$$BODY" ./src --language python
+
+# Search line-oriented text files when no parser exists
+probe query "reqproof:documents" ./docs --format json
 ```
 
 ---
@@ -120,6 +123,24 @@ probe query "go $FUNC($$$ARGS)" ./src -l go
 | `-i`, `--ignore` | String[] | - | Patterns to ignore |
 | `--no-gitignore` | Boolean | false | Don't respect .gitignore |
 | `--with-context`, `--owner-context` | Boolean | false | Include owning source-block context in JSON output |
+| `--strict` | Boolean | false | Disable plain-text fallback for unsupported extensions |
+| `--text-extension` | String[] | - | Treat an extension as plain text (repeatable, with or without `.`) |
+
+### Plain-Text Fallback
+
+When query encounters a file without a supported parser and no explicit language is requested, it falls back to line-oriented text search. The pattern is treated as a literal substring, and each matching line is returned as a `node_type: "text"` result.
+
+This allows documentation and config-style files such as `.1`, `.5`, `.txt`, `.conf`, `.tex`, `.sh`, and `.json` to be searched without a separate code path:
+
+```bash
+probe query "reqproof:documents" ./docs --format json
+```
+
+Use `--strict` for AST-only behavior, or `--text-extension EXT` to force additional suffixes into plain-text mode:
+
+```bash
+probe query "reqproof:documents" ./docs --text-extension req --format json
+```
 
 ### Language Options
 

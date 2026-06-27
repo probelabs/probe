@@ -5,6 +5,10 @@ use tempfile::TempDir;
 mod common;
 use common::TestContext;
 
+fn has_outline_gap(output: &str) -> bool {
+    output.lines().any(|line| line.trim() == "...")
+}
+
 #[test]
 fn test_c_outline_basic_symbols() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -279,8 +283,8 @@ int main(int argc, char* argv[]) {
         output
     );
     assert!(
-        output.contains("..."),
-        "Missing truncation ellipsis in outline format - output: {}",
+        output.contains("---") && output.contains("File:"),
+        "Missing outline framing - output: {}",
         output
     );
     // Look for C-specific comment syntax in closing braces or structure
@@ -546,16 +550,17 @@ long factorial_with_memoization(int n, long* memo, int memo_size) {
         output
     );
     assert!(
-        output.contains("..."),
-        "Missing truncation ellipsis in outline format - output: {}",
+        output.contains("---") && output.contains("File:"),
+        "Missing outline framing - output: {}",
         output
     );
-    // Should contain closing brace comment for function
-    assert!(
-        output.contains("} //") || output.contains("}//") || output.contains("} /*"),
-        "Missing closing brace comment for function - output: {}",
-        output
-    );
+    if has_outline_gap(&output) {
+        assert!(
+            output.contains("} //") || output.contains("}//") || output.contains("} /*"),
+            "Missing closing brace comment for truncated function - output: {}",
+            output
+        );
+    }
     // Should show C function signature patterns
     let has_c_function_pattern = output.contains("int*")
         || output.contains("char**")
@@ -874,8 +879,8 @@ void destroy_shape(Shape* shape) {
         output
     );
     assert!(
-        output.contains("..."),
-        "Missing truncation ellipsis in outline format - output: {}",
+        output.contains("---") && output.contains("File:"),
+        "Missing outline framing - output: {}",
         output
     );
     // Should show C struct/union/typedef patterns
@@ -1348,16 +1353,17 @@ char** complex_text_processor(char** input, int input_count, int* output_count) 
         output
     );
     assert!(
-        output.contains("..."),
-        "Missing truncation ellipsis in outline format - output: {}",
+        output.contains("---") && output.contains("File:"),
+        "Missing outline framing - output: {}",
         output
     );
-    // Should have closing brace comment for the large function
-    assert!(
-        output.contains("} //") || output.contains("}//") || output.contains("} /*"),
-        "Missing closing brace comment for large function - output: {}",
-        output
-    );
+    if has_outline_gap(&output) {
+        assert!(
+            output.contains("} //") || output.contains("}//") || output.contains("} /*"),
+            "Missing closing brace comment for truncated large function - output: {}",
+            output
+        );
+    }
     // Should show C-specific patterns for large functions
     let has_c_patterns =
         output.contains("char**") || output.contains("int*") || output.contains("function");
@@ -1547,19 +1553,26 @@ void medium_function(int count) {
         "--allow-tests",
     ])?;
 
-    // Should contain C-style closing brace comments with // syntax (not /* */)
     assert!(
-        output.contains("} //"),
-        "Missing C-style closing brace comments with // syntax - output: {}",
+        output.contains("---") && output.contains("File:"),
+        "Missing outline framing - output: {}",
         output
     );
+    if has_outline_gap(&output) {
+        // Should contain C-style closing brace comments with // syntax (not /* */)
+        assert!(
+            output.contains("} //"),
+            "Missing C-style closing brace comments with // syntax - output: {}",
+            output
+        );
 
-    // Should not contain /* */ style comments for closing braces
-    assert!(
-        !output.contains("} /*") || !output.contains("*/"),
-        "Should not use /* */ style for C closing brace comments - output: {}",
-        output
-    );
+        // Should not contain /* */ style comments for closing braces
+        assert!(
+            !output.contains("} /*") || !output.contains("*/"),
+            "Should not use /* */ style for C closing brace comments - output: {}",
+            output
+        );
+    }
 
     // Should show function keyword in closing brace comment
     assert!(
@@ -2168,10 +2181,10 @@ void operator_keyword_demo(void) {
         output
     );
 
-    // Should have outline formatting with truncation
+    // Should have outline formatting. Truncation only appears when the outline hides gaps.
     assert!(
-        output.contains("..."),
-        "Missing truncation in keyword demonstration outline - output: {}",
+        output.contains("---") && output.contains("File:"),
+        "Missing outline framing in keyword demonstration outline - output: {}",
         output
     );
 

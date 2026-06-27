@@ -50,6 +50,7 @@ def test_calculator():
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 
@@ -137,6 +138,7 @@ class UserManager:
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 
@@ -227,6 +229,7 @@ def outer_function():
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 
@@ -244,11 +247,12 @@ def outer_function():
         "Missing outer function or similar - output: {}",
         output
     );
-    // Nested classes (PDFReport, CSVReport, Metadata) are not shown individually in outline format
-    // They are inside ReportGenerator and outline format only shows top-level structures
     assert!(
-        output.contains("..."),
-        "Missing ellipsis in outline format - output: {}",
+        output.contains("PDFReport")
+            && output.contains("CSVReport")
+            && output.contains("Metadata")
+            && output.contains("inner_function"),
+        "Missing nested class/function outline content - output: {}",
         output
     );
 
@@ -326,6 +330,7 @@ def test_docstring_parsing():
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 
@@ -452,6 +457,7 @@ def test_complex_signatures():
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 
@@ -614,6 +620,7 @@ def test_performance_large_dataset():
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 
@@ -642,8 +649,11 @@ def test_performance_large_dataset():
         output
     );
     assert!(
-        output.contains("..."),
-        "Missing ellipsis in outline format - output: {}",
+        output.contains("test_fetch_user_data")
+            && output.contains("test_async_operation")
+            && output.contains("create_test_user")
+            && output.contains("test_performance_large_dataset"),
+        "Missing expected test/helper outline entries - output: {}",
         output
     );
 
@@ -782,6 +792,7 @@ def test_indentation_edge_case():
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 
@@ -812,11 +823,14 @@ def test_indentation_edge_case():
         output
     );
 
-    // Lambda functions should NOT be extracted as symbols
+    // Lambda assignments may appear as nearby outline context, but they should not
+    // be emitted as symbols by the symbol extractor.
+    let symbols_output =
+        ctx.run_probe(&["symbols", test_file.to_str().unwrap(), "--format", "json"])?;
     assert!(
-        !output.contains("lambda"),
+        !symbols_output.contains("lambda"),
         "Lambda functions should not be symbols - output: {}",
-        output
+        symbols_output
     );
 
     Ok(())
@@ -969,6 +983,7 @@ class ClassWithLongDocstring:
         "outline",
         "--max-results",
         "20",
+        "--no-merge",
         "--allow-tests",
     ])?;
 

@@ -99,8 +99,10 @@ pub fn extract_query_terms(expr: &Expr) -> HashSet<String> {
     let mut terms = HashSet::new();
 
     match expr {
-        Term { keywords, .. } => {
-            terms.extend(keywords.iter().cloned());
+        Term {
+            lowercase_keywords, ..
+        } => {
+            terms.extend(lowercase_keywords.iter().cloned());
         }
         And(left, right) | Or(left, right) => {
             terms.extend(extract_query_terms(left));
@@ -227,12 +229,12 @@ pub fn score_expr_bm25_optimized(expr: &Expr, params: &PrecomputedBm25Params) ->
     use Expr::*;
     match expr {
         Term {
-            keywords,
+            lowercase_keywords,
             required,
             excluded,
             ..
         } => {
-            let score = score_term_bm25_optimized(keywords, params);
+            let score = score_term_bm25_optimized(lowercase_keywords, params);
 
             if *excluded {
                 // must_not => doc out if doc_score > 0
@@ -818,6 +820,29 @@ mod tests {
         // BM25 scores typically fall within certain ranges based on the algorithm's properties
         assert!(results[0].1 > 0.0);
         assert!(results[0].1 < 10.0); // Upper bound based on typical BM25 behavior with small documents
+    }
+
+    #[test]
+    fn test_mixed_case_exact_term_with_excluded_term_ranking() {
+        let docs = vec![
+            "This is keywordAlpha",
+            "This is keywordAlpha and keywordGamma",
+        ];
+        let query = "\"keywordAlpha\" -keywordGamma";
+
+        let params = RankingParams {
+            documents: &docs,
+            query,
+            pre_tokenized: None,
+        };
+
+        let results = rank_documents(&params);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 0);
+
+        let simd_results = rank_documents_simd(&params);
+        assert_eq!(simd_results.len(), 1);
+        assert_eq!(simd_results[0].0, 0);
     }
 
     #[test]

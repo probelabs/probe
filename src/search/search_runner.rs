@@ -1,4 +1,5 @@
 use anyhow::Result;
+use probe_code::file_guard;
 use probe_code::search::file_list_cache;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -28,7 +29,7 @@ use probe_code::search::{
     result_ranking::rank_search_results,
     search_limiter::apply_limits,
     search_options::SearchOptions,
-    simd_pattern_matching::SimdPatternMatcher,
+    simd_pattern_matching::{SimdPatternConfig, SimdPatternMatcher},
     timeout,
 };
 
@@ -565,55 +566,14 @@ pub fn perform_probe(options: &SearchOptions) -> Result<LimitedSearchResults> {
 
         // Process files that matched by filename
         for (pathbuf, matched_terms) in &filename_matches {
-            // Define a reasonable maximum file size (e.g., 10MB)
-            const MAX_FILE_SIZE: u64 = 1024 * 1024;
-
-            // Check file metadata and resolve symlinks before reading
-            let resolved_path = match std::fs::canonicalize(pathbuf.as_path()) {
-                Ok(path) => path,
-                Err(e) => {
-                    if debug_mode {
-                        println!("DEBUG: Error resolving path for {pathbuf:?}: {e:?}");
-                    }
-                    continue;
-                }
-            };
-
-            // Get file metadata to check size and file type
-            let metadata = match std::fs::metadata(&resolved_path) {
-                Ok(meta) => meta,
-                Err(e) => {
-                    if debug_mode {
-                        println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
-                    }
-                    continue;
-                }
-            };
-
-            // Check if the file is too large
-            if metadata.len() > MAX_FILE_SIZE {
-                if debug_mode {
-                    println!(
-                        "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
-                        resolved_path,
-                        metadata.len(),
-                        MAX_FILE_SIZE
-                    );
-                }
-                continue;
-            }
-
-            // Read the file content to get the total number of lines
-            let file_content = match std::fs::read_to_string(&resolved_path) {
+            // Read the file content to get the total number of lines. Use the
+            // same guard as content search so filename matches cannot pull in
+            // binary or oversized files.
+            let file_content = match file_guard::read_searchable_text_file(pathbuf.as_path()) {
                 Ok(content) => content,
                 Err(e) => {
                     if debug_mode {
-                        println!(
-                            "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
-                            resolved_path,
-                            e,
-                            metadata.len()
-                        );
+                        println!("DEBUG: Skipping filename-matched file {pathbuf:?}: {e:?}");
                     }
                     continue;
                 }
@@ -1705,7 +1665,13 @@ pub fn search_with_structured_patterns(
                 pattern_strings.len()
             );
         }
-        Some(SimdPatternMatcher::with_patterns(pattern_strings.clone()))
+        Some(SimdPatternMatcher::new(
+            pattern_strings.clone(),
+            SimdPatternConfig {
+                case_insensitive: true,
+                ..SimdPatternConfig::default()
+            },
+        ))
     } else {
         if debug_mode {
             println!("DEBUG: Using RipgrepSearcher for complex patterns");
@@ -1888,61 +1854,14 @@ fn search_file_with_simd(
     let mut term_map = HashMap::new();
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
-    // Define a reasonable maximum file size (e.g., 1MB)
-    const MAX_FILE_SIZE: u64 = 1024 * 1024;
-
-    // Check file metadata and resolve symlinks before reading
-    let resolved_path = match std::fs::canonicalize(file_path) {
-        Ok(path) => path,
-        Err(e) => {
-            if debug_mode {
-                println!("DEBUG: Error resolving path for {file_path:?}: {e:?}");
-            }
-            return Err(anyhow::anyhow!("Failed to resolve file path: {}", e));
-        }
-    };
-
-    // Get file metadata to check size and file type
-    let metadata = match std::fs::metadata(&resolved_path) {
-        Ok(meta) => meta,
-        Err(e) => {
-            if debug_mode {
-                println!("DEBUG: Error getting metadata for {resolved_path:?}: {e:?}");
-            }
-            return Err(anyhow::anyhow!("Failed to get file metadata: {}", e));
-        }
-    };
-
-    // Check if the file is too large
-    if metadata.len() > MAX_FILE_SIZE {
-        if debug_mode {
-            println!(
-                "DEBUG: Skipping file {:?} - file too large ({} bytes > {} bytes limit)",
-                resolved_path,
-                metadata.len(),
-                MAX_FILE_SIZE
-            );
-        }
-        return Err(anyhow::anyhow!(
-            "File too large: {} bytes (limit: {} bytes)",
-            metadata.len(),
-            MAX_FILE_SIZE
-        ));
-    }
-
-    // Read the file content with proper error handling
-    let content = match std::fs::read_to_string(&resolved_path) {
+    // Read the file content with shared text-search safety checks.
+    let content = match file_guard::read_searchable_text_file(file_path) {
         Ok(content) => content,
         Err(e) => {
             if debug_mode {
-                println!(
-                    "DEBUG: Error reading file {:?}: {:?} (size: {} bytes)",
-                    resolved_path,
-                    e,
-                    metadata.len()
-                );
+                println!("DEBUG: Skipping unreadable/search-denied file {file_path:?}: {e:?}");
             }
-            return Err(anyhow::anyhow!("Failed to read file: {}", e));
+            return Err(e);
         }
     };
 

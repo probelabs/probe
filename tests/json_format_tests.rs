@@ -171,15 +171,14 @@ fn test_json_output_format_basic() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--format",
             "json",
+            "--exclude-filenames",
         ])
         .output()
         .expect("Failed to execute command");
@@ -265,11 +264,8 @@ fn test_search_json_no_merge_reports_req_id_source_metadata() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_requirement_fixture(&temp_dir);
 
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--quiet",
-            "--",
             "search",
             "--allow-tests",
             "--strict-elastic-syntax",
@@ -466,11 +462,8 @@ fn test_search_json_classifies_req_id_noise_without_policy_interpretation() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     create_requirement_fixture(&temp_dir);
 
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--quiet",
-            "--",
             "search",
             "--allow-tests",
             "--strict-elastic-syntax",
@@ -561,15 +554,14 @@ fn test_json_output_with_special_characters() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format, searching for special characters
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "special", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
             "--format",
             "json",
+            "--exclude-filenames",
         ])
         .output()
         .expect("Failed to execute command");
@@ -632,15 +624,14 @@ fn test_json_output_with_multiple_terms() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format, searching for multiple terms
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "term process", // Multiple terms to search for
             temp_dir.path().to_str().unwrap(),
             "--format",
             "json",
+            "--exclude-filenames",
         ])
         .output()
         .expect("Failed to execute command");
@@ -695,15 +686,14 @@ fn test_json_output_with_no_results() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format, searching for a term that doesn't exist
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
-            "nonexistentterm", // Term that doesn't exist in any file
+            "zzzzqqqqxxxx", // Term that doesn't exist in any file
             temp_dir.path().to_str().unwrap(),
             "--format",
             "json",
+            "--exclude-filenames",
         ])
         .output()
         .expect("Failed to execute command");
@@ -760,10 +750,8 @@ fn test_json_output_with_files_only() {
     create_test_directory_structure(&temp_dir);
 
     // Run the CLI with JSON output format and files-only option
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "search", // Pattern to search for
             temp_dir.path().to_str().unwrap(),

@@ -92,16 +92,9 @@ fn standalone_function() {
 "#;
     fs::write(&file_path, content).unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with both the outer function and inner function
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             &format!("{}:2", file_path.to_string_lossy()), // outer function
             &format!("{}:6", file_path.to_string_lossy()), // inner function (should be deduplicated)
@@ -124,7 +117,7 @@ fn standalone_function() {
     println!("Command stdout: {stdout}");
     println!("Command stderr: {stderr}");
 
-    // Check for deduplication logs (may appear on stderr when using `cargo run`)
+    // Check for deduplication logs (may appear on stderr when using the probe test binary)
     assert!(
         (stdout.contains("Before deduplication:") && stdout.contains("After deduplication:"))
             || (stderr.contains("Before deduplication:")

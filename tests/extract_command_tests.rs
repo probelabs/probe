@@ -297,16 +297,9 @@ fn test() {
     // Print the file path for debugging
     println!("File path: {}", file_path.display());
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with JSON format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             file_path.to_string_lossy().as_ref(),
             "--format",
@@ -497,16 +490,9 @@ fn test() {
     // Print the file path for debugging
     println!("File path: {}", file_path.display());
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with XML format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             file_path.to_string_lossy().as_ref(),
             "--format",
@@ -798,13 +784,9 @@ struct Point {
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     println!("Project directory: {project_dir:?}");
 
-    // Run the extract command using cargo run from the project directory
-    let output = Command::new("cargo")
+    // Run the extract command using the probe test binary from the project directory
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             file_path.to_string_lossy().as_ref(),
             "--allow-tests", // Add this flag to ensure test files are included
@@ -837,12 +819,8 @@ struct Point {
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Run with a line number
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             &format!("{}:3", file_path.to_string_lossy()),
             "--allow-tests", // Add this flag to ensure test files are included
@@ -864,12 +842,8 @@ struct Point {
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Run with a different format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             file_path.to_string_lossy().as_ref(),
             "--format",
@@ -891,12 +865,8 @@ struct Point {
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Run with a line range
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             &format!("{}:2-7", file_path.to_string_lossy()),
             "--allow-tests", // Add this flag to ensure test files are included
@@ -937,16 +907,9 @@ fn main() {
 "#;
     fs::write(&file_path, content).unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with JSON format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             file_path.to_string_lossy().as_ref(),
             "--format",
@@ -1027,12 +990,8 @@ fn main() {
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Run with a line number and JSON format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             &format!("{}:3", file_path.to_string_lossy()),
             "--format",
@@ -1263,16 +1222,9 @@ index cb2cb64..3717769 100644
     );
     fs::write(&diff_path, &diff_content).unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with diff option
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             "--diff",
             diff_path.to_string_lossy().as_ref(),
@@ -1330,16 +1282,9 @@ index cb2cb64..3717769 100644
     );
     fs::write(&diff_path, &diff_content).unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command WITHOUT the diff flag - it should auto-detect
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             diff_path.to_string_lossy().as_ref(),
             "--allow-tests", // Add this flag to ensure test files are included
@@ -1381,23 +1326,15 @@ fn main() {
 "#;
     fs::write(&file_path, content).unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with XML format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             file_path.to_string_lossy().as_ref(),
             "--format",
             "xml",
             "--allow-tests", // Add this flag to ensure test files are included
         ])
-        .current_dir(&project_dir) // Ensure we're in the project directory
         .output()
         .expect("Failed to execute command");
 
@@ -1480,12 +1417,8 @@ fn main() {
     let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Run with a line number and XML format
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             &format!("{}:3", file_path.to_string_lossy()),
             "--format",
@@ -1648,16 +1581,9 @@ fn test_tokenize_with_stemming() {
     let diff_path = PathBuf::from("changes.diff");
     fs::write(&diff_path, &diff_content).unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with the diff containing multiple files
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             diff_path.to_string_lossy().as_ref(),
             "--allow-tests", // Add this flag to ensure test files are included
@@ -1704,9 +1630,6 @@ fn test_keep_input_option_with_stdin() {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Create a temporary file with some content
     let temp_dir = tempfile::tempdir().unwrap();
     let file_path = temp_dir.path().join("test_file.rs");
@@ -1721,12 +1644,8 @@ fn main() {
     let input_content = format!("{}", file_path.to_string_lossy());
 
     // Run the extract command with stdin input and keep_input flag
-    let mut child = Command::new("cargo")
+    let mut child = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             "--keep-input",
             "--allow-tests", // Add this flag to ensure test files are included
@@ -1776,9 +1695,6 @@ fn test_keep_input_option_with_clipboard() {
         return;
     }
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Create a temporary file with some content
     let temp_dir = tempfile::tempdir().unwrap();
     let file_path = temp_dir.path().join("test_file.rs");
@@ -1797,12 +1713,8 @@ fn main() {
     clipboard.set_text(&input_content).unwrap();
 
     // Run the extract command with clipboard input and keep_input flag
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             "--from-clipboard",
             "--keep-input",
@@ -1937,18 +1849,9 @@ fn test_extract_cli_unsupported_file_type() {
 "#;
     fs::write(&file_path, content).unwrap();
 
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command on an unsupported file type
-    let output = Command::new("cargo")
-        .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
-            "extract",
-            &format!("{}:2", file_path.to_string_lossy()),
-        ])
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
+        .args(["extract", &format!("{}:2", file_path.to_string_lossy())])
         .output()
         .expect("Failed to execute command");
 

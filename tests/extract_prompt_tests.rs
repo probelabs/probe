@@ -13,16 +13,9 @@ fn test() {
 "#;
     fs::write(&file_path, content).unwrap();
 
-    // Get the project root directory (where Cargo.toml is)
-    let project_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-
     // Run the extract command with prompt and instructions
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--manifest-path",
-            project_dir.join("Cargo.toml").to_string_lossy().as_ref(),
-            "--",
             "extract",
             file_path.to_string_lossy().as_ref(),
             "--format",

@@ -290,10 +290,8 @@ fn test_html_tags_in_json_output() {
     create_special_character_test_files(&temp_dir);
 
     // Run the CLI with JSON output format, searching for "HTML"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "HTML", // Pattern to search for
             temp_dir.path().to_str().unwrap(),
@@ -359,10 +357,8 @@ fn test_html_tags_in_xml_output() {
     create_special_character_test_files(&temp_dir);
 
     // Run the CLI with XML output format, searching for "HTML"
-    let output = Command::new("cargo")
+    let output = Command::new(env!("CARGO_BIN_EXE_probe"))
         .args([
-            "run",
-            "--",
             "search",
             "HTML", // Pattern to search for
             temp_dir.path().to_str().unwrap(),

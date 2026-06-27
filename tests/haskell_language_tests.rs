@@ -140,6 +140,8 @@ fn test_haskell_query_support() {
         with_context: false,
         format: "terminal",
         no_gitignore: true,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("Haskell query should run");
@@ -168,6 +170,8 @@ fn test_haskell_query_auto_detect_support() {
         with_context: false,
         format: "terminal",
         no_gitignore: true,
+        strict: false,
+        text_extensions: &[],
     };
 
     let matches = perform_query(&options).expect("Haskell query should auto-detect .hs files");

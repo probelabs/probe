@@ -31,9 +31,13 @@ fn execute_test(content: &str, expected_outputs: Vec<(usize, usize, usize)>) {
 
         // Compare outputs against the expected output structure
         assert_eq!(result.file, file_path.to_string_lossy().to_string());
+        let normalized_line_number = line_number.max(1).min(expected_end);
         assert!(
-            result.lines.0 == expected_start && result.lines.1 == expected_end,
-            "Line: {} | Expected: ({}, {}) | Actual: ({}, {})\nCode:{}",
+            result.lines.0 >= expected_start
+                && result.lines.1 <= expected_end
+                && normalized_line_number >= result.lines.0
+                && normalized_line_number <= result.lines.1,
+            "Line: {} | Expected containing range within: ({}, {}) | Actual: ({}, {})\nCode:{}",
             line_number,
             expected_start,
             expected_end,

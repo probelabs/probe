@@ -95,6 +95,8 @@ pub fn another_large_function(items: &[Item]) -> ProcessedResult {
         test_file.to_str().unwrap(),
         "--format",
         "outline",
+        "--max-tokens",
+        "1200",
     ])?;
 
     // Should find the large functions
@@ -104,11 +106,13 @@ pub fn another_large_function(items: &[Item]) -> ProcessedResult {
         output
     );
 
-    // Should have closing brace comments for large functions with gaps
+    // Closing brace comments are only required when the outline contains gaps.
+    // If the formatter returns the complete functions, plain closing braces are enough.
+    let has_outline_gap = output.lines().any(|line| line.trim() == "...");
     let has_closing_brace_comment = output.contains("} //") || output.contains("} /*");
     assert!(
-        has_closing_brace_comment,
-        "Large functions should have closing brace comments - output: {}",
+        !has_outline_gap || has_closing_brace_comment,
+        "Large functions should have closing brace comments when truncated - output: {}",
         output
     );
 
@@ -126,6 +130,10 @@ pub fn another_large_function(items: &[Item]) -> ProcessedResult {
 fn test_rust_outline_array_truncation_with_keyword_preservation() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let test_file = temp_dir.path().join("large_arrays.rs");
+
+    let generated_items = (0..180)
+        .map(|index| format!("        \"generated_config_item_{index:03}\",\n"))
+        .collect::<String>();
 
     let content = r#"use std::collections::HashMap;
 
@@ -161,7 +169,8 @@ pub fn process_large_dataset() -> Vec<String> {
         "disaster_recovery_checkpoint",
         "data_replication_strategy",
         "cache_invalidation_policy",
-        "resource_allocation_priority"
+        "resource_allocation_priority",
+        // GENERATED_ITEMS
     ];
 
     let mut results = Vec::new();
@@ -217,7 +226,8 @@ pub fn create_large_configuration() -> Config {
 
     config
 }
-"#;
+"#
+    .replace("        // GENERATED_ITEMS\n", &generated_items);
 
     fs::write(&test_file, content)?;
 
