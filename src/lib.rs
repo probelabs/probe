@@ -107,6 +107,7 @@ extern crate self as probe_code;
 pub mod bert_reranker;
 pub mod config;
 pub mod extract;
+pub mod file_guard;
 pub mod language;
 pub mod lsp_integration;
 pub mod models;

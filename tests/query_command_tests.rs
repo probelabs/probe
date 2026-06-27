@@ -394,6 +394,68 @@ fn test_query_plain_text_fallback_for_unsupported_extension() -> Result<()> {
 }
 
 #[test]
+fn test_query_custom_text_extension_cannot_override_hard_deny() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let temp_path = temp_dir.path();
+
+    fs::write(temp_path.join("image.png"), "needle in pretend image text")?;
+
+    let text_extensions = vec!["png".to_string()];
+    let options = QueryOptions {
+        path: temp_path,
+        pattern: "needle",
+        language: None,
+        ignore: &[],
+        allow_tests: true,
+        max_results: None,
+        with_context: false,
+        format: "plain",
+        no_gitignore: false,
+        strict: false,
+        text_extensions: &text_extensions,
+    };
+
+    let matches = perform_query(&options)?;
+    assert!(
+        matches.is_empty(),
+        "hard-denied extensions must not be queried even when passed via --text-extension"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_query_skips_oversized_text_files() -> Result<()> {
+    let temp_dir = tempdir()?;
+    let temp_path = temp_dir.path();
+
+    let content = "needle\n".repeat(
+        (probe_code::file_guard::MAX_SEARCHABLE_TEXT_FILE_SIZE_BYTES as usize / "needle\n".len())
+            + 1,
+    );
+    fs::write(temp_path.join("large.txt"), content)?;
+
+    let options = QueryOptions {
+        path: temp_path,
+        pattern: "needle",
+        language: None,
+        ignore: &[],
+        allow_tests: true,
+        max_results: None,
+        with_context: false,
+        format: "plain",
+        no_gitignore: false,
+        strict: false,
+        text_extensions: &[],
+    };
+
+    let matches = perform_query(&options)?;
+    assert!(matches.is_empty(), "oversized text files must be skipped");
+
+    Ok(())
+}
+
+#[test]
 fn test_query_strict_skips_unsupported_extension() -> Result<()> {
     let temp_dir = tempdir()?;
     let temp_path = temp_dir.path();

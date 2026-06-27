@@ -2,16 +2,16 @@ use crate::extract::symbols::{
     is_c_like_extension, is_standard_text_extension, matches_text_extension,
     recover_c_like_functions,
 };
-use anyhow::{Context, Result};
+use anyhow::Result;
 use ast_grep_core::language::{Language, TSLanguage};
 use ast_grep_core::AstGrep;
 use ast_grep_language::SupportLang;
 use colored::*;
 use ignore::WalkBuilder;
+use probe_code::file_guard;
 use probe_code::path_resolver::resolve_path;
 use rayon::prelude::*; // Added import
 use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tree_sitter::Node;
@@ -153,9 +153,9 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
         }
     }
 
-    // Read the file content
-    let content = fs::read_to_string(file_path)
-        .with_context(|| format!("Failed to read file: {}", file_path.display()))?;
+    // Read the file content with the same hard-deny, size, and binary guards
+    // used by regular search.
+    let content = file_guard::read_searchable_text_file(file_path)?;
 
     if force_plain_text {
         return Ok(query_plain_text_file(file_path, &content, options.pattern));
@@ -641,6 +641,7 @@ pub fn perform_query(options: &QueryOptions) -> Result<Vec<AstMatch>> {
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_some_and(|ft| ft.is_file()))
         .filter(|entry| !should_ignore_file(entry.path(), options))
+        .filter(|entry| !file_guard::is_hard_denied_path(entry.path()))
         .map(|entry| entry.path().to_path_buf())
         .collect();
 

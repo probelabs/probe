@@ -1,6 +1,7 @@
 use anyhow::Result;
 use ignore::WalkBuilder;
 use lazy_static::lazy_static;
+use probe_code::file_guard;
 use probe_code::search::tokenization;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -231,16 +232,12 @@ fn build_file_list(
         "*.orig",
         "*.DS_Store",
         "Thumbs.db",
-        "*.yml",
-        "*.yaml",
-        "*.json",
-        "*.tconf",
-        "*.conf",
         "go.sum",
     ]
     .into_iter()
     .map(String::from)
     .collect();
+    common_ignores.extend(file_guard::hard_deny_globs());
 
     // Add test file patterns if allow_tests is false
     if !allow_tests {
@@ -349,6 +346,13 @@ fn build_file_list(
         if !allow_tests && is_test_path(path, entry.path()) {
             if debug_mode {
                 println!("DEBUG: Skipping test file: {:?}", entry.path());
+            }
+            continue;
+        }
+
+        if file_guard::is_hard_denied_path(entry.path()) {
+            if debug_mode {
+                println!("DEBUG: Skipping hard-denied file: {:?}", entry.path());
             }
             continue;
         }
@@ -680,6 +684,44 @@ mod tests {
             matches.is_empty(),
             "unrelated file names must not inherit query terms from short path tokens: {matches:?}"
         );
+    }
+
+    #[test]
+    fn test_file_list_skips_hard_denied_extensions() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let source_file = root.join("main.rs");
+        let binary_file = root.join("image.png");
+        fs::write(&source_file, "fn main() {}").unwrap();
+        fs::write(&binary_file, "not really an image").unwrap();
+
+        let file_list = build_file_list(root, true, &[], false).unwrap();
+
+        assert!(file_list.files.iter().any(|f| f == &source_file));
+        assert!(
+            !file_list.files.iter().any(|f| f == &binary_file),
+            "hard-denied extensions must not enter the searchable file list"
+        );
+    }
+
+    #[test]
+    fn test_file_list_keeps_standard_text_config_extensions() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        let json_file = root.join("settings.json");
+        let conf_file = root.join("probe.conf");
+        let yaml_file = root.join("workflow.yaml");
+        fs::write(&json_file, r#"{"needle": true}"#).unwrap();
+        fs::write(&conf_file, "needle=true").unwrap();
+        fs::write(&yaml_file, "needle: true").unwrap();
+
+        let file_list = build_file_list(root, true, &[], false).unwrap();
+
+        assert!(file_list.files.iter().any(|f| f == &json_file));
+        assert!(file_list.files.iter().any(|f| f == &conf_file));
+        assert!(file_list.files.iter().any(|f| f == &yaml_file));
     }
 
     #[test]

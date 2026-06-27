@@ -3,12 +3,13 @@
 //! Provides a table-of-contents view of a file's symbols (functions, structs, classes,
 //! constants, etc.) with line numbers and nesting.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::Path;
 use tree_sitter::Node;
 
+use crate::file_guard;
 use crate::language::{factory::get_language_impl, get_pooled_parser, return_pooled_parser};
 
 /// Maximum nesting depth for recursive symbol collection.
@@ -59,8 +60,7 @@ pub fn extract_symbols_with_options(path: &Path, options: &SymbolOptions) -> Res
         return Err(anyhow::anyhow!("File does not exist: {:?}", path));
     }
 
-    let content =
-        std::fs::read_to_string(path).context(format!("Failed to read file: {path:?}"))?;
+    let content = file_guard::read_searchable_text_file(path)?;
 
     let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
 
@@ -1253,6 +1253,34 @@ end
         assert_eq!(result.symbols.len(), 2);
         assert!(result.symbols.iter().all(|symbol| symbol.kind == "text"));
         assert_eq!(result.symbols[0].signature, "fn not_a_symbol() {}");
+    }
+
+    #[test]
+    fn test_symbols_custom_text_extension_cannot_override_hard_deny() {
+        let file = create_temp_file("pretend text in image", "png");
+        let result = extract_symbols_with_options(
+            file.path(),
+            &SymbolOptions {
+                text_extensions: vec!["png".to_string()],
+                ..SymbolOptions::default()
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("hard-denied"));
+    }
+
+    #[test]
+    fn test_symbols_reject_oversized_text_file() {
+        let mut file = tempfile::Builder::new().suffix(".txt").tempfile().unwrap();
+        let content =
+            vec![b'a'; crate::file_guard::MAX_SEARCHABLE_TEXT_FILE_SIZE_BYTES as usize + 1];
+        file.write_all(&content).unwrap();
+        file.flush().unwrap();
+
+        let result = extract_symbols(file.path(), false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("File too large"));
     }
 
     #[test]
