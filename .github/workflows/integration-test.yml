@@ -44,7 +44,7 @@ jobs:
         node-version: ${{ matrix.node-version }}
 
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@1.92.0
+      uses: dtolnay/rust-toolchain@1.96.1
       with:
         components: rustfmt, clippy
 
@@ -391,7 +391,7 @@ jobs:
         node-version: ${{ matrix.node-version }}
 
     - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@1.92.0
+      uses: dtolnay/rust-toolchain@1.96.1
       with:
         components: rustfmt, clippy
 
