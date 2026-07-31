@@ -27,8 +27,13 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         "tsx" => Some(Box::new(TypeScriptLanguage::new_tsx())),
         "py" => Some(Box::new(PythonLanguage::new())),
         "go" => Some(Box::new(GoLanguage::new())),
-        "c" | "h" => Some(Box::new(CLanguage::new())),
-        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(Box::new(CppLanguage::new())),
+        "c" => Some(Box::new(CLanguage::new())),
+        // `.h` headers are ambiguous but overwhelmingly used for C++ in practice
+        // (namespaces, classes, templates). tree-sitter-cpp is a superset of C, so it
+        // parses plain C headers correctly too. Routing `.h` to the C grammar caused
+        // C++ headers to fail to parse (ERROR root node), which made symbol extraction
+        // fall back to a single-line text search instead of the full AST node.
+        "cpp" | "cc" | "cxx" | "h" | "hpp" | "hxx" | "hh" => Some(Box::new(CppLanguage::new())),
         "java" => Some(Box::new(JavaLanguage::new())),
         "rb" => Some(Box::new(RubyLanguage::new())),
         "php" => Some(Box::new(PhpLanguage::new())),

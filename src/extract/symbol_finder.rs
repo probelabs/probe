@@ -879,6 +879,85 @@ end
     }
 
     #[test]
+    fn test_cpp_header_symbol_extraction() {
+        // Regression: `.h` headers holding C++ (namespaces, classes, templates,
+        // attributes) used to be routed to the C grammar, which failed to parse them
+        // (ERROR root) and fell back to a single-line text_search. They must now
+        // resolve to their full C++ AST nodes.
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_cpp_header_extraction.h");
+
+        let content = r#"#pragma once
+
+namespace myapp::security {
+
+class [[nodiscard]] result {
+public:
+    result() = default;
+    bool ok() const {
+        return code_ == 0;
+    }
+private:
+    int code_ = 0;
+};
+
+struct credentials {
+    std::string user;
+    std::string password;
+};
+
+int compute_hash(const std::string& input, int seed) {
+    int h = seed;
+    return h;
+}
+
+template <typename T>
+class holder {
+public:
+    explicit holder(T value) : value_(value) {}
+private:
+    T value_;
+};
+
+} // namespace myapp::security
+"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{content}").unwrap();
+
+        // Class with a [[nodiscard]] attribute -> full class_specifier, not text_search.
+        let class_result = find_symbol_in_file(&test_file, "result", content, true, 0)
+            .expect("C++ class in .h header should resolve via AST");
+        assert_eq!(
+            class_result.node_type, "class_specifier",
+            "expected full class node, got {:?} ({:?})",
+            class_result.node_type, class_result.lines
+        );
+        assert!(class_result.code.contains("bool ok() const"));
+        assert!(class_result.code.contains("int code_ = 0;"));
+
+        // Struct -> struct_specifier.
+        let struct_result = find_symbol_in_file(&test_file, "credentials", content, true, 0)
+            .expect("C++ struct in .h header should resolve via AST");
+        assert_eq!(struct_result.node_type, "struct_specifier");
+        assert!(struct_result.code.contains("std::string password"));
+
+        // Free function -> function_definition.
+        let func_result = find_symbol_in_file(&test_file, "compute_hash", content, true, 0)
+            .expect("C++ free function in .h header should resolve via AST");
+        assert_eq!(func_result.node_type, "function_definition");
+        assert!(func_result.code.contains("int h = seed;"));
+
+        // Templated class -> class_specifier (name lives under template_declaration).
+        let template_result = find_symbol_in_file(&test_file, "holder", content, true, 0)
+            .expect("C++ template class in .h header should resolve via AST");
+        assert_eq!(template_result.node_type, "class_specifier");
+        assert!(template_result.code.contains("explicit holder(T value)"));
+
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
     fn test_find_all_symbols_with_duplicate_names() {
         let temp_dir = std::env::temp_dir();
         let test_file = temp_dir.join("test_duplicate_symbols.js");
