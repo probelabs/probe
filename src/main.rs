@@ -363,12 +363,25 @@ fn handle_search(params: SearchParams) -> Result<()> {
                 // Genuinely no results found - show helpful tips
                 println!("{}", "No results found.".yellow().bold());
                 println!();
-                println!("💡 Tips to improve your search:");
-                println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
-                println!("  - Use broader terms without AND operators");
-                println!("  - Check spelling of function/class names");
-                println!("  - Remove file type filters to search all files");
-                println!("  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup");
+                if params.exact && params.pattern.trim().contains(char::is_whitespace) {
+                    // --exact turns a multi-word query into a single literal phrase (no
+                    // tokenization), so conceptual/multi-word queries almost always miss.
+                    // Call this out specifically instead of the generic tips below.
+                    println!(
+                        "💡 {} --exact matched your whole query as one literal phrase (\"{}\"), with no tokenization or stemming",
+                        "Hint:".dimmed(),
+                        params.pattern
+                    );
+                    println!("  - For multi-word/conceptual searches, drop --exact so each word is tokenized and matched individually");
+                    println!("  - Keep --exact for precise, single-term symbol lookups (e.g. an exact function or variable name)");
+                } else {
+                    println!("💡 Tips to improve your search:");
+                    println!("  - Try synonyms or related terms (e.g., \"fetch\" instead of \"get\")");
+                    println!("  - Use broader terms without AND operators");
+                    println!("  - Check spelling of function/class names");
+                    println!("  - Remove file type filters to search all files");
+                    println!("  - Use exact:false (default) for stemming, or exact:true for precise symbol lookup");
+                }
             }
             if params.verbose {
                 println!();

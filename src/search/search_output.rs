@@ -2681,9 +2681,19 @@ fn format_and_print_outline_results(
             .push(result);
     }
 
-    // Sort files for consistent output
+    // Sort file groups by their best (lowest = most relevant) individual result rank, not
+    // alphabetically by path. `results` is already in relevance order by the time it gets here,
+    // so grouping-then-alphabetizing was silently discarding that order: which files appear
+    // depends on --max-results, so an alphabetical re-sort meant a larger --max-results could
+    // shuffle files that were already being displayed instead of simply revealing more of the
+    // same ordering. Fall back to the path for a deterministic tie-break when ranks are equal
+    // or unavailable.
     let mut files: Vec<(String, Vec<&SearchResult>)> = files_map.into_iter().collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| {
+        let rank_a = a.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        let rank_b = b.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        rank_a.cmp(&rank_b).then_with(|| a.0.cmp(&b.0))
+    });
 
     // Sort results within each file by line number (not by score)
     for (_, file_results) in &mut files {
@@ -2864,9 +2874,19 @@ fn format_and_print_outline_xml_results(
             .push(result);
     }
 
-    // Sort files for consistent output
+    // Sort file groups by their best (lowest = most relevant) individual result rank, not
+    // alphabetically by path. `results` is already in relevance order by the time it gets here,
+    // so grouping-then-alphabetizing was silently discarding that order: which files appear
+    // depends on --max-results, so an alphabetical re-sort meant a larger --max-results could
+    // shuffle files that were already being displayed instead of simply revealing more of the
+    // same ordering. Fall back to the path for a deterministic tie-break when ranks are equal
+    // or unavailable.
     let mut files: Vec<(String, Vec<&SearchResult>)> = files_map.into_iter().collect();
-    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.sort_by(|a, b| {
+        let rank_a = a.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        let rank_b = b.1.iter().filter_map(|r| r.rank).min().unwrap_or(usize::MAX);
+        rank_a.cmp(&rank_b).then_with(|| a.0.cmp(&b.0))
+    });
 
     // Sort results within each file by line number (not by score)
     for (_, file_results) in &mut files {
