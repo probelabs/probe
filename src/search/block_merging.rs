@@ -237,6 +237,17 @@ pub fn merge_ranked_blocks(
                             next_block.node_type.clone()
                         };
 
+                        // Keep the best (numerically lowest = most relevant) individual rank
+                        // among the merged blocks. Without this, the merged block silently kept
+                        // whichever block happened to start the chain (chosen by start line, not
+                        // by rank), which could be far worse-ranked than a block it absorbed -
+                        // making post-merge relevance sorting unreliable.
+                        let merged_rank = match (current_block.rank, next_block.rank) {
+                            (Some(r1), Some(r2)) => Some(r1.min(r2)),
+                            (Some(r), None) | (None, Some(r)) => Some(r),
+                            (None, None) => None,
+                        };
+
                         // Combine scores and term statistics
                         let merged_score = merge_scores(&current_block, next_block);
                         let merged_term_stats = merge_term_statistics(&current_block, next_block);
@@ -253,6 +264,7 @@ pub fn merge_ranked_blocks(
                         current_block.lines = (merged_start, merged_end);
                         current_block.code = merged_code;
                         current_block.node_type = merged_node_type;
+                        current_block.rank = merged_rank;
                         current_block.score = merged_score.0;
                         current_block.tfidf_score = merged_score.1;
                         current_block.bm25_score = merged_score.2;
