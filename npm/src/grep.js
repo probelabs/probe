@@ -5,7 +5,7 @@
 
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getBinaryPath } from './utils.js';
+import { getBinaryPath, getCleanEnv } from './utils.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -131,7 +131,7 @@ export async function grep(options) {
 		const { stdout, stderr } = await execFileAsync(binaryPath, cliArgs, {
 			maxBuffer: 10 * 1024 * 1024, // 10MB buffer
 			env: {
-				...process.env,
+				...getCleanEnv(),
 				// Disable colors in stderr for cleaner output
 				NO_COLOR: '1'
 			}

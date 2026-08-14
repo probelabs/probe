@@ -123,6 +123,29 @@ export function buildCliArgs(options, flagMap) {
 }
 
 /**
+ * Build a minimal environment for spawning the probe binary.
+ * Prevents E2BIG when the host process accumulates a large process.env.
+ * @returns {Record<string, string>} - Clean environment with only essential vars
+ */
+export function getCleanEnv() {
+  const keep = [
+    'PATH', 'HOME', 'USER', 'SHELL', 'TERM', 'LANG', 'LC_ALL',
+    'TMPDIR', 'TMP', 'TEMP',
+    'SystemRoot', 'SYSTEMROOT', 'COMSPEC', // Windows
+    'PROBE_PATH', 'PROBE_CONFIG_DIR', 'DEBUG',
+    'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY',
+    'http_proxy', 'https_proxy', 'no_proxy',
+  ];
+  const env = {};
+  for (const key of keep) {
+    if (process.env[key] !== undefined) {
+      env[key] = process.env[key];
+    }
+  }
+  return env;
+}
+
+/**
  * Escape a string for use in a command line
  * @param {string} str - String to escape
  * @returns {string} - Escaped string

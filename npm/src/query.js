@@ -5,7 +5,7 @@
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { getBinaryPath, buildCliArgs, escapeString } from './utils.js';
+import { getBinaryPath, buildCliArgs, escapeString, getCleanEnv } from './utils.js';
 import { validateCwdPath } from './utils/path-validation.js';
 
 const execAsync = promisify(exec);
@@ -84,7 +84,7 @@ export async function query(options) {
 	const command = `${binaryPath} query ${cliArgs.join(' ')}`;
 
 	try {
-		const { stdout, stderr } = await execAsync(command, { cwd });
+		const { stdout, stderr } = await execAsync(command, { cwd, env: getCleanEnv() });
 
 		if (stderr) {
 			console.error(`stderr: ${stderr}`);
