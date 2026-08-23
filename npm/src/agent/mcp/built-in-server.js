@@ -965,6 +965,9 @@ export class BuiltInMCPServer extends EventEmitter {
     if (currentBytes + this.audit.reservedBytes + MAX_AUDIT_RECORD_RESERVATION_BYTES > MAX_AUDIT_BYTES) {
       throw new Error('Governed MCP cumulative audit-byte bound exceeded');
     }
+    if (this.audit.inFlight !== 0) {
+      throw new Error('Governed MCP tool call is already in flight');
+    }
     this.audit.inFlight++;
     this.audit.reservedBytes += MAX_AUDIT_RECORD_RESERVATION_BYTES;
     return { released: false };

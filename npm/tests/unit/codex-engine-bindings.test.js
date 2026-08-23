@@ -25,6 +25,7 @@ const {
   CODEX_PINNED_EXECUTABLE_PATH,
   CODEX_PINNED_EXECUTABLE_SHA256,
   CODEX_REASONING_EFFORT,
+  CODEX_QUIET_WINDOW_MS,
   CODEX_STDERR_MAX_BYTES,
   createCodexEngine,
   preflightCodexHome,
@@ -178,13 +179,14 @@ function makeHarness() {
 }
 
 async function waitForQuietWindow(engine) {
-  await new Promise(resolve => {
-    const check = () => {
-      if (engine.getTransportState().quietWindowArmed) resolve();
-      else queueMicrotask(check);
-    };
-    check();
-  });
+  const maxPolls = 100;
+  for (let poll = 0; poll < maxPolls; poll++) {
+    const transport = engine.getTransportState();
+    if (transport.quietWindowArmed) return;
+    if (transport.poisoned) throw new Error('Codex transport poisoned while waiting for quiet window');
+    await Promise.resolve();
+  }
+  throw new Error(`Codex quiet window did not arm after ${maxPolls} polls`);
 }
 
 function substitute(value, engine) {
@@ -287,7 +289,7 @@ async function replayGolden(engine, mutation = message => message) {
   for (const message of messages) emit(harness, message);
   if (!engine.getTransportState().poisoned) {
     await waitForQuietWindow(engine);
-    jest.advanceTimersByTime(1500);
+    await jest.advanceTimersByTimeAsync(CODEX_QUIET_WINDOW_MS);
   }
   return pending;
 }
@@ -329,6 +331,26 @@ describe('Codex 0.144.1 capture-governed attempt004 transport', () => {
     });
   });
 
+  test('exposes successful late MCP cleanup after startup timeout and late resolve', async () => {
+    const harness = makeHarness();
+    let resolveStart;
+    const lateStart = new Promise(resolve => { resolveStart = resolve; });
+    harness.server.start.mockReturnValue(lateStart);
+
+    const creating = createCodexEngine(options({ codexMcpTimeout: 25 }));
+    const creatingError = creating.catch(failure => failure);
+    await jest.advanceTimersByTimeAsync(25);
+    const error = await creatingError;
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toMatch(/MCP startup timeout/);
+    expect(harness.server.stop).toHaveBeenCalledTimes(1);
+
+    resolveStart({ host: '127.0.0.1', port: 43123 });
+    await expect(error.codexMcpLateCleanup).resolves.toEqual(expect.objectContaining({ status: 'succeeded' }));
+    expect(harness.server.stop).toHaveBeenCalledTimes(2);
+  });
+
   test('replays the authoritative golden wire capture and gates success on cleanup', async () => {
     const engine = await startEngine();
     const harness = harnesses.get(engine);
@@ -344,7 +366,7 @@ describe('Codex 0.144.1 capture-governed attempt004 transport', () => {
     }));
     expect(receipt.nestedMcp[0]).toEqual(expect.objectContaining({
       nestedCallId: 'nested-call-1', callId: 'nested-call-1', outerCallId: 'tool-outer-call-1',
-      duration: { secs: 0, nanos: 2468667 }, directAudit: { ordinal: 2 }
+      duration: { secs: 0, nanos: 2468667 }, directAudit: expect.objectContaining({ ordinal: 2 })
     }));
     expect(receipt.execBridge[1].outerCallId).not.toBe(receipt.nestedMcp[0].nestedCallId);
     expect(harness.reader.close).toHaveBeenCalledTimes(1);

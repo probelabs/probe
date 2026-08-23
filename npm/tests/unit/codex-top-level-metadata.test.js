@@ -73,15 +73,8 @@ function observeRelease(agent) {
   });
   // The Codex branch emits the completion hook after the transaction is released.
   agent.hooks.on(undefined, () => observed.push('completion'));
-  return { observed, onStream, onMetadata, tools };
-}
-
-async function expectNoRelease(chunks, configure = () => {}) {
-  const agent = await createAgent(chunks);
-  const { onStream, onMetadata, tools } = observeRelease(agent);
-  configure({ onStream, onMetadata });
-  const completionCountBefore = agent.hooks.getCallbackCount(undefined);
-  return { agent, onStream, onMetadata, tools, completionCountBefore };
+  const hooksEmit = jest.spyOn(agent.hooks, 'emit');
+  return { observed, onStream, onMetadata, tools, hooksEmit };
 }
 
 afterEach(async () => {
@@ -98,7 +91,7 @@ describe('Codex top-level metadata receipt seam', () => {
       { type: 'toolBatch', tools: [{ id: 'second' }] },
       { type: 'metadata', data: receiptMetadata() }
     ]);
-    const { observed, onStream, onMetadata, tools } = observeRelease(agent);
+    const { observed, onStream, onMetadata, tools, hooksEmit } = observeRelease(agent);
 
     await expect(agent.answer('question', [], { onStream, onMetadata })).resolves.toBe('response text');
     expect(onMetadata).toHaveBeenCalledTimes(1);
@@ -106,6 +99,13 @@ describe('Codex top-level metadata receipt seam', () => {
     expect(observed).toEqual([
       'metadata', 'stream:response ', 'stream:text', 'tool:first', 'tool:second', 'completion'
     ]);
+    const completionEmits = hooksEmit.mock.calls.filter(([hookName]) => hookName === undefined);
+    expect(completionEmits).toHaveLength(1);
+    expect(hooksEmit).toHaveBeenLastCalledWith(undefined, {
+      sessionId: agent.sessionId,
+      prompt: 'question',
+      response: 'response text'
+    });
     expect(onStream).toHaveBeenCalledTimes(2);
     expect(tools).toHaveLength(2);
     expect(agent.history).toEqual([
@@ -119,7 +119,7 @@ describe('Codex top-level metadata receipt seam', () => {
       { type: 'text', content: 'response text' },
       { type: 'metadata', data: receiptMetadata() }
     ]);
-    const { onStream, onMetadata, tools } = observeRelease(agent);
+    const { onStream, onMetadata, tools, hooksEmit } = observeRelease(agent);
     const callbackError = new Error('receipt sink failed');
     onMetadata.mockRejectedValue(callbackError);
 
@@ -128,6 +128,7 @@ describe('Codex top-level metadata receipt seam', () => {
     expect(onStream).not.toHaveBeenCalled();
     expect(tools).toHaveLength(0);
     expect(agent.history).toHaveLength(0);
+    expect(hooksEmit.mock.calls.filter(([hookName]) => hookName === undefined)).toHaveLength(0);
   });
 
   test.each([
@@ -151,7 +152,7 @@ describe('Codex top-level metadata receipt seam', () => {
     ], /duplicate success metadata/]
   ])('rejects %s without releasing any observable effects', async (_name, chunks, error) => {
     const agent = await createAgent(chunks);
-    const { onStream, onMetadata, tools } = observeRelease(agent);
+    const { onStream, onMetadata, tools, hooksEmit } = observeRelease(agent);
 
     await expect(agent.answer('question', [], { onStream, onMetadata })).rejects.toThrow(error);
     expect(onMetadata).not.toHaveBeenCalled();
@@ -159,5 +160,6 @@ describe('Codex top-level metadata receipt seam', () => {
     expect(tools).toHaveLength(0);
     expect(agent.history).toHaveLength(0);
     expect(agent.hooks.getCallbackCount(undefined)).toBe(1);
+    expect(hooksEmit.mock.calls.filter(([hookName]) => hookName === undefined)).toHaveLength(0);
   });
 });

@@ -133,26 +133,38 @@ describe('real governed BuiltInMCPServer surface', () => {
     expectAccounting(server, { search: 2, extract: 0, listFiles: 0 }, 2);
   });
 
-  test('rejects a concurrent duplicate token before execute and records one side effect', async () => {
+  test('rejects a concurrent higher token before latch and reuses it after the first call settles', async () => {
     let executionStarted;
     let releaseExecution;
     const started = new Promise(resolve => { executionStarted = resolve; });
     const release = new Promise(resolve => { releaseExecution = resolve; });
     const execute = jest.fn(async () => {
-      executionStarted();
-      await release;
+      if (execute.mock.calls.length === 1) {
+        executionStarted();
+        await release;
+      }
       return 'held';
     });
-    const { server } = newServer({ search: { execute } });
+    const { server, counts } = newServer({ search: { execute } });
 
     const firstCall = server.handleCallTool(callParams(1));
     await started;
-    await expect(server.handleCallTool(callParams(1))).rejects.toThrow(/duplicate or out of order/);
+    await expect(server.handleCallTool(callParams(2))).rejects.toThrow(/already in flight/);
+    expect(server.lastProgressToken).toBe(1);
+    expect(server.audit.toolCalls).toHaveLength(0);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(counts.search).toBe(1);
     releaseExecution();
     await expect(firstCall).resolves.toEqual({ content: [{ type: 'text', text: 'held' }] });
+    await expect(server.handleCallTool(callParams(2))).resolves.toEqual({ content: [{ type: 'text', text: 'held' }] });
 
-    expect(execute).toHaveBeenCalledTimes(1);
-    expectAccounting(server, { search: 1, extract: 0, listFiles: 0 }, 1);
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(counts.search).toBe(2);
+    const snapshot = expectAccounting(server, { search: 2, extract: 0, listFiles: 0 }, 2);
+    expect(snapshot.toolCalls.map(({ ordinal, metadata }) => ({ ordinal, progressToken: metadata.progressToken }))).toEqual([
+      { ordinal: 1, progressToken: 1 },
+      { ordinal: 2, progressToken: 2 }
+    ]);
   });
 
   test('persists bounded failed terminal audit records for throws and oversized results', async () => {
