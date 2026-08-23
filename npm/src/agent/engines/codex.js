@@ -469,19 +469,7 @@ function validateSessionIdentity(msg, bindings, codexHome) {
       identity.model !== bindings.model || identity.model_provider_id !== 'openai' ||
       identity.approval_policy !== bindings.approvalPolicy || identity.approvals_reviewer !== 'user' ||
       identity.reasoning_effort !== bindings.thinkingEffort || identity.cwd !== bindings.cwd) {
-    throw new Error(`Codex session_configured identity does not match requested bindings: ${JSON.stringify({
-      rollout: isAbsolute(identity.rollout_path) && isDescendantPath(codexHome, identity.rollout_path),
-      model: identity.model === bindings.model,
-      provider: identity.model_provider_id === 'openai',
-      approval: identity.approval_policy === bindings.approvalPolicy,
-      reviewer: identity.approvals_reviewer === 'user',
-      reasoning: identity.reasoning_effort === bindings.thinkingEffort,
-      cwd: identity.cwd === bindings.cwd,
-      identityCwd: identity.cwd,
-      bindingCwd: bindings.cwd,
-      rolloutPath: identity.rollout_path,
-      codexHome
-    })}`);
+    throw new Error('Codex session_configured identity does not match requested bindings');
   }
   if (identity.session_id !== identity.thread_id) throw new Error('Codex session/thread identity is not fresh and paired');
   return identity;
@@ -608,7 +596,7 @@ function validateAuditResultDigest(value, field) {
 }
 
 function validateAuditOrdinal(value, field) {
-  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_EVENT_COUNT) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > CODEX_MAX_EVENT_COUNT) {
     throw new Error(`Codex ${field} ordinal is invalid`);
   }
   return value;
@@ -1504,10 +1492,81 @@ export async function createCodexEngine(options = {}) {
 
   function boundedMcpStop() {
     if (!mcpServer) return Promise.resolve();
-    return Promise.race([
-      Promise.resolve().then(() => mcpServer.stop()),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('MCP server stop timeout')), CODEX_CLEANUP_TIMEOUT_MS))
-    ]);
+    return new Promise((resolvePromise, rejectPromise) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        rejectPromise(new Error('MCP server stop timeout'));
+      }, CODEX_CLEANUP_TIMEOUT_MS);
+      Promise.resolve().then(() => mcpServer.stop()).then(value => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolvePromise(value);
+      }, error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        rejectPromise(error);
+      });
+    });
+  }
+
+  function updateLateCleanupOutcome(outcome) {
+    cleanupOutcome = {
+      ...cleanupOutcome,
+      lateMcpStop: cloneJson(outcome, 'late MCP cleanup outcome'),
+      ...(outcome.status === 'failed' ? {
+        status: 'failed',
+        errors: [...(cleanupOutcome.errors || []), outcome.error].filter(Boolean).slice(0, 4)
+      } : {})
+    };
+  }
+
+  function scheduleLateMcpCleanup() {
+    if (mcpLateStopPromise) return mcpLateStopPromise;
+    mcpLateStopPromise = mcpStartPromise.then(async () => {
+      mcpStartResolved = true;
+      if (!mcpStartTimedOut) {
+        const outcome = { status: 'not_needed' };
+        updateLateCleanupOutcome(outcome);
+        return outcome;
+      }
+      try {
+        // The first cleanup may already have stopped the pre-listen server.
+        // Once start resolves, stop again to close the listener it created.
+        await performCleanup();
+        await boundedMcpStop();
+        const outcome = { status: 'succeeded' };
+        updateLateCleanupOutcome(outcome);
+        return outcome;
+      } catch (error) {
+        const outcome = { status: 'failed', error: errorMessage(error).slice(0, 160) };
+        updateLateCleanupOutcome(outcome);
+        throw error;
+      }
+    }, error => {
+      mcpStartResolved = true;
+      const outcome = { status: 'start_failed', error: errorMessage(error).slice(0, 160) };
+      updateLateCleanupOutcome(outcome);
+      return outcome;
+    });
+    // Keep a late stop failure observable through the exposed promise while
+    // also handling the rejection so a late listener cannot become an
+    // unhandled rejection after startup has already failed.
+    mcpLateStopPromise.catch(() => {});
+    return mcpLateStopPromise;
+  }
+
+  function exposeLateCleanup(error) {
+    if (error instanceof Error && mcpLateStopPromise) {
+      Object.defineProperty(error, 'codexMcpLateCleanup', {
+        configurable: true,
+        value: mcpLateStopPromise
+      });
+    }
+    return error;
   }
 
   async function performCleanup() {
@@ -1545,11 +1604,13 @@ export async function createCodexEngine(options = {}) {
         } catch (error) { errors.push(errorMessage(error)); }
       }
       cleanupOutcome = {
-        status: errors.length === 0 && readerClosed && mcpServerStopped && (!codexProcess || childExited) ? 'succeeded' : 'failed',
+        status: errors.length === 0 && readerClosed && mcpServerStopped && (!codexProcess || childExited) &&
+          (!mcpStartTimedOut || mcpStartResolved) ? 'succeeded' : 'failed',
         readerClosed,
         mcpServerStopped,
         directChild: codexProcess ? { terminationRequested: childTerminationRequested, exited: childExited, exitCode: childExitCode, exitSignal: childExitSignal, escalated } : null,
-        errors: errors.slice(0, 4)
+        errors: errors.slice(0, 4),
+        lateMcpStop: mcpStartTimedOut ? { status: 'pending' } : { status: 'not_needed' }
       };
       return cleanupOutcome;
     })();
@@ -1567,19 +1628,7 @@ export async function createCodexEngine(options = {}) {
       serverName
     });
     mcpStartPromise = Promise.resolve().then(() => mcpServer.start());
-    // Keep in-process MCP startup under the same configured turn budget as
-    // the child transport.  Attach a rejection handler so a late startup
-    // failure after a timeout cannot become an unhandled promise.
-    mcpStartPromise.catch(() => {});
-    mcpStartPromise.then(() => {
-      mcpStartResolved = true;
-      if (mcpStartTimedOut) {
-        // A timeout may have called stop() before listen() completed.  Once
-        // the late start resolves, perform a second bounded stop after the
-        // first cleanup has settled so the late listener cannot leak.
-        mcpLateStopPromise = Promise.resolve(performCleanup()).then(() => boundedMcpStop()).catch(() => {});
-      }
-    }, () => {});
+    scheduleLateMcpCleanup();
     let startTimer;
     let started;
     try {
@@ -1805,6 +1854,6 @@ export async function createCodexEngine(options = {}) {
   } catch (error) {
     if (!poisoned) poison(error);
     await performCleanup();
-    throw attachReceipt(error, state);
+    throw exposeLateCleanup(attachReceipt(error, state));
   }
 }

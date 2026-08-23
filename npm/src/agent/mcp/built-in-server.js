@@ -233,6 +233,8 @@ export class BuiltInMCPServer extends EventEmitter {
       inFlight: 0,
       reservedBytes: 0
     };
+    this.governedIdentity = null;
+    this.lastProgressToken = 0;
   }
 
   /**
@@ -869,7 +871,7 @@ export class BuiltInMCPServer extends EventEmitter {
     }
 
     let args = rawArgs;
-    let admitted = false;
+    let reservation = null;
     let argsDigest = null;
     if (this.governed) {
       // Canonicalize and bound the exact value passed to the implementation.
@@ -877,22 +879,37 @@ export class BuiltInMCPServer extends EventEmitter {
       // request cannot cause a tool side effect.
       args = cloneBoundedJson(rawArgs, 'arguments');
       argsDigest = digest(args, 'arguments');
-      this.reserveToolAudit(argsDigest);
-      admitted = true;
+      reservation = this.reserveToolAudit(argsDigest);
+      try {
+        this.admitGovernedCall(metadata);
+      } catch (error) {
+        this.releaseToolAudit(reservation);
+        reservation = null;
+        throw error;
+      }
     }
 
-    let auditRecorded = false;
     try {
-      // Execute tool directly (no spawning!)
-      const result = await tool.execute(args);
       let response;
       try {
-        const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
-        if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_TOOL_RESULT_BYTES) {
-          throw new Error('tool result exceeds the serialized-byte bound');
+        // Execute tool directly (no spawning!) only after governed admission.
+        const result = await tool.execute(args);
+        try {
+          const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+          if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_TOOL_RESULT_BYTES) {
+            throw new Error('tool result exceeds the serialized-byte bound');
+          }
+          if (typeof result !== 'string') cloneBoundedJson(result, 'tool result', MAX_TOOL_RESULT_BYTES);
+          response = { content: [{ type: 'text', text }] };
+        } catch (error) {
+          response = {
+            content: [{
+              type: 'text',
+              text: `Error executing ${name}: ${boundedToolErrorText(error)}`
+            }],
+            isError: true
+          };
         }
-        if (typeof result !== 'string') cloneBoundedJson(result, 'tool result', MAX_TOOL_RESULT_BYTES);
-        response = { content: [{ type: 'text', text }] };
       } catch (error) {
         response = {
           content: [{
@@ -901,36 +918,38 @@ export class BuiltInMCPServer extends EventEmitter {
           }],
           isError: true
         };
-        if (this.governed) {
-          this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
-          auditRecorded = true;
-          admitted = false;
-        }
-        return response;
       }
       if (this.governed) {
-        this.recordToolAudit(name, args, response, 'ok', metadata, argsDigest);
-        auditRecorded = true;
-        admitted = false;
-      }
-      return response;
-    } catch (error) {
-      const errorText = boundedToolErrorText(error);
-      const response = {
-        content: [{
-          type: 'text',
-          text: `Error executing ${name}: ${errorText}`
-        }],
-        isError: true
-      };
-      if (this.governed && !auditRecorded) {
-        this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
-        auditRecorded = true;
+        const status = response.isError ? 'failed' : 'ok';
+        this.recordToolAudit(name, args, response, status, metadata, argsDigest);
       }
       return response;
     } finally {
-      if (admitted) this.audit.inFlight--;
+      this.releaseToolAudit(reservation);
     }
+  }
+
+  admitGovernedCall(metadata) {
+    if (!this.governed) return;
+    const identity = {
+      session_id: metadata.session_id,
+      thread_id: metadata.thread_id,
+      turn_id: metadata.turn_id,
+      sandbox: metadata.sandbox,
+      turn_started_at_unix_ms: metadata.turn_started_at_unix_ms,
+      model: metadata.model,
+      reasoning_effort: metadata.reasoning_effort,
+      threadId: metadata.threadId
+    };
+    if (this.governedIdentity === null) {
+      this.governedIdentity = Object.freeze(identity);
+    } else if (!Object.keys(identity).every(key => this.governedIdentity[key] === identity[key])) {
+      throw new Error('Governed MCP session identity does not match the latched turn');
+    }
+    if (!Number.isSafeInteger(metadata.progressToken) || metadata.progressToken <= this.lastProgressToken) {
+      throw new Error('Governed MCP progressToken is duplicate or out of order');
+    }
+    this.lastProgressToken = metadata.progressToken;
   }
 
   reserveToolAudit(argsDigest) {
@@ -948,6 +967,14 @@ export class BuiltInMCPServer extends EventEmitter {
     }
     this.audit.inFlight++;
     this.audit.reservedBytes += MAX_AUDIT_RECORD_RESERVATION_BYTES;
+    return { released: false };
+  }
+
+  releaseToolAudit(reservation) {
+    if (!reservation || reservation.released) return;
+    reservation.released = true;
+    this.audit.inFlight--;
+    this.audit.reservedBytes -= MAX_AUDIT_RECORD_RESERVATION_BYTES;
   }
 
   recordToolAudit(name, args, result, status, metadata, knownArgsDigest = null) {
@@ -973,8 +1000,6 @@ export class BuiltInMCPServer extends EventEmitter {
     };
     this.audit.toolCalls.push(record);
     this.audit.executionCounts[bareName]++;
-    this.audit.inFlight--;
-    this.audit.reservedBytes -= MAX_AUDIT_RECORD_RESERVATION_BYTES;
     try {
       this.assertAuditWithinBounds();
     } catch (error) {

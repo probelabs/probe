@@ -3645,6 +3645,7 @@ Follow these instructions carefully:
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
+            let metadata = null;
 
             // Query Codex directly with the message and schema
             for await (const chunk of engine.query(message, options)) {
@@ -3659,9 +3660,25 @@ Follow these instructions carefully:
                 if (this.debug) {
                   console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
                 }
+              } else if (chunk.type === 'metadata') {
+                if (metadata !== null) {
+                  throw new Error('Codex engine returned duplicate success metadata');
+                }
+                if (!chunk.data || !Object.prototype.hasOwnProperty.call(chunk.data, 'codexEventReceipt') ||
+                    !chunk.data.codexEventReceipt) {
+                  throw new Error('Codex engine returned invalid success metadata');
+                }
+                metadata = chunk.data;
               } else if (chunk.type === 'error') {
                 throw chunk.error;
               }
+            }
+
+            if (!metadata) {
+              throw new Error('Codex engine did not return its required success metadata');
+            }
+            if (typeof options.onMetadata === 'function') {
+              await options.onMetadata(metadata);
             }
 
             // Emit tool events after response is complete (batch mode)

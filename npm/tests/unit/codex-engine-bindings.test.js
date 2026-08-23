@@ -1,7 +1,7 @@
 import { describe, expect, test, beforeEach, afterEach, jest } from '@jest/globals';
 import { EventEmitter } from 'events';
 import { createHash } from 'crypto';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { markProbeAgentForTests } from '../../src/agent/governance-marker.js';
@@ -296,8 +296,8 @@ beforeEach(() => {
   jest.useFakeTimers();
   engines = [];
   harnesses = new WeakMap();
-  cwd = mkdtempSync(join(tmpdir(), 'probe-codex-cwd-'));
-  codexHome = mkdtempSync(join(tmpdir(), 'probe-codex-home-'));
+  cwd = realpathSync(mkdtempSync(join(tmpdir(), 'probe-codex-cwd-')));
+  codexHome = realpathSync(mkdtempSync(join(tmpdir(), 'probe-codex-home-')));
   authTarget = join(tmpdir(), `probe-auth-${process.pid}-${Math.random().toString(16).slice(2)}`);
   writeFileSync(authTarget, '{}');
   symlinkSync(authTarget, join(codexHome, 'auth.json'));

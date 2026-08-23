@@ -244,6 +244,8 @@ export interface AnswerOptions {
   context?: string;
   /** Maximum number of tool iterations */
   maxIterations?: number;
+  /** Receives the single successful Codex metadata receipt */
+  onMetadata?: (metadata: any) => void | Promise<void>;
 }
 
 /**
