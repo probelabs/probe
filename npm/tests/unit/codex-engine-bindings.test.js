@@ -209,6 +209,78 @@ function substitute(value, engine) {
   return JSON.parse(text);
 }
 
+function replaceMessage(message, msg) {
+  return { ...message, params: { ...message.params, msg } };
+}
+
+function syntheticSecondToolLifecycle(engine) {
+  const firstToolOuterCall = fixture.find(message => message.params?.msg?.type === 'raw_response_item' &&
+    message.params.msg.item?.type === 'custom_tool_call' && message.params.msg.item.call_id === 'TOOL_OUTER_CALL_ID');
+  const firstToolNestedStart = fixture.find(message => message.params?.msg?.type === 'item_started' &&
+    message.params.msg.item?.type === 'McpToolCall' && message.params.msg.item.id === 'NESTED_CALL_ID');
+  const firstToolBegin = fixture.find(message => message.params?.msg?.type === 'mcp_tool_call_begin' &&
+    message.params.msg.call_id === 'NESTED_CALL_ID');
+  const firstToolCompletion = fixture.find(message => message.params?.msg?.type === 'item_completed' &&
+    message.params.msg.item?.type === 'McpToolCall' && message.params.msg.item.id === 'NESTED_CALL_ID');
+  const firstToolEnd = fixture.find(message => message.params?.msg?.type === 'mcp_tool_call_end' &&
+    message.params.msg.call_id === 'NESTED_CALL_ID');
+  const firstToolOuterOutput = fixture.find(message => message.params?.msg?.type === 'raw_response_item' &&
+    message.params.msg.item?.type === 'custom_tool_call_output' && message.params.msg.item.call_id === 'TOOL_OUTER_CALL_ID');
+  const source = [firstToolOuterCall, firstToolNestedStart, firstToolBegin, firstToolCompletion, firstToolEnd, firstToolOuterOutput];
+  if (source.some(message => !message)) throw new Error('Golden first-tool lifecycle is incomplete');
+
+  const [outerCall, nestedStart, begin, completion, end, outerOutput] = source.map(message => substitute(message, engine));
+  const argumentsValue = { query: 'handler', path: '.' };
+  const resultValue = { content: [{ type: 'text', text: 'http.go:10: handler' }] };
+  const duration = { secs: 0, nanos: 3000000 };
+
+  return [
+    replaceMessage(outerCall, {
+      ...outerCall.params.msg.item,
+      id: 'tool-outer-item-2',
+      call_id: 'tool-outer-call-2',
+      input: 'synthetic-bridge-input-2'
+    }),
+    replaceMessage(nestedStart, {
+      ...nestedStart.params.msg.item,
+      id: 'nested-call-2',
+      tool: 'mcp__probe__search',
+      arguments: argumentsValue
+    }),
+    replaceMessage(begin, {
+      ...begin.params.msg,
+      call_id: 'nested-call-2',
+      invocation: { ...begin.params.msg.invocation, tool: 'mcp__probe__search', arguments: argumentsValue }
+    }),
+    replaceMessage(completion, {
+      ...completion.params.msg,
+      item: {
+        ...completion.params.msg.item,
+        id: 'nested-call-2',
+        tool: 'mcp__probe__search',
+        arguments: argumentsValue,
+        result: resultValue,
+        duration
+      }
+    }),
+    replaceMessage(end, {
+      ...end.params.msg,
+      call_id: 'nested-call-2',
+      invocation: { ...end.params.msg.invocation, tool: 'mcp__probe__search', arguments: argumentsValue },
+      duration,
+      result: { ...end.params.msg.result, Ok: resultValue }
+    }),
+    replaceMessage(outerOutput, {
+      ...outerOutput.params.msg.item,
+      call_id: 'tool-outer-call-2',
+      output: [
+        { type: 'input_text', text: 'synthetic-bridge-output-2-a' },
+        { type: 'input_text', text: 'synthetic-bridge-output-2-b' }
+      ]
+    })
+  ];
+}
+
 function makeAudit() {
   const result = { content: [{ type: 'text', text: '[\n  "fixture-alpha.txt",\n  "fixture-beta.txt"\n]' }] };
   return {
@@ -278,15 +350,45 @@ async function collect(engine) {
   return chunks;
 }
 
-async function replayGolden(engine, mutation = message => message) {
+function createSecondAuditBeforeEmit() {
+  let canonicalMcpCompletionCount = 0;
+  return (message, harness) => {
+    const item = message.params?.msg?.item;
+    if (message.params?.msg?.type !== 'item_completed' || item?.type !== 'McpToolCall') return;
+    canonicalMcpCompletionCount++;
+    if (canonicalMcpCompletionCount !== 2) return;
+
+    const argumentsValue = { query: 'handler', path: '.' };
+    const resultValue = { content: [{ type: 'text', text: 'http.go:10: handler' }] };
+    const firstRecord = harness.server.audit.toolCalls[0];
+    harness.server.audit.toolCalls.push({
+      ordinal: 3,
+      name: 'mcp__probe__search',
+      arguments: digest(argumentsValue),
+      metadata: { ...firstRecord.metadata, progressToken: 2 },
+      result: { ...digest(resultValue), status: 'ok' }
+    });
+    harness.server.audit.executionCounts = { search: 1, extract: 0, listFiles: 1 };
+  };
+}
+
+async function replayGolden(engine, mutation = message => message, beforeEmit = createSecondAuditBeforeEmit()) {
   const harness = harnesses.get(engine);
   const pending = collect(engine);
   await harness.queryWritten;
-  const messages = fixture.slice(1).map(message => substitute(message, engine)).flatMap(message => {
+  const goldenMessages = fixture.slice(1).map(message => substitute(message, engine));
+  const firstToolOutputIndex = goldenMessages.findIndex(message => message.params?.msg?.type === 'raw_response_item' &&
+    message.params.msg.item?.type === 'custom_tool_call_output' && message.params.msg.item.call_id === 'tool-outer-call-1');
+  if (firstToolOutputIndex < 0) throw new Error('Golden first-tool output is missing');
+  goldenMessages.splice(firstToolOutputIndex + 1, 0, ...syntheticSecondToolLifecycle(engine));
+  const messages = goldenMessages.flatMap(message => {
     const mutated = mutation(message);
     return Array.isArray(mutated) ? mutated : [mutated];
   });
-  for (const message of messages) emit(harness, message);
+  for (const message of messages) {
+    await beforeEmit(message, harness);
+    emit(harness, message);
+  }
   if (!engine.getTransportState().poisoned) {
     await waitForQuietWindow(engine);
     await jest.advanceTimersByTimeAsync(CODEX_QUIET_WINDOW_MS);
@@ -361,14 +463,65 @@ describe('Codex 0.144.1 capture-governed attempt004 transport', () => {
     expect(receipt.effective).toEqual(expect.objectContaining({ thread_id: 'thread-1', model: CODEX_MODEL }));
     expect(receipt.cleanup).toEqual(expect.objectContaining({ status: 'succeeded' }));
     expect(receipt.policyVerdict).toEqual({ verdict: 'allow' });
-    expect(receipt.execBridge[1]).toEqual(expect.objectContaining({
-      outerCallId: 'tool-outer-call-1', outerItemId: 'tool-outer-item-1', nestedCallId: 'nested-call-1', status: 'completed'
-    }));
-    expect(receipt.nestedMcp[0]).toEqual(expect.objectContaining({
-      nestedCallId: 'nested-call-1', callId: 'nested-call-1', outerCallId: 'tool-outer-call-1',
-      duration: { secs: 0, nanos: 2468667 }, directAudit: expect.objectContaining({ ordinal: 2 })
-    }));
-    expect(receipt.execBridge[1].outerCallId).not.toBe(receipt.nestedMcp[0].nestedCallId);
+    expect(receipt.counts).toEqual(expect.objectContaining({ bridges: 3, nestedMcp: 2, directAudits: 2 }));
+    expect(receipt.execBridge.map(({ outerCallId, outerItemId, nestedCallId, nestedItemId, status }) => ({
+      outerCallId, outerItemId, nestedCallId, nestedItemId, status
+    }))).toEqual([
+      {
+        outerCallId: 'discovery-outer-call-1', outerItemId: 'discovery-outer-item-1',
+        nestedCallId: null, nestedItemId: null, status: 'completed'
+      },
+      {
+        outerCallId: 'tool-outer-call-1', outerItemId: 'tool-outer-item-1',
+        nestedCallId: 'nested-call-1', nestedItemId: 'nested-call-1', status: 'completed'
+      },
+      {
+        outerCallId: 'tool-outer-call-2', outerItemId: 'tool-outer-item-2',
+        nestedCallId: 'nested-call-2', nestedItemId: 'nested-call-2', status: 'completed'
+      }
+    ]);
+    expect(receipt.nestedMcp.map(({ nestedCallId, callId, outerCallId, tool, duration }) => ({
+      nestedCallId, callId, outerCallId, tool, duration
+    }))).toEqual([
+      {
+        nestedCallId: 'nested-call-1', callId: 'nested-call-1', outerCallId: 'tool-outer-call-1',
+        tool: 'mcp__probe__listFiles', duration: { secs: 0, nanos: 2468667 }
+      },
+      {
+        nestedCallId: 'nested-call-2', callId: 'nested-call-2', outerCallId: 'tool-outer-call-2',
+        tool: 'mcp__probe__search', duration: { secs: 0, nanos: 3000000 }
+      }
+    ]);
+    expect(receipt.directServerAudit.records.map(record => record.ordinal)).toEqual([2, 3]);
+    expect(receipt.directServerAudit.records.map(record => record.name)).toEqual([
+      'mcp__probe__listFiles', 'mcp__probe__search'
+    ]);
+    expect(receipt.directServerAudit.records.map(record => record.metadata.progressToken)).toEqual([1, 2]);
+    expect(receipt.nestedMcp.map(record => record.directAudit.metadata.progressToken)).toEqual([1, 2]);
+    expect(receipt.eventCounts).toEqual({
+      session_configured: 1,
+      mcp_startup_update: 2,
+      task_started: 1,
+      mcp_startup_complete: 1,
+      raw_response_item: 13,
+      item_started: 7,
+      item_completed: 7,
+      user_message: 1,
+      token_count: 3,
+      mcp_tool_call_begin: 2,
+      mcp_tool_call_end: 2,
+      agent_message_content_delta: 4,
+      agent_message: 1,
+      task_complete: 1,
+      result: 1
+    });
+    const bridgeIdentities = receipt.execBridge.flatMap(({ outerCallId, outerItemId, nestedCallId }) =>
+      [outerCallId, outerItemId, nestedCallId].filter(Boolean));
+    expect(new Set(bridgeIdentities).size).toBe(bridgeIdentities.length);
+    expect(receipt.directServerAudit.records[1].arguments).toEqual(digest({ query: 'handler', path: '.' }));
+    expect(receipt.directServerAudit.records[1].result).toEqual({
+      ...digest({ content: [{ type: 'text', text: 'http.go:10: handler' }] }), status: 'ok'
+    });
     expect(harness.reader.close).toHaveBeenCalledTimes(1);
     expect(harness.server.stop).toHaveBeenCalledTimes(1);
     expect(harness.child.kill).toHaveBeenCalledWith('SIGTERM');

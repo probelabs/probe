@@ -3650,19 +3650,34 @@ Follow these instructions carefully:
 
             // Query Codex directly with the message and schema
             for await (const chunk of engine.query(message, options)) {
-              if (chunk.type === 'text' && chunk.content) {
+              if (!chunk || typeof chunk !== 'object' || Array.isArray(chunk) ||
+                  typeof chunk.type !== 'string' || chunk.type.length === 0) {
+                throw new Error('Codex engine returned an invalid chunk');
+              }
+              if (metadata !== null) {
+                if (chunk.type === 'metadata') {
+                  throw new Error('Codex engine returned duplicate success metadata');
+                }
+                throw new Error('Codex engine returned a chunk after success metadata');
+              }
+
+              if (chunk.type === 'text') {
+                if (!Object.prototype.hasOwnProperty.call(chunk, 'content') || typeof chunk.content !== 'string') {
+                  throw new Error('Codex engine returned malformed text chunk');
+                }
                 assistantResponseContent += chunk.content;
                 bufferedText.push(chunk.content);
-              } else if (chunk.type === 'toolBatch' && chunk.tools) {
+              } else if (chunk.type === 'toolBatch') {
+                if (!Object.prototype.hasOwnProperty.call(chunk, 'tools') || !Array.isArray(chunk.tools) ||
+                    chunk.tools.some(toolEvent => !toolEvent || typeof toolEvent !== 'object' || Array.isArray(toolEvent))) {
+                  throw new Error('Codex engine returned malformed toolBatch chunk');
+                }
                 // Store every tool batch for processing after receipt admission.
                 bufferedToolBatches.push([...chunk.tools]);
                 if (this.debug) {
                   console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
                 }
               } else if (chunk.type === 'metadata') {
-                if (metadata !== null) {
-                  throw new Error('Codex engine returned duplicate success metadata');
-                }
                 const receipt = chunk.data?.codexEventReceipt;
                 if (!chunk.data || typeof chunk.data !== 'object' || Array.isArray(chunk.data) ||
                     !Object.prototype.hasOwnProperty.call(chunk.data, 'codexEventReceipt') ||
@@ -3675,7 +3690,12 @@ Follow these instructions carefully:
                 }
                 metadata = chunk.data;
               } else if (chunk.type === 'error') {
+                if (!(chunk.error instanceof Error)) {
+                  throw new Error('Codex engine returned malformed error chunk');
+                }
                 throw chunk.error;
+              } else {
+                throw new Error(`Codex engine returned unknown chunk type: ${chunk.type}`);
               }
             }
 
