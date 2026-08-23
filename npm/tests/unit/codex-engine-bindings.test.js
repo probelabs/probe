@@ -233,19 +233,29 @@ function syntheticSecondToolLifecycle(engine) {
   const argumentsValue = { query: 'handler', path: '.' };
   const resultValue = { content: [{ type: 'text', text: 'http.go:10: handler' }] };
   const duration = { secs: 0, nanos: 3000000 };
+  const secondStartedAtMs = completion.params.msg.completed_at_ms + 1;
+  const firstLifecycleDurationMs = completion.params.msg.completed_at_ms - nestedStart.params.msg.started_at_ms;
+  const secondCompletedAtMs = secondStartedAtMs + Math.max(0, firstLifecycleDurationMs);
 
   return [
     replaceMessage(outerCall, {
-      ...outerCall.params.msg.item,
-      id: 'tool-outer-item-2',
-      call_id: 'tool-outer-call-2',
-      input: 'synthetic-bridge-input-2'
+      ...outerCall.params.msg,
+      item: {
+        ...outerCall.params.msg.item,
+        id: 'tool-outer-item-2',
+        call_id: 'tool-outer-call-2',
+        input: 'synthetic-second-exec-input'
+      }
     }),
     replaceMessage(nestedStart, {
-      ...nestedStart.params.msg.item,
-      id: 'nested-call-2',
-      tool: 'mcp__probe__search',
-      arguments: argumentsValue
+      ...nestedStart.params.msg,
+      started_at_ms: secondStartedAtMs,
+      item: {
+        ...nestedStart.params.msg.item,
+        id: 'nested-call-2',
+        tool: 'mcp__probe__search',
+        arguments: argumentsValue
+      }
     }),
     replaceMessage(begin, {
       ...begin.params.msg,
@@ -261,7 +271,8 @@ function syntheticSecondToolLifecycle(engine) {
         arguments: argumentsValue,
         result: resultValue,
         duration
-      }
+      },
+      completed_at_ms: secondCompletedAtMs
     }),
     replaceMessage(end, {
       ...end.params.msg,
@@ -271,12 +282,12 @@ function syntheticSecondToolLifecycle(engine) {
       result: { ...end.params.msg.result, Ok: resultValue }
     }),
     replaceMessage(outerOutput, {
-      ...outerOutput.params.msg.item,
-      call_id: 'tool-outer-call-2',
-      output: [
-        { type: 'input_text', text: 'synthetic-bridge-output-2-a' },
-        { type: 'input_text', text: 'synthetic-bridge-output-2-b' }
-      ]
+      ...outerOutput.params.msg,
+      item: {
+        ...outerOutput.params.msg.item,
+        call_id: 'tool-outer-call-2',
+        output: [{ type: 'input_text', text: 'synthetic-second-bridge-output' }]
+      }
     })
   ];
 }
@@ -368,7 +379,11 @@ function createSecondAuditBeforeEmit() {
       metadata: { ...firstRecord.metadata, progressToken: 2 },
       result: { ...digest(resultValue), status: 'ok' }
     });
-    harness.server.audit.executionCounts = { search: 1, extract: 0, listFiles: 1 };
+    harness.server.audit.executionCounts = {
+      ...harness.server.audit.executionCounts,
+      search: 1,
+      extract: 0
+    };
   };
 }
 
