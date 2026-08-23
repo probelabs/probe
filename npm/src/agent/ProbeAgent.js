@@ -114,6 +114,7 @@ import {
   CODEX_DEFAULT_TIMEOUT,
   validateCodexBindings
 } from './engines/codex.js';
+import { markProbeAgent } from './governance-marker.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -216,6 +217,7 @@ export class ProbeAgent {
    * @param {string} [options.codexExpectedExecutableSha256] - Optional executable SHA-256 pin.
    */
   constructor(options = {}) {
+    markProbeAgent(this);
     // Basic configuration
     this.sessionId = options.sessionId || randomUUID();
     // Support systemPrompt alias (overrides customPrompt when both are provided)

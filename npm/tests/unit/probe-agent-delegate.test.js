@@ -3,6 +3,8 @@ import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 import { delegateTool } from '../../src/tools/vercel.js';
 import { delegate } from '../../src/delegate.js';
 
+const codexHome = '/tmp/probe-codex-home-constructor-test';
+
 describe('ProbeAgent enableDelegate option', () => {
   describe('Constructor and initialization', () => {
     test('should default enableDelegate to false', () => {
@@ -292,7 +294,7 @@ describe('ProbeAgent enableDelegate option', () => {
       const providerTypes = ['anthropic', 'openai', 'google', 'bedrock', 'claude-code', 'codex'];
 
       for (const providerType of providerTypes) {
-        const agent = new ProbeAgent({ provider: providerType });
+        const agent = new ProbeAgent({ provider: providerType, ...(providerType === 'codex' ? { codexHome } : {}) });
         // apiType should be set based on provider
         // For providers without API keys, it may fall back to different values
         expect(typeof agent.apiType).toBe('string');
@@ -307,7 +309,7 @@ describe('ProbeAgent enableDelegate option', () => {
       const agent2 = new ProbeAgent({ provider: 'claude-code' });
       expect(agent2.clientApiProvider).toBe('claude-code');
 
-      const agent3 = new ProbeAgent({ provider: 'codex' });
+      const agent3 = new ProbeAgent({ provider: 'codex', codexHome });
       expect(agent3.clientApiProvider).toBe('codex');
     });
 
@@ -318,7 +320,7 @@ describe('ProbeAgent enableDelegate option', () => {
     });
 
     test('should store codex provider in clientApiProvider', () => {
-      const agent = new ProbeAgent({ provider: 'codex' });
+      const agent = new ProbeAgent({ provider: 'codex', codexHome });
       // clientApiProvider should always store the input provider string
       expect(agent.clientApiProvider).toBe('codex');
     });

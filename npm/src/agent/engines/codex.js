@@ -17,13 +17,15 @@ import {
   readFileSync,
   statSync
 } from 'fs';
-import { dirname, isAbsolute, join, resolve } from 'path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
 import { Session } from '../shared/Session.js';
+import { isAuthenticProbeAgent } from '../governance-marker.js';
 
 export const CODEX_MODEL = 'gpt-5.6-luna';
 export const CODEX_REASONING_EFFORT = 'xhigh';
 export const CODEX_SANDBOX = 'read-only';
+export const CODEX_EXTENSION_SANDBOX = 'seatbelt';
 export const CODEX_APPROVAL_POLICY = 'never';
 export const CODEX_DEFAULT_TIMEOUT = 600000;
 export const CODEX_TIMEOUT_MIN = 1;
@@ -36,6 +38,7 @@ export const CODEX_QUIET_WINDOW_MS = 1500;
 export const CODEX_CLEANUP_TIMEOUT_MS = 1000;
 export const CODEX_MAX_EVENT_COUNT = 256;
 export const CODEX_MAX_SERIALIZED_BYTES = 1048576;
+export const CODEX_MAX_INCOMING_BYTES = CODEX_MAX_SERIALIZED_BYTES;
 
 const INITIALIZE_PROTOCOL_VERSION = '2024-11-05';
 const INITIALIZE_CLIENT_INFO = Object.freeze({ name: 'protocol-capture-r4', version: '1.0.0' });
@@ -48,6 +51,7 @@ const EVENT_TYPES = new Set([
   'item_completed',
   'item_started',
   'mcp_startup_complete',
+  'mcp_startup_update',
   'mcp_tool_call_begin',
   'mcp_tool_call_end',
   'raw_response_item',
@@ -79,12 +83,16 @@ const FEATURE_OVERRIDES = Object.freeze({
   request_permissions_tool: false,
   standalone_web_search: false
 });
-const ALLOWED_ENVIRONMENT = Object.freeze(['PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'LC_CTYPE']);
+const ALLOWED_ENVIRONMENT = Object.freeze(['PATH', 'TMPDIR', 'LANG', 'LC_ALL', 'USER', 'LOGNAME', 'SHELL', 'TERM']);
 
 const MAX_STRING_LENGTH = 131072;
 const MAX_ID_LENGTH = 512;
 const MAX_EVENT_TYPE_LENGTH = 64;
 const MAX_ACTIVITY = 256;
+const MAX_ITEMS = 128;
+const MAX_MCP_CALLS = 32;
+const MAX_BRIDGE_CALLS = 64;
+const MAX_TOKEN_COUNTS = 64;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -197,7 +205,16 @@ export function buildCodexInitialToolArgs({
     web_search: 'disabled',
     features: { ...FEATURE_OVERRIDES },
     skills: { include_instructions: false },
-    mcp_servers: { [mcpServerName]: { url: mcpServerUrl } }
+    mcp_servers: {
+      [mcpServerName]: {
+        url: mcpServerUrl,
+        default_tools_approval_mode: 'prompt',
+        enabled_tools: PROBE_TOOLS.map(tool => `${PROBE_TOOL_PREFIX}${tool}`),
+        tools: Object.fromEntries(PROBE_TOOLS.map(tool => [
+          `${PROBE_TOOL_PREFIX}${tool}`, { approval_mode: 'approve' }
+        ]))
+      }
+    }
   };
   return {
     prompt,
@@ -222,30 +239,31 @@ export function buildCodexRequestedMetadata(bindings) {
 }
 
 function verifyExecutable({ executablePath, expectedExecutablePath, expectedExecutableSha256 }) {
-  if (!isAbsolute(executablePath || '') || !isAbsolute(expectedExecutablePath || '')) {
-    throw new Error('Codex executable paths must be absolute');
+  if ((executablePath !== undefined && executablePath !== CODEX_PINNED_EXECUTABLE_PATH) ||
+      (expectedExecutablePath !== undefined && expectedExecutablePath !== CODEX_PINNED_EXECUTABLE_PATH) ||
+      (expectedExecutableSha256 !== undefined && expectedExecutableSha256 !== CODEX_PINNED_EXECUTABLE_SHA256)) {
+    throw new Error('Codex executable path and SHA-256 are fixed to the captured binary');
   }
-  if (typeof expectedExecutableSha256 !== 'string' || !/^[0-9a-f]{64}$/.test(expectedExecutableSha256)) {
-    throw new Error('Codex executable SHA-256 pin is invalid');
-  }
+  const expectedSha256 = CODEX_PINNED_EXECUTABLE_SHA256;
   let canonicalExecutable;
-  let canonicalExpected;
   try {
-    canonicalExecutable = realpathSync(resolve(executablePath));
-    canonicalExpected = realpathSync(resolve(expectedExecutablePath));
+    canonicalExecutable = realpathSync(resolve(executablePath || CODEX_PINNED_EXECUTABLE_PATH));
   } catch {
     throw new Error('Codex executable path cannot be canonicalized');
   }
-  if (canonicalExecutable !== canonicalExpected) throw new Error('Codex executable path pin does not match');
+  if (canonicalExecutable !== CODEX_PINNED_EXECUTABLE_PATH) throw new Error('Codex executable path pin does not match');
   const sha256 = createHash('sha256').update(readFileSync(canonicalExecutable)).digest('hex');
-  if (sha256 !== expectedExecutableSha256) throw new Error('Codex executable SHA-256 does not match');
+  if (sha256 !== expectedSha256) throw new Error('Codex executable SHA-256 does not match');
   return { path: canonicalExecutable, sha256 };
 }
 
+function isDescendantPath(parent, candidate) {
+  const child = relative(parent, candidate);
+  return child !== '' && child !== '..' && !child.startsWith(`..${sep}`) && !isAbsolute(child);
+}
+
 function validateGovernedAgent(agent) {
-  if (!agent || typeof agent !== 'object') {
-    throw new Error('Codex Probe governance requires the real top-level ProbeAgent');
-  }
+  if (!isAuthenticProbeAgent(agent)) throw new Error('Codex Probe governance requires the real top-level ProbeAgent');
   for (const field of [
     'enableDelegate', 'enableExecutePlan', 'allowEdit', 'enableBash', 'enableSkills',
     'enableTasks', 'enableMcp'
@@ -276,6 +294,10 @@ function validateGovernedAgent(agent) {
   if (typeof configured.isEnabled === 'function' &&
       (PROBE_TOOLS.some(tool => configured.isEnabled(tool) !== true) || configured.isEnabled('bash') === true)) {
     throw new Error('Codex Probe tool whitelist is not exact');
+  }
+  if (!isObject(agent.toolImplementations) || Object.keys(agent.toolImplementations).sort().join(',') !== PROBE_TOOLS.slice().sort().join(',') ||
+      PROBE_TOOLS.some(tool => !isObject(agent.toolImplementations[tool]) || typeof agent.toolImplementations[tool].execute !== 'function')) {
+    throw new Error('Codex Probe governance requires exact executable Probe tool implementations');
   }
   return { allowed, allowedSet: allowed };
 }
@@ -382,7 +404,7 @@ function validatePermissionProfile(profile) {
   return cloneJson(profile, 'permission_profile');
 }
 
-function validateSessionIdentity(msg, bindings) {
+function validateSessionIdentity(msg, bindings, codexHome) {
   const keys = ['type', 'session_id', 'thread_id', 'model', 'model_provider_id', 'approval_policy',
     'approvals_reviewer', 'permission_profile', 'reasoning_effort', 'rollout_path', 'cwd'];
   const optional = ['active_permission_profile'];
@@ -403,7 +425,8 @@ function validateSessionIdentity(msg, bindings) {
     rollout_path: requireString(msg.rollout_path, 'session_configured.rollout_path', 4096),
     cwd: canonicalizeCodexCwd(msg.cwd)
   };
-  if (!isAbsolute(identity.rollout_path) || identity.model !== bindings.model || identity.model_provider_id !== 'openai' ||
+  if (!isAbsolute(identity.rollout_path) || !isDescendantPath(codexHome, identity.rollout_path) ||
+      identity.model !== bindings.model || identity.model_provider_id !== 'openai' ||
       identity.approval_policy !== bindings.approvalPolicy || identity.approvals_reviewer !== 'user' ||
       identity.reasoning_effort !== bindings.thinkingEffort || identity.cwd !== bindings.cwd) {
     throw new Error('Codex session_configured identity does not match requested bindings');
@@ -494,6 +517,51 @@ function validateMcpResult(result) {
   return cloneJson(result, 'MCP result');
 }
 
+function validateCanonicalMcpResult(result) {
+  if (!exactKeys(result, ['content']) || !Array.isArray(result.content) || result.content.length < 1 || result.content.length > 16) {
+    throw new Error('Codex canonical MCP result is invalid');
+  }
+  for (const item of result.content) {
+    if (!exactKeys(item, ['type', 'text']) || item.type !== 'text') throw new Error('Codex canonical MCP result content is invalid');
+    requireString(item.text, 'canonical MCP result text', MAX_STRING_LENGTH);
+  }
+  return cloneJson(result, 'canonical MCP result');
+}
+
+function validateDuration(duration, field) {
+  if (!exactKeys(duration, ['secs', 'nanos']) || !Number.isInteger(duration.secs) || duration.secs < 0 ||
+      !Number.isInteger(duration.nanos) || duration.nanos < 0 || duration.nanos > 999999999) {
+    throw new Error(`Codex ${field} must be an exact secs/nanos duration`);
+  }
+  return { secs: duration.secs, nanos: duration.nanos };
+}
+
+function digestJson(value, field) {
+  const serialized = canonicalJson(value);
+  if (typeof serialized !== 'string' || Buffer.byteLength(serialized, 'utf8') > CODEX_MAX_SERIALIZED_BYTES) {
+    throw new Error(`Codex ${field} exceeds the serialized-byte bound`);
+  }
+  return { sha256: createHash('sha256').update(serialized).digest('hex'), bytes: Buffer.byteLength(serialized, 'utf8') };
+}
+
+function crossCheckDirectAudit(state, invocation, result, duration) {
+  const getter = state.mcpServer?.getGovernedAuditSnapshot || state.mcpServer?.getAuditSnapshot;
+  if (typeof getter !== 'function') throw new Error('Codex governed MCP direct audit snapshot is unavailable');
+  const snapshot = getter.call(state.mcpServer);
+  if (!isObject(snapshot) || !Array.isArray(snapshot.toolCalls)) throw new Error('Codex governed MCP direct audit snapshot is invalid');
+  const argsDigest = digestJson(invocation.arguments, 'MCP arguments');
+  const resultDigest = digestJson(result, 'MCP result');
+  const matches = snapshot.toolCalls.filter(record => record && record.name === invocation.tool &&
+    record.arguments?.sha256 === argsDigest.sha256 && record.arguments?.bytes === argsDigest.bytes &&
+    record.result?.sha256 === resultDigest.sha256 && record.result?.bytes === resultDigest.bytes &&
+    record.result?.status === 'ok');
+  if (matches.length !== 1) throw new Error('Codex canonical MCP call does not have exactly one direct audit record');
+  const ordinal = matches[0].ordinal;
+  if (!Number.isInteger(ordinal) || state.auditOrdinals.has(ordinal)) throw new Error('Codex direct audit ordinal was reused');
+  state.auditOrdinals.add(ordinal);
+  state.directAudit.push({ ordinal, name: invocation.tool, arguments: argsDigest, result: { ...resultDigest, status: 'ok' } });
+}
+
 function validateMcpInvocation(invocation, serverName, allowedSet) {
   if (!exactKeys(invocation, ['server', 'tool', 'arguments']) || invocation.server !== serverName ||
       typeof invocation.tool !== 'string' || !invocation.tool.startsWith(PROBE_TOOL_PREFIX)) {
@@ -518,6 +586,12 @@ function validateRawMessageItem(state, item) {
         item.internal_chat_message_metadata_passthrough.turn_id !== state.turnId) {
       throw new Error('Codex raw input message shape or turn_id is invalid');
     }
+    if (state.rawMessageRoles.length >= 16 || (item.role === 'developer' && state.rawMessageRoles.includes('developer')) ||
+        (item.role === 'developer' && state.rawMessageRoles.length !== 0) ||
+        (item.role === 'user' && state.rawMessageRoles.length > 0 && state.rawMessageRoles[state.rawMessageRoles.length - 1] === 'assistant')) {
+      throw new Error('Codex raw input message bound or order is invalid');
+    }
+    state.rawMessageRoles.push(item.role);
     return { kind: item.role, text: part.text };
   }
   if (item.role === 'assistant') {
@@ -528,9 +602,75 @@ function validateRawMessageItem(state, item) {
       throw new Error('Codex raw assistant message shape or turn_id is invalid');
     }
     requireString(item.id, 'raw assistant id', MAX_ID_LENGTH);
+    if (item.id !== state.agentItemId || item.content[0].text !== state.agentMessage) {
+      throw new Error('Codex raw assistant message is not bound to the final AgentMessage');
+    }
     return { kind: 'assistant', id: item.id, text: part.text };
   }
   throw new Error('Codex raw_response_item role is not observed');
+}
+
+function validateRawReasoningItem(state, item) {
+  if (!exactKeys(item, ['encrypted_content', 'id', 'internal_chat_message_metadata_passthrough', 'raw_content', 'summary', 'type']) ||
+      item.type !== 'reasoning' || !exactKeys(item.internal_chat_message_metadata_passthrough, ['turn_id']) ||
+      item.internal_chat_message_metadata_passthrough.turn_id !== state.turnId || !Array.isArray(item.summary) ||
+      !Array.isArray(item.raw_content)) {
+    throw new Error('Codex raw reasoning item shape or turn_id is invalid');
+  }
+  requireString(item.id, 'raw reasoning id', MAX_ID_LENGTH);
+  requireString(item.encrypted_content, 'raw reasoning content', MAX_STRING_LENGTH);
+  return item.id;
+}
+
+function validateBridgeCallItem(state, item) {
+  if (!exactKeys(item, ['call_id', 'id', 'input', 'internal_chat_message_metadata_passthrough', 'name', 'status', 'type']) ||
+      item.type !== 'custom_tool_call' || item.name !== 'exec' || item.status !== 'completed' ||
+      !exactKeys(item.internal_chat_message_metadata_passthrough, ['turn_id']) ||
+      item.internal_chat_message_metadata_passthrough.turn_id !== state.turnId) {
+    throw new Error('Codex raw exec bridge call shape is invalid');
+  }
+  const id = requireString(item.id, 'raw exec bridge item id', MAX_ID_LENGTH);
+  const callId = requireString(item.call_id, 'raw exec bridge call_id', MAX_ID_LENGTH);
+  if (state.seenBridgeCallIds.has(callId)) throw new Error('Codex raw exec bridge call_id was reused');
+  if (typeof item.input !== 'string' || item.input.length === 0 || Buffer.byteLength(item.input, 'utf8') > MAX_STRING_LENGTH) {
+    throw new Error('Codex raw exec bridge input is invalid');
+  }
+  const bytes = Buffer.byteLength(item.input, 'utf8');
+  const inputHash = createHash('sha256').update(item.input).digest('hex');
+  state.seenBridgeCallIds.add(callId);
+  state.bridge.set(callId, { callId, itemId: id, inputHash, inputBytes: bytes, status: 'completed' });
+  state.activity.push({ kind: 'exec_bridge', callId, inputHash, inputBytes: bytes, status: 'completed' });
+}
+
+function validateBridgeOutputItem(state, item) {
+  if (!exactKeys(item, ['call_id', 'internal_chat_message_metadata_passthrough', 'output', 'type']) ||
+      item.type !== 'custom_tool_call_output' || !exactKeys(item.internal_chat_message_metadata_passthrough, ['turn_id']) ||
+      item.internal_chat_message_metadata_passthrough.turn_id !== state.turnId || !Array.isArray(item.output) ||
+      item.output.length < 1 || item.output.length > 8) {
+    throw new Error('Codex raw exec bridge output shape is invalid');
+  }
+  const callId = requireString(item.call_id, 'raw exec bridge output call_id', MAX_ID_LENGTH);
+  const bridge = state.bridge.get(callId);
+  if (!bridge || bridge.outputHash) throw new Error('Codex raw exec bridge output has no matching call');
+  for (const part of item.output) {
+    if (!exactKeys(part, ['text', 'type']) || part.type !== 'input_text') throw new Error('Codex raw exec bridge output part is invalid');
+    requireString(part.text, 'raw exec bridge output text', MAX_STRING_LENGTH);
+  }
+  const serialized = JSON.stringify(item.output);
+  const bytes = Buffer.byteLength(serialized, 'utf8');
+  if (bytes > CODEX_MAX_SERIALIZED_BYTES) throw new Error('Codex raw exec bridge output exceeds the bound');
+  bridge.outputHash = createHash('sha256').update(serialized).digest('hex');
+  bridge.outputBytes = bytes;
+  bridge.outputParts = item.output.length;
+  state.bridgeReceipt.push({
+    inputHash: bridge.inputHash,
+    inputBytes: bridge.inputBytes,
+    outputHash: bridge.outputHash,
+    outputBytes: bridge.outputBytes,
+    status: 'completed'
+  });
+  state.activity.push({ kind: 'exec_bridge_output', callId, outputHash: bridge.outputHash, outputBytes: bytes, status: 'completed' });
+  state.bridge.delete(callId);
 }
 
 function validateLifecycleItem(state, item, kind) {
@@ -542,6 +682,22 @@ function validateLifecycleItem(state, item, kind) {
     }
     requireString(item.id, 'UserMessage id', MAX_ID_LENGTH);
     return cloneJson(item, 'UserMessage lifecycle item');
+  }
+  if (kind === 'Reasoning') {
+    if (!exactKeys(item, ['id', 'raw_content', 'summary_text', 'type']) || item.type !== kind ||
+        !Array.isArray(item.summary_text) || !Array.isArray(item.raw_content)) {
+      throw new Error('Codex Reasoning lifecycle item shape is invalid');
+    }
+    requireString(item.id, 'Reasoning id', MAX_ID_LENGTH);
+    return cloneJson(item, 'Reasoning lifecycle item');
+  }
+  if (kind === 'McpToolCall') {
+    if (!exactKeys(item, ['arguments', 'id', 'server', 'status', 'tool', 'type']) || item.type !== kind ||
+        item.status !== 'inProgress' || item.server !== state.serverName || typeof item.tool !== 'string' ||
+        !isObject(item.arguments)) throw new Error('Codex McpToolCall start shape is invalid');
+    requireString(item.id, 'McpToolCall id', MAX_ID_LENGTH);
+    cloneJson(item.arguments, 'McpToolCall arguments');
+    return cloneJson(item, 'McpToolCall lifecycle item');
   }
   if (!exactKeys(item, ['content', 'id', 'phase', 'type']) || item.type !== 'AgentMessage' || item.phase !== 'final_answer' ||
       !Array.isArray(item.content) || item.content.length !== 1 || !exactKeys(item.content[0], ['text', 'type']) ||
@@ -571,7 +727,8 @@ function validateTaskComplete(msg, state) {
 }
 
 function validateOuterResult(result, state) {
-  if (!exactKeys(result, ['content', 'structuredContent']) || !Array.isArray(result.content) || result.content.length !== 1 ||
+  if (!state.taskCompleteSeen || state.openItems.size !== 0 || state.mcp.size !== 0 || state.bridge.size !== 0 || state.toolSuccessCount < 1 ||
+      !exactKeys(result, ['content', 'structuredContent']) || !Array.isArray(result.content) || result.content.length !== 1 ||
       !exactKeys(result.content[0], ['text', 'type']) || result.content[0].type !== 'text' ||
       !exactKeys(result.structuredContent, ['content', 'threadId']) || result.structuredContent.threadId !== state.threadId ||
       result.structuredContent.content !== result.content[0].text || result.content[0].text !== state.agentMessage ||
@@ -600,114 +757,214 @@ function validateUserMessage(msg, state) {
 
 function validateEventState(state, params, serverName, allowedSet) {
   const type = params.msg.type;
-  if (state.resultSeen) throw new Error('Codex traffic arrived after result');
-  if (type !== 'session_configured' && params._meta.threadId !== state.threadId) throw new Error('Codex event thread_id mismatch');
-  if (type === 'session_configured' || type === 'mcp_startup_complete') {
+  if (!EVENT_TYPES.has(type)) throw new Error(`Codex event type ${type} is denied`);
+  if (state.resultSeen || state.taskCompleteSeen) throw new Error('Codex traffic arrived after terminal state');
+  if (state.bridge.size > 0 && !(type === 'raw_response_item' && params.msg.item?.type === 'custom_tool_call_output')) {
+    throw new Error('Codex raw exec bridge output was not paired immediately');
+  }
+  if (type === 'session_configured' || type === 'mcp_startup_update' || type === 'mcp_startup_complete') {
     if (params.id !== '') throw new Error('Codex pre-turn event id must be empty');
   } else if (type === 'task_started') {
     if (params.id !== params.msg.turn_id) throw new Error('Codex task_started id does not equal its turn_id');
   } else if (state.turnId === null || params.id !== state.turnId) {
     throw new Error('Codex event id does not equal the real turn_id');
   }
-  if (!EVENT_TYPES.has(type)) throw new Error(`Codex event type ${type} is denied`);
+  if (type !== 'session_configured' && params._meta.threadId !== state.threadId) throw new Error('Codex event thread_id mismatch');
   state.eventCounts[type] = (state.eventCounts[type] || 0) + 1;
   if (Object.values(state.eventCounts).reduce((sum, value) => sum + value, 0) > CODEX_MAX_EVENT_COUNT) {
     throw new Error('Codex event count exceeds the bound');
   }
 
   if (type === 'session_configured') {
-    if (state.step !== 0 || state.identity) throw new Error('Codex session_configured is duplicated or out of order');
-    state.identity = validateSessionIdentity(params.msg, state.bindings);
+    if (state.identity || Object.keys(state.eventCounts).some(key => key !== type)) throw new Error('Codex session_configured is duplicated or out of order');
+    state.identity = validateSessionIdentity(params.msg, state.bindings, state.codexHome);
     state.threadId = identityThread(state.identity, params._meta.threadId);
-    state.step = 1;
     return;
   }
   if (!state.identity) throw new Error('Codex event preceded session_configured');
+
+  if (type === 'mcp_startup_update') {
+    if (!exactKeys(params.msg, ['server', 'status', 'type']) || params.msg.type !== type || params.msg.server !== serverName ||
+        !exactKeys(params.msg.status, ['state']) || !['starting', 'ready'].includes(params.msg.status.state) || state.startupComplete) {
+      throw new Error('Codex MCP startup update is invalid');
+    }
+    if (params.msg.status.state === 'starting') {
+      if (state.startingSeen) throw new Error('Codex MCP startup starting update was duplicated');
+      state.startingSeen = true;
+    } else {
+      if (state.readySeen || (state.startingSeen === false && state.startupUpdateCount > 0)) throw new Error('Codex MCP startup ready update is invalid');
+      state.readySeen = true;
+      state.readyDynamic = true;
+    }
+    state.startupUpdateCount++;
+    if (state.startupUpdateCount > 2) throw new Error('Codex MCP startup update bound exceeded');
+    return;
+  }
   if (type === 'mcp_startup_complete') {
-    if (state.step !== 1 || state.startupSeen || !exactKeys(params.msg, ['cancelled', 'failed', 'ready', 'type']) ||
-        params.msg.type !== type || !Array.isArray(params.msg.ready) || !sameJson(params.msg.ready, [serverName]) ||
-        !Array.isArray(params.msg.failed) || params.msg.failed.length !== 0 || !Array.isArray(params.msg.cancelled) || params.msg.cancelled.length !== 0) {
+    if (state.startupComplete || !exactKeys(params.msg, ['cancelled', 'failed', 'ready', 'type']) || params.msg.type !== type ||
+        !Array.isArray(params.msg.ready) || !Array.isArray(params.msg.failed) || !Array.isArray(params.msg.cancelled) ||
+        params.msg.failed.length !== 0 || params.msg.cancelled.length !== 0 ||
+        params.msg.ready.some(name => typeof name !== 'string') || params.msg.ready.length > 1 ||
+        (params.msg.ready.length === 1 && params.msg.ready[0] !== serverName)) {
       throw new Error('Codex mcp_startup_complete arrays are not exact');
     }
-    state.startupSeen = true;
-    state.step = 2;
+    state.startupComplete = true;
+    state.readyDynamic = params.msg.ready.length === 1 && params.msg.ready[0] === serverName;
+    if (state.readyDynamic && !state.readySeen && state.startupUpdateCount > 0) throw new Error('Codex MCP startup complete skipped ready update');
     return;
   }
   if (type === 'task_started') {
-    if (state.step !== 2 || state.turnId !== null) throw new Error('Codex task_started is duplicated or out of order');
+    if (state.taskStarted || state.turnId !== null) throw new Error('Codex task_started is duplicated or out of order');
     state.turnId = validateTaskStarted(params.msg);
     if (params._meta.threadId !== state.threadId) throw new Error('Codex task_started thread mismatch');
-    state.step = 3;
+    state.taskStarted = true;
     return;
   }
-  if (state.step < 3) throw new Error('Codex event preceded task_started');
+  if (!state.taskStarted || state.startupComplete === false) throw new Error('Codex event preceded task/startup completion');
 
-  // MCP calls are the only events allowed to interrupt the captured normal
-  // lifecycle.  Their fields are validated in full and balanced by call_id.
+  if (type === 'raw_response_item') {
+    if (!exactKeys(params.msg, ['item', 'type']) || params.msg.type !== type || !isObject(params.msg.item)) throw new Error('Codex raw_response_item wrapper is invalid');
+    const itemType = params.msg.item.type;
+    if (itemType === 'message') {
+      const parsed = validateRawMessageItem(state, params.msg.item);
+      if (parsed.kind === 'developer' || parsed.kind === 'user') {
+        if (state.userItemStarted) throw new Error('Codex raw input message arrived after UserMessage lifecycle');
+      } else {
+        if (!state.agentCompleted || state.rawAssistantSeen) throw new Error('Codex raw assistant message is out of order');
+        state.rawAssistantSeen = true;
+      }
+      return;
+    }
+    if (itemType === 'reasoning') {
+      const reasoningId = validateRawReasoningItem(state, params.msg.item);
+      if (!state.completedReasoningIds.has(reasoningId) || state.rawReasoningIds.has(reasoningId)) throw new Error('Codex raw reasoning item is not paired');
+      state.rawReasoningIds.add(reasoningId);
+      return;
+    }
+    if (itemType === 'custom_tool_call') {
+      validateBridgeCallItem(state, params.msg.item);
+      return;
+    }
+    if (itemType === 'custom_tool_call_output') {
+      validateBridgeOutputItem(state, params.msg.item);
+      return;
+    }
+    throw new Error(`Codex raw response item type ${String(itemType)} is denied`);
+  }
+
+  if (type === 'item_started') {
+    if (!exactKeys(params.msg, ['item', 'started_at_ms', 'thread_id', 'turn_id', 'type']) || params.msg.type !== type ||
+        params.msg.thread_id !== state.threadId || params.msg.turn_id !== state.turnId) throw new Error('Codex item start wrapper is invalid');
+    requireNumber(params.msg.started_at_ms, 'item.started_at_ms', { integer: true, min: 0 });
+    if (!isObject(params.msg.item) || !['UserMessage', 'Reasoning', 'McpToolCall', 'AgentMessage'].includes(params.msg.item.type)) {
+      throw new Error('Codex native item type is denied');
+    }
+    if (state.seenItemIds.has(params.msg.item.id) || state.seenItemIds.size >= MAX_ITEMS) throw new Error('Codex item id was reused or bound exceeded');
+    const itemType = params.msg.item.type;
+    if (itemType === 'UserMessage' && state.userItemStarted) throw new Error('Codex UserMessage lifecycle was duplicated');
+    if (itemType === 'AgentMessage' && (state.agentItemStarted || !state.userMessageSeen)) throw new Error('Codex AgentMessage lifecycle is out of order');
+    if (itemType === 'McpToolCall' && (!state.startupComplete || !state.readyDynamic || state.mcp.size >= MAX_MCP_CALLS)) {
+      throw new Error('Codex MCP tool call arrived before the dynamic server was ready');
+    }
+    const item = validateLifecycleItem(state, params.msg.item, itemType);
+    state.seenItemIds.add(item.id);
+    state.openItems.set(item.id, { type: itemType, item });
+    if (itemType === 'UserMessage') { state.userItemStarted = true; state.userItem = item; }
+    if (itemType === 'Reasoning') { state.reasoningItems.set(item.id, item); }
+    if (itemType === 'AgentMessage') { state.agentItemStarted = true; state.agentItemId = item.id; state.agentItem = item; }
+    if (itemType === 'McpToolCall') {
+      const invocation = validateMcpInvocation({ server: item.server, tool: item.tool, arguments: item.arguments }, serverName, allowedSet);
+      state.seenNestedCallIds.add(item.id);
+      state.mcp.set(item.id, { callId: item.id, invocation, canonicalStarted: true, legacyBegun: false, canonicalCompleted: false, legacyEnded: false });
+    }
+    return;
+  }
+
+  if (type === 'item_completed') {
+    if (!exactKeys(params.msg, ['completed_at_ms', 'item', 'thread_id', 'turn_id', 'type']) || params.msg.type !== type ||
+        params.msg.thread_id !== state.threadId || params.msg.turn_id !== state.turnId || !isObject(params.msg.item)) throw new Error('Codex item completion wrapper is invalid');
+    requireNumber(params.msg.completed_at_ms, 'item.completed_at_ms', { integer: true, min: 0 });
+    const item = params.msg.item;
+    const open = state.openItems.get(item.id);
+    if (!open || open.type !== item.type) throw new Error('Codex item completion has no matching start');
+    if (item.type === 'UserMessage' || item.type === 'Reasoning') {
+      if (!sameJson(item, open.item)) throw new Error(`Codex ${item.type} completion is not paired`);
+      state.openItems.delete(item.id);
+      if (item.type === 'UserMessage') state.userItemCompleted = true;
+      else state.completedReasoningIds.add(item.id);
+      return;
+    }
+    if (item.type === 'AgentMessage') {
+      if (!exactKeys(item, ['content', 'id', 'phase', 'type']) || item.phase !== 'final_answer' || !Array.isArray(item.content) ||
+          item.content.length !== 1 || !exactKeys(item.content[0], ['text', 'type']) || item.content[0].type !== 'Text' ||
+          item.content[0].text !== state.deltaText || !sameJson(item, { ...open.item, content: item.content })) throw new Error('Codex AgentMessage completion is invalid');
+      state.agentCompleted = true;
+      state.agentMessage = requireString(item.content[0].text, 'AgentMessage text');
+      state.openItems.delete(item.id);
+      return;
+    }
+    if (item.type === 'McpToolCall') {
+      const call = state.mcp.get(item.id);
+      if (!call || call.canonicalCompleted || !exactKeys(item, ['arguments', 'duration', 'id', 'result', 'server', 'status', 'tool', 'type']) ||
+          item.status !== 'completed' || item.server !== call.invocation.server || item.tool !== call.invocation.tool || !sameJson(item.arguments, call.invocation.arguments)) {
+        throw new Error('Codex canonical MCP completion is invalid');
+      }
+      const duration = validateDuration(item.duration, 'canonical MCP duration');
+      const result = validateCanonicalMcpResult(item.result);
+      crossCheckDirectAudit(state, call.invocation, result, duration);
+      call.canonicalCompleted = true;
+      call.duration = duration;
+      call.result = result;
+      state.openItems.delete(item.id);
+      state.activity.push({ kind: 'canonical_mcp', callId: item.id, server: call.invocation.server, tool: call.invocation.tool,
+        arguments: digestJson(call.invocation.arguments, 'MCP arguments'), result: digestJson(result, 'MCP result'), duration });
+      return;
+    }
+  }
+
+  if (type === 'user_message') {
+    if (state.userMessageSeen || !state.userItemCompleted || state.rawMessageRoles.filter(role => role === 'user').length < 1) throw new Error('Codex user_message is out of order');
+    validateUserMessage(params.msg, state);
+    state.userMessageSeen = true;
+    return;
+  }
   if (type === 'mcp_tool_call_begin') {
-    if (!exactKeys(params.msg, ['call_id', 'invocation', 'type'])) throw new Error('Codex MCP begin shape is invalid');
+    if (!state.readyDynamic || !exactKeys(params.msg, ['call_id', 'invocation', 'type'])) throw new Error('Codex MCP begin shape is invalid');
     const callId = requireString(params.msg.call_id, 'MCP begin call_id', MAX_ID_LENGTH);
-    if (state.mcp.has(callId)) throw new Error('Codex MCP call_id was reused');
-    const invocation = validateMcpInvocation(params.msg.invocation, serverName, allowedSet);
-    state.mcp.set(callId, invocation);
-    state.activity.push({ kind: type, callId, server: invocation.server, tool: invocation.tool });
+    const call = state.mcp.get(callId);
+    if (!call || call.legacyBegun || !sameJson(call.invocation, validateMcpInvocation(params.msg.invocation, serverName, allowedSet))) throw new Error('Codex MCP begin is not paired with canonical start');
+    call.legacyBegun = true;
     return;
   }
   if (type === 'mcp_tool_call_end') {
-    if (!exactKeys(params.msg, ['call_id', 'duration_ms', 'invocation', 'result', 'type'])) throw new Error('Codex MCP end shape is invalid');
+    if (!exactKeys(params.msg, ['call_id', 'duration', 'invocation', 'result', 'type'])) throw new Error('Codex MCP end shape is invalid');
     const callId = requireString(params.msg.call_id, 'MCP end call_id', MAX_ID_LENGTH);
-    const begin = state.mcp.get(callId);
-    if (!begin) throw new Error('Codex MCP end has no matching begin');
+    const call = state.mcp.get(callId);
     const invocation = validateMcpInvocation(params.msg.invocation, serverName, allowedSet);
-    if (!sameJson(begin, invocation)) throw new Error('Codex MCP begin/end invocation differs');
-    requireNumber(params.msg.duration_ms, 'MCP duration_ms', { integer: true, min: 0 });
-    validateMcpResult(params.msg.result);
+    if (!call || !call.legacyBegun || call.legacyEnded || !call.canonicalCompleted || !sameJson(call.invocation, invocation)) throw new Error('Codex MCP end is not paired with canonical lifecycle');
+    const duration = validateDuration(params.msg.duration, 'legacy MCP duration');
+    const result = validateMcpResult(params.msg.result);
+    if (!sameJson(duration, call.duration) || !sameJson(result.Ok, call.result) || !sameJson(result.Ok.content, call.result.content)) {
+      throw new Error('Codex canonical and legacy MCP results do not match');
+    }
+    call.legacyEnded = true;
     state.mcp.delete(callId);
-    state.activity.push({ kind: type, callId, server: invocation.server, tool: invocation.tool });
+    state.toolSuccessCount++;
+    state.mcpReceipt.push({
+      callId,
+      server: invocation.server,
+      tool: invocation.tool,
+      arguments: digestJson(invocation.arguments, 'MCP arguments'),
+      result: { ...digestJson(call.result, 'MCP result'), status: 'ok' },
+      duration,
+      outcome: 'ok'
+    });
+    state.activity.push({ kind: 'legacy_mcp', callId, server: invocation.server, tool: invocation.tool, duration,
+      arguments: digestJson(invocation.arguments, 'MCP arguments'), result: digestJson(call.result, 'MCP result'), outcome: 'ok' });
     return;
   }
-
-  if (state.step === 3 && type === 'raw_response_item') {
-    if (!exactKeys(params.msg, ['item', 'type']) || params.msg.type !== type) throw new Error('Codex raw_response_item wrapper is invalid');
-    const parsed = validateRawMessageItem(state, params.msg.item);
-    if (parsed.kind === 'developer' && state.rawInputCount === 0) state.rawInputCount++;
-    else if (parsed.kind === 'user' && state.rawInputCount >= 1 && state.rawInputCount <= 2) state.rawInputCount++;
-    else throw new Error('Codex raw input message order is not captured');
-    if (state.rawInputCount === 3) state.step = 4;
-    return;
-  }
-  if (state.step === 4 && type === 'item_started') {
-    if (!exactKeys(params.msg, ['item', 'started_at_ms', 'thread_id', 'turn_id', 'type']) || params.msg.type !== type ||
-        params.msg.thread_id !== state.threadId || params.msg.turn_id !== state.turnId) throw new Error('Codex UserMessage start wrapper is invalid');
-    requireNumber(params.msg.started_at_ms, 'UserMessage started_at_ms', { integer: true, min: 0 });
-    state.userItem = validateLifecycleItem(state, params.msg.item, 'UserMessage');
-    state.step = 5;
-    return;
-  }
-  if (state.step === 5 && type === 'item_completed') {
-    if (!exactKeys(params.msg, ['completed_at_ms', 'item', 'thread_id', 'turn_id', 'type']) || params.msg.type !== type ||
-        params.msg.thread_id !== state.threadId || params.msg.turn_id !== state.turnId ||
-        !sameJson(params.msg.item, state.userItem)) throw new Error('Codex UserMessage completion is not paired');
-    requireNumber(params.msg.completed_at_ms, 'UserMessage completed_at_ms', { integer: true, min: 0 });
-    state.step = 6;
-    return;
-  }
-  if (state.step === 6 && type === 'user_message') {
-    validateUserMessage(params.msg, state);
-    state.step = 7;
-    return;
-  }
-  if (state.step === 7 && type === 'item_started') {
-    if (!exactKeys(params.msg, ['item', 'started_at_ms', 'thread_id', 'turn_id', 'type']) || params.msg.type !== type ||
-        params.msg.thread_id !== state.threadId || params.msg.turn_id !== state.turnId) throw new Error('Codex AgentMessage start wrapper is invalid');
-    requireNumber(params.msg.started_at_ms, 'AgentMessage started_at_ms', { integer: true, min: 0 });
-    state.agentItem = validateLifecycleItem(state, params.msg.item, 'AgentMessage');
-    state.agentItemId = params.msg.item.id;
-    state.step = 8;
-    return;
-  }
-  if (state.step === 8 && type === 'agent_message_content_delta') {
-    if (!exactKeys(params.msg, ['delta', 'item_id', 'thread_id', 'turn_id', 'type']) || params.msg.type !== type ||
+  if (type === 'agent_message_content_delta') {
+    if (!state.agentItemStarted || state.agentCompleted || !exactKeys(params.msg, ['delta', 'item_id', 'thread_id', 'turn_id', 'type']) ||
         params.msg.item_id !== state.agentItemId || params.msg.thread_id !== state.threadId || params.msg.turn_id !== state.turnId) {
       throw new Error('Codex agent_message_content_delta binding is invalid');
     }
@@ -715,46 +972,27 @@ function validateEventState(state, params, serverName, allowedSet) {
     if (state.deltaText.length > MAX_STRING_LENGTH) throw new Error('Codex response exceeds the bound');
     return;
   }
-  if (state.step === 8 && type === 'item_completed') {
-    if (!exactKeys(params.msg, ['completed_at_ms', 'item', 'thread_id', 'turn_id', 'type']) || params.msg.type !== type ||
-        params.msg.thread_id !== state.threadId || params.msg.turn_id !== state.turnId ||
-        !exactKeys(params.msg.item, ['content', 'id', 'phase', 'type']) || params.msg.item.id !== state.agentItemId ||
-        params.msg.item.type !== 'AgentMessage' || params.msg.item.phase !== 'final_answer' || !Array.isArray(params.msg.item.content) ||
-        params.msg.item.content.length !== 1 || !exactKeys(params.msg.item.content[0], ['text', 'type']) ||
-        params.msg.item.content[0].type !== 'Text' || params.msg.item.content[0].text !== state.deltaText) {
-      throw new Error('Codex AgentMessage completion is invalid');
-    }
-    requireNumber(params.msg.completed_at_ms, 'AgentMessage completed_at_ms', { integer: true, min: 0 });
-    state.step = 9;
-    return;
-  }
-  if (state.step === 9 && type === 'agent_message') {
+  if (type === 'agent_message') {
+    if (!state.agentCompleted || state.agentMessageSeen) throw new Error('Codex agent_message is out of order');
     validateAgentMessage(params.msg, state);
-    state.step = 10;
+    state.agentMessageSeen = true;
     return;
   }
-  if (state.step === 10 && type === 'raw_response_item') {
-    if (!exactKeys(params.msg, ['item', 'type']) || params.msg.type !== type) throw new Error('Codex raw assistant wrapper is invalid');
-    const parsed = validateRawMessageItem(state, params.msg.item);
-    if (parsed.kind !== 'assistant' || parsed.text !== state.agentMessage || parsed.id !== state.agentItemId) {
-      throw new Error('Codex raw assistant message is not bound to the lifecycle item');
-    }
-    state.step = 11;
-    return;
-  }
-  if (state.step === 11 && type === 'token_count') {
+  if (type === 'token_count') {
+    if (++state.tokenCount > MAX_TOKEN_COUNTS) throw new Error('Codex token_count bound exceeded');
     validateTokenCount(params.msg);
-    state.step = 12;
     return;
   }
-  if (state.step === 12 && type === 'task_complete') {
-    if (state.mcp.size !== 0) throw new Error('Codex task_complete arrived with unbalanced MCP calls');
+  if (type === 'task_complete') {
+    if (state.taskCompleteSeen || state.openItems.size !== 0 || state.mcp.size !== 0 || state.bridge.size !== 0 ||
+        !state.userMessageSeen || !state.agentMessageSeen || !state.rawAssistantSeen || state.toolSuccessCount < 1 ||
+        !state.startupComplete || !state.readyDynamic) throw new Error('Codex task_complete lifecycle admission is incomplete');
     validateTaskComplete(params.msg, state);
     state.taskCompleteMessage = params.msg.last_agent_message;
-    state.step = 13;
+    state.taskCompleteSeen = true;
     return;
   }
-  throw new Error(`Codex ${type} event is out of the captured order`);
+  throw new Error(`Codex ${type} event is out of the observed bounded lifecycle`);
 }
 
 function identityThread(identity, metadataThread) {
@@ -785,6 +1023,8 @@ export async function createCodexEngine(options = {}) {
   let initializeVersion = null;
   let requestSent = false;
   let queryReserved = false;
+  let initializeTimer = null;
+  let turnTimer = null;
   let poisoned = false;
   let poisonError = null;
   let closed = false;
@@ -794,17 +1034,46 @@ export async function createCodexEngine(options = {}) {
   let childExitCode = null;
   let childExitSignal = null;
   let stderr = Buffer.alloc(0);
+  let incomingBytes = 0;
 
   const requested = buildCodexRequestedMetadata(bindings);
 
   function safeReceipt(currentState = state) {
+    const outerDigest = currentState?.result?.content?.[0]?.text
+      ? digestJson(currentState.result.content[0].text, 'outer content')
+      : null;
+    const activityDigest = currentState ? digestJson(currentState.activity, 'activity') : null;
     const receipt = {
       requested,
-      effective: currentState?.identity ? cloneJson(currentState.identity, 'effective identity') : null,
-      isolation: cloneJson(isolation, 'isolation receipt'),
+      effective: currentState?.identity ? {
+        model: currentState.identity.model,
+        reasoning_effort: currentState.identity.reasoning_effort,
+        sandbox: currentState.bindings.sandbox,
+        approval_policy: currentState.identity.approval_policy,
+        cwd: currentState.identity.cwd,
+        rollout_path: currentState.identity.rollout_path
+      } : null,
+      ids: currentState ? { session_id: currentState.identity?.session_id || null, thread_id: currentState.threadId, turn_id: currentState.turnId } : {},
       executable: { path: executable.path, sha256: executable.sha256 },
       initialize: { serverInfoVersion: initializeVersion },
+      bounds: currentState ? {
+        incomingBytes: currentState.incomingBytes,
+        maxIncomingBytes: CODEX_MAX_INCOMING_BYTES,
+        eventCount: Object.values(currentState.eventCounts).reduce((sum, value) => sum + value, 0),
+        maxEventCount: CODEX_MAX_EVENT_COUNT,
+        openItems: currentState.openItems.size,
+        nestedCalls: currentState.seenNestedCallIds.size,
+        bridgeCalls: currentState.seenBridgeCallIds.size
+      } : {},
       eventCounts: currentState ? { ...currentState.eventCounts, result: currentState.resultSeen ? 1 : 0 } : {},
+      eventDigest: activityDigest,
+      execBridge: currentState ? [...currentState.bridgeReceipt] : [],
+      nestedMcp: currentState ? [...currentState.mcpReceipt] : [],
+      directServerAudit: currentState ? {
+        crosschecked: currentState.directAudit.length,
+        records: currentState.directAudit.map(record => ({ ...record, arguments: { ...record.arguments }, result: { ...record.result } }))
+      } : { crosschecked: 0, records: [] },
+      outer: { content: outerDigest },
       cleanup: cloneJson(cleanupOutcome, 'cleanup receipt'),
       policyVerdict: currentState?.policyVerdict || { verdict: 'pending' }
     };
@@ -843,6 +1112,10 @@ export async function createCodexEngine(options = {}) {
     return poisonError;
   }
 
+  function armTimeout(kind, callback) {
+    return setTimeout(() => callback(new Error(`Codex ${kind} timeout`)), bindings.codexMcpTimeout);
+  }
+
   function appendStderr(data) {
     const chunk = Buffer.isBuffer(data) ? data : Buffer.from(String(data));
     const available = CODEX_STDERR_MAX_BYTES - stderr.length;
@@ -859,6 +1132,9 @@ export async function createCodexEngine(options = {}) {
   function handleLine(line) {
     try {
       if (typeof line !== 'string' || Buffer.byteLength(line, 'utf8') > CODEX_MAX_SERIALIZED_BYTES) throw new Error('Codex stdout line exceeds serialized-byte bound');
+      incomingBytes += Buffer.byteLength(line, 'utf8') + 1;
+      if (incomingBytes > CODEX_MAX_INCOMING_BYTES) throw new Error('Codex cumulative incoming bytes exceed the bound');
+      if (state) state.incomingBytes = incomingBytes;
       const message = JSON.parse(line);
       cloneJson(message, 'stdout message');
       if (!isObject(message) || message.jsonrpc !== '2.0') throw new Error('Codex stdout message is not JSON-RPC 2.0');
@@ -879,7 +1155,7 @@ export async function createCodexEngine(options = {}) {
         return;
       }
       if (message.id === 2) {
-        if (!queryPending || !state || state.resultSeen) throw new Error('Codex unexpected or late tools/call result');
+        if (!queryPending || !state || state.resultSeen || !state.taskCompleteSeen) throw new Error('Codex unexpected or late tools/call result');
         if (!exactKeys(message, ['jsonrpc', 'id', 'result']) || message.jsonrpc !== '2.0' || message.id !== 2) {
           throw new Error('Codex tools/call result envelope is invalid');
         }
@@ -898,12 +1174,12 @@ export async function createCodexEngine(options = {}) {
   }
 
   function waitForChildExit(timeoutMs) {
-    if (!codexProcess || childExited) return Promise.resolve(true);
+    if (!codexProcess || childExited) return Promise.resolve(childExited || !codexProcess);
     return new Promise(resolvePromise => {
-      const timer = setTimeout(() => resolvePromise(childExited), timeoutMs);
+      const timer = setTimeout(() => resolvePromise(false), timeoutMs);
       const check = () => {
         clearTimeout(timer);
-        resolvePromise(true);
+        resolvePromise(childExited);
       };
       codexProcess.once?.('exit', check);
       codexProcess.once?.('close', check);
@@ -915,10 +1191,14 @@ export async function createCodexEngine(options = {}) {
     cleanupPromise = (async () => {
       const errors = [];
       closed = true;
-      try { if (reader && typeof reader.close === 'function') reader.close(); } catch (error) { errors.push(errorMessage(error)); }
-      try { if (mcpServer) await mcpServer.stop(); } catch (error) { errors.push(errorMessage(error)); }
+      if (initializeTimer) clearTimeout(initializeTimer);
+      if (turnTimer) clearTimeout(turnTimer);
+      initializeTimer = null;
+      turnTimer = null;
       let escalated = false;
+      let childTerminationRequested = false;
       if (codexProcess && !childExited && typeof codexProcess.kill === 'function') {
+        childTerminationRequested = true;
         try { codexProcess.kill('SIGTERM'); } catch (error) { errors.push(errorMessage(error)); }
         if (!childExited && !(await waitForChildExit(CODEX_CLEANUP_TIMEOUT_MS))) {
           escalated = true;
@@ -926,11 +1206,28 @@ export async function createCodexEngine(options = {}) {
           if (!childExited && !(await waitForChildExit(CODEX_CLEANUP_TIMEOUT_MS))) errors.push('child exit timeout');
         }
       }
+      let readerClosed = !reader;
+      try {
+        if (reader && typeof reader.close === 'function') {
+          reader.close();
+          readerClosed = true;
+        }
+      } catch (error) { errors.push(errorMessage(error)); }
+      let mcpServerStopped = !mcpServer;
+      if (mcpServer) {
+        try {
+          await Promise.race([
+            Promise.resolve().then(() => mcpServer.stop()),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('MCP server stop timeout')), CODEX_CLEANUP_TIMEOUT_MS))
+          ]);
+          mcpServerStopped = true;
+        } catch (error) { errors.push(errorMessage(error)); }
+      }
       cleanupOutcome = {
-        status: errors.length === 0 ? 'succeeded' : 'failed',
-        readerClosed: !!reader,
-        mcpServerStopped: !!mcpServer,
-        directChild: codexProcess ? { signal: 'SIGTERM', exited: childExited, exitCode: childExitCode, exitSignal: childExitSignal, escalated } : null,
+        status: errors.length === 0 && readerClosed && mcpServerStopped && (!codexProcess || childExited) ? 'succeeded' : 'failed',
+        readerClosed,
+        mcpServerStopped,
+        directChild: codexProcess ? { terminationRequested: childTerminationRequested, exited: childExited, exitCode: childExitCode, exitSignal: childExitSignal, escalated } : null,
         errors: errors.slice(0, 4)
       };
       return cleanupOutcome;
@@ -993,7 +1290,13 @@ export async function createCodexEngine(options = {}) {
         clientInfo: { ...INITIALIZE_CLIENT_INFO }
       }
     });
-    await initializePromise;
+    initializeTimer = armTimeout('initialize', error => poison(error));
+    try {
+      await initializePromise;
+    } finally {
+      if (initializeTimer) clearTimeout(initializeTimer);
+      initializeTimer = null;
+    }
 
     const fullPrompt = combinePrompts(options.systemPrompt, options.customPrompt);
     const engine = {
@@ -1008,22 +1311,50 @@ export async function createCodexEngine(options = {}) {
         const queryPrompt = fullPrompt ? `${fullPrompt}\n\n${prompt}` : prompt;
         state = {
           bindings,
+          codexHome: isolation.codexHome,
+          serverName,
+          mcpServer,
           prompt: queryPrompt,
           threadId: null,
           turnId: null,
           identity: null,
-          startupSeen: false,
-          step: 0,
-          rawInputCount: 0,
+          startupComplete: false,
+          startupUpdateCount: 0,
+          startingSeen: false,
+          readySeen: false,
+          readyDynamic: false,
+          taskStarted: false,
+          taskCompleteSeen: false,
+          incomingBytes,
+          rawMessageRoles: [],
+          rawAssistantSeen: false,
+          rawReasoningIds: new Set(),
           userItem: null,
+          userItemStarted: false,
+          userItemCompleted: false,
+          userMessageSeen: false,
+          agentItemStarted: false,
+          agentCompleted: false,
           agentItem: null,
           agentItemId: null,
           deltaText: '',
           agentMessage: null,
+          agentMessageSeen: false,
           taskCompleteMessage: null,
           resultSeen: false,
           result: null,
+          openItems: new Map(),
+          seenItemIds: new Set(),
           mcp: new Map(),
+          seenNestedCallIds: new Set(),
+          bridge: new Map(),
+          seenBridgeCallIds: new Set(),
+          bridgeReceipt: [],
+          mcpReceipt: [],
+          directAudit: [],
+          auditOrdinals: new Set(),
+          toolSuccessCount: 0,
+          tokenCount: 0,
           eventCounts: Object.create(null),
           activity: [],
           policyVerdict: { verdict: 'pending' }
@@ -1049,8 +1380,11 @@ export async function createCodexEngine(options = {}) {
           });
           resultPromise.catch(() => {});
           sendLine({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'codex', arguments: args } });
+          turnTimer = armTimeout('turn', error => poison(error));
           const result = await resultPromise;
-          if (state.step !== 13 || !state.resultSeen || state.mcp.size !== 0) throw new Error('Codex captured lifecycle admission is incomplete');
+          if (turnTimer) clearTimeout(turnTimer);
+          turnTimer = null;
+          if (!state.taskCompleteSeen || !state.resultSeen || state.mcp.size !== 0 || state.openItems.size !== 0 || state.toolSuccessCount < 1) throw new Error('Codex governed lifecycle admission is incomplete');
           // The capture held the result for a 1.5 second quiet window.  Any
           // correlated traffic during this period poisons the turn.
           await new Promise((resolvePromise, rejectPromise) => {
@@ -1075,6 +1409,8 @@ export async function createCodexEngine(options = {}) {
           };
         } catch (error) {
           if (quietTimer) clearTimeout(quietTimer);
+          if (turnTimer) clearTimeout(turnTimer);
+          turnTimer = null;
           const failure = error instanceof Error ? error : new Error(String(error));
           if (state) state.policyVerdict = { verdict: 'deny', reason: errorMessage(failure).slice(0, 160) };
           if (!poisoned) poison(failure);

@@ -5,7 +5,7 @@
 
 import { createServer } from 'http';
 import { EventEmitter } from 'events';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { Server as MCPServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -14,9 +14,93 @@ import {
   ListToolsRequestSchema,
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
+import { isAuthenticProbeAgent } from '../governance-marker.js';
 
 const GOVERNED_TOOL_PREFIX = 'mcp__probe__';
 const GOVERNED_TOOL_NAMES = Object.freeze(['search', 'extract', 'listFiles']);
+const GOVERNED_MODEL = 'gpt-5.6-luna';
+const GOVERNED_REASONING_EFFORT = 'xhigh';
+const GOVERNED_SANDBOX = 'seatbelt';
+const MAX_AUDIT_BYTES = 1048576;
+const MAX_AUDIT_ID = 512;
+
+function isObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function exactKeys(value, keys) {
+  return isObject(value) && Object.keys(value).length === keys.length &&
+    Object.keys(value).every(key => keys.includes(key));
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (isObject(value)) {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function boundedJson(value, field) {
+  const serialized = canonicalJson(value);
+  if (typeof serialized !== 'string' || Buffer.byteLength(serialized, 'utf8') > MAX_AUDIT_BYTES) {
+    throw new Error(`Governed MCP ${field} exceeds the serialized-byte bound`);
+  }
+  return serialized;
+}
+
+function digest(value, field) {
+  const serialized = boundedJson(value, field);
+  return { sha256: createHash('sha256').update(serialized).digest('hex'), bytes: Buffer.byteLength(serialized, 'utf8') };
+}
+
+function requireBoundedString(value, field) {
+  if (typeof value !== 'string' || value.length === 0 || value.length > MAX_AUDIT_ID) {
+    throw new Error(`Governed MCP ${field} is invalid`);
+  }
+  return value;
+}
+
+function validateGovernedMetadata(meta) {
+  if (!exactKeys(meta, ['progressToken', 'threadId', 'x-codex-turn-metadata'])) {
+    throw new Error('Governed MCP _meta keys are not exact');
+  }
+  if (!Number.isInteger(meta.progressToken) || meta.progressToken < 0 || meta.progressToken > Number.MAX_SAFE_INTEGER) {
+    throw new Error('Governed MCP progressToken is invalid');
+  }
+  const threadId = requireBoundedString(meta.threadId, '_meta.threadId');
+  const extension = meta['x-codex-turn-metadata'];
+  if (!exactKeys(extension, ['session_id', 'thread_id', 'turn_id', 'sandbox', 'turn_started_at_unix_ms', 'model', 'reasoning_effort'])) {
+    throw new Error('Governed MCP extension metadata keys are not exact');
+  }
+  const sessionId = requireBoundedString(extension.session_id, 'extension.session_id');
+  const extensionThreadId = requireBoundedString(extension.thread_id, 'extension.thread_id');
+  const turnId = requireBoundedString(extension.turn_id, 'extension.turn_id');
+  if (sessionId !== extensionThreadId || sessionId !== threadId || extension.sandbox !== GOVERNED_SANDBOX ||
+      extension.model !== GOVERNED_MODEL || extension.reasoning_effort !== GOVERNED_REASONING_EFFORT ||
+      !Number.isSafeInteger(extension.turn_started_at_unix_ms) || extension.turn_started_at_unix_ms <= 0) {
+    throw new Error('Governed MCP extension metadata identity is invalid');
+  }
+  return {
+    session_id: sessionId,
+    thread_id: extensionThreadId,
+    turn_id: turnId,
+    threadId,
+    progressToken: meta.progressToken
+  };
+}
+
+function governedAgentShape(agent) {
+  if (!isAuthenticProbeAgent(agent) || !agent.allowedTools || agent.allowedTools.mode !== 'whitelist' ||
+      !Array.isArray(agent.allowedTools.allowed) || agent.allowedTools.allowed.length !== GOVERNED_TOOL_NAMES.length ||
+      new Set(agent.allowedTools.allowed).size !== GOVERNED_TOOL_NAMES.length ||
+      GOVERNED_TOOL_NAMES.some(name => !agent.allowedTools.allowed.includes(name)) ||
+      !isObject(agent.toolImplementations) ||
+      Object.keys(agent.toolImplementations).sort().join(',') !== GOVERNED_TOOL_NAMES.slice().sort().join(',') ||
+      GOVERNED_TOOL_NAMES.some(name => !isObject(agent.toolImplementations[name]) || typeof agent.toolImplementations[name].execute !== 'function')) {
+    throw new Error('Governed Probe MCP requires an authentic exact three-tool ProbeAgent');
+  }
+}
 
 /**
  * Simple in-memory event store for resumability
@@ -93,6 +177,14 @@ export class BuiltInMCPServer extends EventEmitter {
     if (this.governed && (!this.serverName || typeof this.serverName !== 'string')) {
       throw new Error('Governed Probe MCP requires its derived server name');
     }
+    if (this.governed) governedAgentShape(agent);
+    this.audit = {
+      starts: [],
+      listCalls: [],
+      toolCalls: [],
+      executionCounts: { search: 0, extract: 0, listFiles: 0 },
+      nextOrdinal: 1
+    };
   }
 
   /**
@@ -125,6 +217,9 @@ export class BuiltInMCPServer extends EventEmitter {
       this.httpServer.listen(this.port, this.host, async () => {
         const address = this.httpServer.address();
         this.port = address.port;
+        if (this.governed) {
+          this.audit.starts.push({ host: this.host, port: this.port, url_path: '/mcp' });
+        }
 
         if (this.debug) {
           console.log(`[MCP] Built-in server started at http://${this.host}:${this.port}`);
@@ -665,25 +760,40 @@ export class BuiltInMCPServer extends EventEmitter {
       }
     }
 
-    return { tools };
+    const result = { tools };
+    if (this.governed) {
+      const resultDigest = digest(result, 'list result');
+      this.audit.listCalls.push({
+        ordinal: this.audit.nextOrdinal++,
+        tool_names: tools.map(tool => tool.name),
+        result: resultDigest
+      });
+    }
+    return result;
   }
 
   /**
    * Handle tool execution
    */
   async handleCallTool(params) {
+    let metadata = null;
     if (this.governed) {
       if (!params || typeof params !== 'object' || Array.isArray(params) ||
-          !['name', 'arguments', 'server'].every(key => key === 'server' || Object.prototype.hasOwnProperty.call(params, key)) ||
-          Object.keys(params).some(key => !['name', 'arguments', 'server'].includes(key)) ||
+          !Object.prototype.hasOwnProperty.call(params, '_meta') ||
+          !Object.prototype.hasOwnProperty.call(params, 'name') ||
+          !Object.prototype.hasOwnProperty.call(params, 'arguments') ||
+          Object.keys(params).some(key => !['_meta', 'name', 'arguments', 'server'].includes(key)) ||
           typeof params.name !== 'string' || !GOVERNED_TOOL_NAMES.some(name => params.name === `${GOVERNED_TOOL_PREFIX}${name}`)) {
         throw new Error('Governed Probe MCP tool name is not an exact allowlisted identity');
       }
       if (params.server !== undefined && params.server !== this.serverName) {
         throw new Error('Governed Probe MCP server identity is not exact');
       }
+      metadata = validateGovernedMetadata(params._meta);
     }
     const { name, arguments: args = {} } = params;
+
+    if (!isObject(args)) throw new Error('Governed MCP arguments must be an object');
 
     // Extract tool name from MCP format
     const toolName = this.governed ? name.slice(GOVERNED_TOOL_PREFIX.length) : name.replace(GOVERNED_TOOL_PREFIX, '');
@@ -702,22 +812,66 @@ export class BuiltInMCPServer extends EventEmitter {
     try {
       // Execute tool directly (no spawning!)
       const result = await tool.execute(args);
-
-      return {
+      const response = {
         content: [{
           type: 'text',
           text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
         }]
       };
+      if (this.governed) this.recordToolAudit(name, args, response, 'ok', metadata);
+      return response;
     } catch (error) {
-      return {
+      const response = {
         content: [{
           type: 'text',
           text: `Error executing ${name}: ${error.message}`
         }],
         isError: true
       };
+      if (this.governed) this.recordToolAudit(name, args, response, 'failed', metadata);
+      return response;
     }
+  }
+
+  recordToolAudit(name, args, result, status, metadata) {
+    const bareName = name.slice(GOVERNED_TOOL_PREFIX.length);
+    const argsDigest = digest(args, 'arguments');
+    const resultDigest = digest({ content: result.content }, 'result');
+    const record = {
+      ordinal: this.audit.nextOrdinal++,
+      name,
+      arguments: argsDigest,
+      metadata: {
+        session_id: metadata.session_id,
+        thread_id: metadata.thread_id,
+        turn_id: metadata.turn_id,
+        progressToken: metadata.progressToken
+      },
+      result: { ...resultDigest, status }
+    };
+    this.audit.toolCalls.push(record);
+    this.audit.executionCounts[bareName]++;
+  }
+
+  getAuditSnapshot() {
+    const snapshot = {
+      starts: this.audit.starts.map(start => ({ ...start })),
+      listCalls: this.audit.listCalls.map(call => ({ ...call, result: { ...call.result } })),
+      toolCalls: this.audit.toolCalls.map(call => ({
+        ordinal: call.ordinal,
+        name: call.name,
+        arguments: { ...call.arguments },
+        metadata: { ...call.metadata },
+        result: { ...call.result }
+      })),
+      executionCounts: { ...this.audit.executionCounts }
+    };
+    boundedJson(snapshot, 'audit snapshot');
+    return snapshot;
+  }
+
+  getGovernedAuditSnapshot() {
+    return this.getAuditSnapshot();
   }
 
   /**
