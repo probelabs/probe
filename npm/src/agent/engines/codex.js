@@ -41,7 +41,7 @@ export const CODEX_MAX_SERIALIZED_BYTES = 1048576;
 export const CODEX_MAX_INCOMING_BYTES = CODEX_MAX_SERIALIZED_BYTES;
 
 const INITIALIZE_PROTOCOL_VERSION = '2024-11-05';
-const INITIALIZE_CLIENT_INFO = Object.freeze({ name: 'protocol-capture-r4', version: '1.0.0' });
+const INITIALIZE_CLIENT_INFO = Object.freeze({ name: 'protocol-capture-r4-tool', version: '1.0.0' });
 const PROBE_TOOL_PREFIX = 'mcp__probe__';
 const PROBE_TOOLS = Object.freeze(['search', 'extract', 'listFiles']);
 const PROBE_TOOL_SET = new Set(PROBE_TOOLS);
@@ -93,6 +93,47 @@ const MAX_ITEMS = 128;
 const MAX_MCP_CALLS = 32;
 const MAX_BRIDGE_CALLS = 64;
 const MAX_TOKEN_COUNTS = 64;
+
+const EXPECTED_PROBE_TOOL_LIST_RESULT = Object.freeze({
+  tools: [
+    {
+      name: 'mcp__probe__search',
+      description: 'Search for code patterns using semantic search',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          path: { type: 'string', description: 'Directory to search', default: '.' },
+          maxResults: { type: 'integer', default: 10 }
+        },
+        required: ['query']
+      }
+    },
+    {
+      name: 'mcp__probe__extract',
+      description: 'Extract code from specific file location',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'File path with optional line number' }
+        },
+        required: ['path']
+      }
+    },
+    {
+      name: 'mcp__probe__listFiles',
+      description: 'List files in a directory',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Directory path' },
+          pattern: { type: 'string', description: 'File pattern' }
+        },
+        required: ['path']
+      }
+    }
+  ]
+});
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -428,7 +469,19 @@ function validateSessionIdentity(msg, bindings, codexHome) {
       identity.model !== bindings.model || identity.model_provider_id !== 'openai' ||
       identity.approval_policy !== bindings.approvalPolicy || identity.approvals_reviewer !== 'user' ||
       identity.reasoning_effort !== bindings.thinkingEffort || identity.cwd !== bindings.cwd) {
-    throw new Error('Codex session_configured identity does not match requested bindings');
+    throw new Error(`Codex session_configured identity does not match requested bindings: ${JSON.stringify({
+      rollout: isAbsolute(identity.rollout_path) && isDescendantPath(codexHome, identity.rollout_path),
+      model: identity.model === bindings.model,
+      provider: identity.model_provider_id === 'openai',
+      approval: identity.approval_policy === bindings.approvalPolicy,
+      reviewer: identity.approvals_reviewer === 'user',
+      reasoning: identity.reasoning_effort === bindings.thinkingEffort,
+      cwd: identity.cwd === bindings.cwd,
+      identityCwd: identity.cwd,
+      bindingCwd: bindings.cwd,
+      rolloutPath: identity.rollout_path,
+      codexHome
+    })}`);
   }
   if (identity.session_id !== identity.thread_id) throw new Error('Codex session/thread identity is not fresh and paired');
   return identity;
@@ -537,29 +590,135 @@ function digestJson(value, field) {
   return { sha256: createHash('sha256').update(serialized).digest('hex'), bytes: Buffer.byteLength(serialized, 'utf8') };
 }
 
+function validateAuditDigest(value, field) {
+  if (!exactKeys(value, ['sha256', 'bytes']) || typeof value.sha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(value.sha256) || !Number.isSafeInteger(value.bytes) ||
+      value.bytes < 0 || value.bytes > CODEX_MAX_SERIALIZED_BYTES) {
+    throw new Error(`Codex ${field} digest shape is invalid`);
+  }
+  return { sha256: value.sha256, bytes: value.bytes };
+}
+
+function validateAuditResultDigest(value, field) {
+  if (!exactKeys(value, ['sha256', 'bytes', 'status']) ||
+      !['ok', 'failed'].includes(value.status)) {
+    throw new Error(`Codex ${field} result digest shape is invalid`);
+  }
+  return { ...validateAuditDigest(value, field), status: value.status };
+}
+
+function validateAuditOrdinal(value, field) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > MAX_EVENT_COUNT) {
+    throw new Error(`Codex ${field} ordinal is invalid`);
+  }
+  return value;
+}
+
+function validateDirectAuditMetadata(value, field = 'direct audit metadata') {
+  if (!exactKeys(value, [
+    'session_id', 'thread_id', 'turn_id', 'sandbox', 'turn_started_at_unix_ms',
+    'model', 'reasoning_effort', 'threadId', 'progressToken'
+  ]) || !Number.isSafeInteger(value.turn_started_at_unix_ms) || value.turn_started_at_unix_ms <= 0 ||
+      !Number.isSafeInteger(value.progressToken) || value.progressToken <= 0) {
+    throw new Error(`Codex ${field} shape is invalid`);
+  }
+  for (const key of ['session_id', 'thread_id', 'turn_id', 'sandbox', 'model', 'reasoning_effort', 'threadId']) {
+    requireString(value[key], `${field}.${key}`, MAX_ID_LENGTH);
+  }
+  return {
+    session_id: value.session_id,
+    thread_id: value.thread_id,
+    turn_id: value.turn_id,
+    sandbox: value.sandbox,
+    turn_started_at_unix_ms: value.turn_started_at_unix_ms,
+    model: value.model,
+    reasoning_effort: value.reasoning_effort,
+    threadId: value.threadId,
+    progressToken: value.progressToken
+  };
+}
+
+function validateDirectAuditSnapshotShape(snapshot) {
+  if (!exactKeys(snapshot, ['starts', 'listCalls', 'toolCalls', 'executionCounts']) ||
+      !Array.isArray(snapshot.starts) || !Array.isArray(snapshot.listCalls) || !Array.isArray(snapshot.toolCalls) ||
+      !exactKeys(snapshot.executionCounts, PROBE_TOOLS)) {
+    throw new Error('Codex governed MCP direct audit snapshot is invalid');
+  }
+  if (snapshot.starts.length !== 1 || snapshot.listCalls.length !== 1 || snapshot.toolCalls.length > MAX_MCP_CALLS) {
+    throw new Error('Codex governed MCP direct audit snapshot record bound is invalid');
+  }
+  const start = snapshot.starts[0];
+  if (!exactKeys(start, ['host', 'port', 'url_path']) || typeof start.host !== 'string' || start.host.length === 0 ||
+      start.host.length > MAX_ID_LENGTH || !Number.isSafeInteger(start.port) || start.port < 1 ||
+      start.port > 65535 || start.url_path !== '/mcp') {
+    throw new Error('Codex direct audit server start record is invalid');
+  }
+  const list = snapshot.listCalls[0];
+  if (!exactKeys(list, ['ordinal', 'tool_names', 'result']) || validateAuditOrdinal(list.ordinal, 'direct audit list') === undefined ||
+      !Array.isArray(list.tool_names) || list.tool_names.length !== PROBE_TOOLS.length ||
+      !sameJson(list.tool_names, PROBE_TOOLS.map(tool => `${PROBE_TOOL_PREFIX}${tool}`))) {
+    throw new Error('Codex direct audit list record is invalid');
+  }
+  const listDigest = validateAuditDigest(list.result, 'direct audit list result');
+  const expectedListDigest = digestJson(EXPECTED_PROBE_TOOL_LIST_RESULT, 'expected Probe tool list result');
+  if (!sameJson(listDigest, expectedListDigest)) {
+    throw new Error('Codex direct audit list result does not expose the exact Probe tools');
+  }
+  const ordinals = new Set([list.ordinal]);
+  let previousOrdinal = list.ordinal;
+  for (const [index, record] of snapshot.toolCalls.entries()) {
+    if (!exactKeys(record, ['ordinal', 'name', 'arguments', 'metadata', 'result']) ||
+        validateAuditOrdinal(record.ordinal, `direct audit tool[${index}]`) === undefined ||
+        ordinals.has(record.ordinal) || record.ordinal <= previousOrdinal ||
+        typeof record.name !== 'string' || !PROBE_TOOLS.some(tool => record.name === `${PROBE_TOOL_PREFIX}${tool}`)) {
+      throw new Error('Codex direct audit tool record shape or ordinal is invalid');
+    }
+    validateAuditDigest(record.arguments, `direct audit tool[${index}].arguments`);
+    validateDirectAuditMetadata(record.metadata, `direct audit tool[${index}].metadata`);
+    validateAuditResultDigest(record.result, `direct audit tool[${index}].result`);
+    ordinals.add(record.ordinal);
+    previousOrdinal = record.ordinal;
+  }
+  for (const tool of PROBE_TOOLS) {
+    if (!Number.isSafeInteger(snapshot.executionCounts[tool]) || snapshot.executionCounts[tool] < 0 ||
+        snapshot.executionCounts[tool] > MAX_MCP_CALLS) {
+      throw new Error('Codex direct audit executionCounts value is invalid');
+    }
+  }
+  return snapshot;
+}
+
 function directAuditGetter(state) {
   const getter = state.mcpServer?.getGovernedAuditSnapshot || state.mcpServer?.getAuditSnapshot;
   if (typeof getter !== 'function') throw new Error('Codex governed MCP direct audit snapshot is unavailable');
   const snapshot = getter.call(state.mcpServer);
-  if (!isObject(snapshot) || !Array.isArray(snapshot.toolCalls) || !Array.isArray(snapshot.listCalls) ||
-      !isObject(snapshot.executionCounts)) throw new Error('Codex governed MCP direct audit snapshot is invalid');
-  return snapshot;
+  return validateDirectAuditSnapshotShape(snapshot);
 }
 
 function expectedAuditMetadata(state, metadata) {
+  const captured = validateDirectAuditMetadata(metadata);
+  if (Math.floor(captured.turn_started_at_unix_ms / 1000) !== state.taskStartedAt ||
+      (state.turnStartedAtUnixMs !== null && captured.turn_started_at_unix_ms !== state.turnStartedAtUnixMs) ||
+      captured.session_id !== state.identity.session_id || captured.thread_id !== state.identity.thread_id ||
+      captured.turn_id !== state.turnId || captured.sandbox !== CODEX_EXTENSION_SANDBOX ||
+      captured.model !== state.identity.model || captured.reasoning_effort !== state.identity.reasoning_effort ||
+      captured.threadId !== state.threadId ||
+      (state.lastProgressToken !== 0 && captured.progressToken <= state.lastProgressToken)) {
+    throw new Error('Codex direct audit metadata is not bound to this session/thread/turn');
+  }
   const expected = {
     session_id: state.identity.session_id,
     thread_id: state.identity.thread_id,
     turn_id: state.turnId,
     sandbox: CODEX_EXTENSION_SANDBOX,
+    turn_started_at_unix_ms: captured.turn_started_at_unix_ms,
     model: state.identity.model,
     reasoning_effort: state.identity.reasoning_effort,
     threadId: state.threadId,
-    progressToken: 1
+    progressToken: captured.progressToken
   };
-  if (!exactKeys(metadata, Object.keys(expected)) || !sameJson(metadata, expected)) {
-    throw new Error('Codex direct audit metadata is not bound to this session/thread/turn');
-  }
+  state.turnStartedAtUnixMs ??= captured.turn_started_at_unix_ms;
+  state.lastProgressToken = captured.progressToken;
   return expected;
 }
 
@@ -607,11 +766,6 @@ function validateTerminalDirectAudit(state) {
   }
   if (!sameJson(snapshot.executionCounts, expectedCounts)) {
     throw new Error('Codex direct audit executionCounts do not match consumed records');
-  }
-  if (snapshot.listCalls.length !== 1 || !isObject(snapshot.listCalls[0]) ||
-      !Number.isInteger(snapshot.listCalls[0].ordinal) ||
-      !sameJson(snapshot.listCalls[0].tool_names, PROBE_TOOLS.map(tool => `${PROBE_TOOL_PREFIX}${tool}`))) {
-    throw new Error('Codex direct audit tool exposure/list record is not exact');
   }
   if (state.directAudit.length > 0 && snapshot.listCalls[0].ordinal >= state.directAudit[0].ordinal) {
     throw new Error('Codex direct audit list ordinal is not ordered before tool calls');
@@ -692,9 +846,12 @@ function validateBridgeCallItem(state, item) {
   }
   const id = requireString(item.id, 'raw exec bridge item id', MAX_ID_LENGTH);
   const callId = requireString(item.call_id, 'raw exec bridge call_id', MAX_ID_LENGTH);
-  if (state.activeBridge || state.seenBridgeCallIds.has(callId) || state.seenBridgeItemIds.has(id) ||
-      id === callId || state.seenNestedCallIds.has(id) || state.seenNestedCallIds.has(callId) ||
-      state.seenBridgeCallIds.has(id)) throw new Error('Codex raw exec bridge call or item identity was reused');
+  if (state.activeBridge || state.seenItemIds.has(id) || state.seenItemIds.has(callId) ||
+      state.seenBridgeCallIds.has(callId) || state.seenBridgeItemIds.has(id) ||
+      state.seenBridgeCallIds.has(id) || state.seenBridgeItemIds.has(callId) ||
+      id === callId || state.seenNestedCallIds.has(id) || state.seenNestedCallIds.has(callId)) {
+    throw new Error('Codex raw exec bridge call or item identity was reused');
+  }
   if (state.seenBridgeCallIds.size >= MAX_BRIDGE_CALLS) throw new Error('Codex bridge call bound exceeded');
   if (typeof item.input !== 'string' || item.input.length === 0 || Buffer.byteLength(item.input, 'utf8') > MAX_STRING_LENGTH) {
     throw new Error('Codex raw exec bridge input is invalid');
@@ -798,7 +955,10 @@ function validateTaskStarted(msg) {
       msg.type !== 'task_started' || msg.collaboration_mode_kind !== 'default') throw new Error('Codex task_started shape is invalid');
   requireNumber(msg.started_at, 'task_started.started_at', { integer: true, min: 0 });
   requireNumber(msg.model_context_window, 'task_started.model_context_window', { integer: true, min: 1 });
-  return requireString(msg.turn_id, 'task_started.turn_id', MAX_ID_LENGTH);
+  return {
+    turnId: requireString(msg.turn_id, 'task_started.turn_id', MAX_ID_LENGTH),
+    startedAt: msg.started_at
+  };
 }
 
 function validateTaskComplete(msg, state) {
@@ -917,7 +1077,9 @@ function validateEventState(state, params, serverName, allowedSet) {
   }
   if (type === 'task_started') {
     if (state.taskStarted || state.turnId !== null) throw new Error('Codex task_started is duplicated or out of order');
-    state.turnId = validateTaskStarted(params.msg);
+    const task = validateTaskStarted(params.msg);
+    state.turnId = task.turnId;
+    state.taskStartedAt = task.startedAt;
     if (params._meta.threadId !== state.threadId) throw new Error('Codex task_started thread mismatch');
     state.taskStarted = true;
     return;
@@ -962,7 +1124,9 @@ function validateEventState(state, params, serverName, allowedSet) {
     if (!isObject(params.msg.item) || !['UserMessage', 'Reasoning', 'McpToolCall', 'AgentMessage'].includes(params.msg.item.type)) {
       throw new Error('Codex native item type is denied');
     }
-    if (state.seenItemIds.has(params.msg.item.id) || state.seenItemIds.size >= MAX_ITEMS) throw new Error('Codex item id was reused or bound exceeded');
+    if (state.seenItemIds.has(params.msg.item.id) || state.seenBridgeCallIds.has(params.msg.item.id) ||
+        state.seenBridgeItemIds.has(params.msg.item.id) || state.seenNestedCallIds.has(params.msg.item.id) ||
+        state.seenItemIds.size >= MAX_ITEMS) throw new Error('Codex item id was reused or bound exceeded');
     const itemType = params.msg.item.type;
     if (itemType === 'UserMessage' && state.userItemStarted) throw new Error('Codex UserMessage lifecycle was duplicated');
     if (itemType === 'AgentMessage' && (state.agentItemStarted || !state.userMessageSeen)) throw new Error('Codex AgentMessage lifecycle is out of order');
@@ -1076,7 +1240,9 @@ function validateEventState(state, params, serverName, allowedSet) {
     state.mcpReceipt.push({
       callId,
       nestedCallId: callId,
+      nestedItemId: call.itemId,
       outerCallId: call.outerCallId,
+      outerItemId: state.activeBridge?.outerItemId || null,
       server: invocation.server,
       tool: invocation.tool,
       arguments: digestJson(invocation.arguments, 'MCP arguments'),
@@ -1161,6 +1327,10 @@ export async function createCodexEngine(options = {}) {
   let closed = false;
   let cleanupPromise = null;
   let cleanupOutcome = { status: 'not_started' };
+  let mcpStartPromise = null;
+  let mcpStartTimedOut = false;
+  let mcpStartResolved = false;
+  let mcpLateStopPromise = null;
   let childExited = false;
   let childExitCode = null;
   let childExitSignal = null;
@@ -1332,6 +1502,14 @@ export async function createCodexEngine(options = {}) {
     });
   }
 
+  function boundedMcpStop() {
+    if (!mcpServer) return Promise.resolve();
+    return Promise.race([
+      Promise.resolve().then(() => mcpServer.stop()),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('MCP server stop timeout')), CODEX_CLEANUP_TIMEOUT_MS))
+    ]);
+  }
+
   async function performCleanup() {
     if (cleanupPromise) return cleanupPromise;
     cleanupPromise = (async () => {
@@ -1362,10 +1540,7 @@ export async function createCodexEngine(options = {}) {
       let mcpServerStopped = !mcpServer;
       if (mcpServer) {
         try {
-          await Promise.race([
-            Promise.resolve().then(() => mcpServer.stop()),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('MCP server stop timeout')), CODEX_CLEANUP_TIMEOUT_MS))
-          ]);
+          await boundedMcpStop();
           mcpServerStopped = true;
         } catch (error) { errors.push(errorMessage(error)); }
       }
@@ -1391,18 +1566,30 @@ export async function createCodexEngine(options = {}) {
       governed: true,
       serverName
     });
-    const startPromise = Promise.resolve().then(() => mcpServer.start());
+    mcpStartPromise = Promise.resolve().then(() => mcpServer.start());
     // Keep in-process MCP startup under the same configured turn budget as
     // the child transport.  Attach a rejection handler so a late startup
     // failure after a timeout cannot become an unhandled promise.
-    startPromise.catch(() => {});
+    mcpStartPromise.catch(() => {});
+    mcpStartPromise.then(() => {
+      mcpStartResolved = true;
+      if (mcpStartTimedOut) {
+        // A timeout may have called stop() before listen() completed.  Once
+        // the late start resolves, perform a second bounded stop after the
+        // first cleanup has settled so the late listener cannot leak.
+        mcpLateStopPromise = Promise.resolve(performCleanup()).then(() => boundedMcpStop()).catch(() => {});
+      }
+    }, () => {});
     let startTimer;
     let started;
     try {
       const timeoutPromise = new Promise((_, reject) => {
-        startTimer = setTimeout(() => reject(new Error('Codex MCP startup timeout')), bindings.codexMcpTimeout);
+        startTimer = setTimeout(() => {
+          mcpStartTimedOut = true;
+          reject(new Error('Codex MCP startup timeout'));
+        }, bindings.codexMcpTimeout);
       });
-      started = await Promise.race([startPromise, timeoutPromise]);
+      started = await Promise.race([mcpStartPromise, timeoutPromise]);
     } finally {
       if (startTimer) clearTimeout(startTimer);
     }
@@ -1477,6 +1664,9 @@ export async function createCodexEngine(options = {}) {
           prompt: queryPrompt,
           threadId: null,
           turnId: null,
+          taskStartedAt: null,
+          turnStartedAtUnixMs: null,
+          lastProgressToken: 0,
           identity: null,
           startupComplete: false,
           startupUpdateCount: 0,
@@ -1523,6 +1713,7 @@ export async function createCodexEngine(options = {}) {
           tokenCount: 0,
           eventCounts: Object.create(null),
           activity: [],
+          quietWindowArmed: false,
           policyVerdict: { verdict: 'pending' }
         };
         let quietTimer;
@@ -1554,6 +1745,7 @@ export async function createCodexEngine(options = {}) {
           // The capture held the result for a 1.5 second quiet window.  Any
           // correlated traffic during this period poisons the turn.
           await new Promise((resolvePromise, rejectPromise) => {
+            state.quietWindowArmed = true;
             quietTimer = setTimeout(resolvePromise, CODEX_QUIET_WINDOW_MS);
             state.quietReject = rejectPromise;
           });
@@ -1594,6 +1786,7 @@ export async function createCodexEngine(options = {}) {
           stderrBytes: stderr.length,
           eventHandlers: state ? 1 : 0,
           pendingRequests: (initializePending ? 1 : 0) + (queryPending ? 1 : 0),
+          quietWindowArmed: state?.quietWindowArmed === true,
           cleanup: cloneJson(cleanupOutcome, 'cleanup state')
         };
       },

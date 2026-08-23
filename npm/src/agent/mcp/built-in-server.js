@@ -26,7 +26,10 @@ const MAX_AUDIT_ID = 512;
 const MAX_AUDIT_RECORDS = 64;
 const MAX_LIST_AUDIT_RECORDS = 8;
 const MAX_TOOL_RESULT_BYTES = 262144;
-const MAX_AUDIT_RECORD_RESERVATION_BYTES = 4096;
+// This is a conservative reservation for the complete terminal digest-only
+// record, including the bounded extension metadata.  It is charged before
+// execute() and released only after the record is durable.
+const MAX_AUDIT_RECORD_RESERVATION_BYTES = 16384;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -87,11 +90,24 @@ function requireBoundedString(value, field) {
   return value;
 }
 
+function boundedToolErrorText(error) {
+  let text;
+  try {
+    text = error instanceof Error ? error.message : String(error);
+  } catch {
+    text = 'Unknown tool error';
+  }
+  if (typeof text !== 'string' || text.length === 0) text = 'Unknown tool error';
+  text = text.slice(0, MAX_AUDIT_ID);
+  while (Buffer.byteLength(text, 'utf8') > MAX_AUDIT_ID) text = text.slice(0, -1);
+  return text;
+}
+
 function validateGovernedMetadata(meta) {
   if (!exactKeys(meta, ['progressToken', 'threadId', 'x-codex-turn-metadata'])) {
     throw new Error('Governed MCP _meta keys are not exact');
   }
-  if (!Number.isInteger(meta.progressToken) || meta.progressToken < 0 || meta.progressToken > Number.MAX_SAFE_INTEGER) {
+  if (!Number.isSafeInteger(meta.progressToken) || meta.progressToken <= 0) {
     throw new Error('Governed MCP progressToken is invalid');
   }
   const threadId = requireBoundedString(meta.threadId, '_meta.threadId');
@@ -214,7 +230,8 @@ export class BuiltInMCPServer extends EventEmitter {
       toolCalls: [],
       executionCounts: { search: 0, extract: 0, listFiles: 0 },
       nextOrdinal: 1,
-      inFlight: 0
+      inFlight: 0,
+      reservedBytes: 0
     };
   }
 
@@ -833,7 +850,7 @@ export class BuiltInMCPServer extends EventEmitter {
       }
       metadata = validateGovernedMetadata(params._meta);
     }
-    const { name, arguments: rawArgs = {} } = params;
+    const { name, arguments: rawArgs } = params;
 
     if (!isObject(rawArgs)) throw new Error('Governed MCP arguments must be an object');
 
@@ -864,6 +881,7 @@ export class BuiltInMCPServer extends EventEmitter {
       admitted = true;
     }
 
+    let auditRecorded = false;
     try {
       // Execute tool directly (no spawning!)
       const result = await tool.execute(args);
@@ -879,24 +897,36 @@ export class BuiltInMCPServer extends EventEmitter {
         response = {
           content: [{
             type: 'text',
-            text: `Error executing ${name}: ${String(error?.message || error).slice(0, MAX_AUDIT_ID)}`
+            text: `Error executing ${name}: ${boundedToolErrorText(error)}`
           }],
           isError: true
         };
-        if (this.governed) this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
+        if (this.governed) {
+          this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
+          auditRecorded = true;
+          admitted = false;
+        }
         return response;
       }
-      if (this.governed) this.recordToolAudit(name, args, response, 'ok', metadata, argsDigest);
+      if (this.governed) {
+        this.recordToolAudit(name, args, response, 'ok', metadata, argsDigest);
+        auditRecorded = true;
+        admitted = false;
+      }
       return response;
     } catch (error) {
+      const errorText = boundedToolErrorText(error);
       const response = {
         content: [{
           type: 'text',
-          text: `Error executing ${name}: ${error.message}`
+          text: `Error executing ${name}: ${errorText}`
         }],
         isError: true
       };
-      if (this.governed) this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
+      if (this.governed && !auditRecorded) {
+        this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
+        auditRecorded = true;
+      }
       return response;
     } finally {
       if (admitted) this.audit.inFlight--;
@@ -913,16 +943,17 @@ export class BuiltInMCPServer extends EventEmitter {
     // Reserve enough ledger space before execute() for the terminal record.
     const current = this.getAuditSnapshot();
     const currentBytes = Buffer.byteLength(JSON.stringify(current), 'utf8');
-    if (currentBytes + MAX_AUDIT_RECORD_RESERVATION_BYTES > MAX_AUDIT_BYTES) {
+    if (currentBytes + this.audit.reservedBytes + MAX_AUDIT_RECORD_RESERVATION_BYTES > MAX_AUDIT_BYTES) {
       throw new Error('Governed MCP cumulative audit-byte bound exceeded');
     }
     this.audit.inFlight++;
+    this.audit.reservedBytes += MAX_AUDIT_RECORD_RESERVATION_BYTES;
   }
 
   recordToolAudit(name, args, result, status, metadata, knownArgsDigest = null) {
     const bareName = name.slice(GOVERNED_TOOL_PREFIX.length);
     const argsDigest = knownArgsDigest || digest(args, 'arguments');
-    const resultDigest = digest({ content: result.content }, 'result');
+    const resultDigest = digest(result, 'result');
     const record = {
       ordinal: this.audit.nextOrdinal++,
       name,
@@ -941,14 +972,17 @@ export class BuiltInMCPServer extends EventEmitter {
       result: { ...resultDigest, status }
     };
     this.audit.toolCalls.push(record);
+    this.audit.executionCounts[bareName]++;
+    this.audit.inFlight--;
+    this.audit.reservedBytes -= MAX_AUDIT_RECORD_RESERVATION_BYTES;
     try {
       this.assertAuditWithinBounds();
     } catch (error) {
       this.audit.toolCalls.pop();
       this.audit.nextOrdinal--;
+      this.audit.executionCounts[bareName]--;
       throw error;
     }
-    this.audit.executionCounts[bareName]++;
   }
 
   assertAuditWithinBounds() {
@@ -961,7 +995,7 @@ export class BuiltInMCPServer extends EventEmitter {
       toolCalls: this.audit.toolCalls,
       executionCounts: this.audit.executionCounts
     };
-    if (Buffer.byteLength(boundedJson(snapshot, 'audit snapshot'), 'utf8') > MAX_AUDIT_BYTES) {
+    if (Buffer.byteLength(boundedJson(snapshot, 'audit snapshot'), 'utf8') + this.audit.reservedBytes > MAX_AUDIT_BYTES) {
       throw new Error('Governed MCP cumulative audit-byte bound exceeded');
     }
   }

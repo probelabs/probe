@@ -41,6 +41,7 @@ let processMock;
 let readerMock;
 let serverMock;
 let engines;
+let harnesses;
 
 function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
@@ -53,6 +54,47 @@ function canonicalJson(value) {
 function digest(value) {
   const serialized = canonicalJson(value);
   return { sha256: createHash('sha256').update(serialized).digest('hex'), bytes: Buffer.byteLength(serialized, 'utf8') };
+}
+
+function governedToolListResult() {
+  return {
+    tools: [
+      {
+        name: 'mcp__probe__search',
+        description: 'Search for code patterns using semantic search',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Search query' },
+            path: { type: 'string', description: 'Directory to search', default: '.' },
+            maxResults: { type: 'integer', default: 10 }
+          },
+          required: ['query']
+        }
+      },
+      {
+        name: 'mcp__probe__extract',
+        description: 'Extract code from specific file location',
+        inputSchema: {
+          type: 'object',
+          properties: { path: { type: 'string', description: 'File path with optional line number' } },
+          required: ['path']
+        }
+      },
+      {
+        name: 'mcp__probe__listFiles',
+        description: 'List files in a directory',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: 'Directory path' },
+            pattern: { type: 'string', description: 'File pattern' }
+          },
+          required: ['path']
+        }
+      }
+    ]
+  };
 }
 
 function governedAgent(overrides = {}) {
@@ -98,6 +140,53 @@ function makeProcess() {
   return child;
 }
 
+function makeHarness() {
+  let initializeWrittenResolve;
+  let queryWrittenResolve;
+  let readerListenerResolve;
+  const initializeWritten = new Promise(resolve => { initializeWrittenResolve = resolve; });
+  const queryWritten = new Promise(resolve => { queryWrittenResolve = resolve; });
+  const readerListenerInstalled = new Promise(resolve => { readerListenerResolve = resolve; });
+  const child = makeProcess();
+  child.stdin.write.mockImplementation(line => {
+    const message = JSON.parse(line);
+    if (message.id === 1) initializeWrittenResolve();
+    if (message.id === 2) queryWrittenResolve();
+  });
+  const reader = new EventEmitter();
+  reader.close = jest.fn();
+  const originalOn = reader.on.bind(reader);
+  reader.on = jest.fn((event, listener) => {
+    const result = originalOn(event, listener);
+    if (event === 'line') readerListenerResolve();
+    return result;
+  });
+  const server = {
+    audit: makeAudit(),
+    start: jest.fn(async () => ({ host: '127.0.0.1', port: 43123 })),
+    stop: jest.fn(async () => {}),
+    getGovernedAuditSnapshot: jest.fn(() => server.audit)
+  };
+  const harness = { child, reader, server, initializeWritten, queryWritten, readerListenerInstalled };
+  processMock = child;
+  readerMock = reader;
+  serverMock = server;
+  spawnMock.mockReturnValue(child);
+  createInterfaceMock.mockReturnValue(reader);
+  BuiltInMCPServerMock.mockImplementation(() => server);
+  return harness;
+}
+
+async function waitForQuietWindow(engine) {
+  await new Promise(resolve => {
+    const check = () => {
+      if (engine.getTransportState().quietWindowArmed) resolve();
+      else queueMicrotask(check);
+    };
+    check();
+  });
+}
+
 function substitute(value, engine) {
   const text = JSON.stringify(value)
     .replaceAll('CWD', cwd)
@@ -125,7 +214,7 @@ function makeAudit() {
     listCalls: [{
       ordinal: 1,
       tool_names: ['mcp__probe__search', 'mcp__probe__extract', 'mcp__probe__listFiles'],
-      result: { sha256: 'list-result', bytes: 1 }
+      result: digest(governedToolListResult())
     }],
     toolCalls: [{
       ordinal: 2,
@@ -148,13 +237,8 @@ function makeAudit() {
   };
 }
 
-function emit(message) {
-  readerMock.emit('line', JSON.stringify(message));
-}
-
-async function flush() {
-  await Promise.resolve();
-  await Promise.resolve();
+function emit(harness, message) {
+  harness.reader.emit('line', JSON.stringify(message));
 }
 
 function options(overrides = {}) {
@@ -176,14 +260,12 @@ function options(overrides = {}) {
 }
 
 async function startEngine(overrides = {}) {
-  console.log('DEBUG start create');
+  const harness = makeHarness();
   const creating = createCodexEngine(options(overrides));
-  await flush();
-  console.log('DEBUG start emit');
-  emit(fixture[0]);
-  console.log('DEBUG start awaiting');
+  await Promise.all([harness.initializeWritten, harness.readerListenerInstalled]);
+  emit(harness, fixture[0]);
   const engine = await creating;
-  console.log('DEBUG start done');
+  harnesses.set(engine, harness);
   engines.push(engine);
   return engine;
 }
@@ -195,47 +277,33 @@ async function collect(engine) {
 }
 
 async function replayGolden(engine, mutation = message => message) {
-  console.log('DEBUG replay start');
+  const harness = harnesses.get(engine);
   const pending = collect(engine);
-  await flush();
-  console.log('DEBUG query started');
+  await harness.queryWritten;
   const messages = fixture.slice(1).map(message => substitute(message, engine)).flatMap(message => {
     const mutated = mutation(message);
     return Array.isArray(mutated) ? mutated : [mutated];
   });
-  for (const message of messages) emit(message);
-  console.log('DEBUG emitted');
-  await flush();
-  console.log('DEBUG flushed', engine.getTransportState());
-  jest.advanceTimersByTime(1500);
-  await flush();
-  console.log('DEBUG done replay');
+  for (const message of messages) emit(harness, message);
+  if (!engine.getTransportState().poisoned) {
+    await waitForQuietWindow(engine);
+    jest.advanceTimersByTime(1500);
+  }
   return pending;
 }
 
 beforeEach(() => {
   jest.useFakeTimers();
   engines = [];
+  harnesses = new WeakMap();
   cwd = mkdtempSync(join(tmpdir(), 'probe-codex-cwd-'));
   codexHome = mkdtempSync(join(tmpdir(), 'probe-codex-home-'));
   authTarget = join(tmpdir(), `probe-auth-${process.pid}-${Math.random().toString(16).slice(2)}`);
   writeFileSync(authTarget, '{}');
   symlinkSync(authTarget, join(codexHome, 'auth.json'));
-  processMock = makeProcess();
-  readerMock = new EventEmitter();
-  readerMock.close = jest.fn();
-  serverMock = {
-    audit: makeAudit(),
-    start: jest.fn(async () => ({ host: '127.0.0.1', port: 43123 })),
-    stop: jest.fn(async () => {}),
-    getGovernedAuditSnapshot: jest.fn(() => serverMock.audit)
-  };
   spawnMock.mockReset();
-  spawnMock.mockReturnValue(processMock);
   createInterfaceMock.mockReset();
-  createInterfaceMock.mockReturnValue(readerMock);
   BuiltInMCPServerMock.mockReset();
-  BuiltInMCPServerMock.mockImplementation(() => serverMock);
 });
 
 afterEach(async () => {
@@ -263,6 +331,7 @@ describe('Codex 0.144.1 capture-governed attempt004 transport', () => {
 
   test('replays the authoritative golden wire capture and gates success on cleanup', async () => {
     const engine = await startEngine();
+    const harness = harnesses.get(engine);
     const chunks = await replayGolden(engine);
     expect(chunks.map(chunk => chunk.type)).toEqual(['text', 'metadata']);
     expect(chunks[0].content).toBe('PROBE_TOOL_OK');
@@ -278,19 +347,20 @@ describe('Codex 0.144.1 capture-governed attempt004 transport', () => {
       duration: { secs: 0, nanos: 2468667 }, directAudit: { ordinal: 2 }
     }));
     expect(receipt.execBridge[1].outerCallId).not.toBe(receipt.nestedMcp[0].nestedCallId);
-    expect(readerMock.close).toHaveBeenCalledTimes(1);
-    expect(serverMock.stop).toHaveBeenCalledTimes(1);
-    expect(processMock.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(harness.reader.close).toHaveBeenCalledTimes(1);
+    expect(harness.server.stop).toHaveBeenCalledTimes(1);
+    expect(harness.child.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
   test('sends exactly initialize then tools/call and queries TOOL_PROMPT', async () => {
     const engine = await startEngine();
+    const harness = harnesses.get(engine);
     const pending = replayGolden(engine);
-    const writes = processMock.stdin.write.mock.calls.map(([line]) => JSON.parse(line));
+    const writes = harness.child.stdin.write.mock.calls.map(([line]) => JSON.parse(line));
     expect(writes).toHaveLength(2);
     expect(writes[0]).toEqual({
       jsonrpc: '2.0', id: 1, method: 'initialize',
-      params: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, clientInfo: { name: 'protocol-capture-r4', version: '1.0.0' } }
+      params: { protocolVersion: '2024-11-05', capabilities: { tools: {} }, clientInfo: { name: 'protocol-capture-r4-tool', version: '1.0.0' } }
     });
     expect(writes[1]).toMatchObject({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'codex' } });
     expect(writes[1].params.arguments.prompt).toBe('TOOL_PROMPT');
@@ -342,28 +412,31 @@ describe('Codex 0.144.1 capture-governed attempt004 transport', () => {
 
   test('rejects extra or unconsumed direct audits and execution count mismatches', async () => {
     const extra = await startEngine();
-    extra.serverAudit = serverMock.audit;
-    serverMock.audit.toolCalls.push({ ...serverMock.audit.toolCalls[0], ordinal: 3 });
+    const extraHarness = harnesses.get(extra);
+    extra.serverAudit = extraHarness.server.audit;
+    extraHarness.server.audit.toolCalls.push({ ...extraHarness.server.audit.toolCalls[0], ordinal: 3 });
     await expect(replayGolden(extra)).rejects.toThrow(/direct audit/);
 
     const mismatch = await startEngine();
-    serverMock.audit.executionCounts.listFiles = 2;
+    const mismatchHarness = harnesses.get(mismatch);
+    mismatchHarness.server.audit.executionCounts.listFiles = 2;
     await expect(replayGolden(mismatch)).rejects.toThrow(/executionCounts/);
   });
 
   test('rejects direct audit metadata from another session', async () => {
     const engine = await startEngine();
-    serverMock.audit.toolCalls[0].metadata.session_id = 'other-session';
+    harnesses.get(engine).server.audit.toolCalls[0].metadata.session_id = 'other-session';
     await expect(replayGolden(engine)).rejects.toThrow(/direct audit/);
   });
 
   test('keeps stderr bounded and rejects a second query', async () => {
     const engine = await startEngine();
-    processMock.stderr.emit('data', Buffer.alloc(CODEX_STDERR_MAX_BYTES + 100, 0x61));
+    const harness = harnesses.get(engine);
+    harness.child.stderr.emit('data', Buffer.alloc(CODEX_STDERR_MAX_BYTES + 100, 0x61));
     expect(engine.getTransportState().stderrBytes).toBe(CODEX_STDERR_MAX_BYTES);
     const pending = replayGolden(engine);
     await expect(engine.query('SECOND').next()).rejects.toThrow(/exactly one query/);
     await pending;
-    expect(processMock.stdin.write).toHaveBeenCalledTimes(2);
+    expect(harness.child.stdin.write).toHaveBeenCalledTimes(2);
   });
 });
