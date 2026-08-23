@@ -24,9 +24,27 @@ export interface ProbeAgentOptions {
   /** Working directory for resolving relative paths (independent of allowedFolders security) */
   cwd?: string;
   /** Force specific AI provider */
-  provider?: 'anthropic' | 'openai' | 'google';
+  provider?: 'anthropic' | 'openai' | 'google' | 'codex';
   /** Override model name */
   model?: string;
+  /** Native thinking/reasoning effort; Codex R2 requires exactly 'xhigh'. */
+  thinkingEffort?: string | number;
+  /** Codex sandbox mode; R2 requires exactly 'read-only'. */
+  codexSandbox?: 'read-only';
+  /** Codex approval policy; R2 requires exactly 'never'. */
+  codexApprovalPolicy?: 'never';
+  /** Bounded Codex MCP timeout in milliseconds. */
+  codexMcpTimeout?: number;
+  /** Deployment-selected Codex executable path. */
+  codexExecutablePath?: string;
+  /** Optional absolute Codex executable path pin. */
+  codexExpectedExecutablePath?: string;
+  /** Optional SHA-256 pin for the Codex executable. */
+  codexExpectedExecutableSha256?: string;
+  /** Expected pinned initialize.serverInfo.version. */
+  codexExpectedServerVersion?: '0.144.1';
+  /** Mandatory absolute private Codex home containing only the auth symlink. */
+  codexHome?: string;
   /** Enable debug mode */
   debug?: boolean;
   /** Optional telemetry tracer instance */
@@ -82,7 +100,8 @@ export interface ProbeAgentOptions {
   /** Retry configuration for handling transient API failures */
   retry?: any;
   /** Fallback configuration for multi-provider support */
-  fallback?: any;
+  /** Fallback configuration, or false to disable fallback. */
+  fallback?: any | false;
   /** Enable the delegate tool for task distribution to subagents */
   enableDelegate?: boolean;
   /** Enable bash tool for command execution */

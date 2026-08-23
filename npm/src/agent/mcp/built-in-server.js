@@ -15,6 +15,9 @@ import {
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
 
+const GOVERNED_TOOL_PREFIX = 'mcp__probe__';
+const GOVERNED_TOOL_NAMES = Object.freeze(['search', 'extract', 'listFiles']);
+
 /**
  * Simple in-memory event store for resumability
  */
@@ -85,6 +88,11 @@ export class BuiltInMCPServer extends EventEmitter {
     this.streamableTransports = new Map();  // Map of sessionId -> StreamableHTTPServerTransport
     this.connections = new Set();
     this.debug = options.debug || false;
+    this.governed = options.governed === true;
+    this.serverName = options.serverName || null;
+    if (this.governed && (!this.serverName || typeof this.serverName !== 'string')) {
+      throw new Error('Governed Probe MCP requires its derived server name');
+    }
   }
 
   /**
@@ -644,10 +652,12 @@ export class BuiltInMCPServer extends EventEmitter {
         }
       };
 
-      for (const [name, def] of Object.entries(toolDefs)) {
-        if (this.agent.allowedTools.isEnabled(name)) {
+      const names = this.governed ? GOVERNED_TOOL_NAMES : Object.keys(toolDefs);
+      for (const name of names) {
+        const def = toolDefs[name];
+        if (def && this.agent.allowedTools.isEnabled(name) && this.agent.toolImplementations?.[name]) {
           tools.push({
-            name: `mcp__probe__${name}`,
+            name: `${GOVERNED_TOOL_PREFIX}${name}`,
             description: def.description,
             inputSchema: def.inputSchema
           });
@@ -662,10 +672,21 @@ export class BuiltInMCPServer extends EventEmitter {
    * Handle tool execution
    */
   async handleCallTool(params) {
-    const { name, arguments: args } = params;
+    if (this.governed) {
+      if (!params || typeof params !== 'object' || Array.isArray(params) ||
+          !['name', 'arguments', 'server'].every(key => key === 'server' || Object.prototype.hasOwnProperty.call(params, key)) ||
+          Object.keys(params).some(key => !['name', 'arguments', 'server'].includes(key)) ||
+          typeof params.name !== 'string' || !GOVERNED_TOOL_NAMES.some(name => params.name === `${GOVERNED_TOOL_PREFIX}${name}`)) {
+        throw new Error('Governed Probe MCP tool name is not an exact allowlisted identity');
+      }
+      if (params.server !== undefined && params.server !== this.serverName) {
+        throw new Error('Governed Probe MCP server identity is not exact');
+      }
+    }
+    const { name, arguments: args = {} } = params;
 
     // Extract tool name from MCP format
-    const toolName = name.replace('mcp__probe__', '');
+    const toolName = this.governed ? name.slice(GOVERNED_TOOL_PREFIX.length) : name.replace(GOVERNED_TOOL_PREFIX, '');
 
     // Check if tool is enabled
     if (!this.agent.allowedTools.isEnabled(toolName)) {
@@ -707,7 +728,7 @@ export class BuiltInMCPServer extends EventEmitter {
       return 0;
     }
 
-    const tools = ['search', 'extract', 'listFiles', 'searchFiles', 'query'];
+    const tools = this.governed ? GOVERNED_TOOL_NAMES : ['search', 'extract', 'listFiles', 'searchFiles', 'query'];
     return tools.filter(name => this.agent.allowedTools.isEnabled(name)).length;
   }
 

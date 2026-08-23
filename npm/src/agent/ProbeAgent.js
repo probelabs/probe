@@ -106,6 +106,14 @@ import {
   createTaskCompletionBlockedMessage
 } from './tasks/index.js';
 import { z } from 'zod';
+import {
+  CODEX_MODEL,
+  CODEX_REASONING_EFFORT,
+  CODEX_SANDBOX,
+  CODEX_APPROVAL_POLICY,
+  CODEX_DEFAULT_TIMEOUT,
+  validateCodexBindings
+} from './engines/codex.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -117,8 +125,6 @@ const MAX_TOOL_ITERATIONS = (() => {
   return val;
 })();
 const MAX_HISTORY_MESSAGES = 100;
-
-
 // Supported image file extensions (imported from shared config)
 
 // Maximum image file size (20MB) to prevent OOM attacks
@@ -191,7 +197,7 @@ export class ProbeAgent {
    * @param {number} [options.retry.maxDelay=30000] - Maximum delay in ms
    * @param {number} [options.retry.backoffFactor=2] - Exponential backoff multiplier
    * @param {Array<string>} [options.retry.retryableErrors] - List of retryable error patterns
-   * @param {Object} [options.fallback] - Fallback configuration
+   * @param {Object|false} [options.fallback] - Fallback configuration, or false to disable fallback
    * @param {string} [options.fallback.strategy] - Fallback strategy: 'same-model', 'same-provider', 'any', 'custom'
    * @param {Array<string>} [options.fallback.models] - List of models for same-provider fallback
    * @param {Array<Object>} [options.fallback.providers] - List of provider configurations for custom fallback
@@ -201,7 +207,13 @@ export class ProbeAgent {
    * @param {number} [options.maxOutputTokens] - Maximum tokens for tool output before truncation (default: 20000, can also be set via PROBE_MAX_OUTPUT_TOKENS env var)
    * @param {number} [options.requestTimeout] - Timeout in ms for AI requests (default: 120000 or REQUEST_TIMEOUT env var). Used to abort hung requests.
    * @param {number} [options.maxOperationTimeout] - Maximum timeout in ms for the entire operation including all retries and fallbacks (default: 300000 or MAX_OPERATION_TIMEOUT env var). This is the absolute maximum time for streamTextWithRetryAndFallback.
-   * @param {string|number} [options.thinkingEffort] - Native thinking/reasoning effort level: 'low', 'medium', 'high', or a number (budget tokens). When set, passes provider-specific thinking options to the LLM via providerOptions.
+   * @param {string|number} [options.thinkingEffort] - Native thinking/reasoning effort level. Codex R2 requires 'xhigh'.
+   * @param {string} [options.codexSandbox] - Codex sandbox mode; R2 requires 'read-only'.
+   * @param {string} [options.codexApprovalPolicy] - Codex approval policy; R2 requires 'never'.
+   * @param {number} [options.codexMcpTimeout] - Bounded Codex MCP timeout in milliseconds.
+   * @param {string} [options.codexExecutablePath] - Deployment-selected Codex executable path.
+   * @param {string} [options.codexExpectedExecutablePath] - Optional absolute executable path pin.
+   * @param {string} [options.codexExpectedExecutableSha256] - Optional executable SHA-256 pin.
    */
   constructor(options = {}) {
     // Basic configuration
@@ -218,8 +230,10 @@ export class ProbeAgent {
     this._abortController = new AbortController();
     this._activeSubagents = new Map(); // sessionId → subagent ProbeAgent instance
     this.tracer = options.tracer || null;
+    const codexRequested = options.provider === 'codex' || process.env.USE_CODEX === 'true';
     this.outline = !!options.outline;
-    this.searchDelegate = options.searchDelegate !== undefined ? !!options.searchDelegate : true;
+    this.searchDelegate = codexRequested ? (options.searchDelegate === undefined ? false : !!options.searchDelegate) :
+      (options.searchDelegate !== undefined ? !!options.searchDelegate : true);
     this.searchDelegateProvider = options.searchDelegateProvider || null;
     this.searchDelegateModel = options.searchDelegateModel || null;
     this.maxResponseTokens = options.maxResponseTokens || (() => {
@@ -230,8 +244,10 @@ export class ProbeAgent {
       return val || null;
     })();
     this.maxIterations = options.maxIterations || null;
-    this.disableMermaidValidation = !!options.disableMermaidValidation;
-    this.disableJsonValidation = !!options.disableJsonValidation;
+    this.disableMermaidValidation = codexRequested && options.disableMermaidValidation === undefined
+      ? true : !!options.disableMermaidValidation;
+    this.disableJsonValidation = codexRequested && options.disableJsonValidation === undefined
+      ? true : !!options.disableJsonValidation;
     // Skills are disabled by default; enable via allowSkills or enableSkills
     this.enableSkills = options.disableSkills ? false : !!(options.allowSkills || options.enableSkills);
     if (Array.isArray(options.skillDirs)) {
@@ -247,15 +263,18 @@ export class ProbeAgent {
     // Completion prompt for post-completion validation/review
     this.completionPrompt = options.completionPrompt || null;
 
-    // Native thinking/reasoning effort for LLM providers
-    // Accepted values: 'off' (default), 'low', 'medium', 'high', or a number (budget tokens)
-    this.thinkingEffort = options.thinkingEffort || null;
+    // Native thinking/reasoning effort for LLM providers. Codex R2 has a
+    // fixed, explicit binding so an absent effort cannot become an account default.
+    this.thinkingEffort = codexRequested
+      ? (options.thinkingEffort ?? CODEX_REASONING_EFFORT)
+      : (options.thinkingEffort || null);
 
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
     // Supports exclusion with '!' prefix: ['*', '!bash'] = all tools except bash
     // disableTools is a convenience flag that overrides allowedTools to []
-    const effectiveAllowedTools = options.disableTools ? [] : options.allowedTools;
+    const effectiveAllowedTools = options.disableTools ? [] :
+      (codexRequested && options.allowedTools === undefined ? ['search', 'extract', 'listFiles'] : options.allowedTools);
     this._rawAllowedTools = options.allowedTools; // Keep raw value for explicit tool checks
     this.allowedTools = this._parseAllowedTools(effectiveAllowedTools);
 
@@ -304,6 +323,39 @@ export class ProbeAgent {
     // If not explicitly provided, use workspace root for consistency
     this.cwd = options.cwd || this.workspaceRoot;
 
+    this.codexSandbox = options.codexSandbox === undefined ? CODEX_SANDBOX : options.codexSandbox;
+    this.codexApprovalPolicy = options.codexApprovalPolicy === undefined ? CODEX_APPROVAL_POLICY : options.codexApprovalPolicy;
+    this.codexMcpTimeout = options.codexMcpTimeout === undefined ? CODEX_DEFAULT_TIMEOUT : options.codexMcpTimeout;
+    this.codexExecutablePath = options.codexExecutablePath;
+    this.codexExpectedExecutablePath = options.codexExpectedExecutablePath;
+    this.codexExpectedExecutableSha256 = options.codexExpectedExecutableSha256;
+    this.codexExpectedServerVersion = options.codexExpectedServerVersion;
+    this.codexHome = options.codexHome;
+    if (codexRequested) {
+      if (typeof this.codexHome !== 'string' || !isAbsolute(this.codexHome)) {
+        throw new Error('Codex provider requires an absolute codexHome');
+      }
+      validateCodexBindings({
+        model: options.model ?? CODEX_MODEL,
+        thinkingEffort: this.thinkingEffort,
+        cwd: this.cwd,
+        sandbox: this.codexSandbox,
+        approvalPolicy: this.codexApprovalPolicy,
+        codexMcpTimeout: this.codexMcpTimeout
+      });
+    } else if (options.codexMcpTimeout !== undefined) {
+      // Validate an explicitly supplied Codex timeout even when the current
+      // provider is not Codex; this prevents a bad value being inherited by a clone.
+      validateCodexBindings({
+        model: CODEX_MODEL,
+        thinkingEffort: CODEX_REASONING_EFFORT,
+        cwd: this.cwd,
+        sandbox: this.codexSandbox,
+        approvalPolicy: this.codexApprovalPolicy,
+        codexMcpTimeout: this.codexMcpTimeout
+      });
+    }
+
     // API configuration
     this.clientApiProvider = options.provider || null;
     this.clientApiModel = options.model || null;
@@ -315,6 +367,9 @@ export class ProbeAgent {
 
     // Maximum output tokens for tool results (truncate if exceeded)
     this.maxOutputTokens = getMaxOutputTokens(options.maxOutputTokens);
+
+    this.fallbackConfig = codexRequested ? (options.fallback === undefined ? false : options.fallback) : (options.fallback ?? null);
+    this.fallbackManager = null;
 
     if (this.debug) {
       console.log(`[DEBUG] Generated session ID for agent: ${this.sessionId}`);
@@ -441,12 +496,9 @@ export class ProbeAgent {
     this.retryConfig = options.retry || {};
     this.retryManager = null; // Will be initialized lazily when needed
 
-    // Fallback configuration
-    this.fallbackConfig = options.fallback || null;
-    this.fallbackManager = null; // Will be initialized in initializeModel
-
     // Engine support - minimal interface for multi-engine compatibility
     this.engine = null; // Will be set in initializeModel or getEngine
+    this._enginePromise = null;
 
     // Initialize the AI model
     this.initializeModel();
@@ -748,7 +800,7 @@ export class ProbeAgent {
           // Set provider to codex
           this.clientApiProvider = 'codex';
           this.provider = null;
-          this.model = this.clientApiModel || 'gpt-5.2';
+          this.model = this.clientApiModel || CODEX_MODEL;
           this.apiType = 'codex';
         } else {
           // Neither API keys nor CLI commands available
@@ -868,6 +920,11 @@ export class ProbeAgent {
       architectureFileName: this.architectureFileName,
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      thinkingEffort: this.thinkingEffort,
+      fallback: this.fallbackConfig,
+      codexSandbox: this.codexSandbox,
+      codexApprovalPolicy: this.codexApprovalPolicy,
+      codexMcpTimeout: this.codexMcpTimeout,
       searchDelegateProvider: this.searchDelegateProvider,
       searchDelegateModel: this.searchDelegateModel,
       delegationManager: this.delegationManager,  // Per-instance delegation limits
@@ -1110,8 +1167,8 @@ export class ProbeAgent {
       // Codex CLI engine will be initialized lazily in getEngine()
       // Set minimal defaults for compatibility
       this.provider = null;
-      // Only set model if explicitly provided, otherwise let Codex use account default
-      this.model = modelName || null;
+      // R2 does not permit an account-selected model; bind the exact model.
+      this.model = modelName || CODEX_MODEL;
       this.apiType = 'codex';
       if (this.debug) {
         console.log('[DEBUG] Codex CLI engine selected - will use built-in access if available');
@@ -1665,6 +1722,9 @@ export class ProbeAgent {
             result = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, this.debug);
           }
         } catch (error) {
+          if (useCodex && this.fallbackConfig === false) {
+            throw error;
+          }
           if (this.debug) {
             const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
             console.log(`[DEBUG] Failed to use ${engineType} engine, falling back to Vercel:`, error.message);
@@ -2283,6 +2343,27 @@ export class ProbeAgent {
       return this.engine;
     }
 
+    // Initialization can perform several awaits (including server startup).
+    // Publish the promise before entering that work so concurrent callers share
+    // one lifecycle owner and one engine.
+    if (this._enginePromise) {
+      return this._enginePromise;
+    }
+
+    const promise = this._initializeEngine();
+    this._enginePromise = promise;
+    try {
+      return await promise;
+    } catch (error) {
+      if (this._enginePromise === promise && !this.engine) {
+        this._enginePromise = null;
+      }
+      throw error;
+    }
+  }
+
+  async _initializeEngine() {
+
     // Try Claude Code engine if requested
     if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
       try {
@@ -2330,7 +2411,17 @@ export class ProbeAgent {
           sessionId: this.options?.sessionId,
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
-          model: this.model  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          model: this.model,
+          thinkingEffort: this.thinkingEffort,
+          cwd: this.cwd,
+          sandbox: this.codexSandbox,
+          approvalPolicy: this.codexApprovalPolicy,
+          codexMcpTimeout: this.codexMcpTimeout,
+          codexExecutablePath: this.codexExecutablePath,
+          codexExpectedExecutablePath: this.codexExpectedExecutablePath,
+          codexExpectedExecutableSha256: this.codexExpectedExecutableSha256,
+          codexExpectedServerVersion: this.codexExpectedServerVersion,
+          codexHome: this.codexHome
         });
         if (this.debug) {
           console.log('[DEBUG] Using Codex CLI engine with Probe tools');
@@ -2341,6 +2432,9 @@ export class ProbeAgent {
         return this.engine;
       } catch (error) {
         console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
+        if (this.fallbackConfig === false) {
+          throw error;
+        }
         console.warn('[WARNING] Falling back to Vercel AI SDK');
         this.clientApiProvider = null;
       }
@@ -5328,6 +5422,8 @@ Double-check your response based on the criteria above. If everything looks good
       cwd: this.cwd, // Preserve explicit working directory
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      thinkingEffort: this.thinkingEffort,
+      fallback: this.fallbackConfig,
       debug: this.debug,
       outline: this.outline,
       searchDelegate: this.searchDelegate,
@@ -5336,6 +5432,13 @@ Double-check your response based on the criteria above. If everything looks good
       disableMermaidValidation: this.disableMermaidValidation,
       disableJsonValidation: this.disableJsonValidation,
       completionPrompt: this.completionPrompt,
+      codexSandbox: this.codexSandbox,
+      codexApprovalPolicy: this.codexApprovalPolicy,
+      codexMcpTimeout: this.codexMcpTimeout,
+      codexExecutablePath: this.codexExecutablePath,
+      codexExpectedExecutablePath: this.codexExpectedExecutablePath,
+      codexExpectedExecutableSha256: this.codexExpectedExecutableSha256,
+      codexExpectedServerVersion: this.codexExpectedServerVersion,
       enableSkills: this.enableSkills,
       skillDirs: this.skillDirs ? [...this.skillDirs] : null,
       allowedTools: allowedToolsArray,

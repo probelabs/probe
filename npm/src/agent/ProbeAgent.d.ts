@@ -63,9 +63,27 @@ export interface ProbeAgentOptions {
   /** Use a delegated code-search subagent for the search tool (default: true) */
   searchDelegate?: boolean;
   /** Force specific AI provider */
-  provider?: 'anthropic' | 'openai' | 'google' | 'bedrock';
+  provider?: 'anthropic' | 'openai' | 'google' | 'bedrock' | 'codex';
   /** Override model name */
   model?: string;
+  /** Native thinking/reasoning effort; Codex R2 requires exactly 'xhigh'. */
+  thinkingEffort?: string | number;
+  /** Codex sandbox mode; R2 requires exactly 'read-only'. */
+  codexSandbox?: 'read-only';
+  /** Codex approval policy; R2 requires exactly 'never'. */
+  codexApprovalPolicy?: 'never';
+  /** Bounded Codex MCP timeout in milliseconds. */
+  codexMcpTimeout?: number;
+  /** Deployment-selected Codex executable path. */
+  codexExecutablePath?: string;
+  /** Optional absolute Codex executable path pin. */
+  codexExpectedExecutablePath?: string;
+  /** Optional SHA-256 pin for the Codex executable. */
+  codexExpectedExecutableSha256?: string;
+  /** Expected pinned initialize.serverInfo.version. */
+  codexExpectedServerVersion?: '0.144.1';
+  /** Mandatory absolute private Codex home containing only the auth symlink. */
+  codexHome?: string;
   /** Enable debug mode */
   debug?: boolean;
   /** Optional telemetry tracer instance */
@@ -85,7 +103,7 @@ export interface ProbeAgentOptions {
   /** Retry configuration for handling transient API failures */
   retry?: RetryOptions;
   /** Fallback configuration for multi-provider support */
-  fallback?: FallbackOptions | { auto: boolean };
+  fallback?: FallbackOptions | { auto: boolean } | false;
   /** Disable automatic mermaid diagram validation and fixing */
   disableMermaidValidation?: boolean;
   /** Disable automatic JSON validation and fixing (prevents infinite recursion in JsonFixingAgent) */
