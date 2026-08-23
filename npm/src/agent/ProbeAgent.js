@@ -3644,19 +3644,18 @@ Follow these instructions carefully:
           const engine = await this.getEngine();
           if (engine && engine.query) {
             let assistantResponseContent = '';
-            let toolBatch = null;
+            const bufferedText = [];
+            const bufferedToolBatches = [];
             let metadata = null;
 
             // Query Codex directly with the message and schema
             for await (const chunk of engine.query(message, options)) {
               if (chunk.type === 'text' && chunk.content) {
                 assistantResponseContent += chunk.content;
-                if (options.onStream) {
-                  options.onStream(chunk.content);
-                }
+                bufferedText.push(chunk.content);
               } else if (chunk.type === 'toolBatch' && chunk.tools) {
-                // Store tool batch for processing after response
-                toolBatch = chunk.tools;
+                // Store every tool batch for processing after receipt admission.
+                bufferedToolBatches.push([...chunk.tools]);
                 if (this.debug) {
                   console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
                 }
@@ -3664,8 +3663,14 @@ Follow these instructions carefully:
                 if (metadata !== null) {
                   throw new Error('Codex engine returned duplicate success metadata');
                 }
-                if (!chunk.data || !Object.prototype.hasOwnProperty.call(chunk.data, 'codexEventReceipt') ||
-                    !chunk.data.codexEventReceipt) {
+                const receipt = chunk.data?.codexEventReceipt;
+                if (!chunk.data || typeof chunk.data !== 'object' || Array.isArray(chunk.data) ||
+                    !Object.prototype.hasOwnProperty.call(chunk.data, 'codexEventReceipt') ||
+                    !receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+                    !receipt.policyVerdict || typeof receipt.policyVerdict !== 'object' ||
+                    Array.isArray(receipt.policyVerdict) || receipt.policyVerdict.verdict !== 'allow' ||
+                    !receipt.cleanup || typeof receipt.cleanup !== 'object' ||
+                    Array.isArray(receipt.cleanup) || receipt.cleanup.status !== 'succeeded') {
                   throw new Error('Codex engine returned invalid success metadata');
                 }
                 metadata = chunk.data;
@@ -3681,13 +3686,22 @@ Follow these instructions carefully:
               await options.onMetadata(metadata);
             }
 
-            // Emit tool events after response is complete (batch mode)
-            if (toolBatch && toolBatch.length > 0 && this.events) {
-              if (this.debug) {
-                console.log(`[DEBUG] Emitting ${toolBatch.length} tool events from Codex batch`);
+            // Release all buffered output only after the receipt callback has
+            // accepted the allow/succeeded terminal policy decision.
+            if (options.onStream) {
+              for (const text of bufferedText) {
+                options.onStream(text);
               }
-              for (const toolEvent of toolBatch) {
-                this.events.emit('toolCall', toolEvent);
+            }
+
+            if (this.events) {
+              for (const toolBatch of bufferedToolBatches) {
+                if (this.debug) {
+                  console.log(`[DEBUG] Emitting ${toolBatch.length} tool events from Codex batch`);
+                }
+                for (const toolEvent of toolBatch) {
+                  this.events.emit('toolCall', toolEvent);
+                }
               }
             }
 

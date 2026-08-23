@@ -592,7 +592,10 @@ function validateAuditResultDigest(value, field) {
       !['ok', 'failed'].includes(value.status)) {
     throw new Error(`Codex ${field} result digest shape is invalid`);
   }
-  return { ...validateAuditDigest(value, field), status: value.status };
+  return {
+    ...validateAuditDigest({ sha256: value.sha256, bytes: value.bytes }, field),
+    status: value.status
+  };
 }
 
 function validateAuditOrdinal(value, field) {
@@ -1286,6 +1289,7 @@ function identityThread(identity, metadataThread) {
 }
 
 export async function createCodexEngine(options = {}) {
+  console.error('DEBUG-R2 create start');
   const bindings = validateCodexBindings(options);
   const governance = validateGovernedAgent(options.agent);
   const executable = verifyExecutable({
@@ -1405,6 +1409,7 @@ export async function createCodexEngine(options = {}) {
 
   function poison(error) {
     const governedError = error instanceof Error ? error : new Error(String(error));
+    console.error('DEBUG-R2 poison', governedError.message);
     if (!poisoned) {
       poisoned = true;
       poisonError = governedError;
@@ -1514,14 +1519,24 @@ export async function createCodexEngine(options = {}) {
   }
 
   function updateLateCleanupOutcome(outcome) {
-    cleanupOutcome = {
+    const errors = [...(cleanupOutcome.errors || [])];
+    if ((outcome.status === 'failed' || outcome.status === 'start_failed') && outcome.error) {
+      errors.push(outcome.error);
+    }
+    const nextOutcome = {
       ...cleanupOutcome,
       lateMcpStop: cloneJson(outcome, 'late MCP cleanup outcome'),
-      ...(outcome.status === 'failed' ? {
-        status: 'failed',
-        errors: [...(cleanupOutcome.errors || []), outcome.error].filter(Boolean).slice(0, 4)
-      } : {})
+      errors: errors.filter(Boolean).slice(0, 4)
     };
+    if (outcome.status === 'failed' || outcome.status === 'start_failed') {
+      nextOutcome.status = 'failed';
+    } else if (typeof nextOutcome.readerClosed === 'boolean' && typeof nextOutcome.mcpServerStopped === 'boolean') {
+      const lateCleanupSucceeded = !mcpStartTimedOut || outcome.status === 'succeeded';
+      nextOutcome.status = nextOutcome.errors.length === 0 && nextOutcome.readerClosed &&
+        nextOutcome.mcpServerStopped && (!nextOutcome.directChild || nextOutcome.directChild.exited) &&
+        lateCleanupSucceeded ? 'succeeded' : 'failed';
+    }
+    cleanupOutcome = nextOutcome;
   }
 
   function scheduleLateMcpCleanup() {
@@ -1650,6 +1665,7 @@ export async function createCodexEngine(options = {}) {
       env: buildCodexEnvironment(isolation.codexHome),
       stdio: ['pipe', 'pipe', 'pipe']
     });
+    console.error('DEBUG-R2 spawned');
     if (!codexProcess?.stdin || !codexProcess?.stdout || !codexProcess?.stderr || typeof codexProcess.on !== 'function') {
       throw new Error('Codex direct child transport is unavailable');
     }
@@ -1788,6 +1804,7 @@ export async function createCodexEngine(options = {}) {
           sendLine({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'codex', arguments: args } });
           turnTimer = armTimeout('turn', error => poison(error));
           const result = await resultPromise;
+          console.error('DEBUG-R2 result resolved');
           if (turnTimer) clearTimeout(turnTimer);
           turnTimer = null;
           if (!state.taskCompleteSeen || !state.resultSeen || state.mcp.size !== 0 || state.openItems.size !== 0 || state.toolSuccessCount < 1) throw new Error('Codex governed lifecycle admission is incomplete');
@@ -1795,6 +1812,7 @@ export async function createCodexEngine(options = {}) {
           // correlated traffic during this period poisons the turn.
           await new Promise((resolvePromise, rejectPromise) => {
             state.quietWindowArmed = true;
+            console.error('DEBUG-R2 quiet armed');
             quietTimer = setTimeout(resolvePromise, CODEX_QUIET_WINDOW_MS);
             state.quietReject = rejectPromise;
           });
