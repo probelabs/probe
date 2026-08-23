@@ -407,8 +407,7 @@ function validatePermissionProfile(profile) {
 function validateSessionIdentity(msg, bindings, codexHome) {
   const keys = ['type', 'session_id', 'thread_id', 'model', 'model_provider_id', 'approval_policy',
     'approvals_reviewer', 'permission_profile', 'reasoning_effort', 'rollout_path', 'cwd'];
-  const optional = ['active_permission_profile'];
-  if (!isObject(msg) || !Object.keys(msg).every(key => keys.includes(key) || optional.includes(key)) ||
+  if (!isObject(msg) || !Object.keys(msg).every(key => keys.includes(key)) ||
       !requiredKeys(msg, keys) || msg.type !== 'session_configured') {
     throw new Error('Codex session_configured fields do not match the captured shape');
   }
@@ -432,12 +431,6 @@ function validateSessionIdentity(msg, bindings, codexHome) {
     throw new Error('Codex session_configured identity does not match requested bindings');
   }
   if (identity.session_id !== identity.thread_id) throw new Error('Codex session/thread identity is not fresh and paired');
-  if (Object.prototype.hasOwnProperty.call(msg, 'active_permission_profile')) {
-    if (!exactKeys(msg.active_permission_profile, ['id']) || msg.active_permission_profile.id !== ':read-only') {
-      throw new Error('Codex active_permission_profile is not the pinned read-only representation');
-    }
-    identity.active_permission_profile = cloneJson(msg.active_permission_profile, 'active_permission_profile');
-  }
   return identity;
 }
 
@@ -544,22 +537,85 @@ function digestJson(value, field) {
   return { sha256: createHash('sha256').update(serialized).digest('hex'), bytes: Buffer.byteLength(serialized, 'utf8') };
 }
 
-function crossCheckDirectAudit(state, invocation, result, duration) {
+function directAuditGetter(state) {
   const getter = state.mcpServer?.getGovernedAuditSnapshot || state.mcpServer?.getAuditSnapshot;
   if (typeof getter !== 'function') throw new Error('Codex governed MCP direct audit snapshot is unavailable');
   const snapshot = getter.call(state.mcpServer);
-  if (!isObject(snapshot) || !Array.isArray(snapshot.toolCalls)) throw new Error('Codex governed MCP direct audit snapshot is invalid');
+  if (!isObject(snapshot) || !Array.isArray(snapshot.toolCalls) || !Array.isArray(snapshot.listCalls) ||
+      !isObject(snapshot.executionCounts)) throw new Error('Codex governed MCP direct audit snapshot is invalid');
+  return snapshot;
+}
+
+function expectedAuditMetadata(state, metadata) {
+  const expected = {
+    session_id: state.identity.session_id,
+    thread_id: state.identity.thread_id,
+    turn_id: state.turnId,
+    sandbox: CODEX_EXTENSION_SANDBOX,
+    model: state.identity.model,
+    reasoning_effort: state.identity.reasoning_effort,
+    threadId: state.threadId,
+    progressToken: 1
+  };
+  if (!exactKeys(metadata, Object.keys(expected)) || !sameJson(metadata, expected)) {
+    throw new Error('Codex direct audit metadata is not bound to this session/thread/turn');
+  }
+  return expected;
+}
+
+function crossCheckDirectAudit(state, invocation, result) {
+  const snapshot = directAuditGetter(state);
   const argsDigest = digestJson(invocation.arguments, 'MCP arguments');
   const resultDigest = digestJson(result, 'MCP result');
-  const matches = snapshot.toolCalls.filter(record => record && record.name === invocation.tool &&
-    record.arguments?.sha256 === argsDigest.sha256 && record.arguments?.bytes === argsDigest.bytes &&
-    record.result?.sha256 === resultDigest.sha256 && record.result?.bytes === resultDigest.bytes &&
-    record.result?.status === 'ok');
-  if (matches.length !== 1) throw new Error('Codex canonical MCP call does not have exactly one direct audit record');
-  const ordinal = matches[0].ordinal;
-  if (!Number.isInteger(ordinal) || state.auditOrdinals.has(ordinal)) throw new Error('Codex direct audit ordinal was reused');
+  const index = state.auditConsumedCount;
+  if (index >= snapshot.toolCalls.length) throw new Error('Codex canonical MCP call has no unconsumed direct audit record');
+  const record = snapshot.toolCalls[index];
+  if (!isObject(record) || record.name !== invocation.tool ||
+      !isObject(record.arguments) || record.arguments.sha256 !== argsDigest.sha256 || record.arguments.bytes !== argsDigest.bytes ||
+      !isObject(record.result) || record.result.sha256 !== resultDigest.sha256 || record.result.bytes !== resultDigest.bytes ||
+      record.result.status !== 'ok') {
+    throw new Error('Codex direct audit record does not match the canonical MCP call');
+  }
+  const ordinal = record.ordinal;
+  if (!Number.isInteger(ordinal) || ordinal < 1 || state.auditOrdinals.has(ordinal) ||
+      (state.lastAuditOrdinal !== 0 && ordinal <= state.lastAuditOrdinal)) {
+    throw new Error('Codex direct audit ordinal was reused or out of order');
+  }
+  const metadata = expectedAuditMetadata(state, record.metadata);
   state.auditOrdinals.add(ordinal);
-  state.directAudit.push({ ordinal, name: invocation.tool, arguments: argsDigest, result: { ...resultDigest, status: 'ok' } });
+  state.lastAuditOrdinal = ordinal;
+  state.auditConsumedCount++;
+  state.directAudit.push({
+    ordinal,
+    name: invocation.tool,
+    arguments: argsDigest,
+    result: { ...resultDigest, status: 'ok' },
+    metadata
+  });
+}
+
+function validateTerminalDirectAudit(state) {
+  const snapshot = directAuditGetter(state);
+  if (snapshot.toolCalls.length !== state.auditConsumedCount) {
+    throw new Error('Codex direct audit contains extra or unconsumed tool records');
+  }
+  const expectedCounts = { search: 0, extract: 0, listFiles: 0 };
+  for (const record of state.directAudit) {
+    const bare = record.name.slice(PROBE_TOOL_PREFIX.length);
+    if (!Object.prototype.hasOwnProperty.call(expectedCounts, bare)) throw new Error('Codex direct audit tool is not allowlisted');
+    expectedCounts[bare]++;
+  }
+  if (!sameJson(snapshot.executionCounts, expectedCounts)) {
+    throw new Error('Codex direct audit executionCounts do not match consumed records');
+  }
+  if (snapshot.listCalls.length !== 1 || !isObject(snapshot.listCalls[0]) ||
+      !Number.isInteger(snapshot.listCalls[0].ordinal) ||
+      !sameJson(snapshot.listCalls[0].tool_names, PROBE_TOOLS.map(tool => `${PROBE_TOOL_PREFIX}${tool}`))) {
+    throw new Error('Codex direct audit tool exposure/list record is not exact');
+  }
+  if (state.directAudit.length > 0 && snapshot.listCalls[0].ordinal >= state.directAudit[0].ordinal) {
+    throw new Error('Codex direct audit list ordinal is not ordered before tool calls');
+  }
 }
 
 function validateMcpInvocation(invocation, serverName, allowedSet) {
@@ -610,15 +666,20 @@ function validateRawMessageItem(state, item) {
   throw new Error('Codex raw_response_item role is not observed');
 }
 
+function addActivity(state, activity) {
+  if (state.activity.length >= MAX_ACTIVITY) throw new Error('Codex activity bound exceeded');
+  state.activity.push(cloneJson(activity, 'activity record', CODEX_MAX_SERIALIZED_BYTES));
+}
+
 function validateRawReasoningItem(state, item) {
-  if (!exactKeys(item, ['encrypted_content', 'id', 'internal_chat_message_metadata_passthrough', 'raw_content', 'summary', 'type']) ||
+  if (!exactKeys(item, ['encrypted_content', 'id', 'internal_chat_message_metadata_passthrough', 'summary', 'type']) ||
       item.type !== 'reasoning' || !exactKeys(item.internal_chat_message_metadata_passthrough, ['turn_id']) ||
-      item.internal_chat_message_metadata_passthrough.turn_id !== state.turnId || !Array.isArray(item.summary) ||
-      !Array.isArray(item.raw_content)) {
+      item.internal_chat_message_metadata_passthrough.turn_id !== state.turnId || !Array.isArray(item.summary)) {
     throw new Error('Codex raw reasoning item shape or turn_id is invalid');
   }
   requireString(item.id, 'raw reasoning id', MAX_ID_LENGTH);
   requireString(item.encrypted_content, 'raw reasoning content', MAX_STRING_LENGTH);
+  cloneJson(item.summary, 'raw reasoning summary');
   return item.id;
 }
 
@@ -631,15 +692,29 @@ function validateBridgeCallItem(state, item) {
   }
   const id = requireString(item.id, 'raw exec bridge item id', MAX_ID_LENGTH);
   const callId = requireString(item.call_id, 'raw exec bridge call_id', MAX_ID_LENGTH);
-  if (state.seenBridgeCallIds.has(callId)) throw new Error('Codex raw exec bridge call_id was reused');
+  if (state.activeBridge || state.seenBridgeCallIds.has(callId) || state.seenBridgeItemIds.has(id) ||
+      id === callId || state.seenNestedCallIds.has(id) || state.seenNestedCallIds.has(callId) ||
+      state.seenBridgeCallIds.has(id)) throw new Error('Codex raw exec bridge call or item identity was reused');
+  if (state.seenBridgeCallIds.size >= MAX_BRIDGE_CALLS) throw new Error('Codex bridge call bound exceeded');
   if (typeof item.input !== 'string' || item.input.length === 0 || Buffer.byteLength(item.input, 'utf8') > MAX_STRING_LENGTH) {
     throw new Error('Codex raw exec bridge input is invalid');
   }
   const bytes = Buffer.byteLength(item.input, 'utf8');
   const inputHash = createHash('sha256').update(item.input).digest('hex');
   state.seenBridgeCallIds.add(callId);
-  state.bridge.set(callId, { callId, itemId: id, inputHash, inputBytes: bytes, status: 'completed' });
-  state.activity.push({ kind: 'exec_bridge', callId, inputHash, inputBytes: bytes, status: 'completed' });
+  state.seenBridgeItemIds.add(id);
+  const bridge = {
+    outerCallId: callId,
+    outerItemId: id,
+    inputHash,
+    inputBytes: bytes,
+    status: 'open',
+    nestedCallId: null,
+    nestedItemId: null
+  };
+  state.bridge.set(callId, bridge);
+  state.activeBridge = bridge;
+  addActivity(state, { kind: 'exec_bridge', outerCallId: callId, outerItemId: id, inputHash, inputBytes: bytes, status: 'open' });
 }
 
 function validateBridgeOutputItem(state, item) {
@@ -651,7 +726,10 @@ function validateBridgeOutputItem(state, item) {
   }
   const callId = requireString(item.call_id, 'raw exec bridge output call_id', MAX_ID_LENGTH);
   const bridge = state.bridge.get(callId);
-  if (!bridge || bridge.outputHash) throw new Error('Codex raw exec bridge output has no matching call');
+  if (!bridge || state.activeBridge !== bridge || bridge.outputHash) throw new Error('Codex raw exec bridge output has no matching call');
+  if (bridge.nestedCallId !== null && (!bridge.nestedCompleted || !bridge.legacyEnded)) {
+    throw new Error('Codex raw exec bridge output arrived before nested MCP completion');
+  }
   for (const part of item.output) {
     if (!exactKeys(part, ['text', 'type']) || part.type !== 'input_text') throw new Error('Codex raw exec bridge output part is invalid');
     requireString(part.text, 'raw exec bridge output text', MAX_STRING_LENGTH);
@@ -662,15 +740,22 @@ function validateBridgeOutputItem(state, item) {
   bridge.outputHash = createHash('sha256').update(serialized).digest('hex');
   bridge.outputBytes = bytes;
   bridge.outputParts = item.output.length;
+  bridge.status = 'completed';
   state.bridgeReceipt.push({
+    outerCallId: bridge.outerCallId,
+    outerItemId: bridge.outerItemId,
     inputHash: bridge.inputHash,
     inputBytes: bridge.inputBytes,
     outputHash: bridge.outputHash,
     outputBytes: bridge.outputBytes,
+    nestedCallId: bridge.nestedCallId,
+    nestedItemId: bridge.nestedItemId,
     status: 'completed'
   });
-  state.activity.push({ kind: 'exec_bridge_output', callId, outputHash: bridge.outputHash, outputBytes: bytes, status: 'completed' });
+  addActivity(state, { kind: 'exec_bridge_output', outerCallId: bridge.outerCallId, outerItemId: bridge.outerItemId,
+    outputHash: bridge.outputHash, outputBytes: bytes, nestedCallId: bridge.nestedCallId, status: 'completed' });
   state.bridge.delete(callId);
+  state.activeBridge = null;
 }
 
 function validateLifecycleItem(state, item, kind) {
@@ -759,8 +844,25 @@ function validateEventState(state, params, serverName, allowedSet) {
   const type = params.msg.type;
   if (!EVENT_TYPES.has(type)) throw new Error(`Codex event type ${type} is denied`);
   if (state.resultSeen || state.taskCompleteSeen) throw new Error('Codex traffic arrived after terminal state');
-  if (state.bridge.size > 0 && !(type === 'raw_response_item' && params.msg.item?.type === 'custom_tool_call_output')) {
-    throw new Error('Codex raw exec bridge output was not paired immediately');
+  if (state.activeBridge) {
+    const nestedCall = state.activeBridge.nestedCallId === null
+      ? null
+      : state.mcp.get(state.activeBridge.nestedCallId);
+    const isOutput = type === 'raw_response_item' && params.msg.item?.type === 'custom_tool_call_output';
+    const isNestedStart = type === 'item_started' && params.msg.item?.type === 'McpToolCall' &&
+      state.activeBridge.nestedCallId === null;
+    const isNestedBegin = type === 'mcp_tool_call_begin' && nestedCall && !nestedCall.legacyBegun;
+    const isNestedCompletion = type === 'item_completed' && params.msg.item?.type === 'McpToolCall' &&
+      nestedCall && params.msg.item.id === nestedCall.callId && nestedCall.legacyBegun && !nestedCall.canonicalCompleted;
+    const isNestedEnd = type === 'mcp_tool_call_end' && nestedCall && nestedCall.canonicalCompleted && !nestedCall.legacyEnded;
+    if (!isOutput && !isNestedStart && !isNestedBegin && !isNestedCompletion && !isNestedEnd) {
+      throw new Error('Codex exec bridge has unrelated interleaved traffic');
+    }
+  } else if (type === 'mcp_tool_call_begin' || type === 'mcp_tool_call_end' ||
+      (type === 'item_started' && params.msg.item?.type === 'McpToolCall') ||
+      (type === 'item_completed' && params.msg.item?.type === 'McpToolCall') ||
+      (type === 'raw_response_item' && params.msg.item?.type === 'custom_tool_call_output')) {
+    throw new Error('Codex nested MCP traffic has no open exec bridge');
   }
   if (type === 'session_configured' || type === 'mcp_startup_update' || type === 'mcp_startup_complete') {
     if (params.id !== '') throw new Error('Codex pre-turn event id must be empty');
@@ -837,7 +939,8 @@ function validateEventState(state, params, serverName, allowedSet) {
     }
     if (itemType === 'reasoning') {
       const reasoningId = validateRawReasoningItem(state, params.msg.item);
-      if (!state.completedReasoningIds.has(reasoningId) || state.rawReasoningIds.has(reasoningId)) throw new Error('Codex raw reasoning item is not paired');
+      if (!state.completedReasoningIds.has(reasoningId) || state.rawReasoningIds.has(reasoningId) ||
+          !state.reasoningItems.has(reasoningId)) throw new Error('Codex raw reasoning item is not paired');
       state.rawReasoningIds.add(reasoningId);
       return;
     }
@@ -863,7 +966,9 @@ function validateEventState(state, params, serverName, allowedSet) {
     const itemType = params.msg.item.type;
     if (itemType === 'UserMessage' && state.userItemStarted) throw new Error('Codex UserMessage lifecycle was duplicated');
     if (itemType === 'AgentMessage' && (state.agentItemStarted || !state.userMessageSeen)) throw new Error('Codex AgentMessage lifecycle is out of order');
-    if (itemType === 'McpToolCall' && (!state.startupComplete || !state.readyDynamic || state.mcp.size >= MAX_MCP_CALLS)) {
+    if (itemType === 'McpToolCall' && (!state.startupComplete || !state.readyDynamic || state.mcp.size >= MAX_MCP_CALLS ||
+        state.seenNestedCallIds.size >= MAX_MCP_CALLS ||
+        !state.activeBridge || state.activeBridge.nestedCallId !== null)) {
       throw new Error('Codex MCP tool call arrived before the dynamic server was ready');
     }
     const item = validateLifecycleItem(state, params.msg.item, itemType);
@@ -874,8 +979,15 @@ function validateEventState(state, params, serverName, allowedSet) {
     if (itemType === 'AgentMessage') { state.agentItemStarted = true; state.agentItemId = item.id; state.agentItem = item; }
     if (itemType === 'McpToolCall') {
       const invocation = validateMcpInvocation({ server: item.server, tool: item.tool, arguments: item.arguments }, serverName, allowedSet);
+      if (item.id === state.activeBridge.outerCallId || item.id === state.activeBridge.outerItemId ||
+          state.seenBridgeCallIds.has(item.id) || state.seenBridgeItemIds.has(item.id)) {
+        throw new Error('Codex nested MCP call identity equals an outer bridge identity');
+      }
       state.seenNestedCallIds.add(item.id);
-      state.mcp.set(item.id, { callId: item.id, invocation, canonicalStarted: true, legacyBegun: false, canonicalCompleted: false, legacyEnded: false });
+      state.activeBridge.nestedCallId = item.id;
+      state.activeBridge.nestedItemId = item.id;
+      state.mcp.set(item.id, { callId: item.id, itemId: item.id, outerCallId: state.activeBridge.outerCallId,
+        invocation, canonicalStarted: true, legacyBegun: false, canonicalCompleted: false, legacyEnded: false });
     }
     return;
   }
@@ -911,12 +1023,17 @@ function validateEventState(state, params, serverName, allowedSet) {
       }
       const duration = validateDuration(item.duration, 'canonical MCP duration');
       const result = validateCanonicalMcpResult(item.result);
-      crossCheckDirectAudit(state, call.invocation, result, duration);
+      crossCheckDirectAudit(state, call.invocation, result);
       call.canonicalCompleted = true;
       call.duration = duration;
       call.result = result;
+      const bridge = state.activeBridge;
+      if (!bridge || bridge.nestedCallId !== call.callId || bridge.outerCallId === call.callId) {
+        throw new Error('Codex canonical MCP call is not associated with its outer bridge');
+      }
+      bridge.nestedCompleted = true;
       state.openItems.delete(item.id);
-      state.activity.push({ kind: 'canonical_mcp', callId: item.id, server: call.invocation.server, tool: call.invocation.tool,
+      addActivity(state, { kind: 'canonical_mcp', callId: item.id, outerCallId: call.outerCallId, server: call.invocation.server, tool: call.invocation.tool,
         arguments: digestJson(call.invocation.arguments, 'MCP arguments'), result: digestJson(result, 'MCP result'), duration });
       return;
     }
@@ -948,18 +1065,27 @@ function validateEventState(state, params, serverName, allowedSet) {
       throw new Error('Codex canonical and legacy MCP results do not match');
     }
     call.legacyEnded = true;
+    if (!state.activeBridge || state.activeBridge.nestedCallId !== callId || !call.canonicalCompleted) {
+      throw new Error('Codex legacy MCP call is not associated with its outer bridge');
+    }
+    state.activeBridge.legacyEnded = true;
     state.mcp.delete(callId);
     state.toolSuccessCount++;
+    const directAudit = state.directAudit[state.directAudit.length - 1];
+    if (!directAudit || directAudit.name !== invocation.tool) throw new Error('Codex direct audit pairing is incomplete');
     state.mcpReceipt.push({
       callId,
+      nestedCallId: callId,
+      outerCallId: call.outerCallId,
       server: invocation.server,
       tool: invocation.tool,
       arguments: digestJson(invocation.arguments, 'MCP arguments'),
       result: { ...digestJson(call.result, 'MCP result'), status: 'ok' },
       duration,
-      outcome: 'ok'
+      outcome: 'ok',
+      directAudit: { ordinal: directAudit.ordinal, metadata: directAudit.metadata }
     });
-    state.activity.push({ kind: 'legacy_mcp', callId, server: invocation.server, tool: invocation.tool, duration,
+    addActivity(state, { kind: 'legacy_mcp', callId, outerCallId: call.outerCallId, server: invocation.server, tool: invocation.tool, duration,
       arguments: digestJson(invocation.arguments, 'MCP arguments'), result: digestJson(call.result, 'MCP result'), outcome: 'ok' });
     return;
   }
@@ -986,10 +1112,15 @@ function validateEventState(state, params, serverName, allowedSet) {
   if (type === 'task_complete') {
     if (state.taskCompleteSeen || state.openItems.size !== 0 || state.mcp.size !== 0 || state.bridge.size !== 0 ||
         !state.userMessageSeen || !state.agentMessageSeen || !state.rawAssistantSeen || state.toolSuccessCount < 1 ||
-        !state.startupComplete || !state.readyDynamic) throw new Error('Codex task_complete lifecycle admission is incomplete');
+        !state.startupComplete || !state.readyDynamic || state.reasoningItems.size === 0 ||
+        state.completedReasoningIds.size !== state.reasoningItems.size ||
+        state.rawReasoningIds.size !== state.reasoningItems.size || state.activeBridge) {
+      throw new Error('Codex task_complete lifecycle admission is incomplete');
+    }
     validateTaskComplete(params.msg, state);
     state.taskCompleteMessage = params.msg.last_agent_message;
     state.taskCompleteSeen = true;
+    validateTerminalDirectAudit(state);
     return;
   }
   throw new Error(`Codex ${type} event is out of the observed bounded lifecycle`);
@@ -1046,10 +1177,13 @@ export async function createCodexEngine(options = {}) {
     const receipt = {
       requested,
       effective: currentState?.identity ? {
+        session_id: currentState.identity.session_id,
+        thread_id: currentState.identity.thread_id,
         model: currentState.identity.model,
         reasoning_effort: currentState.identity.reasoning_effort,
         sandbox: currentState.bindings.sandbox,
         approval_policy: currentState.identity.approval_policy,
+        approvals_reviewer: currentState.identity.approvals_reviewer,
         cwd: currentState.identity.cwd,
         rollout_path: currentState.identity.rollout_path
       } : null,
@@ -1061,9 +1195,21 @@ export async function createCodexEngine(options = {}) {
         maxIncomingBytes: CODEX_MAX_INCOMING_BYTES,
         eventCount: Object.values(currentState.eventCounts).reduce((sum, value) => sum + value, 0),
         maxEventCount: CODEX_MAX_EVENT_COUNT,
+        eventBytes: currentState.incomingBytes,
+        maxEventBytes: CODEX_MAX_INCOMING_BYTES,
         openItems: currentState.openItems.size,
         nestedCalls: currentState.seenNestedCallIds.size,
-        bridgeCalls: currentState.seenBridgeCallIds.size
+        maxNestedCalls: MAX_MCP_CALLS,
+        bridgeCalls: currentState.seenBridgeCallIds.size,
+        maxBridgeCalls: MAX_BRIDGE_CALLS,
+        directAuditRecords: currentState.directAudit.length
+      } : {},
+      counts: currentState ? {
+        events: Object.values(currentState.eventCounts).reduce((sum, value) => sum + value, 0),
+        incomingBytes: currentState.incomingBytes,
+        bridges: currentState.seenBridgeCallIds.size,
+        nestedMcp: currentState.seenNestedCallIds.size,
+        directAudits: currentState.directAudit.length
       } : {},
       eventCounts: currentState ? { ...currentState.eventCounts, result: currentState.resultSeen ? 1 : 0 } : {},
       eventDigest: activityDigest,
@@ -1245,7 +1391,21 @@ export async function createCodexEngine(options = {}) {
       governed: true,
       serverName
     });
-    const started = await mcpServer.start();
+    const startPromise = Promise.resolve().then(() => mcpServer.start());
+    // Keep in-process MCP startup under the same configured turn budget as
+    // the child transport.  Attach a rejection handler so a late startup
+    // failure after a timeout cannot become an unhandled promise.
+    startPromise.catch(() => {});
+    let startTimer;
+    let started;
+    try {
+      const timeoutPromise = new Promise((_, reject) => {
+        startTimer = setTimeout(() => reject(new Error('Codex MCP startup timeout')), bindings.codexMcpTimeout);
+      });
+      started = await Promise.race([startPromise, timeoutPromise]);
+    } finally {
+      if (startTimer) clearTimeout(startTimer);
+    }
     if (!started || typeof started.host !== 'string' || !Number.isInteger(started.port)) throw new Error('Probe MCP startup result is invalid');
     const mcpUrl = `http://${started.host}:${started.port}/mcp`;
 
@@ -1329,6 +1489,8 @@ export async function createCodexEngine(options = {}) {
           rawMessageRoles: [],
           rawAssistantSeen: false,
           rawReasoningIds: new Set(),
+          reasoningItems: new Map(),
+          completedReasoningIds: new Set(),
           userItem: null,
           userItemStarted: false,
           userItemCompleted: false,
@@ -1348,11 +1510,15 @@ export async function createCodexEngine(options = {}) {
           mcp: new Map(),
           seenNestedCallIds: new Set(),
           bridge: new Map(),
+          activeBridge: null,
           seenBridgeCallIds: new Set(),
+          seenBridgeItemIds: new Set(),
           bridgeReceipt: [],
           mcpReceipt: [],
           directAudit: [],
           auditOrdinals: new Set(),
+          auditConsumedCount: 0,
+          lastAuditOrdinal: 0,
           toolSuccessCount: 0,
           tokenCount: 0,
           eventCounts: Object.create(null),

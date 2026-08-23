@@ -23,6 +23,10 @@ const GOVERNED_REASONING_EFFORT = 'xhigh';
 const GOVERNED_SANDBOX = 'seatbelt';
 const MAX_AUDIT_BYTES = 1048576;
 const MAX_AUDIT_ID = 512;
+const MAX_AUDIT_RECORDS = 64;
+const MAX_LIST_AUDIT_RECORDS = 8;
+const MAX_TOOL_RESULT_BYTES = 262144;
+const MAX_AUDIT_RECORD_RESERVATION_BYTES = 4096;
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -47,6 +51,28 @@ function boundedJson(value, field) {
     throw new Error(`Governed MCP ${field} exceeds the serialized-byte bound`);
   }
   return serialized;
+}
+
+function cloneBoundedJson(value, field, maxBytes = MAX_AUDIT_BYTES) {
+  let serialized;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error(`Governed MCP ${field} is not JSON-serializable`);
+  }
+  if (typeof serialized !== 'string' || Buffer.byteLength(serialized, 'utf8') > maxBytes) {
+    throw new Error(`Governed MCP ${field} exceeds the serialized-byte bound`);
+  }
+  try {
+    const clone = JSON.parse(serialized);
+    // Check the canonical representation too.  This rejects values such as
+    // undefined that JSON.stringify would otherwise silently discard.
+    boundedJson(clone, field);
+    return clone;
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Governed MCP ')) throw error;
+    throw new Error(`Governed MCP ${field} is not JSON-serializable`);
+  }
 }
 
 function digest(value, field) {
@@ -85,6 +111,10 @@ function validateGovernedMetadata(meta) {
     session_id: sessionId,
     thread_id: extensionThreadId,
     turn_id: turnId,
+    sandbox: extension.sandbox,
+    turn_started_at_unix_ms: extension.turn_started_at_unix_ms,
+    model: extension.model,
+    reasoning_effort: extension.reasoning_effort,
     threadId,
     progressToken: meta.progressToken
   };
@@ -183,7 +213,8 @@ export class BuiltInMCPServer extends EventEmitter {
       listCalls: [],
       toolCalls: [],
       executionCounts: { search: 0, extract: 0, listFiles: 0 },
-      nextOrdinal: 1
+      nextOrdinal: 1,
+      inFlight: 0
     };
   }
 
@@ -762,12 +793,23 @@ export class BuiltInMCPServer extends EventEmitter {
 
     const result = { tools };
     if (this.governed) {
+      if (this.audit.listCalls.length >= MAX_LIST_AUDIT_RECORDS || this.audit.nextOrdinal > MAX_AUDIT_RECORDS + MAX_LIST_AUDIT_RECORDS) {
+        throw new Error('Governed MCP list audit bound exceeded');
+      }
       const resultDigest = digest(result, 'list result');
-      this.audit.listCalls.push({
+      const record = {
         ordinal: this.audit.nextOrdinal++,
         tool_names: tools.map(tool => tool.name),
         result: resultDigest
-      });
+      };
+      this.audit.listCalls.push(record);
+      try {
+        this.assertAuditWithinBounds();
+      } catch (error) {
+        this.audit.listCalls.pop();
+        this.audit.nextOrdinal--;
+        throw error;
+      }
     }
     return result;
   }
@@ -791,9 +833,9 @@ export class BuiltInMCPServer extends EventEmitter {
       }
       metadata = validateGovernedMetadata(params._meta);
     }
-    const { name, arguments: args = {} } = params;
+    const { name, arguments: rawArgs = {} } = params;
 
-    if (!isObject(args)) throw new Error('Governed MCP arguments must be an object');
+    if (!isObject(rawArgs)) throw new Error('Governed MCP arguments must be an object');
 
     // Extract tool name from MCP format
     const toolName = this.governed ? name.slice(GOVERNED_TOOL_PREFIX.length) : name.replace(GOVERNED_TOOL_PREFIX, '');
@@ -809,16 +851,42 @@ export class BuiltInMCPServer extends EventEmitter {
       throw new Error(`Tool ${name} not found`);
     }
 
+    let args = rawArgs;
+    let admitted = false;
+    let argsDigest = null;
+    if (this.governed) {
+      // Canonicalize and bound the exact value passed to the implementation.
+      // This admission happens before execute(), so a malformed or oversized
+      // request cannot cause a tool side effect.
+      args = cloneBoundedJson(rawArgs, 'arguments');
+      argsDigest = digest(args, 'arguments');
+      this.reserveToolAudit(argsDigest);
+      admitted = true;
+    }
+
     try {
       // Execute tool directly (no spawning!)
       const result = await tool.execute(args);
-      const response = {
-        content: [{
-          type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-        }]
-      };
-      if (this.governed) this.recordToolAudit(name, args, response, 'ok', metadata);
+      let response;
+      try {
+        const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+        if (typeof text !== 'string' || Buffer.byteLength(text, 'utf8') > MAX_TOOL_RESULT_BYTES) {
+          throw new Error('tool result exceeds the serialized-byte bound');
+        }
+        if (typeof result !== 'string') cloneBoundedJson(result, 'tool result', MAX_TOOL_RESULT_BYTES);
+        response = { content: [{ type: 'text', text }] };
+      } catch (error) {
+        response = {
+          content: [{
+            type: 'text',
+            text: `Error executing ${name}: ${String(error?.message || error).slice(0, MAX_AUDIT_ID)}`
+          }],
+          isError: true
+        };
+        if (this.governed) this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
+        return response;
+      }
+      if (this.governed) this.recordToolAudit(name, args, response, 'ok', metadata, argsDigest);
       return response;
     } catch (error) {
       const response = {
@@ -828,14 +896,32 @@ export class BuiltInMCPServer extends EventEmitter {
         }],
         isError: true
       };
-      if (this.governed) this.recordToolAudit(name, args, response, 'failed', metadata);
+      if (this.governed) this.recordToolAudit(name, args, response, 'failed', metadata, argsDigest);
       return response;
+    } finally {
+      if (admitted) this.audit.inFlight--;
     }
   }
 
-  recordToolAudit(name, args, result, status, metadata) {
+  reserveToolAudit(argsDigest) {
+    if (this.audit.toolCalls.length + this.audit.inFlight >= MAX_AUDIT_RECORDS ||
+        this.audit.nextOrdinal > MAX_AUDIT_RECORDS + MAX_LIST_AUDIT_RECORDS ||
+        !argsDigest || argsDigest.bytes > MAX_AUDIT_BYTES) {
+      throw new Error('Governed MCP tool audit bound exceeded');
+    }
+    // The audit stores digests and bounded metadata, never result content.
+    // Reserve enough ledger space before execute() for the terminal record.
+    const current = this.getAuditSnapshot();
+    const currentBytes = Buffer.byteLength(JSON.stringify(current), 'utf8');
+    if (currentBytes + MAX_AUDIT_RECORD_RESERVATION_BYTES > MAX_AUDIT_BYTES) {
+      throw new Error('Governed MCP cumulative audit-byte bound exceeded');
+    }
+    this.audit.inFlight++;
+  }
+
+  recordToolAudit(name, args, result, status, metadata, knownArgsDigest = null) {
     const bareName = name.slice(GOVERNED_TOOL_PREFIX.length);
-    const argsDigest = digest(args, 'arguments');
+    const argsDigest = knownArgsDigest || digest(args, 'arguments');
     const resultDigest = digest({ content: result.content }, 'result');
     const record = {
       ordinal: this.audit.nextOrdinal++,
@@ -845,12 +931,39 @@ export class BuiltInMCPServer extends EventEmitter {
         session_id: metadata.session_id,
         thread_id: metadata.thread_id,
         turn_id: metadata.turn_id,
+        sandbox: metadata.sandbox,
+        turn_started_at_unix_ms: metadata.turn_started_at_unix_ms,
+        model: metadata.model,
+        reasoning_effort: metadata.reasoning_effort,
+        threadId: metadata.threadId,
         progressToken: metadata.progressToken
       },
       result: { ...resultDigest, status }
     };
     this.audit.toolCalls.push(record);
+    try {
+      this.assertAuditWithinBounds();
+    } catch (error) {
+      this.audit.toolCalls.pop();
+      this.audit.nextOrdinal--;
+      throw error;
+    }
     this.audit.executionCounts[bareName]++;
+  }
+
+  assertAuditWithinBounds() {
+    if (this.audit.toolCalls.length > MAX_AUDIT_RECORDS || this.audit.listCalls.length > MAX_LIST_AUDIT_RECORDS) {
+      throw new Error('Governed MCP audit record bound exceeded');
+    }
+    const snapshot = {
+      starts: this.audit.starts,
+      listCalls: this.audit.listCalls,
+      toolCalls: this.audit.toolCalls,
+      executionCounts: this.audit.executionCounts
+    };
+    if (Buffer.byteLength(boundedJson(snapshot, 'audit snapshot'), 'utf8') > MAX_AUDIT_BYTES) {
+      throw new Error('Governed MCP cumulative audit-byte bound exceeded');
+    }
   }
 
   getAuditSnapshot() {
