@@ -106,6 +106,7 @@ import {
   createTaskCompletionBlockedMessage
 } from './tasks/index.js';
 import { z } from 'zod';
+import { validateGovernedCodexProfile } from './engines/governed-codex-profile.js';
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -321,6 +322,15 @@ export class ProbeAgent {
     // Native thinking/reasoning effort for LLM providers
     // Accepted values: 'off' (default), 'low', 'medium', 'high', or a number (budget tokens)
     this.thinkingEffort = options.thinkingEffort || null;
+
+    if (options.governedCodexProfile !== undefined) {
+      if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex');
+      const profile = validateGovernedCodexProfile(options.governedCodexProfile);
+      if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== profile.probeTools.length || options.allowedTools.some((tool, index) => tool !== profile.probeTools[index])) {
+        throw new TypeError('allowedTools must exactly match governedCodexProfile.probeTools');
+      }
+      this.governedCodexProfile = profile;
+    }
 
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
@@ -1752,6 +1762,7 @@ export class ProbeAgent {
             result = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, this.debug);
           }
         } catch (error) {
+          if (this.governedCodexProfile) throw error;
           if (this.debug) {
             const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
             console.log(`[DEBUG] Failed to use ${engineType} engine, falling back to Vercel:`, error.message);
@@ -2424,7 +2435,8 @@ export class ProbeAgent {
           sessionId: this.options?.sessionId,
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
-          model: this.model  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          model: this.model,  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          governedCodexProfile: this.governedCodexProfile
         });
         if (this.debug) {
           console.log('[DEBUG] Using Codex CLI engine with Probe tools');
@@ -2434,6 +2446,7 @@ export class ProbeAgent {
         }
         return this.engine;
       } catch (error) {
+        if (this.governedCodexProfile) throw error;
         console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
         console.warn('[WARNING] Falling back to Vercel AI SDK');
         this.clientApiProvider = null;
