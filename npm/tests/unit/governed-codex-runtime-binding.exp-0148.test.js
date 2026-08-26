@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +10,8 @@ import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs } from '.
 import { generateSchemaInstructions } from '../../src/agent/schemaUtils.js';
 
 const TOOLS = ['search', 'extract', 'listFiles'];
+const DIGEST_A = `sha256:${'a'.repeat(64)}`;
+const DIGEST_B = `sha256:${'b'.repeat(64)}`;
 const LINEAGE = { subjectId: 'SYS-REQ-048', subjectFingerprint: '636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7', role: 'spec-review', coverageKey: 'SYS-REQ-048::spec-review', findings: [{ type: 'ambiguity', severity: 'medium', message: 'timeout semantics are underspecified' }] };
 const LINEAGE_SCHEMA = JSON.stringify({ type: 'object', required: ['subjectId', 'subjectFingerprint', 'role', 'coverageKey', 'findings'], additionalProperties: false, properties: { subjectId: { type: 'string' }, subjectFingerprint: { type: 'string' }, role: { type: 'string' }, coverageKey: { type: 'string' }, findings: { type: 'array', items: { type: 'object', required: ['type', 'severity', 'message'], additionalProperties: false, properties: { type: { type: 'string' }, severity: { type: 'string' }, message: { type: 'string' } } } } } });
 const fakeCodex = `#!/usr/bin/env node
@@ -71,6 +74,12 @@ function configuredEvidence(pid, requestId, cwd) {
 function recursiveKeys(value, found = []) {
   if (value && typeof value === 'object') for (const [key, child] of Object.entries(value)) { found.push(key); recursiveKeys(child, found); } return found;
 }
+function dispatchFor(prompt) {
+  const promptBytes = Buffer.byteLength(prompt, 'utf8'); const byteLength = Buffer.alloc(8);
+  byteLength.writeBigUInt64BE(BigInt(promptBytes));
+  const promptDigest = `sha256:${createHash('sha256').update('probe.governed-codex-dispatch/prompt/v1', 'utf8').update(Buffer.from([0])).update(byteLength).update(prompt, 'utf8').digest('hex')}`;
+  return { source: 'probe-host-tools-call', tool: 'codex', promptDigest, promptBytes };
+}
 async function stateFiles(dir) {
   return (await readdir(dir)).filter(name => name.endsWith('.json'));
 }
@@ -118,9 +127,9 @@ async function runEngine(root, stateDir, marker, useProbe = false) {
   const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
   return { engine, output, state, call, url };
 }
-async function runGoverned(root, stateDir, marker) {
+async function runGoverned(root, stateDir, marker, options = { schema: LINEAGE_SCHEMA }) {
   const before = await stateFiles(stateDir); const agent = governedAgent(root);
-  const settled = await agent.answerGoverned(marker, { schema: LINEAGE_SCHEMA }).then(value => ({ value }), error => ({ error }));
+  const settled = await agent.answerGoverned(marker, options).then(value => ({ value }), error => ({ error }));
   const state = await readState(await waitForState(stateDir, before, marker)); const call = state.seen.find(item => item.method === 'tools/call');
   return { settled, state, call, url: Object.values(call.params.arguments.config.mcp_servers)[0].url };
 }
@@ -132,7 +141,7 @@ test('EXP-0148 governed Codex runtime binding', async t => {
   const executable = join(bin, 'codex'); await writeFile(executable, fakeCodex); await chmod(executable, 0o755);
   const originalPath = process.env.PATH; process.env.PATH = `${bin}:${originalPath}`; process.env.PROBE_EXP0148_STATE = stateDir;
   t.after(async () => { process.env.PATH = originalPath; delete process.env.PROBE_EXP0148_STATE; await rm(root, { recursive: true, force: true }); });
-  let governedValid;
+  let governedValid; let boundValid;
 
   await t.test('rejects non-exact public bindings before spawn', () => {
     const count = () => stateFiles(stateDir);
@@ -278,6 +287,138 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     assert.equal(data.subjectId, 'SYS-REQ-048'); assert.equal(data.subjectFingerprint, '636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7');
     assert.equal(data.role, 'spec-review'); assert.equal(data.coverageKey, 'SYS-REQ-048::spec-review'); assert.deepEqual(data.findings, LINEAGE.findings);
     assert.equal('runtimeAttestation' in data, false);
+  });
+
+  await t.test('EXP-0151 O01 omitted digest preserves exact v1 receipt and result', async () => {
+    const run = await runGoverned(root, stateDir, '[VALID][UNBOUND-V1]'); assert.ifError(run.settled.error);
+    assert.deepEqual(run.settled.value.runtimeAttestation, governedValid.settled.value.runtimeAttestation);
+    assert.deepEqual(Object.keys(run.settled.value), ['data', 'runtimeAttestation']);
+    const inherited = Object.assign(Object.create({ invocationDigest: DIGEST_A }), { schema: LINEAGE_SCHEMA });
+    const inheritedRun = await runGoverned(root, stateDir, '[VALID][INHERITED-V1]', inherited); assert.ifError(inheritedRun.settled.error);
+    assert.equal(inheritedRun.settled.value.runtimeAttestation.version, 'probe.governed-codex-attestation/v1');
+  });
+
+  await t.test('EXP-0151 O02 bound digest returns the exact distinct v2 projection', async () => {
+    boundValid = await runGoverned(root, stateDir, '[VALID][BOUND]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }); assert.ifError(boundValid.settled.error);
+    const receipt = boundValid.settled.value.runtimeAttestation;
+    assert.deepEqual(Object.keys(boundValid.settled.value), ['data', 'runtimeAttestation']); assert.deepEqual(boundValid.settled.value.data, LINEAGE);
+    const server = Object.entries(boundValid.call.params.arguments.config.mcp_servers)[0]; assert.deepEqual(boundValid.call.params.arguments, buildGovernedCodexInitialToolArgs({ profile: profile(root), prompt: boundValid.call.params.arguments.prompt, mcp: { name: server[0], url: server[1].url } }));
+    assert.deepEqual(Object.keys(receipt), ['version', 'profileId', 'requested', 'observed', 'executionContext', 'dispatch', 'evidence', 'usage']);
+    assert.equal(receipt.version, 'probe.governed-codex-attestation/v2'); assert.equal(receipt.profileId, 'luna-xhigh-readonly-v1');
+    assert.deepEqual(receipt.requested, governedValid.settled.value.runtimeAttestation.requested); assert.deepEqual(receipt.observed, governedValid.settled.value.runtimeAttestation.observed);
+    assert.deepEqual(receipt.executionContext, { source: 'caller', invocationDigest: DIGEST_A });
+    assert.deepEqual(Object.keys(receipt.dispatch), ['source', 'tool', 'promptDigest', 'promptBytes']);
+    assert.deepEqual(receipt.evidence, { eventCount: 1 }); assert.deepEqual(receipt.usage, { status: 'unavailable' });
+  });
+
+  await t.test('EXP-0151 O03 independently recomputes prompt digest and byte length', () => {
+    assert.deepEqual(boundValid.settled.value.runtimeAttestation.dispatch, dispatchFor(boundValid.call.params.arguments.prompt));
+  });
+
+  await t.test('EXP-0151 O04 digest is host-only and absent from prompt, tool args, and candidate', () => {
+    assert.equal(JSON.stringify(boundValid.call.params.arguments).includes(DIGEST_A), false);
+    assert.equal(boundValid.call.params.arguments.prompt.includes(DIGEST_A), false);
+    assert.equal(JSON.stringify(boundValid.settled.value.data).includes(DIGEST_A), false);
+  });
+
+  await t.test('EXP-0151 O05 changing only caller digest changes only execution context', async () => {
+    const run = await runGoverned(root, stateDir, '[VALID][BOUND]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_B }); assert.ifError(run.settled.error);
+    const a = structuredClone(boundValid.settled.value.runtimeAttestation); const b = structuredClone(run.settled.value.runtimeAttestation);
+    assert.equal(a.executionContext.invocationDigest, DIGEST_A); assert.equal(b.executionContext.invocationDigest, DIGEST_B);
+    delete a.executionContext; delete b.executionContext; assert.deepEqual(a, b);
+    assert.equal(boundValid.call.params.arguments.prompt, run.call.params.arguments.prompt);
+  });
+
+  await t.test('EXP-0151 O06 changing prompt bytes changes dispatch under the same digest', async () => {
+    const run = await runGoverned(root, stateDir, '[VALID][BOUND-CHANGED]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }); assert.ifError(run.settled.error);
+    assert.notEqual(run.call.params.arguments.prompt, boundValid.call.params.arguments.prompt);
+    assert.notEqual(run.settled.value.runtimeAttestation.dispatch.promptDigest, boundValid.settled.value.runtimeAttestation.dispatch.promptDigest);
+    assert.equal(run.settled.value.runtimeAttestation.executionContext.invocationDigest, DIGEST_A);
+  });
+
+  await t.test('EXP-0151 O07 invalid digests fail before acquisition and direct tools call', async () => {
+    const invalid = ['a'.repeat(64), `sha256:${'A'.repeat(64)}`, ` ${DIGEST_A}`, `${DIGEST_A}\n`, 'sha256:ab', 7, null];
+    const agent = governedAgent(root); let acquisitions = 0; agent.getEngine = async () => { acquisitions++; throw new Error('must not acquire'); };
+    for (const invocationDigest of invalid) await assert.rejects(agent.answerGoverned('x', { schema: LINEAGE_SCHEMA, invocationDigest }), { name: 'TypeError', message: 'answerGoverned invocationDigest must match sha256:<64 lowercase hexadecimal digits>' });
+    assert.equal(acquisitions, 0);
+    const before = await stateFiles(stateDir); const engine = await createCodexEngine({ agent: host(), governedCodexProfile: profile(root) });
+    const output = await collect(engine.query('[DIRECT-INVALID]', { invocationDigest: 'bad' })); const state = await readState(await waitForState(stateDir, before));
+    assert.equal(output.filter(item => item.type === 'error').length, 1); assert.equal(state.seen.some(item => item.method === 'tools/call'), false); assert.equal(alive(state.pid), false);
+  });
+
+  await t.test('EXP-0151 O08 unmatched v2 metadata fails closed', async () => {
+    const receipt = boundValid.settled.value.runtimeAttestation;
+    const cases = [[], [receipt, receipt], [{ ...receipt, version: 'probe.governed-codex-attestation/v1' }], [{ ...receipt, executionContext: { source: 'caller', invocationDigest: DIGEST_B } }]];
+    for (const receipts of cases) {
+      const agent = governedAgent(root); let closeCount = 0;
+      agent.engine = { async *query() { yield { type: 'text', content: JSON.stringify(LINEAGE) }; for (const attestation of receipts) yield { type: 'metadata', data: { attestation } }; }, async close() { closeCount++; } };
+      await assert.rejects(agent.answerGoverned('[INJECTED-V2]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }), { message: 'Expected exactly one matching governed invocation attestation' }); assert.equal(closeCount, 1);
+    }
+  });
+
+  await t.test('EXP-0151 O09 simultaneous siblings retain their own binding', async () => {
+    const [a, b] = await Promise.all([
+      runGoverned(root, stateDir, '[VALID][HOLD][BOUND-SIBLING-A]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }),
+      runGoverned(root, stateDir, '[VALID][BOUND-SIBLING-B]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_B })
+    ]);
+    assert.ifError(a.settled.error); assert.ifError(b.settled.error); assert.notEqual(a.state.pid, b.state.pid);
+    assert.equal(a.settled.value.runtimeAttestation.executionContext.invocationDigest, DIGEST_A); assert.equal(b.settled.value.runtimeAttestation.executionContext.invocationDigest, DIGEST_B);
+    assert.notEqual(a.url, b.url); assert.equal(alive(a.state.pid) || alive(b.state.pid), false);
+  });
+
+  await t.test('EXP-0151 O10 bound call has one schema suffix, query, and tools call', () => {
+    const suffix = generateSchemaInstructions(LINEAGE_SCHEMA, { debug: false }); const prompt = boundValid.call.params.arguments.prompt;
+    assert.equal(prompt.split(suffix).length - 1, 1); assert.equal(boundValid.state.seen.filter(item => item.method === 'tools/call').length, 1);
+    const agent = governedAgent(root); let queryCount = 0;
+    agent.engine = { async *query() { queryCount++; yield { type: 'text', content: JSON.stringify(LINEAGE) }; yield { type: 'metadata', data: { attestation: boundValid.settled.value.runtimeAttestation } }; }, async close() {} };
+    return agent.answerGoverned('[QUERY-COUNT]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }).then(() => assert.equal(queryCount, 1));
+  });
+
+  await t.test('EXP-0151 O11 bound projection recursively redacts host and model bytes', () => {
+    const receipt = boundValid.settled.value.runtimeAttestation; const serialized = JSON.stringify(receipt);
+    for (const forbidden of ['prompt', 'schema', 'candidate', 'environment', 'credentials', 'correlation', 'requestId', 'sessionId', 'threadId', 'conversationId', 'cwd', 'path']) assert.equal(recursiveKeys(receipt).includes(forbidden), false, forbidden);
+    for (const secret of [root, boundValid.call.params.arguments.prompt, LINEAGE_SCHEMA, JSON.stringify(LINEAGE), process.env.PATH]) assert.equal(serialized.includes(secret), false);
+  });
+
+  await t.test('EXP-0151 O12 inherited governed contracts remain live', () => {
+    assert.equal(governedValid.settled.value.runtimeAttestation.version, 'probe.governed-codex-attestation/v1');
+    assert.deepEqual(boundValid.settled.value.data, LINEAGE); assert.equal(alive(boundValid.state.pid), false);
+  });
+
+  await t.test('EXP-0151 O13 bound cancellation emits no admissible result and cleans up', async () => {
+    const before = await stateFiles(stateDir); const agent = governedAgent(root);
+    const pending = agent.answerGoverned('[WAIT][BOUND-CANCEL]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }).then(value => ({ value }), error => ({ error }));
+    const state = await readState(await waitForState(stateDir, before, '[BOUND-CANCEL]')); const call = state.seen.find(item => item.method === 'tools/call'); const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
+    agent.cancel(); const settled = await pending; assert.ok(settled.error); assert.equal('value' in settled, false); assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
+  });
+
+  await t.test('EXP-0151 O14 mirrors match and regular answer bytes remain frozen', async () => {
+    const sourceDeclaration = await readFile(new URL('../../src/agent/ProbeAgent.d.ts', import.meta.url), 'utf8'); const packageDeclaration = await readFile(new URL('../../index.d.ts', import.meta.url), 'utf8');
+    const contract = value => value.slice(value.indexOf('export interface GovernedAnswerOptions'), value.indexOf('/**\n * Clone options', value.indexOf('export interface GovernedAnswerOptions')));
+    assert.equal(contract(sourceDeclaration), contract(packageDeclaration));
+    for (const declaration of [sourceDeclaration, packageDeclaration]) assert.equal(declaration.includes('answer(message: string, images?: any[], options?: AnswerOptions): Promise<string>;'), true);
+    const source = await readFile(new URL('../../src/agent/ProbeAgent.js', import.meta.url), 'utf8'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message')));
+    assert.equal(createHash('sha256').update(answer).digest('hex'), '53ee9f207963f5b991aaf89e143211039ad632d9cc7535d91af66bcae95b135f');
+  });
+
+  await t.test('EXP-0151 O15 changing own getters are read once at each boundary', async () => {
+    let agentReads = 0; const options = { schema: LINEAGE_SCHEMA };
+    Object.defineProperty(options, 'invocationDigest', { enumerable: true, get() { agentReads++; return agentReads === 1 ? DIGEST_A : DIGEST_B; } });
+    const agent = governedAgent(root); let transported;
+    agent.engine = { async *query(_prompt, opts) { transported = opts.invocationDigest; yield { type: 'text', content: JSON.stringify(LINEAGE) }; yield { type: 'metadata', data: { attestation: boundValid.settled.value.runtimeAttestation } }; }, async close() {} };
+    const answer = await agent.answerGoverned('[GETTER-AGENT]', options); assert.equal(agentReads, 1); assert.equal(transported, DIGEST_A); assert.equal(answer.runtimeAttestation.executionContext.invocationDigest, DIGEST_A);
+    const before = await stateFiles(stateDir); const engine = await createCodexEngine({ agent: host(), governedCodexProfile: profile(root) }); let engineReads = 0; const engineOptions = {};
+    Object.defineProperty(engineOptions, 'invocationDigest', { enumerable: true, get() { engineReads++; return engineReads === 1 ? DIGEST_A : DIGEST_B; } });
+    const output = await collect(engine.query('[VALID][GETTER-ENGINE]', engineOptions)); const state = await readState(await waitForState(stateDir, before, '[GETTER-ENGINE]'));
+    assert.equal(engineReads, 1); assert.equal(output.find(item => item.type === 'metadata').data.attestation.executionContext.invocationDigest, DIGEST_A); assert.equal(alive(state.pid), false);
+  });
+
+  await t.test('EXP-0151 O16 caller mutation after start cannot alter snapshot', async () => {
+    const before = await stateFiles(stateDir); const agent = governedAgent(root); const options = { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A };
+    const pending = agent.answerGoverned('[VALID][DELAY][MUTATION]', options).then(value => ({ value }), error => ({ error })); options.invocationDigest = DIGEST_B;
+    const settled = await pending; assert.ifError(settled.error); const state = await readState(await waitForState(stateDir, before, '[MUTATION]')); const call = state.seen.find(item => item.method === 'tools/call');
+    assert.equal(settled.value.runtimeAttestation.executionContext.invocationDigest, DIGEST_A);
+    assert.equal(JSON.stringify(call.params.arguments).includes(DIGEST_A) || JSON.stringify(call.params.arguments).includes(DIGEST_B), false);
   });
 
   await t.test('omitting the profile preserves the ungoverned result path', async () => {

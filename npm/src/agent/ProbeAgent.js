@@ -3416,6 +3416,13 @@ Follow these instructions carefully:
     if (!options || typeof options.schema !== 'string' || !options.schema.trim() || !isJsonSchema(options.schema)) throw new Error('answerGoverned requires a valid JSON schema string');
     if (!Array.isArray(images) || images.length > 0) throw new Error('answerGoverned does not support images');
 
+    const hasInvocationDigest = Object.prototype.hasOwnProperty.call(options,
+      'invocationDigest');
+    const invocationDigest = hasInvocationDigest ? options.invocationDigest : undefined;
+    if (hasInvocationDigest && (typeof invocationDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(invocationDigest))) {
+      throw new TypeError('answerGoverned invocationDigest must match sha256:<64 lowercase hexadecimal digits>');
+    }
+
     const prompt = message.trim() + generateSchemaInstructions(options.schema,{debug:this.debug});
     let engine;
     try {
@@ -3424,14 +3431,21 @@ Follow these instructions carefully:
       const candidateChunks = [];
       let runtimeAttestation;
       let attestationCount = 0;
-      for await (const chunk of engine.query(prompt, { abortSignal: this._abortController.signal })) {
+      const queryOptions = hasInvocationDigest
+        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest }
+        : { abortSignal: this._abortController.signal };
+      for await (const chunk of engine.query(prompt, queryOptions)) {
         if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
         else if (chunk.type === 'metadata' && chunk.data?.attestation) {
           runtimeAttestation = chunk.data.attestation;
           attestationCount++;
         } else if (chunk.type === 'error') throw chunk.error || new Error('Governed Codex query failed');
       }
-      if (attestationCount !== 1) throw new Error(`Expected exactly one governed runtime attestation; received ${attestationCount}`);
+      if (hasInvocationDigest) {
+        if (attestationCount !== 1 || runtimeAttestation?.version !== 'probe.governed-codex-attestation/v2' || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
+          throw new Error('Expected exactly one matching governed invocation attestation');
+        }
+      } else if (attestationCount !== 1) throw new Error(`Expected exactly one governed runtime attestation; received ${attestationCount}`);
       const validation = validateJsonResponse(candidateChunks.join(''), { debug: this.debug, schema: options.schema });
       if (!validation.isValid) throw new Error(validation.errorSummary || validation.error || 'Governed answer failed schema validation');
       return { data: validation.parsed, runtimeAttestation };
