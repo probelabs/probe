@@ -29,7 +29,7 @@ export const ENGINE_ACTIVITY_TIMEOUT_MAX = 600000;
 
 import { createProviderInstance, DEFAULT_MODELS } from '../utils/provider.js';
 import { streamText, generateText, tool, stepCountIs, jsonSchema, Output } from 'ai';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { readFile, stat, readdir } from 'fs/promises';
@@ -107,6 +107,40 @@ import {
 } from './tasks/index.js';
 import { z } from 'zod';
 import { validateGovernedCodexProfile } from './engines/governed-codex-profile.js';
+
+const GOVERNED_RESULT_IDENTITY = 'probe.governed-result-identity/v1';
+const GOVERNED_RESULT_DOMAIN = 'probe.governed-result-identity/data/v1';
+
+function normalizeGovernedJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('answerGoverned validated result is not canonical JSON');
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeGovernedJson);
+  if (typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)) {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, normalizeGovernedJson(child)]));
+  }
+  throw new TypeError('answerGoverned validated result is not canonical JSON');
+}
+
+function freezeGovernedTree(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeGovernedTree(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function identifyGovernedResult(value) {
+  const data = freezeGovernedTree(normalizeGovernedJson(value));
+  const canonical = Buffer.from(JSON.stringify(data), 'utf8');
+  const byteLength = Buffer.alloc(8);
+  byteLength.writeBigUInt64BE(BigInt(canonical.length));
+  const resultDigest = `sha256:${createHash('sha256').update(GOVERNED_RESULT_DOMAIN, 'utf8').update(Buffer.from([0])).update(byteLength).update(canonical).digest('hex')}`;
+  const resultIdentity = Object.freeze({ version: GOVERNED_RESULT_IDENTITY, source: 'probe-host-schema-valid-json', resultDigest, canonicalBytes: canonical.length });
+  return { data, resultIdentity };
+}
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -3413,7 +3447,9 @@ Follow these instructions carefully:
   async answerGoverned(message, options, images = []) {
     if (!this.governedCodexProfile) throw new Error('answerGoverned requires governedCodexProfile');
     if (!message || typeof message !== 'string' || message.trim().length === 0) throw new Error('Message is required and must be a non-empty string');
-    if (!options || typeof options.schema !== 'string' || !options.schema.trim() || !isJsonSchema(options.schema)) throw new Error('answerGoverned requires a valid JSON schema string');
+    if (!options) throw new Error('answerGoverned requires a valid JSON schema string');
+    const schema = options.schema;
+    if (typeof schema !== 'string' || !schema.trim() || !isJsonSchema(schema)) throw new Error('answerGoverned requires a valid JSON schema string');
     if (!Array.isArray(images) || images.length > 0) throw new Error('answerGoverned does not support images');
 
     const hasInvocationDigest = Object.prototype.hasOwnProperty.call(options,
@@ -3422,8 +3458,17 @@ Follow these instructions carefully:
     if (hasInvocationDigest && (typeof invocationDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(invocationDigest))) {
       throw new TypeError('answerGoverned invocationDigest must match sha256:<64 lowercase hexadecimal digits>');
     }
+    const hasResultIdentity = Object.prototype.hasOwnProperty.call(options,
+      'resultIdentity');
+    const requestedResultIdentity = hasResultIdentity ? options.resultIdentity : undefined;
+    if (hasResultIdentity && requestedResultIdentity !== GOVERNED_RESULT_IDENTITY) {
+      throw new TypeError('answerGoverned resultIdentity must equal probe.governed-result-identity/v1');
+    }
+    if (hasResultIdentity && !hasInvocationDigest) {
+      throw new TypeError('answerGoverned resultIdentity requires an own invocationDigest');
+    }
 
-    const prompt = message.trim() + generateSchemaInstructions(options.schema,{debug:this.debug});
+    const prompt = message.trim()+generateSchemaInstructions(schema,{debug:this.debug});
     let engine;
     try {
       engine = await this.getEngine();
@@ -3446,8 +3491,13 @@ Follow these instructions carefully:
           throw new Error('Expected exactly one matching governed invocation attestation');
         }
       } else if (attestationCount !== 1) throw new Error(`Expected exactly one governed runtime attestation; received ${attestationCount}`);
-      const validation = validateJsonResponse(candidateChunks.join(''), { debug: this.debug, schema: options.schema });
+      const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
       if (!validation.isValid) throw new Error(validation.errorSummary || validation.error || 'Governed answer failed schema validation');
+      if (hasResultIdentity) {
+        const { data, resultIdentity } = identifyGovernedResult(validation.parsed);
+        freezeGovernedTree(runtimeAttestation);
+        return Object.freeze({ data, runtimeAttestation, resultIdentity });
+      }
       return { data: validation.parsed, runtimeAttestation };
     } finally {
       if (engine) await engine.close();

@@ -268,6 +268,17 @@ export interface GovernedInvocationAnswerOptions extends GovernedAnswerOptions {
   invocationDigest: string;
 }
 
+export interface GovernedIdentifiedAnswerOptions extends GovernedInvocationAnswerOptions {
+  resultIdentity: 'probe.governed-result-identity/v1';
+}
+
+export interface GovernedResultIdentity {
+  version: 'probe.governed-result-identity/v1';
+  source: 'probe-host-schema-valid-json';
+  resultDigest: string;
+  canonicalBytes: number;
+}
+
 export interface GovernedCodexRuntimeAttestation {
   version: 'probe.governed-codex-attestation/v1';
   profileId: 'luna-xhigh-readonly-v1';
@@ -296,6 +307,12 @@ export interface GovernedCodexRuntimeAttestationV2 {
 export interface GovernedInvocationAnswerResult {
   data: unknown;
   runtimeAttestation: GovernedCodexRuntimeAttestationV2;
+}
+
+export interface GovernedIdentifiedAnswerResult {
+  data: unknown;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2;
+  resultIdentity: GovernedResultIdentity;
 }
 
 /**
@@ -364,6 +381,7 @@ export declare class ProbeAgent {
    */
   answer(message: string, images?: any[], options?: AnswerOptions): Promise<string>;
 
+  answerGoverned(message: string, options: GovernedIdentifiedAnswerOptions, images?: any[]): Promise<GovernedIdentifiedAnswerResult>;
   answerGoverned(message: string, options: GovernedInvocationAnswerOptions, images?: any[]): Promise<GovernedInvocationAnswerResult>;
   answerGoverned(message: string, options: GovernedAnswerOptions, images?: any[]): Promise<GovernedAnswerResult>;
 
