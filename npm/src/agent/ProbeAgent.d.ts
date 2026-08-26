@@ -230,6 +230,24 @@ export interface AnswerOptions {
   maxIterations?: number;
 }
 
+export interface GovernedAnswerOptions extends AnswerOptions {
+  schema: string;
+}
+
+export interface GovernedCodexRuntimeAttestation {
+  version: 'probe.governed-codex-attestation/v1';
+  profileId: 'luna-xhigh-readonly-v1';
+  requested: { profileDigest: string; cwdDigest: string; probeToolsDigest: string; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; };
+  observed: { source: 'session_configured'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; };
+  evidence: { eventCount: 1; };
+  usage: { status: 'unavailable'; };
+}
+
+export interface GovernedAnswerResult {
+  data: unknown;
+  runtimeAttestation: GovernedCodexRuntimeAttestation;
+}
+
 /**
  * Clone options for creating a new agent with shared history
  */
@@ -298,6 +316,8 @@ export declare class ProbeAgent {
    * @returns Promise resolving to the AI response
    */
   answer(message: string, images?: any[], options?: AnswerOptions): Promise<string>;
+
+  answerGoverned(message: string, options: GovernedAnswerOptions, images?: any[]): Promise<GovernedAnswerResult>;
 
   /**
    * Get token usage statistics

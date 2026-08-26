@@ -3403,6 +3403,44 @@ Follow these instructions carefully:
   }
 
   /**
+   * Return one schema-validated result with its governed Codex attestation.
+   * @param {string} message - The user's question
+   * @param {Object} options - Governed answer options
+   * @param {string} options.schema - Required JSON schema
+   * @param {Array} [images] - Unsupported; must be empty
+   * @returns {Promise<{data: unknown, runtimeAttestation: Object}>}
+   */
+  async answerGoverned(message, options, images = []) {
+    if (!this.governedCodexProfile) throw new Error('answerGoverned requires governedCodexProfile');
+    if (!message || typeof message !== 'string' || message.trim().length === 0) throw new Error('Message is required and must be a non-empty string');
+    if (!options || typeof options.schema !== 'string' || !options.schema.trim() || !isJsonSchema(options.schema)) throw new Error('answerGoverned requires a valid JSON schema string');
+    if (!Array.isArray(images) || images.length > 0) throw new Error('answerGoverned does not support images');
+
+    const prompt = message.trim() + generateSchemaInstructions(options.schema,{debug:this.debug});
+    let engine;
+    try {
+      engine = await this.getEngine();
+      if (!engine?.query) throw new Error('Governed Codex engine is unavailable');
+      const candidateChunks = [];
+      let runtimeAttestation;
+      let attestationCount = 0;
+      for await (const chunk of engine.query(prompt, { abortSignal: this._abortController.signal })) {
+        if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
+        else if (chunk.type === 'metadata' && chunk.data?.attestation) {
+          runtimeAttestation = chunk.data.attestation;
+          attestationCount++;
+        } else if (chunk.type === 'error') throw chunk.error || new Error('Governed Codex query failed');
+      }
+      if (attestationCount !== 1) throw new Error(`Expected exactly one governed runtime attestation; received ${attestationCount}`);
+      const validation = validateJsonResponse(candidateChunks.join(''), { debug: this.debug, schema: options.schema });
+      if (!validation.isValid) throw new Error(validation.errorSummary || validation.error || 'Governed answer failed schema validation');
+      return { data: validation.parsed, runtimeAttestation };
+    } finally {
+      if (engine) await engine.close();
+    }
+  }
+
+  /**
    * Answer a question using the agentic flow
    * @param {string} message - The user's question
    * @param {Array} [images] - Optional array of image data (base64 strings or URLs)

@@ -6,8 +6,11 @@ import { join } from 'node:path';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 import { createCodexEngine } from '../../src/agent/engines/codex.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs } from '../../src/agent/engines/governed-codex-profile.js';
+import { generateSchemaInstructions } from '../../src/agent/schemaUtils.js';
 
 const TOOLS = ['search', 'extract', 'listFiles'];
+const LINEAGE = { subjectId: 'SYS-REQ-048', subjectFingerprint: '636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7', role: 'spec-review', coverageKey: 'SYS-REQ-048::spec-review', findings: [{ type: 'ambiguity', severity: 'medium', message: 'timeout semantics are underspecified' }] };
+const LINEAGE_SCHEMA = JSON.stringify({ type: 'object', required: ['subjectId', 'subjectFingerprint', 'role', 'coverageKey', 'findings'], additionalProperties: false, properties: { subjectId: { type: 'string' }, subjectFingerprint: { type: 'string' }, role: { type: 'string' }, coverageKey: { type: 'string' }, findings: { type: 'array', items: { type: 'object', required: ['type', 'severity', 'message'], additionalProperties: false, properties: { type: { type: 'string' }, severity: { type: 'string' }, message: { type: 'string' } } } } } });
 const fakeCodex = `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -40,6 +43,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (foreign) { const cwd = decodeURIComponent(foreign[2]); events = [configured(request.id, { ...args, cwd }, {}, Number(foreign[1]))]; }
   for (const event of events) send(event);
   let text = 'candidate-' + process.pid;
+  const lineage = { subjectId: 'SYS-REQ-048', subjectFingerprint: '636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7', role: 'spec-review', coverageKey: 'SYS-REQ-048::spec-review', findings: [{ type: 'ambiguity', severity: 'medium', message: 'timeout semantics are underspecified' }] };
+  if (prompt.includes('[VALID]')) text = JSON.stringify(lineage);
+  if (prompt.includes('[WRONG]')) text = JSON.stringify({ subjectId: lineage.subjectId });
+  if (prompt.includes('[BADJSON]')) text = '{';
+  if (prompt.includes('[EXTRA]')) text = JSON.stringify({ ...lineage, extra: true });
   if (prompt.includes('[FORBIDDEN]')) {
     const url = Object.values(args.config.mcp_servers)[0].url.replace('/mcp', '/rpc');
     const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'mcp__probe__bash', arguments: {} } }) });
@@ -95,6 +103,9 @@ async function closed(url) {
 function host() {
   return { allowedTools: { isEnabled: name => TOOLS.includes(name) }, toolImplementations: Object.fromEntries(TOOLS.map(name => [name, { execute: async () => name }])) };
 }
+function governedAgent(root) {
+  return new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [...TOOLS], governedCodexProfile: profile(root), disableMermaidValidation: true });
+}
 async function runEngine(root, stateDir, marker, useProbe = false) {
   const before = await stateFiles(stateDir); let engine;
   if (useProbe) {
@@ -107,6 +118,12 @@ async function runEngine(root, stateDir, marker, useProbe = false) {
   const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
   return { engine, output, state, call, url };
 }
+async function runGoverned(root, stateDir, marker) {
+  const before = await stateFiles(stateDir); const agent = governedAgent(root);
+  const settled = await agent.answerGoverned(marker, { schema: LINEAGE_SCHEMA }).then(value => ({ value }), error => ({ error }));
+  const state = await readState(await waitForState(stateDir, before, marker)); const call = state.seen.find(item => item.method === 'tools/call');
+  return { settled, state, call, url: Object.values(call.params.arguments.config.mcp_servers)[0].url };
+}
 
 test('EXP-0148 governed Codex runtime binding', async t => {
   const root = await mkdtemp(join(tmpdir(), 'probe-exp0148-'));
@@ -115,6 +132,7 @@ test('EXP-0148 governed Codex runtime binding', async t => {
   const executable = join(bin, 'codex'); await writeFile(executable, fakeCodex); await chmod(executable, 0o755);
   const originalPath = process.env.PATH; process.env.PATH = `${bin}:${originalPath}`; process.env.PROBE_EXP0148_STATE = stateDir;
   t.after(async () => { process.env.PATH = originalPath; delete process.env.PROBE_EXP0148_STATE; await rm(root, { recursive: true, force: true }); });
+  let governedValid;
 
   await t.test('rejects non-exact public bindings before spawn', () => {
     const count = () => stateFiles(stateDir);
@@ -196,6 +214,70 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     const url = Object.values(state.seen.find(item => item.method === 'tools/call').params.arguments.config.mcp_servers)[0].url;
     await engine.close(); const output = await pending; assert.equal(output.some(item => item.type === 'text'), false);
     assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
+  });
+
+  await t.test('O1 governed answer returns parsed data and the exact attestation', async () => {
+    governedValid = await runGoverned(root, stateDir, '[VALID]'); assert.ifError(governedValid.settled.error);
+    assert.deepEqual(Object.keys(governedValid.settled.value), ['data', 'runtimeAttestation']);
+    assert.deepEqual(governedValid.settled.value.data, LINEAGE);
+    const receipt = governedValid.settled.value.runtimeAttestation; const internal = attestGovernedCodexSession({ profile: profile(root), events: [configuredEvidence(governedValid.state.pid, 2, root)] });
+    assert.deepEqual(receipt, { version: 'probe.governed-codex-attestation/v1', profileId: 'luna-xhigh-readonly-v1', requested: { profileDigest: internal.requested.profileDigest, cwdDigest: internal.requested.cwdDigest, probeToolsDigest: internal.requested.probeToolsDigest, model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never' }, observed: { source: 'session_configured', model: 'gpt-5.6-luna', modelProviderId: 'openai', reasoningEffort: 'xhigh', approvalPolicy: 'never', cwdDigest: internal.observed.cwdDigest, permissionProfileDigest: internal.observed.permissionProfileDigest, filesystem: 'restricted-read-root', network: 'restricted' }, evidence: { eventCount: 1 }, usage: { status: 'unavailable' } });
+    assert.equal(alive(governedValid.state.pid), false); assert.equal(await closed(governedValid.url), true);
+  });
+
+  await t.test('O2 preflight rejects before acquisition and wrong-shaped JSON fails closed', async () => {
+    const preflight = governedAgent(root); let acquisitions = 0; preflight.getEngine = async () => { acquisitions++; throw new Error('must not acquire'); };
+    for (const call of [() => preflight.answerGoverned('x'), () => preflight.answerGoverned('x', { schema: '' }), () => preflight.answerGoverned('x', { schema: 'plain text' }), () => preflight.answerGoverned('x', { schema: LINEAGE_SCHEMA }, {}), () => preflight.answerGoverned('x', { schema: LINEAGE_SCHEMA }, ['image'])]) await assert.rejects(call());
+    const ungoverned = new ProbeAgent({ provider: 'codex', path: root, allowedTools: [...TOOLS] }); ungoverned.getEngine = preflight.getEngine;
+    await assert.rejects(ungoverned.answerGoverned('x', { schema: LINEAGE_SCHEMA }), /governedCodexProfile/); assert.equal(acquisitions, 0);
+    const run = await runGoverned(root, stateDir, '[WRONG]'); assert.match(run.settled.error.message, /Schema validation failed/);
+    assert.equal(alive(run.state.pid), false); assert.equal(await closed(run.url), true);
+  });
+
+  await t.test('O3 malformed JSON fails closed', async () => {
+    const run = await runGoverned(root, stateDir, '[BADJSON]'); assert.ok(run.settled.error);
+    assert.equal(alive(run.state.pid), false); assert.equal(await closed(run.url), true);
+  });
+
+  await t.test('O4 forbidden extra properties fail closed', async () => {
+    const run = await runGoverned(root, stateDir, '[EXTRA]'); assert.match(run.settled.error.message, /Schema validation failed/);
+    assert.equal(alive(run.state.pid), false); assert.equal(await closed(run.url), true);
+  });
+
+  await t.test('O5 missing or duplicate attestation metadata fails closed', async () => {
+    for (const copies of [0, 2]) {
+      const agent = governedAgent(root); let closeCount = 0; let queryCount = 0;
+      agent.engine = { async *query() { queryCount++; yield { type: 'text', content: JSON.stringify(LINEAGE) }; for (let i = 0; i < copies; i++) yield { type: 'metadata', data: { attestation: governedValid.settled.value.runtimeAttestation } }; }, async close() { closeCount++; } };
+      await assert.rejects(agent.answerGoverned('[INJECTED]', { schema: LINEAGE_SCHEMA }), /exactly one/);
+      assert.equal(queryCount, 1); assert.equal(closeCount, 1);
+    }
+  });
+
+  await t.test('O6 the sole tools/call contains exactly one exact schema suffix', () => {
+    const suffix = generateSchemaInstructions(LINEAGE_SCHEMA, { debug: false }); const prompt = governedValid.call.params.arguments.prompt;
+    assert.equal(prompt.endsWith('[VALID]' + suffix), true); assert.equal(prompt.split(suffix).length - 1, 1);
+    assert.equal(governedValid.state.seen.filter(item => item.method === 'tools/call').length, 1);
+  });
+
+  await t.test('O7 cancellation returns no result and awaits cleanup', async () => {
+    const before = await stateFiles(stateDir); const agent = governedAgent(root);
+    const pending = agent.answerGoverned('[WAIT]', { schema: LINEAGE_SCHEMA }).then(value => ({ value }), error => ({ error }));
+    const state = await readState(await waitForState(stateDir, before, '[WAIT]')); const call = state.seen.find(item => item.method === 'tools/call'); const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
+    agent.cancel(); const settled = await pending; assert.ok(settled.error); assert.equal('value' in settled, false);
+    assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
+  });
+
+  await t.test('O8 answer keeps its string-returning behavior', async () => {
+    const before = await stateFiles(stateDir); const agent = governedAgent(root); const value = await agent.answer('[STRING]');
+    const state = await readState(await waitForState(stateDir, before, '[STRING]')); const call = state.seen.find(item => item.method === 'tools/call'); const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
+    assert.equal(typeof value, 'string'); assert.match(value, /^candidate-/); assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
+  });
+
+  await t.test('O9 frozen Proof-admission lineage is preserved without interpretation', () => {
+    const data = governedValid.settled.value.data;
+    assert.equal(data.subjectId, 'SYS-REQ-048'); assert.equal(data.subjectFingerprint, '636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7');
+    assert.equal(data.role, 'spec-review'); assert.equal(data.coverageKey, 'SYS-REQ-048::spec-review'); assert.deepEqual(data.findings, LINEAGE.findings);
+    assert.equal('runtimeAttestation' in data, false);
   });
 
   await t.test('omitting the profile preserves the ungoverned result path', async () => {
