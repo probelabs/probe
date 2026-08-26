@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 import { createCodexEngine } from '../../src/agent/engines/codex.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs } from '../../src/agent/engines/governed-codex-profile.js';
@@ -12,6 +15,8 @@ import { generateSchemaInstructions } from '../../src/agent/schemaUtils.js';
 const TOOLS = ['search', 'extract', 'listFiles'];
 const DIGEST_A = `sha256:${'a'.repeat(64)}`;
 const DIGEST_B = `sha256:${'b'.repeat(64)}`;
+const RESULT_IDENTITY = 'probe.governed-result-identity/v1';
+const execFileAsync = promisify(execFile);
 const LINEAGE = { subjectId: 'SYS-REQ-048', subjectFingerprint: '636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7', role: 'spec-review', coverageKey: 'SYS-REQ-048::spec-review', findings: [{ type: 'ambiguity', severity: 'medium', message: 'timeout semantics are underspecified' }] };
 const LINEAGE_SCHEMA = JSON.stringify({ type: 'object', required: ['subjectId', 'subjectFingerprint', 'role', 'coverageKey', 'findings'], additionalProperties: false, properties: { subjectId: { type: 'string' }, subjectFingerprint: { type: 'string' }, role: { type: 'string' }, coverageKey: { type: 'string' }, findings: { type: 'array', items: { type: 'object', required: ['type', 'severity', 'message'], additionalProperties: false, properties: { type: { type: 'string' }, severity: { type: 'string' }, message: { type: 'string' } } } } } });
 const fakeCodex = `#!/usr/bin/env node
@@ -132,6 +137,18 @@ async function runGoverned(root, stateDir, marker, options = { schema: LINEAGE_S
   const settled = await agent.answerGoverned(marker, options).then(value => ({ value }), error => ({ error }));
   const state = await readState(await waitForState(stateDir, before, marker)); const call = state.seen.find(item => item.method === 'tools/call');
   return { settled, state, call, url: Object.values(call.params.arguments.config.mcp_servers)[0].url };
+}
+function installIdentifiedEngine(agent, receipt, candidate) {
+  const state = { queries: 0, closes: 0, prompts: [], options: [] };
+  agent.engine = { async *query(prompt, options) { state.queries++; state.prompts.push(prompt); state.options.push(options); yield { type: 'text', content: candidate }; yield { type: 'metadata', data: { attestation: structuredClone(receipt) } }; }, async close() { state.closes++; } };
+  return state;
+}
+function expectedResultIdentity(canonical) {
+  const bytes = Buffer.from(canonical, 'utf8'); const byteLength = Buffer.alloc(8); byteLength.writeBigUInt64BE(BigInt(bytes.length));
+  return { version: RESULT_IDENTITY, source: 'probe-host-schema-valid-json', resultDigest: `sha256:${createHash('sha256').update('probe.governed-result-identity/data/v1', 'utf8').update(Buffer.from([0])).update(byteLength).update(bytes).digest('hex')}`, canonicalBytes: bytes.length };
+}
+function assertDeepFrozen(value) {
+  if (!value || typeof value !== 'object') return; assert.equal(Object.isFrozen(value), true); for (const child of Object.values(value)) assertDeepFrozen(child);
 }
 
 test('EXP-0148 governed Codex runtime binding', async t => {
@@ -426,5 +443,144 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     const output = await collect(engine.query('[MISSING]')); const state = await readState(await waitForState(stateDir, before, '[MISSING]'));
     assert.match(output.find(item => item.type === 'text').content, /^candidate-/); assert.equal(alive(state.pid), true);
     await engine.close(); assert.equal(alive(state.pid), false);
+  });
+
+  let identifiedValid;
+  await t.test('EXP-0152 T01 omitted and inherited selector preserve v1 and v2 lanes', async () => {
+    const v1 = await runGoverned(root, stateDir, '[VALID][EXP0152-V1]'); const v2 = await runGoverned(root, stateDir, '[VALID][EXP0152-V2]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A });
+    assert.deepEqual(Object.keys(v1.settled.value), ['data', 'runtimeAttestation']); assert.deepEqual(Object.keys(v2.settled.value), ['data', 'runtimeAttestation']); assert.equal(Object.isFrozen(v1.settled.value), false); assert.equal(Object.isFrozen(v2.settled.value), false);
+    const inherited = Object.assign(Object.create({ resultIdentity: RESULT_IDENTITY }), { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }); const inheritedRun = await runGoverned(root, stateDir, '[VALID][EXP0152-INHERITED]', inherited);
+    assert.ifError(inheritedRun.settled.error); assert.deepEqual(Object.keys(inheritedRun.settled.value), ['data', 'runtimeAttestation']); assert.equal(inheritedRun.settled.value.runtimeAttestation.version, 'probe.governed-codex-attestation/v2');
+  });
+
+  await t.test('EXP-0152 T02 public types and overload returns compile with expected errors', async () => {
+    const npmRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const typescriptBin = join(npmRoot, 'node_modules', 'typescript', 'bin', 'tsc');
+    const fixtureDir = await mkdtemp(join(npmRoot, '.exp-0152-types-'));
+    const fixturePath = join(fixtureDir, 'overloads.mts');
+    const fixtureSource = `import type ProbeAgent from '../index.js';
+import type { GovernedAnswerResult, GovernedIdentifiedAnswerResult, GovernedInvocationAnswerResult } from '../index.js';
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends
+  (<T>() => T extends B ? 1 : 2) ? true : false;
+type Expect<T extends true> = T;
+declare const agent: ProbeAgent;
+declare const schema: string;
+declare const invocationDigest: string;
+const identified = agent.answerGoverned('x', { schema, invocationDigest, resultIdentity: 'probe.governed-result-identity/v1' });
+const bound = agent.answerGoverned('x', { schema, invocationDigest });
+const unbound = agent.answerGoverned('x', { schema });
+type Identified = Expect<Equal<typeof identified, Promise<GovernedIdentifiedAnswerResult>>>;
+type Bound = Expect<Equal<typeof bound, Promise<GovernedInvocationAnswerResult>>>;
+type Unbound = Expect<Equal<typeof unbound, Promise<GovernedAnswerResult>>>;
+// @ts-expect-error wrong resultIdentity literal
+agent.answerGoverned('x', { schema, invocationDigest, resultIdentity: 'wrong' });
+// @ts-expect-error resultIdentity requires invocationDigest
+agent.answerGoverned('x', { schema, resultIdentity: 'probe.governed-result-identity/v1' });`;
+    try {
+      await writeFile(fixturePath, fixtureSource, 'utf8');
+      await execFileAsync(process.execPath,[typescriptBin,'--noEmit','--strict','--skipLibCheck','--target','ES2022','--module','NodeNext','--moduleResolution','NodeNext','--types','node',fixturePath],{cwd:npmRoot});
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('EXP-0152 T03 selector errors are exact, ordered, and pre-acquisition', async () => {
+    const agent = governedAgent(root); let acquisitions = 0; agent.getEngine = async () => { acquisitions++; throw new Error('must not acquire'); };
+    await assert.rejects(agent.answerGoverned('x', { schema: LINEAGE_SCHEMA, invocationDigest: 'bad', resultIdentity: 'wrong' }), { name: 'TypeError', message: 'answerGoverned invocationDigest must match sha256:<64 lowercase hexadecimal digits>' });
+    await assert.rejects(agent.answerGoverned('x', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: 'wrong' }), { name: 'TypeError', message: 'answerGoverned resultIdentity must equal probe.governed-result-identity/v1' });
+    await assert.rejects(agent.answerGoverned('x', { schema: LINEAGE_SCHEMA, resultIdentity: RESULT_IDENTITY }), { name: 'TypeError', message: 'answerGoverned resultIdentity requires an own invocationDigest' }); assert.equal(acquisitions, 0);
+  });
+
+  await t.test('EXP-0152 T04 schema and optional selectors are one-read snapshots before await', async () => {
+    const trace = []; let schemaReads = 0; let invocationReads = 0; let resultReads = 0; const options = {};
+    Object.defineProperty(options, 'schema', { enumerable: true, get() { trace.push('schema'); schemaReads++; return schemaReads === 1 ? LINEAGE_SCHEMA : JSON.stringify({ type: 'string' }); } });
+    Object.defineProperty(options, 'invocationDigest', { enumerable: true, get() { trace.push('invocation'); invocationReads++; return invocationReads === 1 ? DIGEST_A : DIGEST_B; } });
+    Object.defineProperty(options, 'resultIdentity', { enumerable: true, get() { trace.push('result'); resultReads++; return resultReads === 1 ? RESULT_IDENTITY : 'wrong'; } });
+    const agent = governedAgent(root); const state = installIdentifiedEngine(agent, boundValid.settled.value.runtimeAttestation, JSON.stringify(LINEAGE)); const value = await agent.answerGoverned('[EXP0152-GETTERS]', options);
+    assert.deepEqual(trace, ['schema', 'invocation', 'result']); assert.deepEqual([schemaReads, invocationReads, resultReads], [1, 1, 1]); assert.equal(state.prompts[0].endsWith(generateSchemaInstructions(LINEAGE_SCHEMA, { debug: false })), true); assert.deepEqual(value.data, LINEAGE);
+    const mutable = { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }; const delayed = governedAgent(root); installIdentifiedEngine(delayed, boundValid.settled.value.runtimeAttestation, JSON.stringify(LINEAGE)); const pending = delayed.answerGoverned('[EXP0152-MUTATE]', mutable); mutable.schema = JSON.stringify({ type: 'string' }); assert.deepEqual((await pending).data, LINEAGE);
+  });
+
+  await t.test('EXP-0152 T05 independently recomputes canonical bytes and framed digest', async () => {
+    const agent = governedAgent(root); const candidate = '{"findings":[{"message":"timeout semantics are underspecified","severity":"medium","type":"ambiguity"}],"coverageKey":"SYS-REQ-048::spec-review","role":"spec-review","subjectFingerprint":"636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7","subjectId":"SYS-REQ-048"}';
+    installIdentifiedEngine(agent, boundValid.settled.value.runtimeAttestation, candidate); identifiedValid = await agent.answerGoverned('[EXP0152-IDENTIFIED]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY });
+    const canonical = JSON.stringify({ coverageKey: LINEAGE.coverageKey, findings: [{ message: LINEAGE.findings[0].message, severity: 'medium', type: 'ambiguity' }], role: 'spec-review', subjectFingerprint: LINEAGE.subjectFingerprint, subjectId: 'SYS-REQ-048' });
+    assert.deepEqual(identifiedValid.resultIdentity, expectedResultIdentity(canonical)); assert.deepEqual(Object.keys(identifiedValid), ['data', 'runtimeAttestation', 'resultIdentity']);
+  });
+
+  await t.test('EXP-0152 T06 equivalence and honest mixed-key ordering include own __proto__', async () => {
+    const mixedKeys=['10','2','01','4294967294','4294967295','é','😀','__proto__'];
+    const schema=JSON.stringify({type:'object',required:mixedKeys,additionalProperties:false,properties:Object.fromEntries(mixedKeys.map(key=>[key,{type:'string'}])),patternProperties:{'^__proto__$':{type:'string'}}}); const raw = '{"10":"ten","2":"two","01":"leading","4294967294":"max","4294967295":"overflow","é":"accent","😀":"emoji","__proto__":"proto"}';
+    const agent = governedAgent(root); installIdentifiedEngine(agent, boundValid.settled.value.runtimeAttestation, raw); const mixed = await agent.answerGoverned('mixed', { schema, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY });
+    const expected = '{"2":"two","10":"ten","4294967294":"max","01":"leading","4294967295":"overflow","__proto__":"proto","é":"accent","😀":"emoji"}';
+    assert.deepEqual(Object.keys(mixed.data), ['2', '10', '4294967294', '01', '4294967295', '__proto__', 'é', '😀']); assert.equal(Object.prototype.hasOwnProperty.call(mixed.data, '__proto__'), true); assert.deepEqual(mixed.resultIdentity, expectedResultIdentity(expected));
+    const equivalent = governedAgent(root); installIdentifiedEngine(equivalent, boundValid.settled.value.runtimeAttestation, '{"😀":"emoji","é":"accent","__proto__":"proto","4294967295":"overflow","4294967294":"max","01":"leading","2":"two","10":"ten"}'); const reordered = await equivalent.answerGoverned('mixed-2', { schema, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }); assert.equal(reordered.resultIdentity.resultDigest, mixed.resultIdentity.resultDigest);
+    for (const candidate of ['-0', '0']) { const numberAgent = governedAgent(root); installIdentifiedEngine(numberAgent, boundValid.settled.value.runtimeAttestation, candidate); const result = await numberAgent.answerGoverned('number', { schema: JSON.stringify({ type: 'number' }), invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }); assert.equal(result.resultIdentity.resultDigest, expectedResultIdentity('0').resultDigest); }
+  });
+
+  await t.test('EXP-0152 T07 semantic content and array order change identity', async () => {
+    const answer = async candidate => { const agent = governedAgent(root); installIdentifiedEngine(agent, boundValid.settled.value.runtimeAttestation, candidate); return agent.answerGoverned('array', { schema: '{}', invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }); };
+    const [a, b, c] = await Promise.all([answer('[1,2]'), answer('[2,1]'), answer('[1,3]')]); assert.notEqual(a.resultIdentity.resultDigest, b.resultIdentity.resultDigest); assert.notEqual(a.resultIdentity.resultDigest, c.resultIdentity.resultDigest);
+  });
+
+  await t.test('EXP-0152 T08 identity is content-only across invocation bindings', async () => {
+    const receiptB = structuredClone(boundValid.settled.value.runtimeAttestation); receiptB.executionContext.invocationDigest = DIGEST_B;
+    const run = async (digest, receipt) => { const agent = governedAgent(root); installIdentifiedEngine(agent, receipt, JSON.stringify(LINEAGE)); return agent.answerGoverned('same', { schema: LINEAGE_SCHEMA, invocationDigest: digest, resultIdentity: RESULT_IDENTITY }); };
+    const [a, b] = await Promise.all([run(DIGEST_A, boundValid.settled.value.runtimeAttestation), run(DIGEST_B, receiptB)]); assert.equal(a.resultIdentity.resultDigest, b.resultIdentity.resultDigest); assert.notEqual(a.runtimeAttestation.executionContext.invocationDigest, b.runtimeAttestation.executionContext.invocationDigest);
+  });
+
+  await t.test('EXP-0152 T09 complete identified graph is deeply frozen', () => {
+    assertDeepFrozen(identifiedValid); assertDeepFrozen(identifiedValid.data); assertDeepFrozen(identifiedValid.resultIdentity); assertDeepFrozen(identifiedValid.runtimeAttestation);
+  });
+
+  await t.test('EXP-0152 T10 normalized data is a new host snapshot', async () => {
+    const candidate='{"z":[{"b":2,"a":1}]}';
+    const originalJSONParse=JSON.parse;
+    const captures=[];
+    JSON.parse=function (...args) {
+      const parsed=Reflect.apply(originalJSONParse,this,args);
+      if (args[0]===candidate && parsed!==null && typeof parsed==='object') captures.push(parsed);
+      return parsed;
+    };
+    let result;
+    try {
+      const agent = governedAgent(root); installIdentifiedEngine(agent, boundValid.settled.value.runtimeAttestation, candidate); result = await agent.answerGoverned('copy', { schema: '{}', invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY });
+    } finally {
+      JSON.parse=originalJSONParse;
+    }
+    assert.equal(captures.length, 2); const validationParsed=captures.at(-1);
+    assert.notEqual(result.data, validationParsed); assert.notEqual(result.data.z, validationParsed.z); assert.notEqual(result.data.z[0], validationParsed.z[0]);
+    assert.deepEqual(result.data, { z: [{ a: 1, b: 2 }] }); assert.equal(result.data.z[0].a, 1); assert.equal(result.data.z[0].b, 2); assertDeepFrozen(result.data);
+  });
+
+  await t.test('EXP-0152 T11 receipt and schema failures emit no identity and clean once', async () => {
+    const mismatch = governedAgent(root); const wrong = structuredClone(boundValid.settled.value.runtimeAttestation); wrong.executionContext.invocationDigest = DIGEST_B; const mismatchState = installIdentifiedEngine(mismatch, wrong, '{');
+    const mismatchSettled = await mismatch.answerGoverned('mismatch', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }).then(value => ({ value }), error => ({ error })); assert.equal('value' in mismatchSettled, false); assert.match(mismatchSettled.error.message, /matching governed invocation/); assert.deepEqual([mismatchState.queries, mismatchState.closes], [1, 1]);
+    const invalid = governedAgent(root); const invalidState = installIdentifiedEngine(invalid, boundValid.settled.value.runtimeAttestation, '{'); const invalidSettled = await invalid.answerGoverned('invalid', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }).then(value => ({ value }), error => ({ error })); assert.equal('value' in invalidSettled, false); assert.doesNotMatch(invalidSettled.error.message, /matching governed invocation/); assert.deepEqual([invalidState.queries, invalidState.closes], [1, 1]);
+  });
+
+  await t.test('EXP-0152 T12 public identity and receipt recursively exclude operational bytes', () => {
+    const projection = { runtimeAttestation: identifiedValid.runtimeAttestation, resultIdentity: identifiedValid.resultIdentity }; const serialized = JSON.stringify(projection);
+    for (const forbidden of ['prompt', 'schema', 'candidate', 'canonical', 'environment', 'credentials', 'correlation', 'requestId', 'sessionId', 'threadId', 'conversationId', 'cwd', 'path']) assert.equal(recursiveKeys(projection).includes(forbidden), false, forbidden);
+    for (const secret of [root, LINEAGE_SCHEMA, JSON.stringify(LINEAGE), process.env.PATH]) assert.equal(serialized.includes(secret), false);
+  });
+
+  await t.test('EXP-0152 T13 complete EXP-0151 oracle set remains present', async () => {
+    const source = await readFile(new URL(import.meta.url), 'utf8'); for (let i = 1; i <= 16; i++) assert.match(source, new RegExp(`EXP-0151 O${String(i).padStart(2, '0')}`));
+  });
+
+  await t.test('EXP-0152 T14 declaration mirrors and overload order are exact', async () => {
+    const sourceDeclaration = await readFile(new URL('../../src/agent/ProbeAgent.d.ts', import.meta.url), 'utf8'); const packageDeclaration = await readFile(new URL('../../index.d.ts', import.meta.url), 'utf8');
+    const contract = value => value.slice(value.indexOf('export interface GovernedAnswerOptions'), value.indexOf('/**\n * Clone options', value.indexOf('export interface GovernedAnswerOptions'))); assert.equal(contract(sourceDeclaration), contract(packageDeclaration));
+    const overloads = value => value.slice(value.indexOf('  answerGoverned(message: string, options: GovernedIdentifiedAnswerOptions'), value.indexOf('\n\n  /**\n   * Get token usage', value.indexOf('  answerGoverned(message: string, options: GovernedIdentifiedAnswerOptions'))); assert.equal(overloads(sourceDeclaration), overloads(packageDeclaration));
+    assert.equal(overloads(sourceDeclaration), `  answerGoverned(message: string, options: GovernedIdentifiedAnswerOptions, images?: any[]): Promise<GovernedIdentifiedAnswerResult>;\n  answerGoverned(message: string, options: GovernedInvocationAnswerOptions, images?: any[]): Promise<GovernedInvocationAnswerResult>;\n  answerGoverned(message: string, options: GovernedAnswerOptions, images?: any[]): Promise<GovernedAnswerResult>;`);
+  });
+
+  await t.test('EXP-0152 T15 frozen files and legacy function/declaration regions remain exact', async () => {
+    const sha = value => createHash('sha256').update(value).digest('hex'); const read = path => readFile(new URL(path, import.meta.url), 'utf8');
+    assert.equal(sha(await read('../../src/agent/engines/codex.js')), '98e688326ecaabf384559f882e0bffea70460f5667b9f47f183763cf2a3f8912'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), 'de56ab543afb61224bdba860bbad0a6734d48bbb5393d3da7807cfb5baf54936');
+    const source = await read('../../src/agent/ProbeAgent.js'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message'))); assert.equal(sha(answer), '53ee9f207963f5b991aaf89e143211039ad632d9cc7535d91af66bcae95b135f');
+    const governed = source.slice(source.indexOf('  async answerGoverned(message'), source.indexOf('\n  /**\n   * Answer a question', source.indexOf('  async answerGoverned(message'))); assert.equal((governed.match(/options\.schema/g) || []).length, 1); assert.equal((governed.match(/options\.resultIdentity/g) || []).length, 1); assert.equal((governed.match(/validateJsonResponse\(/g) || []).length, 1); assert.match(governed, /return \{ data: validation\.parsed, runtimeAttestation \};/);
+    const identityHelper = source.slice(source.indexOf('function identifyGovernedResult'), source.indexOf('// Maximum tool iterations')); assert.equal((identityHelper.match(/JSON\.stringify\(/g) || []).length, 1);
   });
 });
