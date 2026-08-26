@@ -46,10 +46,7 @@ export interface ProbeAgentOptions {
   /** List of allowed tool names. Use ['*'] for all tools (default), [] or null for no tools (raw AI mode), or specific tool names like ['search', 'query', 'extract']. Supports exclusion with '!' prefix (e.g., ['*', '!bash']). */
   allowedTools?: string[] | null;
   /** Attested, fail-closed Codex runtime profile. Requires provider codex and an exact allowedTools match. */
-  governedCodexProfile?: {
-    version: 'probe.governed-codex-profile/v1'; profileId: 'luna-xhigh-readonly-v1'; engine: 'codex'; model: 'gpt-5.6-luna';
-    reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeTools: ['search', 'extract', 'listFiles']; fallback: false; retries: 0;
-  };
+  governedCodexProfile?: { version: 'probe.governed-codex-profile/v1'; profileId: 'luna-xhigh-readonly-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeTools: ['search', 'extract', 'listFiles']; fallback: false; retries: 0; };
   /** Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set. */
   disableTools?: boolean;
   /** Disable automatic mermaid diagram validation and fixing */

@@ -10,6 +10,15 @@ import { BuiltInMCPServer } from '../mcp/built-in-server.js';
 import { Session } from '../shared/Session.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs, validateGovernedCodexProfile } from './governed-codex-profile.js';
 
+function externalReceipt(attestation) {
+  return {
+    version: attestation.version, profileId: attestation.profileId,
+    requested: { profileDigest: attestation.requested.profileDigest, cwdDigest: attestation.requested.cwdDigest, probeToolsDigest: attestation.requested.probeToolsDigest, model: attestation.requested.model, reasoningEffort: attestation.requested.reasoningEffort, sandbox: attestation.requested.sandbox, approvalPolicy: attestation.requested.approvalPolicy },
+    observed: { source: attestation.observed.source, model: attestation.observed.model, modelProviderId: attestation.observed.modelProviderId, reasoningEffort: attestation.observed.reasoningEffort, approvalPolicy: attestation.observed.approvalPolicy, cwdDigest: attestation.observed.cwdDigest, permissionProfileDigest: attestation.observed.permissionProfileDigest, filesystem: attestation.observed.filesystem, network: attestation.observed.network },
+    evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+  };
+}
+
 /**
  * Codex Engine using MCP Server with event streaming
  */
@@ -138,18 +147,13 @@ export async function createCodexEngine(options = {}) {
     });
   }
 
-  function rejectPending(error) {
-    for (const { reject, timer } of pendingRequests.values()) { clearTimeout(timer); reject(error); }
-    pendingRequests.clear();
-  }
+  function rejectPending(error) { for (const { reject, timer } of pendingRequests.values()) { clearTimeout(timer); reject(error); } pendingRequests.clear(); }
 
   async function cleanup(reason = new Error('Codex engine closed')) {
     if (closePromise) return closePromise;
     closePromise = (async () => {
-      rejectPending(reason);
-      eventHandlers.clear(); governedEvidenceHandler = null;
-      stdoutReader.close();
-      codexProcess.stdin.destroy();
+      rejectPending(reason); eventHandlers.clear(); governedEvidenceHandler = null;
+      stdoutReader.close(); codexProcess.stdin.destroy();
       if (codexProcess.exitCode === null && !codexProcess.killed) codexProcess.kill();
       await processClosed;
       if (mcpServer) await mcpServer.stop();
@@ -188,6 +192,7 @@ export async function createCodexEngine(options = {}) {
 
       const isFollowUp = session.conversationId !== null;
       const toolName = isFollowUp ? 'codex-reply' : 'codex';
+      let abortHandler;
 
       try {
         // Build arguments
@@ -202,9 +207,7 @@ export async function createCodexEngine(options = {}) {
         if (governedProfile) {
           if (governedQueryStarted) throw new Error('Governed Codex engine permits one initial query');
           governedQueryStarted = true;
-          toolArgs = buildGovernedCodexInitialToolArgs({
-            profile: governedProfile, prompt: finalPrompt, mcp: { name: mcpServerName, url: mcpServerUrl }
-          });
+          toolArgs = buildGovernedCodexInitialToolArgs({ profile: governedProfile, prompt: finalPrompt, mcp: { name: mcpServerName, url: mcpServerUrl } });
         } else if (model) {
           toolArgs.model = model;
         }
@@ -223,9 +226,7 @@ export async function createCodexEngine(options = {}) {
         const reqId = requestId + 1;
         let fullResponse = '';
         let gotSessionId = false;
-        const evidence = [];
-        if (governedProfile) governedEvidenceHandler = (event) => evidence.push(event);
-        let abortHandler;
+        const evidence = []; if (governedProfile) governedEvidenceHandler = (event) => evidence.push(event);
         if (opts.abortSignal) {
           if (opts.abortSignal.aborted) throw new Error('Codex query cancelled');
           abortHandler = () => cleanup(new Error('Codex query cancelled'));
@@ -266,10 +267,9 @@ export async function createCodexEngine(options = {}) {
 
         // Clean up event handler
         eventHandlers.delete(reqId);
-        if (opts.abortSignal && abortHandler) opts.abortSignal.removeEventListener('abort', abortHandler);
         let attestation = null;
         if (governedProfile) {
-          attestation = attestGovernedCodexSession({ profile: governedProfile, events: evidence });
+          attestation = externalReceipt(attestGovernedCodexSession({ profile: governedProfile, events: evidence }));
           session.setConversationId(evidence[0].params.msg.session_id);
         }
 
@@ -314,6 +314,7 @@ export async function createCodexEngine(options = {}) {
           error: error
         };
       } finally {
+        if (opts.abortSignal && abortHandler) opts.abortSignal.removeEventListener('abort', abortHandler);
         if (governedProfile) await cleanup();
       }
     },

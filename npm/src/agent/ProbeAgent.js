@@ -324,11 +324,8 @@ export class ProbeAgent {
     this.thinkingEffort = options.thinkingEffort || null;
 
     if (options.governedCodexProfile !== undefined) {
-      if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex');
-      const profile = validateGovernedCodexProfile(options.governedCodexProfile);
-      if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== profile.probeTools.length || options.allowedTools.some((tool, index) => tool !== profile.probeTools[index])) {
-        throw new TypeError('allowedTools must exactly match governedCodexProfile.probeTools');
-      }
+      if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex'); const profile = validateGovernedCodexProfile(options.governedCodexProfile);
+      if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== profile.probeTools.length || options.allowedTools.some((tool, index) => tool !== profile.probeTools[index])) throw new TypeError('allowedTools must exactly match governedCodexProfile.probeTools');
       this.governedCodexProfile = profile;
     }
 
@@ -3656,14 +3653,14 @@ Follow these instructions carefully:
         }
 
         // Send the message directly to Codex and collect the response
-        try {
-          const engine = await this.getEngine();
+        let engine; try {
+          engine = await this.getEngine();
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
 
             // Query Codex directly with the message and schema
-            for await (const chunk of engine.query(message, options)) {
+            for await (const chunk of engine.query(message, this.governedCodexProfile ? { ...options, abortSignal: this._abortController.signal } : options)) {
               if (chunk.type === 'text' && chunk.content) {
                 assistantResponseContent += chunk.content;
                 if (options.onStream) {
@@ -3715,7 +3712,7 @@ Follow these instructions carefully:
             console.error('[DEBUG] Codex error:', error);
           }
           throw error;
-        }
+        } finally { if (this.governedCodexProfile && engine) await engine.close(); }
       }
 
       if (this.debug) {
@@ -5671,6 +5668,8 @@ Double-check your response based on the criteria above. If everything looks good
     if (!this._abortController.signal.aborted) {
       this._abortController.abort();
     }
+
+    if (this.governedCodexProfile && this.engine?.close) await this.engine.close();
 
     // Clean up MCP bridge
     if (this.mcpBridge) {
