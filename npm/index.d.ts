@@ -264,6 +264,10 @@ export interface GovernedAnswerOptions extends AnswerOptions {
   schema: string;
 }
 
+export interface GovernedInvocationAnswerOptions extends GovernedAnswerOptions {
+  invocationDigest: string;
+}
+
 export interface GovernedCodexRuntimeAttestation {
   version: 'probe.governed-codex-attestation/v1';
   profileId: 'luna-xhigh-readonly-v1';
@@ -276,6 +280,22 @@ export interface GovernedCodexRuntimeAttestation {
 export interface GovernedAnswerResult {
   data: unknown;
   runtimeAttestation: GovernedCodexRuntimeAttestation;
+}
+
+export interface GovernedCodexRuntimeAttestationV2 {
+  version: 'probe.governed-codex-attestation/v2';
+  profileId: 'luna-xhigh-readonly-v1';
+  requested: { profileDigest: string; cwdDigest: string; probeToolsDigest: string; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; };
+  observed: { source: 'session_configured'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; };
+  executionContext: { source: 'caller'; invocationDigest: string; };
+  dispatch: { source: 'probe-host-tools-call'; tool: 'codex'; promptDigest: string; promptBytes: number; };
+  evidence: { eventCount: 1; };
+  usage: { status: 'unavailable'; };
+}
+
+export interface GovernedInvocationAnswerResult {
+  data: unknown;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2;
 }
 
 /**
@@ -344,6 +364,7 @@ export declare class ProbeAgent {
    */
   answer(message: string, images?: any[], options?: AnswerOptions): Promise<string>;
 
+  answerGoverned(message: string, options: GovernedInvocationAnswerOptions, images?: any[]): Promise<GovernedInvocationAnswerResult>;
   answerGoverned(message: string, options: GovernedAnswerOptions, images?: any[]): Promise<GovernedAnswerResult>;
 
   /**

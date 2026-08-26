@@ -4,7 +4,7 @@
  */
 
 import { spawn } from 'child_process';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { createInterface } from 'readline';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
 import { Session } from '../shared/Session.js';
@@ -15,6 +15,27 @@ function externalReceipt(attestation) {
     version: attestation.version, profileId: attestation.profileId,
     requested: { profileDigest: attestation.requested.profileDigest, cwdDigest: attestation.requested.cwdDigest, probeToolsDigest: attestation.requested.probeToolsDigest, model: attestation.requested.model, reasoningEffort: attestation.requested.reasoningEffort, sandbox: attestation.requested.sandbox, approvalPolicy: attestation.requested.approvalPolicy },
     observed: { source: attestation.observed.source, model: attestation.observed.model, modelProviderId: attestation.observed.modelProviderId, reasoningEffort: attestation.observed.reasoningEffort, approvalPolicy: attestation.observed.approvalPolicy, cwdDigest: attestation.observed.cwdDigest, permissionProfileDigest: attestation.observed.permissionProfileDigest, filesystem: attestation.observed.filesystem, network: attestation.observed.network },
+    evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+  };
+}
+
+function governedCodexDispatch(prompt) {
+  const promptBytes = Buffer.byteLength(prompt, 'utf8');
+  const byteLength = Buffer.alloc(8);
+  byteLength.writeBigUInt64BE(BigInt(promptBytes));
+  const promptDigest = `sha256:${createHash('sha256')
+    .update('probe.governed-codex-dispatch/prompt/v1', 'utf8')
+    .update(Buffer.from([0])).update(byteLength).update(prompt, 'utf8').digest('hex')}`;
+  return Object.freeze({ source: 'probe-host-tools-call', tool: 'codex', promptDigest, promptBytes });
+}
+
+function externalBoundReceipt(internal, dispatch, invocationDigest) {
+  return {
+    version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
+    requested: { profileDigest: internal.requested.profileDigest, cwdDigest: internal.requested.cwdDigest, probeToolsDigest: internal.requested.probeToolsDigest, model: internal.requested.model, reasoningEffort: internal.requested.reasoningEffort, sandbox: internal.requested.sandbox, approvalPolicy: internal.requested.approvalPolicy },
+    observed: { source: internal.observed.source, model: internal.observed.model, modelProviderId: internal.observed.modelProviderId, reasoningEffort: internal.observed.reasoningEffort, approvalPolicy: internal.observed.approvalPolicy, cwdDigest: internal.observed.cwdDigest, permissionProfileDigest: internal.observed.permissionProfileDigest, filesystem: internal.observed.filesystem, network: internal.observed.network },
+    executionContext: { source: 'caller', invocationDigest },
+    dispatch: { source: dispatch.source, tool: dispatch.tool, promptDigest: dispatch.promptDigest, promptBytes: dispatch.promptBytes },
     evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
   };
 }
@@ -195,6 +216,13 @@ export async function createCodexEngine(options = {}) {
       let abortHandler;
 
       try {
+        const hasInvocationDigest = Object.prototype.hasOwnProperty.call(opts,
+          'invocationDigest');
+        const invocationDigest = hasInvocationDigest ? opts.invocationDigest : undefined;
+        if (hasInvocationDigest && (typeof invocationDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(invocationDigest))) {
+          throw new TypeError('answerGoverned invocationDigest must match sha256:<64 lowercase hexadecimal digits>');
+        }
+
         // Build arguments
         let toolArgs = { prompt: finalPrompt };
 
@@ -257,6 +285,7 @@ export async function createCodexEngine(options = {}) {
         });
 
         // Call the tool
+        const dispatch = governedProfile ? governedCodexDispatch(toolArgs.prompt) : null;
         const resultPromise = sendRequest('tools/call', {
           name: toolName,
           arguments: toolArgs
@@ -269,7 +298,10 @@ export async function createCodexEngine(options = {}) {
         eventHandlers.delete(reqId);
         let attestation = null;
         if (governedProfile) {
-          attestation = externalReceipt(attestGovernedCodexSession({ profile: governedProfile, events: evidence }));
+          const internal = attestGovernedCodexSession({ profile: governedProfile, events: evidence });
+          attestation = hasInvocationDigest
+            ? externalBoundReceipt(internal, dispatch, invocationDigest)
+            : externalReceipt(internal);
           session.setConversationId(evidence[0].params.msg.session_id);
         }
 
