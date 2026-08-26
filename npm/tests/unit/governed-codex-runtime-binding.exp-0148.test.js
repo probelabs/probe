@@ -534,8 +534,23 @@ agent.answerGoverned('x', { schema, resultIdentity: 'probe.governed-result-ident
   });
 
   await t.test('EXP-0152 T10 normalized data is a new host snapshot', async () => {
-    const source = { z: [{ b: 2, a: 1 }] }; const agent = governedAgent(root); installIdentifiedEngine(agent, boundValid.settled.value.runtimeAttestation, JSON.stringify(source)); const result = await agent.answerGoverned('copy', { schema: '{}', invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY });
-    assert.notEqual(result.data, source); assert.notEqual(result.data.z, source.z); assert.deepEqual(result.data, { z: [{ a: 1, b: 2 }] }); source.z[0].a = 9; assert.equal(result.data.z[0].a, 1);
+    const candidate='{"z":[{"b":2,"a":1}]}';
+    const originalJSONParse=JSON.parse;
+    const captures=[];
+    JSON.parse=function (...args) {
+      const parsed=Reflect.apply(originalJSONParse,this,args);
+      if (args[0]===candidate && parsed!==null && typeof parsed==='object') captures.push(parsed);
+      return parsed;
+    };
+    let result;
+    try {
+      const agent = governedAgent(root); installIdentifiedEngine(agent, boundValid.settled.value.runtimeAttestation, candidate); result = await agent.answerGoverned('copy', { schema: '{}', invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY });
+    } finally {
+      JSON.parse=originalJSONParse;
+    }
+    assert.equal(captures.length, 2); const validationParsed=captures.at(-1);
+    assert.notEqual(result.data, validationParsed); assert.notEqual(result.data.z, validationParsed.z); assert.notEqual(result.data.z[0], validationParsed.z[0]);
+    assert.deepEqual(result.data, { z: [{ a: 1, b: 2 }] }); assert.equal(result.data.z[0].a, 1); assert.equal(result.data.z[0].b, 2); assertDeepFrozen(result.data);
   });
 
   await t.test('EXP-0152 T11 receipt and schema failures emit no identity and clean once', async () => {
