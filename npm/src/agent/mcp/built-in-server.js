@@ -9,11 +9,48 @@ import { randomUUID } from 'crypto';
 import { Server as MCPServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { asSchema } from 'ai';
+import { searchSchema, extractSchema, listFilesSchema } from '../../tools/common.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
+
+function descriptor(description, schema) {
+  const canonical = asSchema(schema);
+  return Object.freeze({ description, inputSchema: canonical.jsonSchema, validate: canonical.validate });
+}
+
+const TOOL_DESCRIPTORS = Object.freeze({
+  search: descriptor('Search for code patterns using semantic search', searchSchema),
+  extract: descriptor('Extract code from files or symbols', extractSchema),
+  listFiles: descriptor('List files in a directory', listFilesSchema)
+});
+
+async function validateToolArguments(name, args) {
+  const contract = TOOL_DESCRIPTORS[name];
+  if (!contract) return args;
+  if (!args || Array.isArray(args) || typeof args !== 'object') throw new TypeError(`Invalid arguments for ${name}`);
+  for (const key of Object.keys(args)) if (!Object.prototype.hasOwnProperty.call(contract.inputSchema.properties, key)) throw new TypeError(`Unknown argument ${key} for ${name}`);
+  const validated = await contract.validate(args);
+  if (!validated.success) throw new TypeError(`Invalid arguments for ${name}: ${validated.error.message}`);
+  return validated.value;
+}
+
+function emitToolCall(agent, event) {
+  agent.events?.emit('toolCall', Object.freeze(event));
+}
+
+function abortable(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error('Tool execution cancelled'));
+  return new Promise((resolve, reject) => {
+    const aborted = () => reject(new Error('Tool execution cancelled'));
+    signal.addEventListener('abort', aborted, { once: true });
+    promise.then(value => { signal.removeEventListener('abort', aborted); resolve(value); }, error => { signal.removeEventListener('abort', aborted); reject(error); });
+  });
+}
 
 /**
  * Simple in-memory event store for resumability
@@ -586,40 +623,7 @@ export class BuiltInMCPServer extends EventEmitter {
 
     // Get tools from agent
     if (this.agent && this.agent.allowedTools) {
-      const toolDefs = {
-        search: {
-          description: 'Search for code patterns using semantic search',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: { type: 'string', description: 'Search query' },
-              path: { type: 'string', description: 'Directory to search', default: '.' },
-              maxResults: { type: 'integer', default: 10 }
-            },
-            required: ['query']
-          }
-        },
-        extract: {
-          description: 'Extract code from specific file location',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'File path with optional line number' }
-            },
-            required: ['path']
-          }
-        },
-        listFiles: {
-          description: 'List files in a directory',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'Directory path' },
-              pattern: { type: 'string', description: 'File pattern' }
-            },
-            required: ['path']
-          }
-        },
+      const toolDefs = { ...TOOL_DESCRIPTORS,
         searchFiles: {
           description: 'Search for files by name pattern',
           inputSchema: {
@@ -662,7 +666,7 @@ export class BuiltInMCPServer extends EventEmitter {
    * Handle tool execution
    */
   async handleCallTool(params) {
-    const { name, arguments: args } = params;
+    const { name, arguments: rawArgs } = params;
 
     // Extract tool name from MCP format
     const toolName = name.replace('mcp__probe__', '');
@@ -678,9 +682,33 @@ export class BuiltInMCPServer extends EventEmitter {
       throw new Error(`Tool ${name} not found`);
     }
 
+    let args;
+    try { args = await validateToolArguments(toolName, rawArgs); } catch (error) {
+      return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
+    }
+
+    const id = randomUUID();
+    const startTime = Date.now();
+    const baseEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime };
+    const fail = error => {
+      const endTime = Date.now();
+      try { emitToolCall(this.agent, { ...baseEvent, status: 'failed', error: error.message, endTime, duration: endTime - startTime }); }
+      catch (listenerError) { error = listenerError; }
+      return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
+    };
+
+    try { emitToolCall(this.agent, { ...baseEvent, status: 'in_progress' }); }
+    catch (error) { return fail(error); }
+
     try {
       // Execute tool directly (no spawning!)
-      const result = await tool.execute(args);
+      const signal = this.agent._abortController?.signal;
+      const execution = Promise.resolve().then(() => tool.execute({ ...args, sessionId: this.agent.sessionId, workingDirectory: this.agent.workspaceRoot || this.agent.cwd || process.cwd(), abortSignal: signal }));
+      const result = await abortable(execution, signal);
+
+      const endTime = Date.now();
+      try { emitToolCall(this.agent, { ...baseEvent, status: 'completed', endTime, duration: endTime - startTime }); }
+      catch { /* Execution already succeeded; observer failure is non-authoritative. */ }
 
       return {
         content: [{
@@ -689,13 +717,7 @@ export class BuiltInMCPServer extends EventEmitter {
         }]
       };
     } catch (error) {
-      return {
-        content: [{
-          type: 'text',
-          text: `Error executing ${name}: ${error.message}`
-        }],
-        isError: true
-      };
+      return fail(error);
     }
   }
 
