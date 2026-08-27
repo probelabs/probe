@@ -5,7 +5,7 @@
 
 import { createServer } from 'http';
 import { EventEmitter } from 'events';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { Server as MCPServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -28,14 +28,60 @@ const TOOL_DESCRIPTORS = Object.freeze({
   listFiles: descriptor('List files in a directory', listFilesSchema)
 });
 
+const ARGUMENT_DOMAIN = Buffer.from('reqproof.probe.tool-arguments/v1', 'utf8');
+
+function ownData(value, arrays, stack = new Set()) {
+  if (value === null || typeof value !== 'object') return;
+  if (stack.has(value)) throw new TypeError('cycle');
+  stack.add(value);
+  const proto = Object.getPrototypeOf(value);
+  const isArray = Array.isArray(value);
+  if (isArray ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) throw new TypeError('prototype');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.some(key => typeof key === 'symbol')) throw new TypeError('symbol');
+  if (isArray) {
+    if (!arrays) throw new TypeError('array');
+    if (keys.some(key => key !== 'length' && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))) throw new TypeError('array key');
+    for (let i = 0; i < value.length; i++) if (!Object.prototype.hasOwnProperty.call(descriptors, i)) throw new TypeError('array hole');
+  }
+  for (const key of keys) {
+    if (isArray && key === 'length') continue;
+    const property = descriptors[key];
+    if (!property.enumerable || !Object.prototype.hasOwnProperty.call(property, 'value') || key === 'toJSON') throw new TypeError('property');
+    ownData(property.value, arrays, stack);
+  }
+  stack.delete(value);
+}
+
+function canonicalJSON(value, stack = new Set()) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') { if (!Number.isFinite(value)) throw new TypeError('number'); return Object.is(value, -0) ? '0' : JSON.stringify(value); }
+  if (typeof value !== 'object' || stack.has(value)) throw new TypeError('value');
+  ownData(value, true); stack.add(value);
+  let encoded;
+  if (Array.isArray(value)) encoded = `[${value.map(item => canonicalJSON(item, stack)).join(',')}]`;
+  else encoded = `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJSON(value[key], stack)}`).join(',')}}`;
+  stack.delete(value); return encoded;
+}
+
+function argumentDigest(value) {
+  const payload = Buffer.from(canonicalJSON(value), 'utf8');
+  const length = bytes => { const out = Buffer.alloc(8); out.writeBigUInt64BE(BigInt(bytes.length)); return out; };
+  return `sha256:${createHash('sha256').update(length(ARGUMENT_DOMAIN)).update(ARGUMENT_DOMAIN).update(length(payload)).update(payload).digest('hex')}`;
+}
+
 async function validateToolArguments(name, args) {
   const contract = TOOL_DESCRIPTORS[name];
-  if (!contract) return args;
-  if (!args || Array.isArray(args) || typeof args !== 'object') throw new TypeError(`Invalid arguments for ${name}`);
-  for (const key of Object.keys(args)) if (!Object.prototype.hasOwnProperty.call(contract.inputSchema.properties, key)) throw new TypeError(`Unknown argument ${key} for ${name}`);
-  const validated = await contract.validate(args);
-  if (!validated.success) throw new TypeError(`Invalid arguments for ${name}: ${validated.error.message}`);
-  return validated.value;
+  if (!contract) return { value: args };
+  try { if (!args || Array.isArray(args) || typeof args !== 'object') throw new TypeError(); ownData(args, false); }
+  catch { throw new TypeError('TOOL_ARGUMENT_CONTAINER_INVALID'); }
+  try {
+    for (const key of Object.keys(args)) if (!Object.prototype.hasOwnProperty.call(contract.inputSchema.properties, key)) throw new TypeError();
+    const validated = await contract.validate(args);
+    if (!validated.success) throw new TypeError();
+    return { value: validated.value, digest: argumentDigest(validated.value) };
+  } catch { throw new TypeError('TOOL_ARGUMENT_VALIDATION_FAILED'); }
 }
 
 function emitToolCall(agent, event) {
@@ -682,17 +728,18 @@ export class BuiltInMCPServer extends EventEmitter {
       throw new Error(`Tool ${name} not found`);
     }
 
-    let args;
-    try { args = await validateToolArguments(toolName, rawArgs); } catch (error) {
+    let validated;
+    try { validated = await validateToolArguments(toolName, rawArgs); } catch (error) {
       return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
     }
+    const { value: args, digest: argumentsDigest } = validated;
 
     const id = randomUUID();
     const startTime = Date.now();
-    const baseEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime };
+    const baseEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, ...(argumentsDigest && { argumentsDigest }) };
     const fail = error => {
       const endTime = Date.now();
-      try { emitToolCall(this.agent, { ...baseEvent, status: 'failed', error: error.message, endTime, duration: endTime - startTime }); }
+      try { emitToolCall(this.agent, { ...baseEvent, status: 'failed', error: 'TOOL_EXECUTION_FAILED', endTime, duration: endTime - startTime }); }
       catch (listenerError) { error = listenerError; }
       return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
     };

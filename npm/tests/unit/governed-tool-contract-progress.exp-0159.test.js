@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -10,6 +11,11 @@ import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 import MCP, { BuiltInMCPServer } from '@probelabs/probe/agent/mcp';
 
 const call = (server, name, args) => server.handleCallTool({ name: `mcp__probe__${name}`, arguments: args });
+const framedDigest = payload => {
+  const domain = Buffer.from('reqproof.probe.tool-arguments/v1'), body = Buffer.from(payload);
+  const length = value => { const bytes = Buffer.alloc(8); bytes.writeBigUInt64BE(BigInt(value.length)); return bytes; };
+  return `sha256:${createHash('sha256').update(length(domain)).update(domain).update(length(body)).update(body).digest('hex')}`;
+};
 
 function fixture() {
   const agent = new ProbeAgent({ allowedTools: ['search', 'extract', 'listFiles'], sessionId: 'exp-0159-session', cwd: process.cwd() });
@@ -40,6 +46,7 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
         import type { ProbeAgent } from '@probelabs/probe/agent';
         declare const agent: ProbeAgent; declare const rootAgent: RootProbeAgent; declare const subpathAgent: AgentProbeAgent;
         const signals: AbortSignal[] = [agent.abortSignal, rootAgent.abortSignal, subpathAgent.abortSignal]; void signals;
+        declare const event: import('@probelabs/probe').ToolCallEvent; const digest: string | undefined = event.argumentsDigest; void digest;
         const server = new BuiltInMCPServer(agent, { port: 0, debug: false });
         const same: typeof BuiltInMCPServer = MCP.BuiltInMCPServer;
         void same; void server.start(); void server.stop(); void server.handleListTools();
@@ -88,11 +95,75 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
       assert.equal(events[i].sessionId, 'exp-0159-session');
       assert.equal(events[i + 1].sessionId, 'exp-0159-session');
       assert.equal(typeof events[i + 1].duration, 'number');
-      for (const key of ['params', 'args', 'result', 'resultPreview', 'preview', 'body']) {
+      assert.match(events[i].argumentsDigest, /^sha256:[0-9a-f]{64}$/);
+      assert.equal(events[i].argumentsDigest, events[i + 1].argumentsDigest);
+      for (const key of ['params', 'args', 'arguments', 'result', 'resultPreview', 'preview', 'body', 'source']) {
         assert.equal(Object.prototype.hasOwnProperty.call(events[i], key), false);
         assert.equal(Object.prototype.hasOwnProperty.call(events[i + 1], key), false);
       }
     }
+  });
+
+  await t.test('digest binds canonical validated arguments, defaults, framing, and number rules', async () => {
+    const { agent, server } = fixture();
+    const events = []; agent.events.on('toolCall', event => events.push(event));
+    await call(server, 'extract', { targets: 'http.go http_test.go' });
+    await call(server, 'extract', { allow_tests: true, targets: 'http.go http_test.go' });
+    await call(server, 'extract', { targets: 'http.go http_test.go', allow_tests: false });
+    await call(server, 'search', { maxTokens: -0, query: 'ordered' });
+    await call(server, 'search', { query: 'ordered', maxTokens: 0 });
+    const digests = events.filter(event => event.status === 'in_progress').map(event => event.argumentsDigest);
+    const payload = '{"allow_tests":true,"targets":"http.go http_test.go"}';
+    assert.equal(digests[0], framedDigest(payload));
+    assert.equal(digests[0], digests[1]);
+    assert.notEqual(digests[1], digests[2]);
+    assert.equal(digests[3], digests[4]);
+    assert.notEqual(digests[0], `sha256:${createHash('sha256').update(Buffer.from(payload)).digest('hex')}`);
+    const nullRecord = Object.assign(Object.create(null), { targets: 'http.go http_test.go' });
+    await call(server, 'extract', nullRecord);
+    assert.equal(events.at(-2).argumentsDigest, digests[0]);
+  });
+
+  await t.test('invalid values and containers fail before lifecycle without leaking details', async () => {
+    const { agent, server, calls } = fixture();
+    const events = []; agent.events.on('toolCall', event => events.push(event));
+    const accessor = {}; Object.defineProperty(accessor, 'query', { enumerable: true, get() { throw new Error('ACCESSOR_SECRET'); } });
+    const hidden = { query: 'safe' }; Object.defineProperty(hidden, 'HIDDEN_SECRET', { value: true });
+    const symbolKey = { query: 'safe', [Symbol('SYMBOL_SECRET')]: true };
+    const exotic = Object.assign(Object.create({ EXOTIC_SECRET: true }), { query: 'safe' });
+    const hook = { query: 'safe', toJSON() { return 'HOOK_SECRET'; } };
+    const trapped = new Proxy({ query: 'safe' }, { ownKeys() { throw new Error('PROXY_SECRET'); } });
+    const cycle = { query: 'safe' }; cycle.self = cycle;
+    const hole = []; hole.length = 1;
+    const extra = ['safe']; extra.extra = true;
+    const containerCases = [null, [], accessor, hidden, symbolKey, exotic, hook, trapped, cycle, { query: hole }, { query: extra }];
+    for (const args of containerCases) {
+      const result = await call(server, 'search', args);
+      assert.equal(result.isError, true);
+      assert.equal(result.content[0].text, 'Error executing mcp__probe__search: TOOL_ARGUMENT_CONTAINER_INVALID');
+    }
+    const invalidCases = [undefined, 1n, () => {}, Symbol('VALUE_SECRET'), NaN, Infinity];
+    for (const query of invalidCases) {
+      const result = await call(server, 'search', { query });
+      assert.equal(result.isError, true);
+      assert.equal(result.content[0].text, 'Error executing mcp__probe__search: TOOL_ARGUMENT_VALIDATION_FAILED');
+    }
+    assert.equal(calls.length, 0); assert.deepEqual(events, []);
+    const diagnostics = containerCases.length + invalidCases.length;
+    assert.equal(diagnostics, 17);
+  });
+
+  await t.test('failed lifecycle exposes one stable code and retains its digest', async () => {
+    const { agent, server, calls } = fixture();
+    agent.toolImplementations.search.execute = async () => { throw new Error('EXECUTION_SECRET'); };
+    const events = []; agent.events.on('toolCall', event => events.push(event));
+    const result = await call(server, 'search', { query: 'ARGUMENT_SECRET' });
+    assert.equal(result.isError, true); assert.equal(calls.length, 0);
+    assert.deepEqual(events.map(event => event.status), ['in_progress', 'failed']);
+    assert.equal(events[0].argumentsDigest, events[1].argumentsDigest);
+    assert.equal(events[1].error, 'TOOL_EXECUTION_FAILED');
+    const publicTrace = JSON.stringify(events);
+    for (const secret of ['ARGUMENT_SECRET', 'EXECUTION_SECRET']) assert.equal(publicTrace.includes(secret), false);
   });
 
   await t.test('malformed and unknown shapes fail before execution', async () => {
@@ -147,5 +218,7 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
     assert.equal(result.isError, true);
     assert.equal(closes, 1);
     assert.deepEqual(progress.map(event => event.status), ['in_progress', 'failed']);
+    assert.equal(progress[0].argumentsDigest, progress[1].argumentsDigest);
+    assert.equal(progress[1].error, 'TOOL_EXECUTION_FAILED');
   });
 });

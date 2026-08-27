@@ -95,6 +95,7 @@ export interface ProbeAgentOptions {
  * Tool execution event data
  */
 export interface ToolCallEvent {
+  argumentsDigest?: string;
   /** Unique tool call identifier */
   id: string;
   /** Name of the tool being called */
