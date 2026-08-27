@@ -358,6 +358,7 @@ export declare class ProbeAgent {
   
   /** Whether operations have been cancelled */
   cancelled: boolean;
+  readonly abortSignal: AbortSignal;
 
   /**
    * Create a new ProbeAgent instance

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -34,8 +35,11 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
       writeFileSync(join(temp, 'package.json'), JSON.stringify({ type: 'module' }));
       writeFileSync(join(temp, 'consumer.ts'), `
         import MCP, { BuiltInMCPServer, MCPClientManager, MCPXmlBridge } from '@probelabs/probe/agent/mcp';
+        import type RootProbeAgent from '@probelabs/probe';
+        import type AgentProbeAgent from '@probelabs/probe/agent';
         import type { ProbeAgent } from '@probelabs/probe/agent';
-        declare const agent: ProbeAgent;
+        declare const agent: ProbeAgent; declare const rootAgent: RootProbeAgent; declare const subpathAgent: AgentProbeAgent;
+        const signals: AbortSignal[] = [agent.abortSignal, rootAgent.abortSignal, subpathAgent.abortSignal]; void signals;
         const server = new BuiltInMCPServer(agent, { port: 0, debug: false });
         const same: typeof BuiltInMCPServer = MCP.BuiltInMCPServer;
         void same; void server.start(); void server.stop(); void server.handleListTools();
@@ -124,27 +128,24 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
   });
 
   await t.test('cooperative cancellation settles the call and close bookkeeping', async () => {
-    const { agent, server, lifecycle } = fixture();
-    let active = false;
-    let entered;
-    const started = new Promise(resolve => { entered = resolve; });
+    const controller = new AbortController(), events = new EventEmitter();
+    let entered = 0, observedSignal, closes = 0, markEntered;
+    const started = new Promise(resolve => { markEntered = resolve; });
+    const agent = { allowedTools: { isEnabled: name => name === 'search' }, toolImplementations: { search: {} }, events, sessionId: 'public-facade', cwd: process.cwd(),
+      get abortSignal() { return controller.signal; }, cancel() { controller.abort(); }, async close() { closes++; await server.stop(); } };
+    const server = new BuiltInMCPServer(agent);
+    assert.equal('_abortController' in agent, false);
     // This is cooperative AbortSignal handling; arbitrary binary termination requires external containment.
     agent.toolImplementations.search.execute = ({ abortSignal }) => new Promise((resolve, reject) => {
-      active = true;
-      entered();
-      assert.equal(abortSignal, agent.abortSignal);
-      abortSignal.addEventListener('abort', () => { active = false; reject(new Error('controlled child cancelled')); }, { once: true });
+      entered++; observedSignal = abortSignal; markEntered();
+      abortSignal.addEventListener('abort', () => reject(new Error('controlled child cancelled')), { once: true });
     });
-    const events = [];
-    agent.events.on('toolCall', event => events.push(event));
+    const progress = []; agent.events.on('toolCall', event => progress.push(event));
     const pending = call(server, 'search', { query: 'wait' });
-    await started;
-    agent.cancel();
-    const result = await pending;
-    await agent.close();
+    await started; assert.equal(entered, 1); assert.equal(observedSignal, agent.abortSignal); agent.cancel();
+    const result = await pending; await agent.close();
     assert.equal(result.isError, true);
-    assert.equal(active, false);
-    assert.equal(lifecycle.closes, 1);
-    assert.deepEqual(events.map(event => event.status), ['in_progress', 'failed']);
+    assert.equal(closes, 1);
+    assert.deepEqual(progress.map(event => event.status), ['in_progress', 'failed']);
   });
 });

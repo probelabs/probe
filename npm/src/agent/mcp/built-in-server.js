@@ -702,7 +702,7 @@ export class BuiltInMCPServer extends EventEmitter {
 
     try {
       // Execute tool directly (no spawning!)
-      const signal = this.agent._abortController?.signal;
+      const signal = this.agent.abortSignal;
       const execution = Promise.resolve().then(() => tool.execute({ ...args, sessionId: this.agent.sessionId, workingDirectory: this.agent.workspaceRoot || this.agent.cwd || process.cwd(), abortSignal: signal }));
       const result = await abortable(execution, signal);
 
