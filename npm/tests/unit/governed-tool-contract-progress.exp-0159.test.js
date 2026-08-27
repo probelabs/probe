@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
-import { BuiltInMCPServer } from '../../src/agent/mcp/built-in-server.js';
+import MCP, { BuiltInMCPServer } from '@probelabs/probe/agent/mcp';
 
 const call = (server, name, args) => server.handleCallTool({ name: `mcp__probe__${name}`, arguments: args });
 
@@ -18,6 +23,37 @@ function fixture() {
 }
 
 test('EXP-0159 canonical governed tool contracts and progress', async t => {
+  await t.test('public package export is stable for JavaScript and NodeNext TypeScript consumers', () => {
+    assert.equal(BuiltInMCPServer, MCP.BuiltInMCPServer);
+    const packageRoot = fileURLToPath(new URL('../..', import.meta.url));
+    const temp = mkdtempSync(join(tmpdir(), 'probe-exp-0159-types-'));
+    try {
+      const packageLink = join(temp, 'node_modules', '@probelabs', 'probe');
+      mkdirSync(dirname(packageLink), { recursive: true });
+      symlinkSync(packageRoot, packageLink, 'dir');
+      writeFileSync(join(temp, 'package.json'), JSON.stringify({ type: 'module' }));
+      writeFileSync(join(temp, 'consumer.ts'), `
+        import MCP, { BuiltInMCPServer, MCPClientManager, MCPXmlBridge } from '@probelabs/probe/agent/mcp';
+        import type { ProbeAgent } from '@probelabs/probe/agent';
+        declare const agent: ProbeAgent;
+        const server = new BuiltInMCPServer(agent, { port: 0, debug: false });
+        const same: typeof BuiltInMCPServer = MCP.BuiltInMCPServer;
+        void same; void server.start(); void server.stop(); void server.handleListTools();
+        void server.handleCallTool({ name: 'mcp__probe__search', arguments: { query: 'x' } });
+        const count: number = server.getToolCount(); const url: string = server.getConfig().url;
+        void count; void url; new MCPClientManager(); new MCPXmlBridge();
+      `);
+      writeFileSync(join(temp, 'tsconfig.json'), JSON.stringify({ compilerOptions: {
+        target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', strict: true,
+        noEmit: true, skipLibCheck: true
+      }, files: ['consumer.ts'] }));
+      const compile = spawnSync(process.execPath, [join(packageRoot, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(temp, 'tsconfig.json')], { encoding: 'utf8' });
+      assert.equal(compile.status, 0, `${compile.stdout}${compile.stderr}`);
+    } finally {
+      rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
   await t.test('tools/list describes the inputs direct implementations accept', async () => {
     const { server } = fixture();
     const listed = await server.handleListTools();
@@ -93,10 +129,11 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
     let entered;
     const started = new Promise(resolve => { entered = resolve; });
     // This is cooperative AbortSignal handling; arbitrary binary termination requires external containment.
-    agent.toolImplementations.search.execute = () => new Promise((resolve, reject) => {
+    agent.toolImplementations.search.execute = ({ abortSignal }) => new Promise((resolve, reject) => {
       active = true;
       entered();
-      agent._abortController.signal.addEventListener('abort', () => { active = false; reject(new Error('controlled child cancelled')); }, { once: true });
+      assert.equal(abortSignal, agent.abortSignal);
+      abortSignal.addEventListener('abort', () => { active = false; reject(new Error('controlled child cancelled')); }, { once: true });
     });
     const events = [];
     agent.events.on('toolCall', event => events.push(event));
