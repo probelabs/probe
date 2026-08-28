@@ -87,8 +87,28 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const args = request.params.arguments, cwd = args.cwd, prompt = args.prompt;
   writeFileSync(process.env.PROBE_NATIVE_ARGS_FILE, JSON.stringify(args));
   const configured = (session)(cwd);
+  const foreignSession = (foreignRequestId = 99) => {
+    const event = (session)(cwd);
+    event.params._meta = { requestId: foreignRequestId, threadId: 'SECRET_FOREIGN_THREAD' };
+    event.params.msg.session_id = 'SECRET_FOREIGN_SESSION';
+    event.params.msg.thread_id = 'SECRET_FOREIGN_SESSION';
+    return event;
+  };
+  const foreignRaw = () => send({ jsonrpc: '2.0', method: 'codex/event', params: {
+    _meta: { requestId: 99, threadId: 'SECRET_FOREIGN_THREAD' }, id: '99', msg: {
+      type: 'raw_response_item', item: { type: 'SECRET_FOREIGN_ITEM', payload: 'SECRET_FOREIGN_BODY' }
+    }
+  } });
   if (prompt.includes('[LIVE-SESSION]')) configured.params.msg.model = 'SECRET_INVALID_MODEL';
-  if (!prompt.includes('[LIVE-ORDER]')) send(configured);
+  if (prompt.includes('[FOREIGN-SESSION-BEFORE]') || prompt.includes('[FOREIGN-DUPLICATE-SESSION]') ||
+    prompt.includes('[CONCURRENT-FOREIGN]')) send(foreignSession());
+  if (prompt.includes('[MISSING-REQUEST-ID]')) {
+    const event = foreignSession(); delete event.params._meta.requestId; send(event);
+  }
+  if (prompt.includes('[MALFORMED-REQUEST-ID]')) send(foreignSession('2'));
+  if (!prompt.includes('[LIVE-ORDER]') && !prompt.includes('[LIVE-MISSING-SESSION]')) send(configured);
+  if (prompt.includes('[FOREIGN-RAW]') || prompt.includes('[CONCURRENT-FOREIGN]')) foreignRaw();
+  if (prompt.includes('[FOREIGN-DUPLICATE-SESSION]') || prompt.includes('[CONCURRENT-FOREIGN]')) send(foreignSession());
   const raw = item => send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item } } });
   const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
     content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
@@ -253,6 +273,17 @@ createInterface({ input: process.stdin }).on('line', async line => {
       { sessionEventCount: 1, nativeCallCount: 0, probeMcpCallCount: 0 });
     assert.deepEqual(zero.events, []);
 
+    for (const marker of ['[FOREIGN-SESSION-BEFORE]', '[FOREIGN-RAW]', '[FOREIGN-DUPLICATE-SESSION]',
+      '[MISSING-REQUEST-ID]', '[MALFORMED-REQUEST-ID]', '[CONCURRENT-FOREIGN]']) {
+      const routed = await run(marker); assert.ifError(routed.error);
+      assert.deepEqual(routed.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+      assert.deepEqual(routed.result.runtimeAttestation.evidence,
+        { sessionEventCount: 1, nativeCallCount: 0, probeMcpCallCount: 0 });
+      assert.deepEqual(routed.events, []);
+      const serialized = JSON.stringify({ result: routed.result, events: routed.events });
+      assert.equal(serialized.includes('SECRET_FOREIGN'), false);
+    }
+
     const mcp = await run('[MCP]'); assert.ifError(mcp.error);
     assert.deepEqual(mcp.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
     assert.deepEqual(mcp.result.runtimeAttestation.evidence,
@@ -309,7 +340,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assert.deepEqual(rejected.events, []);
     }
 
-    for (const marker of ['[LIVE-ORDER]', '[LIVE-DUPLICATE-SESSION]', '[LIVE-SESSION]'])
+    for (const marker of ['[LIVE-MISSING-SESSION]', '[LIVE-ORDER]', '[LIVE-DUPLICATE-SESSION]', '[LIVE-SESSION]'])
       assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session');
 
     for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',

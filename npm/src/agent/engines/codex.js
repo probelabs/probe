@@ -271,7 +271,8 @@ export async function createCodexEngine(options = {}) {
   let requestId = 0;
   const pendingRequests = new Map();
   const eventHandlers = new Map();
-  let governedEvidenceHandler = null, governedQueryStarted = false, closePromise = null;
+  const governedEvidenceHandlers = new Map();
+  let governedQueryStarted = false, closePromise = null;
 
   // Read stdout line by line
   const stdoutReader = createInterface({
@@ -304,8 +305,10 @@ export async function createCodexEngine(options = {}) {
 
       // Handle notifications (codex/event)
       if (message.method === 'codex/event' && message.params) {
-        if (governedEvidenceHandler) governedEvidenceHandler(message);
         const requestId = message.params._meta?.requestId;
+        if (requestId !== undefined && governedEvidenceHandlers.has(requestId)) {
+          governedEvidenceHandlers.get(requestId)(message);
+        }
         if (requestId !== undefined && eventHandlers.has(requestId)) {
           eventHandlers.get(requestId)(message.params);
         }
@@ -356,7 +359,7 @@ export async function createCodexEngine(options = {}) {
   async function cleanup(reason = new Error('Codex engine closed')) {
     if (closePromise) return closePromise;
     closePromise = (async () => {
-      rejectPending(reason); eventHandlers.clear(); governedEvidenceHandler = null;
+      rejectPending(reason); eventHandlers.clear(); governedEvidenceHandlers.clear();
       stdoutReader.close(); codexProcess.stdin.destroy();
       const receipt = await governedProcess.terminate('codex_engine_closed');
       const processCleanupFailed = receipt.classification === 'cleanup_timeout' ||
@@ -439,9 +442,9 @@ export async function createCodexEngine(options = {}) {
         let gotSessionId = false;
         const collector = governedProfile ? createGovernedNativeCollector(governedProfile) : null;
         let evidenceFailure = null;
-        if (governedProfile) governedEvidenceHandler = (event) => {
+        if (governedProfile) governedEvidenceHandlers.set(reqId, (event) => {
           try { collector.observe(event); } catch (error) { evidenceFailure ??= normalizeGovernedAnswerFailure(error, 'native_event_grammar'); }
-        };
+        });
         if (opts.abortSignal) {
           if (opts.abortSignal.aborted) throw new Error('Codex query cancelled');
           abortHandler = () => { void cleanup(new Error('Codex query cancelled')).catch(() => {}); };
@@ -489,6 +492,7 @@ export async function createCodexEngine(options = {}) {
 
         // Clean up event handler
         eventHandlers.delete(reqId);
+        governedEvidenceHandlers.delete(reqId);
         let attestation = null;
         if (governedProfile) {
           if (evidenceFailure) throw evidenceFailure;
