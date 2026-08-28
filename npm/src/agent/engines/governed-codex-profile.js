@@ -3,12 +3,17 @@ import { realpathSync, statSync } from 'node:fs';
 import { isAbsolute, normalize } from 'node:path';
 
 const PROFILE_KEYS = ['version', 'profileId', 'engine', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy', 'cwd', 'probeTools', 'fallback', 'retries'];
+const PROFILE_V2_KEYS = ['version', 'profileId', 'engine', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy', 'cwd', 'probeMcpTools', 'codexNativeTools', 'fallback', 'retries'];
 const PROFILE_VALUES = {
   version: 'probe.governed-codex-profile/v1', profileId: 'luna-xhigh-readonly-v1', engine: 'codex',
   model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never',
   fallback: false, retries: 0,
 };
+const PROFILE_V2_VALUES = { ...PROFILE_VALUES, version: 'probe.governed-codex-profile/v2', profileId: 'luna-xhigh-readonly-native-exec-v1' };
+// This profile admits the pinned Codex `exec` capability inside the attested read-only sandbox.
+// It does not claim that commands supplied to `exec` are semantically safe.
 const PROBE_TOOLS = ['search', 'extract', 'listFiles'];
+const CODEX_NATIVE_TOOLS = ['exec'];
 const ENABLED_TOOLS = ['mcp__probe__search', 'mcp__probe__extract', 'mcp__probe__listFiles'];
 const FEATURE_NAMES = [
   'shell_tool', 'multi_agent', 'multi_agent_v2', 'enable_fanout', 'apps', 'enable_mcp_apps',
@@ -66,14 +71,23 @@ function canonicalCwd(value) {
 function requireValue(actual, expected, label) { if (!Object.is(actual, expected)) invalid(label); }
 
 export function validateGovernedCodexProfile(input) {
-  const profile = exactObject(input, PROFILE_KEYS, 'profile');
-  for (const [key, value] of Object.entries(PROFILE_VALUES)) requireValue(profile[key], value, `profile.${key}`);
-  exactArray(profile.probeTools, PROBE_TOOLS.length, 'profile.probeTools');
-  PROBE_TOOLS.forEach((tool, index) => requireValue(profile.probeTools[index], tool, `profile.probeTools[${index}]`));
+  const version = input && Object.getOwnPropertyDescriptor(input, 'version')?.value;
+  const v2 = version === PROFILE_V2_VALUES.version, values = v2 ? PROFILE_V2_VALUES : PROFILE_VALUES;
+  const profile = exactObject(input, v2 ? PROFILE_V2_KEYS : PROFILE_KEYS, 'profile');
+  for (const [key, value] of Object.entries(values)) requireValue(profile[key], value, `profile.${key}`);
+  const probeKey = v2 ? 'probeMcpTools' : 'probeTools';
+  exactArray(profile[probeKey], PROBE_TOOLS.length, `profile.${probeKey}`);
+  PROBE_TOOLS.forEach((tool, index) => requireValue(profile[probeKey][index], tool, `profile.${probeKey}[${index}]`));
+  if (v2) {
+    exactArray(profile.codexNativeTools, CODEX_NATIVE_TOOLS.length, 'profile.codexNativeTools');
+    CODEX_NATIVE_TOOLS.forEach((tool, index) => requireValue(profile.codexNativeTools[index], tool, `profile.codexNativeTools[${index}]`));
+    if (profile.probeMcpTools.some((tool) => profile.codexNativeTools.includes(tool))) invalid('profile capability overlap');
+  }
   return deepFreeze({
-    version: PROFILE_VALUES.version, profileId: PROFILE_VALUES.profileId, engine: PROFILE_VALUES.engine,
-    model: PROFILE_VALUES.model, reasoningEffort: PROFILE_VALUES.reasoningEffort, sandbox: PROFILE_VALUES.sandbox,
-    approvalPolicy: PROFILE_VALUES.approvalPolicy, cwd: canonicalCwd(profile.cwd), probeTools: [...PROBE_TOOLS],
+    version: values.version, profileId: values.profileId, engine: values.engine,
+    model: values.model, reasoningEffort: values.reasoningEffort, sandbox: values.sandbox,
+    approvalPolicy: values.approvalPolicy, cwd: canonicalCwd(profile.cwd),
+    ...(v2 ? { probeMcpTools: [...PROBE_TOOLS], codexNativeTools: [...CODEX_NATIVE_TOOLS] } : { probeTools: [...PROBE_TOOLS] }),
     fallback: false, retries: 0,
   });
 }
@@ -129,7 +143,10 @@ function validateRollout(value) {
 export function attestGovernedCodexSession(input) {
   exactObject(input, ['profile', 'events'], 'attester input');
   const profile = validateGovernedCodexProfile(input.profile);
-  exactArray(input.events, 1, 'events');
+  const v2 = profile.version === PROFILE_V2_VALUES.version;
+  if (v2) {
+    exactArray(input.events, 2, 'events');
+  } else exactArray(input.events, 1, 'events');
   const event = exactObject(input.events[0], ['jsonrpc', 'method', 'params'], 'event');
   requireValue(event.jsonrpc, '2.0', 'event.jsonrpc'); requireValue(event.method, 'codex/event', 'event.method');
   const params = exactObject(event.params, ['_meta', 'id', 'msg'], 'event.params'); requireValue(params.id, '', 'event.params.id');
@@ -144,6 +161,29 @@ export function attestGovernedCodexSession(input) {
   if (canonicalCwd(msg.cwd) !== profile.cwd) invalid('msg.cwd');
   const permission = validatePermission(msg.permission_profile);
   const cwdDigest = digest(profile.cwd);
+  if (v2) {
+    const nativeTools = exactObject(input.events[1], ['total', 'tools'], 'native tool evidence');
+    if (!Number.isSafeInteger(nativeTools.total) || nativeTools.total < 0 || nativeTools.total > 256) invalid('native tool total');
+    exactArray(nativeTools.tools, nativeTools.total === 0 ? 0 : 1, 'native tool aggregates');
+    if (nativeTools.total > 0) {
+      const aggregate = exactObject(nativeTools.tools[0], ['name', 'status', 'count'], 'native tool aggregate');
+      if (!profile.codexNativeTools.includes(aggregate.name)) invalid('undeclared native tool evidence');
+      requireValue(aggregate.status, 'completed', 'native tool status');
+      if (!Number.isSafeInteger(aggregate.count) || aggregate.count !== nativeTools.total) invalid('native tool count');
+    }
+    return deepFreeze({
+      version: 'probe.governed-codex-attestation/v3', profileId: profile.profileId,
+      requested: { profileDigest: digest(profile), cwdDigest, probeMcpToolsDigest: digest(profile.probeMcpTools),
+        codexNativeToolsDigest: digest(profile.codexNativeTools), probeMcpTools: [...profile.probeMcpTools],
+        codexNativeTools: [...profile.codexNativeTools], model: profile.model, reasoningEffort: profile.reasoningEffort,
+        sandbox: profile.sandbox, approvalPolicy: profile.approvalPolicy },
+      observed: { source: 'session_configured+raw_response_item', model: msg.model, modelProviderId: msg.model_provider_id,
+        reasoningEffort: msg.reasoning_effort, approvalPolicy: msg.approval_policy, cwdDigest,
+        permissionProfileDigest: digest(permission), filesystem: 'restricted-read-root', network: permission.network,
+        nativeTools: { total: nativeTools.total, tools: nativeTools.tools.map((item) => ({ ...item })) } },
+      correlation: { requestId: 2, eventCount: nativeTools.total + 1 }, usage: { status: 'unavailable' },
+    });
+  }
   return deepFreeze({
     version: 'probe.governed-codex-attestation/v1', profileId: profile.profileId,
     requested: { profileDigest: digest(profile), cwdDigest, probeToolsDigest: digest(profile.probeTools), model: profile.model, reasoningEffort: profile.reasoningEffort, sandbox: profile.sandbox, approvalPolicy: profile.approvalPolicy },

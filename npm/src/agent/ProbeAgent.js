@@ -356,7 +356,8 @@ export class ProbeAgent {
 
     if (options.governedCodexProfile !== undefined) {
       if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex'); const profile = validateGovernedCodexProfile(options.governedCodexProfile);
-      if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== profile.probeTools.length || options.allowedTools.some((tool, index) => tool !== profile.probeTools[index])) throw new TypeError('allowedTools must exactly match governedCodexProfile.probeTools');
+      const probeTools = profile.probeTools ?? profile.probeMcpTools;
+      if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== probeTools.length || options.allowedTools.some((tool, index) => tool !== probeTools[index])) throw new TypeError('allowedTools must exactly match governedCodexProfile Probe MCP tools');
       this.governedCodexProfile = profile;
     }
 
@@ -3505,6 +3506,8 @@ Follow these instructions carefully:
       const candidateChunks = [];
       let runtimeAttestation;
       let attestationCount = 0;
+      let nativeToolBatch;
+      let nativeToolBatchCount = 0;
       const queryOptions = hasInvocationDigest
         ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest }
         : { abortSignal: this._abortController.signal };
@@ -3513,13 +3516,26 @@ Follow these instructions carefully:
         else if (chunk.type === 'metadata' && chunk.data?.attestation) {
           runtimeAttestation = chunk.data.attestation;
           attestationCount++;
+        } else if (chunk.type === 'toolBatch') {
+          nativeToolBatch = chunk;
+          nativeToolBatchCount++;
         } else if (chunk.type === 'error') throw chunk.error || new Error('Governed Codex query failed');
       }
       if (hasInvocationDigest) {
-        if (attestationCount !== 1 || runtimeAttestation?.version !== 'probe.governed-codex-attestation/v2' || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
+        const expectedAttestation = this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2'
+          ? 'probe.governed-codex-attestation/v3' : 'probe.governed-codex-attestation/v2';
+        if (attestationCount !== 1 || runtimeAttestation?.version !== expectedAttestation || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
           throw new Error('Expected exactly one matching governed invocation attestation');
         }
       } else if (attestationCount !== 1) throw new Error(`Expected exactly one governed runtime attestation; received ${attestationCount}`);
+      if (this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2') {
+        if (nativeToolBatchCount !== 1 || !Number.isSafeInteger(nativeToolBatch?.total) ||
+          !Array.isArray(nativeToolBatch?.tools) || nativeToolBatch.total !== runtimeAttestation?.observed?.nativeTools?.total ||
+          JSON.stringify(nativeToolBatch.tools) !== JSON.stringify(runtimeAttestation?.observed?.nativeTools?.tools)) {
+          throw new Error('Expected exactly one matching governed native capability aggregate');
+        }
+        for (const toolEvent of nativeToolBatch.tools) this.events.emit('toolCall', toolEvent);
+      } else if (nativeToolBatchCount !== 0) throw new Error('Unexpected governed native capability aggregate');
       const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
       if (!validation.isValid) throw new Error(validation.errorSummary || validation.error || 'Governed answer failed schema validation');
       if (hasResultIdentity) {

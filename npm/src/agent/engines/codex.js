@@ -11,12 +11,142 @@ import { governSpawnedProcess } from '../processSupervisor.js';
 import { Session } from '../shared/Session.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs, validateGovernedCodexProfile } from './governed-codex-profile.js';
 
-function externalReceipt(attestation) {
+const GOVERNED_NATIVE_EVENT_LIMIT = 256;
+const GOVERNED_SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const GOVERNED_CODEX_NATIVE_CALLS = new Map([['exec', 'exec']]);
+const GOVERNED_PROBE_MCP_CALLS = new Map([
+  ['mcp__probe__search', 'search'], ['mcp__probe__extract', 'extract'], ['mcp__probe__listFiles', 'listFiles'],
+]);
+
+function governedInvalid() { throw new Error('Invalid governed Codex native event evidence'); }
+function governedExactObject(value, keys) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) governedInvalid();
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) governedInvalid();
+  const actual = Reflect.ownKeys(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key));
+  if (actual.some((key) => typeof key !== 'string') || actual.length !== keys.length || keys.some((key) => !actual.includes(key))) governedInvalid();
+  for (const key of keys) if (!Object.prototype.hasOwnProperty.call(Object.getOwnPropertyDescriptor(value, key), 'value')) governedInvalid();
+  return value;
+}
+function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedInvalid(); }
+function governedPassthrough(value) {
+  governedExactObject(value, ['turn_id']); governedSafeId(value.turn_id);
+}
+function validateGovernedRawMessage(item) {
+  const assistant = item.role === 'assistant';
+  governedExactObject(item, assistant
+    ? ['type', 'id', 'role', 'content', 'phase', 'internal_chat_message_metadata_passthrough']
+    : ['type', 'role', 'content', 'internal_chat_message_metadata_passthrough']);
+  if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedInvalid();
+  if (assistant) {
+    governedSafeId(item.id);
+    if (item.phase !== 'final_answer') governedInvalid();
+  }
+  if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedInvalid();
+  for (const part of item.content) {
+    governedExactObject(part, ['type', 'text']);
+    const allowed = assistant ? part.type === 'output_text' : part.type === 'input_text';
+    if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedInvalid();
+  }
+  governedPassthrough(item.internal_chat_message_metadata_passthrough);
+}
+function validateGovernedRawReasoning(item) {
+  governedExactObject(item, ['type', 'id', 'summary', 'encrypted_content', 'internal_chat_message_metadata_passthrough']);
+  if (item.type !== 'reasoning') governedInvalid(); governedSafeId(item.id);
+  if (!Array.isArray(item.summary) || item.summary.length !== 0 || typeof item.encrypted_content !== 'string' || Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedInvalid();
+  governedPassthrough(item.internal_chat_message_metadata_passthrough);
+}
+function createGovernedNativeCollector(profile) {
+  let sessionEvent = null, requestId = null, threadId = null, nativeCallCount = 0, probeMcpCallCount = 0;
+  let relevantEventCount = 0, totalCallCount = 0;
+  const rawIds = new Set(), callOrigins = new Map(), outputIds = new Set();
+  function observe(event) {
+    const type = event?.params?.msg?.type;
+    if (type === 'session_configured') {
+      if (sessionEvent) governedInvalid();
+      sessionEvent = event;
+      requestId = event.params?._meta?.requestId;
+      threadId = event.params?._meta?.threadId;
+      return;
+    }
+    if (profile.version !== 'probe.governed-codex-profile/v2' || type !== 'raw_response_item') return;
+    if (!sessionEvent) governedInvalid();
+    governedExactObject(event, ['jsonrpc', 'method', 'params']);
+    if (event.jsonrpc !== '2.0' || event.method !== 'codex/event') governedInvalid();
+    const params = governedExactObject(event.params, ['_meta', 'msg', 'id']);
+    const meta = governedExactObject(params._meta, ['requestId', 'threadId']);
+    if (meta.requestId !== requestId || meta.threadId !== threadId || params.id !== String(requestId)) governedInvalid();
+    const msg = governedExactObject(params.msg, ['type', 'item']);
+    if (msg.type !== 'raw_response_item') governedInvalid();
+    const item = msg.item;
+    if (item?.type === 'message') return validateGovernedRawMessage(item);
+    if (item?.type === 'reasoning') return validateGovernedRawReasoning(item);
+    if (item?.type === 'custom_tool_call') {
+      governedExactObject(item, ['type', 'id', 'status', 'call_id', 'name', 'input', 'internal_chat_message_metadata_passthrough']);
+      governedSafeId(item.id); governedSafeId(item.call_id);
+      if (rawIds.has(item.id) || callOrigins.has(item.call_id)) governedInvalid();
+      const nativeName = GOVERNED_CODEX_NATIVE_CALLS.get(item.name);
+      const probeMcpName = GOVERNED_PROBE_MCP_CALLS.get(item.name);
+      if ((nativeName !== undefined) === (probeMcpName !== undefined)) governedInvalid();
+      if (nativeName !== undefined && !profile.codexNativeTools.includes(nativeName)) governedInvalid();
+      if (probeMcpName !== undefined && !profile.probeMcpTools.includes(probeMcpName)) governedInvalid();
+      if (item.status !== 'completed' || typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedInvalid();
+      governedPassthrough(item.internal_chat_message_metadata_passthrough);
+      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedInvalid();
+      const origin = nativeName !== undefined ? 'codex-native' : 'probe-mcp';
+      rawIds.add(item.id); callOrigins.set(item.call_id, origin);
+      if (origin === 'codex-native') nativeCallCount++; else probeMcpCallCount++;
+      return;
+    }
+    if (item?.type === 'custom_tool_call_output') {
+      governedExactObject(item, ['type', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']);
+      governedSafeId(item.call_id);
+      if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id) || !Array.isArray(item.output) || item.output.length > 64) governedInvalid();
+      for (const part of item.output) {
+        governedExactObject(part, ['type', 'text']);
+        if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedInvalid();
+      }
+      governedPassthrough(item.internal_chat_message_metadata_passthrough);
+      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedInvalid();
+      outputIds.add(item.call_id);
+      return;
+    }
+    governedInvalid();
+  }
+  function evidence() {
+    if (!sessionEvent) governedInvalid();
+    const tools = nativeCallCount === 0 ? [] : [{ name: 'exec', status: 'completed', count: nativeCallCount }];
+    return { sessionEvent, capabilities: { nativeTools: { total: nativeCallCount, tools }, probeMcpCallCount } };
+  }
+  return { observe, evidence };
+}
+
+function externalReceipt(attestation, capabilityCounts) {
+  if (attestation.version === 'probe.governed-codex-attestation/v3') return externalV3Receipt(attestation, {}, capabilityCounts);
   return {
     version: attestation.version, profileId: attestation.profileId,
     requested: { profileDigest: attestation.requested.profileDigest, cwdDigest: attestation.requested.cwdDigest, probeToolsDigest: attestation.requested.probeToolsDigest, model: attestation.requested.model, reasoningEffort: attestation.requested.reasoningEffort, sandbox: attestation.requested.sandbox, approvalPolicy: attestation.requested.approvalPolicy },
     observed: { source: attestation.observed.source, model: attestation.observed.model, modelProviderId: attestation.observed.modelProviderId, reasoningEffort: attestation.observed.reasoningEffort, approvalPolicy: attestation.observed.approvalPolicy, cwdDigest: attestation.observed.cwdDigest, permissionProfileDigest: attestation.observed.permissionProfileDigest, filesystem: attestation.observed.filesystem, network: attestation.observed.network },
     evidence: { eventCount: 1 }, usage: { status: 'unavailable' },
+  };
+}
+
+function externalV3Receipt(attestation, extra, capabilityCounts) {
+  return {
+    version: attestation.version, profileId: attestation.profileId,
+    requested: { profileDigest: attestation.requested.profileDigest, cwdDigest: attestation.requested.cwdDigest,
+      probeMcpToolsDigest: attestation.requested.probeMcpToolsDigest, codexNativeToolsDigest: attestation.requested.codexNativeToolsDigest,
+      probeMcpTools: [...attestation.requested.probeMcpTools], codexNativeTools: [...attestation.requested.codexNativeTools],
+      model: attestation.requested.model, reasoningEffort: attestation.requested.reasoningEffort,
+      sandbox: attestation.requested.sandbox, approvalPolicy: attestation.requested.approvalPolicy },
+    observed: { source: attestation.observed.source, model: attestation.observed.model,
+      modelProviderId: attestation.observed.modelProviderId, reasoningEffort: attestation.observed.reasoningEffort,
+      approvalPolicy: attestation.observed.approvalPolicy, cwdDigest: attestation.observed.cwdDigest,
+      permissionProfileDigest: attestation.observed.permissionProfileDigest, filesystem: attestation.observed.filesystem,
+      network: attestation.observed.network, nativeTools: { total: attestation.observed.nativeTools.total,
+        tools: attestation.observed.nativeTools.tools.map((item) => ({ ...item })) } },
+    ...extra, evidence: { sessionEventCount: 1, nativeCallCount: capabilityCounts.nativeCallCount,
+      probeMcpCallCount: capabilityCounts.probeMcpCallCount }, usage: { status: 'unavailable' },
   };
 }
 
@@ -39,7 +169,11 @@ export function previewGovernedCodexInitialDispatch(input) {
   return governedCodexDispatch(composeCodexInitialPrompt(input));
 }
 
-function externalBoundReceipt(internal, dispatch, invocationDigest) {
+function externalBoundReceipt(internal, dispatch, invocationDigest, capabilityCounts) {
+  if (internal.version === 'probe.governed-codex-attestation/v3') return externalV3Receipt(internal, {
+    executionContext: { source: 'caller', invocationDigest },
+    dispatch: { source: dispatch.source, tool: dispatch.tool, promptDigest: dispatch.promptDigest, promptBytes: dispatch.promptBytes },
+  }, capabilityCounts);
   return {
     version: 'probe.governed-codex-attestation/v2', profileId: 'luna-xhigh-readonly-v1',
     requested: { profileDigest: internal.requested.profileDigest, cwdDigest: internal.requested.cwdDigest, probeToolsDigest: internal.requested.probeToolsDigest, model: internal.requested.model, reasoningEffort: internal.requested.reasoningEffort, sandbox: internal.requested.sandbox, approvalPolicy: internal.requested.approvalPolicy },
@@ -136,7 +270,7 @@ export async function createCodexEngine(options = {}) {
 
       // Handle notifications (codex/event)
       if (message.method === 'codex/event' && message.params) {
-        if (governedEvidenceHandler && message.params.msg?.type === 'session_configured') governedEvidenceHandler(message);
+        if (governedEvidenceHandler) governedEvidenceHandler(message);
         const requestId = message.params._meta?.requestId;
         if (requestId !== undefined && eventHandlers.has(requestId)) {
           eventHandlers.get(requestId)(message.params);
@@ -269,7 +403,11 @@ export async function createCodexEngine(options = {}) {
         const reqId = requestId + 1;
         let fullResponse = '';
         let gotSessionId = false;
-        const evidence = []; if (governedProfile) governedEvidenceHandler = (event) => evidence.push(event);
+        const collector = governedProfile ? createGovernedNativeCollector(governedProfile) : null;
+        let evidenceInvalid = false;
+        if (governedProfile) governedEvidenceHandler = (event) => {
+          try { collector.observe(event); } catch { evidenceInvalid = true; }
+        };
         if (opts.abortSignal) {
           if (opts.abortSignal.aborted) throw new Error('Codex query cancelled');
           abortHandler = () => { void cleanup(new Error('Codex query cancelled')).catch(() => {}); };
@@ -313,11 +451,21 @@ export async function createCodexEngine(options = {}) {
         eventHandlers.delete(reqId);
         let attestation = null;
         if (governedProfile) {
-          const internal = attestGovernedCodexSession({ profile: governedProfile, events: evidence });
+          if (evidenceInvalid) throw new Error('Invalid governed Codex native event evidence');
+          const collected = collector.evidence();
+          const internal = attestGovernedCodexSession({ profile: governedProfile,
+            events: governedProfile.version === 'probe.governed-codex-profile/v2'
+              ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
           attestation = hasInvocationDigest
-            ? externalBoundReceipt(internal, dispatch, invocationDigest)
-            : externalReceipt(internal);
-          session.setConversationId(evidence[0].params.msg.session_id);
+            ? externalBoundReceipt(internal, dispatch, invocationDigest, {
+              nativeCallCount: collected.capabilities.nativeTools.total,
+              probeMcpCallCount: collected.capabilities.probeMcpCallCount,
+            })
+            : externalReceipt(internal, {
+              nativeCallCount: collected.capabilities.nativeTools.total,
+              probeMcpCallCount: collected.capabilities.probeMcpCallCount,
+            });
+          session.setConversationId(collected.sessionEvent.params.msg.session_id);
         }
 
         // Parse result
@@ -339,6 +487,11 @@ export async function createCodexEngine(options = {}) {
             type: 'text',
             content: fullResponse
           };
+        }
+
+        if (governedProfile?.version === 'probe.governed-codex-profile/v2') {
+          yield { type: 'toolBatch', total: attestation.observed.nativeTools.total,
+            tools: attestation.observed.nativeTools.tools.map((item) => ({ ...item })) };
         }
 
         session.incrementMessageCount();
