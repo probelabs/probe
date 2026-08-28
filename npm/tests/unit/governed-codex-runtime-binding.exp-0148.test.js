@@ -52,6 +52,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (foreign) { const cwd = decodeURIComponent(foreign[2]); events = [configured(request.id, { ...args, cwd }, {}, Number(foreign[1]))]; }
   for (const event of events) send(event);
   if (prompt.includes('[TERMINAL-WITHHELD]')) {
+    process.on('SIGTERM', () => { phases.push('shutdown-observed'); save(); });
+    const descendant = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: ['ignore', 1, 2] });
+    descendantPid = descendant.pid; save();
+    setInterval(() => {}, 1000);
+    await new Promise(resolve => setTimeout(resolve, 30));
     phases.push('terminal-evidence'); save();
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: request.id }, msg: { type: 'task_complete' } } });
     return;
@@ -320,29 +325,42 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
   });
 
-  await t.test('EXP-0171 terminal evidence with a withheld tools/call response aborts and leaves no lifecycle survivor', async () => {
-    const before = await stateFiles(stateDir); const agent = governedAgent(root); let state; let pending;
+  await t.test('EXP-0171 terminal evidence with a withheld tools/call response times out and leaves no lifecycle survivor', async () => {
+    const before = await stateFiles(stateDir); const agent = governedAgent(root); let state; let pending; let url; let resolutions = 0; let rejections = 0;
     const signal = agent._abortController.signal; let abortListeners = 0;
     const add = signal.addEventListener.bind(signal); const remove = signal.removeEventListener.bind(signal);
     signal.addEventListener = (...args) => { if (args[0] === 'abort') abortListeners++; return add(...args); };
     signal.removeEventListener = (...args) => { if (args[0] === 'abort') abortListeners--; return remove(...args); };
-    const originalSetTimeout = globalThis.setTimeout; const requestTimers = [];
+    const originalSetTimeout = globalThis.setTimeout; const requestTimers = []; const lifecycleTimers = [];
     globalThis.setTimeout = (callback, delay, ...args) => {
-      const timer = originalSetTimeout(callback, delay, ...args); if (delay === 600000) requestTimers.push(timer); return timer;
+      const mappedDelay = delay === 600000 ? 80 : delay === 5000 ? 30 : delay === 10000 ? 500 : delay;
+      const timer = originalSetTimeout(callback, mappedDelay, ...args);
+      if (delay === 600000) requestTimers.push(timer); else if (delay === 5000 || delay === 10000) lifecycleTimers.push(timer);
+      return timer;
     };
     try {
-      pending = agent.answerGoverned('[TERMINAL-WITHHELD]', { schema: LINEAGE_SCHEMA }).then(value => ({ value }), error => ({ error }));
+      pending = agent.answerGoverned('[TERMINAL-WITHHELD]', { schema: LINEAGE_SCHEMA }).then(
+        value => { resolutions++; return { value }; },
+        error => { rejections++; return { error }; }
+      );
       const file = await waitForState(stateDir, before, '[TERMINAL-WITHHELD]');
-      state = await readState(file); const call = state.seen.find(item => item.method === 'tools/call'); const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
+      state = await readState(file); const call = state.seen.find(item => item.method === 'tools/call'); url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
       state = await waitForPhase(file, 'terminal-evidence', originalSetTimeout);
-      assert.deepEqual(state.phases, ['terminal-evidence']); agent.cancel();
+      assert.deepEqual(state.phases, ['terminal-evidence']);
       const settled = await settleWithin(pending, 500);
-      assert.equal(settled.timeout, undefined); assert.equal(settled.error?.message, 'Codex query cancelled'); assert.equal('value' in settled, false);
+      state = await waitForPhase(file, 'shutdown-observed', originalSetTimeout);
+      assert.equal(settled.timeout, undefined); assert.equal(settled.error?.message, 'Request tools/call timed out after 10 minutes'); assert.equal('value' in settled, false);
+      assert.deepEqual(Object.keys(settled), ['error']); assert.deepEqual([resolutions, rejections], [0, 1]);
+      assert.deepEqual(state.phases, ['terminal-evidence', 'shutdown-observed']); assert.equal(state.phases.includes('response-delivered'), false);
       assert.equal(abortListeners, 0); assert.equal(requestTimers.length, 2); assert.equal(requestTimers.every(timer => timer._destroyed), true);
-      assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
+      assert.equal(lifecycleTimers.length, 2); assert.equal(lifecycleTimers.every(timer => timer._destroyed), true);
+      assert.equal(alive(state.pid), false); assert.equal(alive(state.descendantPid), false); assert.equal(await closed(url), true);
     } finally {
       globalThis.setTimeout = originalSetTimeout;
-      if (state?.pid && alive(state.pid)) { agent.cancel(); if (pending) await settleWithin(pending, 500); }
+      if (state?.pid && alive(state.pid)) {
+        try { process.kill(-state.pid, 'SIGKILL'); } catch { process.kill(state.pid, 'SIGKILL'); }
+        if (pending) await settleWithin(pending, 500);
+      }
     }
   });
 
