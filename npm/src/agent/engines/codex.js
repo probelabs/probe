@@ -21,7 +21,9 @@ const GOVERNED_PROBE_MCP_CALLS = new Map([
 ]);
 
 function governedRawItemInvalid() { throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate'); }
-function governedLiveEnvelopeInvalid() { throw governedAnswerFailure('native_event_grammar', 'live_envelope_session'); }
+function governedLiveEnvelopeInvalid(subreason) {
+  throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', subreason);
+}
 function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) invalid();
   const proto = Object.getPrototypeOf(value);
@@ -79,21 +81,22 @@ function createGovernedNativeCollector(profile) {
   function observe(event) {
     const type = event?.params?.msg?.type;
     if (type === 'session_configured') {
-      if (sessionEvent) governedLiveEnvelopeInvalid();
+      if (sessionEvent) governedLiveEnvelopeInvalid('session_sequence');
       sessionEvent = event;
       requestId = event.params?._meta?.requestId;
       threadId = event.params?._meta?.threadId;
       return;
     }
     if (profile.version !== 'probe.governed-codex-profile/v2' || type !== 'raw_response_item') return;
-    if (!sessionEvent) governedLiveEnvelopeInvalid();
-    governedExactObject(event, ['jsonrpc', 'method', 'params'], governedLiveEnvelopeInvalid);
-    if (event.jsonrpc !== '2.0' || event.method !== 'codex/event') governedLiveEnvelopeInvalid();
-    const params = governedExactObject(event.params, ['_meta', 'msg', 'id'], governedLiveEnvelopeInvalid);
-    const meta = governedExactObject(params._meta, ['requestId', 'threadId'], governedLiveEnvelopeInvalid);
-    if (meta.requestId !== requestId || meta.threadId !== threadId || params.id !== String(requestId)) governedLiveEnvelopeInvalid();
-    const msg = governedExactObject(params.msg, ['type', 'item'], governedLiveEnvelopeInvalid);
-    if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid();
+    if (!sessionEvent) governedLiveEnvelopeInvalid('session_sequence');
+    governedExactObject(event, ['jsonrpc', 'method', 'params'], () => governedLiveEnvelopeInvalid('envelope_shape'));
+    if (event.jsonrpc !== '2.0' || event.method !== 'codex/event') governedLiveEnvelopeInvalid('envelope_shape');
+    const params = governedExactObject(event.params, ['_meta', 'msg', 'id'], () => governedLiveEnvelopeInvalid('envelope_shape'));
+    const meta = governedExactObject(params._meta, ['requestId', 'threadId'], () => governedLiveEnvelopeInvalid('envelope_shape'));
+    if (meta.requestId !== requestId || meta.threadId !== threadId || params.id !== String(requestId))
+      governedLiveEnvelopeInvalid('correlation');
+    const msg = governedExactObject(params.msg, ['type', 'item'], () => governedLiveEnvelopeInvalid('envelope_shape'));
+    if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid('envelope_shape');
     const item = msg.item;
     if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
     if (item?.type === 'message') {
@@ -147,7 +150,7 @@ function createGovernedNativeCollector(profile) {
     governedRawItemInvalid();
   }
   function evidence() {
-    if (!sessionEvent) governedLiveEnvelopeInvalid();
+    if (!sessionEvent) governedLiveEnvelopeInvalid('session_sequence');
     if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedRawItemInvalid();
     const tools = nativeCallCount === 0 ? [] : [{ name: 'exec', status: 'completed', count: nativeCallCount }];
     return { sessionEvent, capabilities: { nativeTools: { total: nativeCallCount, tools }, probeMcpCallCount } };
@@ -499,10 +502,16 @@ export async function createCodexEngine(options = {}) {
           let collected, internal;
           try {
             collected = collector.evidence();
+          } catch (error) {
+            throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session');
+          }
+          try {
             internal = attestGovernedCodexSession({ profile: governedProfile,
               events: governedProfile.version === 'probe.governed-codex-profile/v2'
                 ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
-          } catch (error) { throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session'); }
+          } catch (error) {
+            throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session', 'attestation');
+          }
           attestation = hasInvocationDigest
             ? externalBoundReceipt(internal, dispatch, invocationDigest, {
               nativeCallCount: collected.capabilities.nativeTools.total,

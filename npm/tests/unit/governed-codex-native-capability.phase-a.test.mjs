@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs,
   validateGovernedCodexProfile } from '../../src/agent/engines/governed-codex-profile.js';
-import { governedAnswerFailure } from '../../src/agent/engines/governed-answer-failure.js';
+import { governedAnswerFailure,
+  normalizeGovernedAnswerFailure } from '../../src/agent/engines/governed-answer-failure.js';
 
 const TOOLS = ['search', 'extract', 'listFiles'];
 const PROFILE_ID = 'luna-xhigh-readonly-native-exec-v1';
@@ -28,13 +29,21 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     call_id: `raw-secret-call-${index}`, name: 'exec', input: 'SECRET_ARGUMENT_BODY',
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
-function assertFailure(result, stage, boundary = null) {
+function assertFailure(result, stage, boundary = null, subreason = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
   assert.equal(result.error?.answerFailureStage, stage);
-  if (stage === 'native_event_grammar') assert.equal(result.error?.nativeEventFailureBoundary, boundary);
-  else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureBoundary'), false);
+  if (stage === 'native_event_grammar') {
+    assert.equal(result.error?.nativeEventFailureBoundary, boundary);
+    if (boundary === 'live_envelope_session') {
+      assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), true);
+      assert.equal(result.error?.nativeEventFailureSubreason, subreason);
+    } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), false);
+  } else {
+    assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureBoundary'), false);
+    assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), false);
+  }
   assert.equal(result.error?.stack, undefined);
   assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
   const serialized = JSON.stringify(result.error);
@@ -65,6 +74,12 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
       { total: 2, tools: [{ name: 'exec', status: 'completed', count: 1 }] }
     ]) assert.throws(() => attestGovernedCodexSession({ profile: normalized, events: [session(cwd), rejected] }), /Invalid/);
     assert.throws(() => validateGovernedCodexProfile({ ...profile(cwd), codexNativeTools: ['search'] }), /Invalid/);
+    const source = await readFile(new URL('../../src/agent/engines/codex.js', import.meta.url), 'utf8');
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\('session_sequence'\)/g) ?? []).length, 3);
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\('envelope_shape'\)/g) ?? []).length, 6);
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation'\)/g) ?? []).length, 1);
+    assert.equal((source.match(/'attestation'/g) ?? []).length, 1);
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\(\)/g) ?? []).length, 0);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
 
@@ -100,6 +115,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
     }
   } });
   if (prompt.includes('[LIVE-SESSION]')) configured.params.msg.model = 'SECRET_INVALID_MODEL';
+  if (prompt.includes('[ATTEST-SESSION-SHAPE]')) delete configured.params.msg.model;
+  if (prompt.includes('[ATTEST-IDENTITY]')) configured.params.msg.session_id = 'SECRET_INVALID_IDENTITY';
+  if (prompt.includes('[ATTEST-PERMISSION]')) configured.params.msg.permission_profile.network = 'enabled';
+  if (prompt.includes('[ATTEST-ROLLOUT]')) configured.params.msg.rollout_path += '/SECRET_INVALID_ROLLOUT';
+  if (prompt.includes('[ATTEST-CWD]')) configured.params.msg.cwd = '/SECRET_INVALID_CWD';
   if (prompt.includes('[FOREIGN-SESSION-BEFORE]') || prompt.includes('[FOREIGN-DUPLICATE-SESSION]') ||
     prompt.includes('[CONCURRENT-FOREIGN]')) send(foreignSession());
   if (prompt.includes('[MISSING-REQUEST-ID]')) {
@@ -110,6 +130,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[FOREIGN-RAW]') || prompt.includes('[CONCURRENT-FOREIGN]')) foreignRaw();
   if (prompt.includes('[FOREIGN-DUPLICATE-SESSION]') || prompt.includes('[CONCURRENT-FOREIGN]')) send(foreignSession());
   const raw = item => send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item } } });
+  const liveEnvelope = mutate => { const event = (native)(0); mutate(event); send(event); };
+  if (prompt.includes('[LIVE-RAW-OBJECT]')) liveEnvelope(event => { event.extra = 'SECRET_ENVELOPE_EXTRA'; });
+  if (prompt.includes('[LIVE-JSONRPC]')) liveEnvelope(event => { event.jsonrpc = '1.0'; });
+  if (prompt.includes('[LIVE-PARAMS]')) liveEnvelope(event => { event.params.extra = 'SECRET_PARAMS_EXTRA'; });
+  if (prompt.includes('[LIVE-META]')) liveEnvelope(event => { event.params._meta.extra = 'SECRET_META_EXTRA'; });
+  if (prompt.includes('[LIVE-MSG]')) liveEnvelope(event => { event.params.msg.extra = 'SECRET_MSG_EXTRA'; });
+  if (prompt.includes('[LIVE-RESPONSE-ID]')) liveEnvelope(event => { event.params.id = 'SECRET_RESPONSE_ID'; });
   const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
     content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
     ...(role === 'assistant' ? { phase } : {}), internal_chat_message_metadata_passthrough: metadata });
@@ -334,14 +361,23 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
     assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
 
-    for (const marker of ['[UNKNOWN-MCP]', '[UNDECLARED]', '[MALFORMED]', '[UNKNOWN]', '[DUPLICATE]', '[CROSS]', '[OVERFLOW]']) {
-      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar',
-        marker === '[CROSS]' ? 'live_envelope_session' : 'raw_item_predicate');
+    for (const marker of ['[UNKNOWN-MCP]', '[UNDECLARED]', '[MALFORMED]', '[UNKNOWN]', '[DUPLICATE]', '[OVERFLOW]']) {
+      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar', 'raw_item_predicate');
       assert.deepEqual(rejected.events, []);
     }
 
-    for (const marker of ['[LIVE-MISSING-SESSION]', '[LIVE-ORDER]', '[LIVE-DUPLICATE-SESSION]', '[LIVE-SESSION]'])
-      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session');
+    for (const marker of ['[LIVE-MISSING-SESSION]', '[LIVE-ORDER]', '[LIVE-DUPLICATE-SESSION]'])
+      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'session_sequence');
+
+    for (const marker of ['[LIVE-RAW-OBJECT]', '[LIVE-JSONRPC]', '[LIVE-PARAMS]', '[LIVE-META]', '[LIVE-MSG]'])
+      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'envelope_shape');
+
+    for (const marker of ['[CROSS]', '[LIVE-RESPONSE-ID]'])
+      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'correlation');
+
+    for (const marker of ['[LIVE-SESSION]', '[ATTEST-SESSION-SHAPE]', '[ATTEST-IDENTITY]',
+      '[ATTEST-PERMISSION]', '[ATTEST-ROLLOUT]', '[ATTEST-CWD]'])
+      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'attestation');
 
     for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',
       '[DELTA-KINDS-OVERFLOW]', '[DELTA-KINDS-WRONG]', '[DELTA-KIND-UNSAFE]', '[DELTA-KIND-OVERSIZED]',
@@ -359,6 +395,28 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.equal(governedAnswerFailure('native_event_grammar', 'future_boundary').nativeEventFailureBoundary, null);
     assert.equal(JSON.stringify(governedAnswerFailure('native_event_grammar', 'SECRET_raw_item_predicate'))
       .includes('SECRET_'), false);
+    for (const invalid of [['session_sequence', 'envelope_shape'], 'session_sequence|envelope_shape',
+      'future_subreason', 'SECRET_session_sequence']) {
+      const failure = governedAnswerFailure('native_event_grammar', 'live_envelope_session', invalid);
+      assert.equal(failure.nativeEventFailureSubreason, null);
+      assert.deepEqual(Object.keys(failure),
+        ['answerFailureStage', 'nativeEventFailureBoundary', 'nativeEventFailureSubreason']);
+      assert.equal(JSON.stringify(failure).includes('SECRET_'), false);
+    }
+    for (const subreason of ['session_sequence', 'envelope_shape', 'correlation', 'attestation'])
+      assert.equal(governedAnswerFailure('native_event_grammar', 'live_envelope_session', subreason)
+        .nativeEventFailureSubreason, subreason);
+    assert.equal(Object.hasOwn(governedAnswerFailure('native_event_grammar', 'raw_item_predicate', 'correlation'),
+      'nativeEventFailureSubreason'), false);
+    assert.equal(Object.hasOwn(governedAnswerFailure('provider_engine', 'live_envelope_session', 'attestation'),
+      'nativeEventFailureSubreason'), false);
+    const classified = governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'session_sequence');
+    assert.equal(normalizeGovernedAnswerFailure(classified, 'native_event_grammar',
+      'live_envelope_session', 'attestation'), classified);
+    const sanitized = normalizeGovernedAnswerFailure(new Error('SECRET_ATTESTATION_BODY'),
+      'native_event_grammar', 'live_envelope_session', 'attestation');
+    assert.equal(sanitized.nativeEventFailureSubreason, 'attestation');
+    assert.equal(JSON.stringify(sanitized).includes('SECRET_'), false);
 
     const invalidAnswer = await run('[BADJSON]');
     assertFailure(invalidAnswer, 'schema_result_validation');
