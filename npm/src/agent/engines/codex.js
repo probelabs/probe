@@ -20,29 +20,30 @@ const GOVERNED_PROBE_MCP_CALLS = new Map([
   ['mcp__probe__search', 'search'], ['mcp__probe__extract', 'extract'], ['mcp__probe__listFiles', 'listFiles'],
 ]);
 
-function governedInvalid() { throw governedAnswerFailure('native_event_grammar'); }
-function governedExactObject(value, keys) {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) governedInvalid();
+function governedRawItemInvalid() { throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate'); }
+function governedLiveEnvelopeInvalid() { throw governedAnswerFailure('native_event_grammar', 'live_envelope_session'); }
+function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) invalid();
   const proto = Object.getPrototypeOf(value);
-  if (proto !== Object.prototype && proto !== null) governedInvalid();
+  if (proto !== Object.prototype && proto !== null) invalid();
   const actual = Reflect.ownKeys(value).filter((key) => Object.prototype.propertyIsEnumerable.call(value, key));
-  if (actual.some((key) => typeof key !== 'string') || actual.length !== keys.length || keys.some((key) => !actual.includes(key))) governedInvalid();
-  for (const key of keys) if (!Object.prototype.hasOwnProperty.call(Object.getOwnPropertyDescriptor(value, key), 'value')) governedInvalid();
+  if (actual.some((key) => typeof key !== 'string') || actual.length !== keys.length || keys.some((key) => !actual.includes(key))) invalid();
+  for (const key of keys) if (!Object.prototype.hasOwnProperty.call(Object.getOwnPropertyDescriptor(value, key), 'value')) invalid();
   return value;
 }
-function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedInvalid(); }
+function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedRawItemInvalid(); }
 function governedPassthrough(value, message = false) {
   const keys = Object.keys(value ?? {}).sort().join(',');
   const legacy = keys === 'turn_id';
   const current = keys === (message ? 'content_item_kinds,create_time,turn_id' : 'create_time,turn_id');
-  if (!legacy && !current) governedInvalid();
+  if (!legacy && !current) governedRawItemInvalid();
   governedSafeId(value.turn_id);
   if (current) {
     if (typeof value.create_time !== 'number' || !Number.isFinite(value.create_time) ||
-      value.create_time < 0 || value.create_time > Number.MAX_SAFE_INTEGER) governedInvalid();
+      value.create_time < 0 || value.create_time > Number.MAX_SAFE_INTEGER) governedRawItemInvalid();
     if (message) {
-      if (!Array.isArray(value.content_item_kinds) || value.content_item_kinds.length > 16) governedInvalid();
-      for (const kind of value.content_item_kinds) if (typeof kind !== 'string' || !GOVERNED_SAFE_KIND.test(kind)) governedInvalid();
+      if (!Array.isArray(value.content_item_kinds) || value.content_item_kinds.length > 16) governedRawItemInvalid();
+      for (const kind of value.content_item_kinds) if (typeof kind !== 'string' || !GOVERNED_SAFE_KIND.test(kind)) governedRawItemInvalid();
     }
   }
 }
@@ -54,21 +55,21 @@ function validateGovernedRawMessage(item) {
       ? ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough']
       : ['type', 'role', 'content', 'internal_chat_message_metadata_passthrough'];
   governedExactObject(item, keys);
-  if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedInvalid();
+  if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedRawItemInvalid();
   if (Object.prototype.hasOwnProperty.call(item, 'id')) governedSafeId(item.id);
-  if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedInvalid();
-  if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedInvalid();
+  if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedRawItemInvalid();
+  if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedRawItemInvalid();
   for (const part of item.content) {
     governedExactObject(part, ['type', 'text']);
     const allowed = assistant ? part.type === 'output_text' : part.type === 'input_text';
-    if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedInvalid();
+    if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedRawItemInvalid();
   }
   governedPassthrough(item.internal_chat_message_metadata_passthrough, true);
 }
 function validateGovernedRawReasoning(item) {
   governedExactObject(item, ['type', 'id', 'summary', 'encrypted_content', 'internal_chat_message_metadata_passthrough']);
-  if (item.type !== 'reasoning') governedInvalid(); governedSafeId(item.id);
-  if (!Array.isArray(item.summary) || item.summary.length !== 0 || typeof item.encrypted_content !== 'string' || Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedInvalid();
+  if (item.type !== 'reasoning') governedRawItemInvalid(); governedSafeId(item.id);
+  if (!Array.isArray(item.summary) || item.summary.length !== 0 || typeof item.encrypted_content !== 'string' || Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedRawItemInvalid();
   governedPassthrough(item.internal_chat_message_metadata_passthrough);
 }
 function createGovernedNativeCollector(profile) {
@@ -78,48 +79,48 @@ function createGovernedNativeCollector(profile) {
   function observe(event) {
     const type = event?.params?.msg?.type;
     if (type === 'session_configured') {
-      if (sessionEvent) governedInvalid();
+      if (sessionEvent) governedLiveEnvelopeInvalid();
       sessionEvent = event;
       requestId = event.params?._meta?.requestId;
       threadId = event.params?._meta?.threadId;
       return;
     }
     if (profile.version !== 'probe.governed-codex-profile/v2' || type !== 'raw_response_item') return;
-    if (!sessionEvent) governedInvalid();
-    governedExactObject(event, ['jsonrpc', 'method', 'params']);
-    if (event.jsonrpc !== '2.0' || event.method !== 'codex/event') governedInvalid();
-    const params = governedExactObject(event.params, ['_meta', 'msg', 'id']);
-    const meta = governedExactObject(params._meta, ['requestId', 'threadId']);
-    if (meta.requestId !== requestId || meta.threadId !== threadId || params.id !== String(requestId)) governedInvalid();
-    const msg = governedExactObject(params.msg, ['type', 'item']);
-    if (msg.type !== 'raw_response_item') governedInvalid();
+    if (!sessionEvent) governedLiveEnvelopeInvalid();
+    governedExactObject(event, ['jsonrpc', 'method', 'params'], governedLiveEnvelopeInvalid);
+    if (event.jsonrpc !== '2.0' || event.method !== 'codex/event') governedLiveEnvelopeInvalid();
+    const params = governedExactObject(event.params, ['_meta', 'msg', 'id'], governedLiveEnvelopeInvalid);
+    const meta = governedExactObject(params._meta, ['requestId', 'threadId'], governedLiveEnvelopeInvalid);
+    if (meta.requestId !== requestId || meta.threadId !== threadId || params.id !== String(requestId)) governedLiveEnvelopeInvalid();
+    const msg = governedExactObject(params.msg, ['type', 'item'], governedLiveEnvelopeInvalid);
+    if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid();
     const item = msg.item;
-    if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedInvalid();
+    if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
     if (item?.type === 'message') {
       validateGovernedRawMessage(item);
       if (Object.prototype.hasOwnProperty.call(item, 'id')) {
-        if (rawIds.has(item.id)) governedInvalid(); rawIds.add(item.id);
+        if (rawIds.has(item.id)) governedRawItemInvalid(); rawIds.add(item.id);
       }
       if (item.role === 'assistant') { assistantMessageCount++; if (item.phase === 'final_answer') finalAnswerCount++; }
       return;
     }
     if (item?.type === 'reasoning') {
       validateGovernedRawReasoning(item);
-      if (rawIds.has(item.id)) governedInvalid(); rawIds.add(item.id);
+      if (rawIds.has(item.id)) governedRawItemInvalid(); rawIds.add(item.id);
       return;
     }
     if (item?.type === 'custom_tool_call') {
       governedExactObject(item, ['type', 'id', 'status', 'call_id', 'name', 'input', 'internal_chat_message_metadata_passthrough']);
       governedSafeId(item.id); governedSafeId(item.call_id);
-      if (rawIds.has(item.id) || callOrigins.has(item.call_id)) governedInvalid();
+      if (rawIds.has(item.id) || callOrigins.has(item.call_id)) governedRawItemInvalid();
       const nativeName = GOVERNED_CODEX_NATIVE_CALLS.get(item.name);
       const probeMcpName = GOVERNED_PROBE_MCP_CALLS.get(item.name);
-      if ((nativeName !== undefined) === (probeMcpName !== undefined)) governedInvalid();
-      if (nativeName !== undefined && !profile.codexNativeTools.includes(nativeName)) governedInvalid();
-      if (probeMcpName !== undefined && !profile.probeMcpTools.includes(probeMcpName)) governedInvalid();
-      if (item.status !== 'completed' || typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedInvalid();
+      if ((nativeName !== undefined) === (probeMcpName !== undefined)) governedRawItemInvalid();
+      if (nativeName !== undefined && !profile.codexNativeTools.includes(nativeName)) governedRawItemInvalid();
+      if (probeMcpName !== undefined && !profile.probeMcpTools.includes(probeMcpName)) governedRawItemInvalid();
+      if (item.status !== 'completed' || typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedRawItemInvalid();
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedInvalid();
+      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
       const origin = nativeName !== undefined ? 'codex-native' : 'probe-mcp';
       rawIds.add(item.id); callOrigins.set(item.call_id, origin);
       if (origin === 'codex-native') nativeCallCount++; else probeMcpCallCount++;
@@ -130,24 +131,24 @@ function createGovernedNativeCollector(profile) {
       governedExactObject(item, hasId
         ? ['type', 'id', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']
         : ['type', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']);
-      if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedInvalid(); }
+      if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedRawItemInvalid(); }
       governedSafeId(item.call_id);
-      if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id) || !Array.isArray(item.output) || item.output.length > 64) governedInvalid();
+      if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id) || !Array.isArray(item.output) || item.output.length > 64) governedRawItemInvalid();
       for (const part of item.output) {
         governedExactObject(part, ['type', 'text']);
-        if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedInvalid();
+        if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid();
       }
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedInvalid();
+      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
       if (hasId) rawIds.add(item.id);
       outputIds.add(item.call_id);
       return;
     }
-    governedInvalid();
+    governedRawItemInvalid();
   }
   function evidence() {
-    if (!sessionEvent) governedInvalid();
-    if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedInvalid();
+    if (!sessionEvent) governedLiveEnvelopeInvalid();
+    if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedRawItemInvalid();
     const tools = nativeCallCount === 0 ? [] : [{ name: 'exec', status: 'completed', count: nativeCallCount }];
     return { sessionEvent, capabilities: { nativeTools: { total: nativeCallCount, tools }, probeMcpCallCount } };
   }
@@ -497,7 +498,7 @@ export async function createCodexEngine(options = {}) {
             internal = attestGovernedCodexSession({ profile: governedProfile,
               events: governedProfile.version === 'probe.governed-codex-profile/v2'
                 ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
-          } catch (error) { throw normalizeGovernedAnswerFailure(error, 'native_event_grammar'); }
+          } catch (error) { throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session'); }
           attestation = hasInvocationDigest
             ? externalBoundReceipt(internal, dispatch, invocationDigest, {
               nativeCallCount: collected.capabilities.nativeTools.total,

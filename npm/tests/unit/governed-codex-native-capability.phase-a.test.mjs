@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs,
   validateGovernedCodexProfile } from '../../src/agent/engines/governed-codex-profile.js';
+import { governedAnswerFailure } from '../../src/agent/engines/governed-answer-failure.js';
 
 const TOOLS = ['search', 'extract', 'listFiles'];
 const PROFILE_ID = 'luna-xhigh-readonly-native-exec-v1';
@@ -27,11 +28,13 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     call_id: `raw-secret-call-${index}`, name: 'exec', input: 'SECRET_ARGUMENT_BODY',
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
-function assertFailure(result, stage) {
+function assertFailure(result, stage, boundary = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
   assert.equal(result.error?.answerFailureStage, stage);
+  if (stage === 'native_event_grammar') assert.equal(result.error?.nativeEventFailureBoundary, boundary);
+  else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureBoundary'), false);
   assert.equal(result.error?.stack, undefined);
   assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
   const serialized = JSON.stringify(result.error);
@@ -83,7 +86,9 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (request.method === 'initialize') return send({ jsonrpc: '2.0', id: request.id, result: {} });
   const args = request.params.arguments, cwd = args.cwd, prompt = args.prompt;
   writeFileSync(process.env.PROBE_NATIVE_ARGS_FILE, JSON.stringify(args));
-  send((session)(cwd));
+  const configured = (session)(cwd);
+  if (prompt.includes('[LIVE-SESSION]')) configured.params.msg.model = 'SECRET_INVALID_MODEL';
+  if (!prompt.includes('[LIVE-ORDER]')) send(configured);
   const raw = item => send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item } } });
   const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
     content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
@@ -98,6 +103,77 @@ createInterface({ input: process.stdin }).on('line', async line => {
       output: [{ type: 'input_text', text: 'SECRET_RESULT_BODY' }], internal_chat_message_metadata_passthrough: currentPassthrough });
     raw(message('final-safe', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
   }
+  if (prompt.includes('[ATTEMPT8-SAFE]')) {
+    const emittedOutputProjection = [];
+    const emitOutput = item => { raw(item); emittedOutputProjection.push({
+      type: item.type, outputPartTypes: item.output.map(part => part.type)
+    }); };
+    raw(message('attempt8-developer', 'developer'));
+    raw(message('attempt8-user-1', 'user'));
+    raw(message('attempt8-user-2', 'user'));
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-1', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw(message('attempt8-commentary-1', 'assistant', 'commentary', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+    raw({ type: 'custom_tool_call', id: 'attempt8-call-item-2', status: 'completed', call_id: 'attempt8-call-2', name: 'exec',
+      input: 'SECRET_ARGUMENT_BODY', internal_chat_message_metadata_passthrough: currentPassthrough });
+    emitOutput({ type: 'custom_tool_call_output', id: 'attempt8-output-item-2', call_id: 'attempt8-call-2', output: [
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_2_1' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_2_2' }
+    ], internal_chat_message_metadata_passthrough: currentPassthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-2', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'custom_tool_call', id: 'attempt8-call-item-5', status: 'completed', call_id: 'attempt8-call-5', name: 'exec',
+      input: 'SECRET_ARGUMENT_BODY', internal_chat_message_metadata_passthrough: currentPassthrough });
+    emitOutput({ type: 'custom_tool_call_output', id: 'attempt8-output-item-5', call_id: 'attempt8-call-5', output: [
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_5_1' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_5_2' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_5_3' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_5_4' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_5_5' }
+    ], internal_chat_message_metadata_passthrough: currentPassthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-3', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-4', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-5', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'custom_tool_call', id: 'attempt8-call-item-3', status: 'completed', call_id: 'attempt8-call-3', name: 'exec',
+      input: 'SECRET_ARGUMENT_BODY', internal_chat_message_metadata_passthrough: currentPassthrough });
+    emitOutput({ type: 'custom_tool_call_output', id: 'attempt8-output-item-3', call_id: 'attempt8-call-3', output: [
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_3_1' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_3_2' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_3_3' }
+    ], internal_chat_message_metadata_passthrough: currentPassthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-6', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-7', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-8', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw(message('attempt8-commentary-2', 'assistant', 'commentary', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+    raw({ type: 'custom_tool_call', id: 'attempt8-call-item-4', status: 'completed', call_id: 'attempt8-call-4', name: 'exec',
+      input: 'SECRET_ARGUMENT_BODY', internal_chat_message_metadata_passthrough: currentPassthrough });
+    emitOutput({ type: 'custom_tool_call_output', id: 'attempt8-output-item-4', call_id: 'attempt8-call-4', output: [
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_4_1' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_4_2' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_4_3' },
+      { type: 'input_text', text: 'SECRET_RESULT_BODY_4_4' }
+    ], internal_chat_message_metadata_passthrough: currentPassthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-9', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-10', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-11', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-12', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw({ type: 'reasoning', id: 'attempt8-reasoning-13', summary: [], encrypted_content: 'SECRET_REASONING_BODY',
+      internal_chat_message_metadata_passthrough: passthrough });
+    raw(message('attempt8-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+    writeFileSync(process.env.PROBE_NATIVE_PROJECTION_FILE, JSON.stringify(emittedOutputProjection));
+  }
+  if (prompt.includes('[LIVE-ORDER]')) raw(message('live-order-secret', 'user'));
+  if (prompt.includes('[LIVE-DUPLICATE-SESSION]')) send((session)(cwd));
   if (prompt.includes('[BOUNDS]')) raw(message('a'.repeat(128), 'user', null, {
     turn_id: 'raw-secret-turn', create_time: 9007199254740991, content_item_kinds: Array(16).fill('a'.repeat(64)) }));
   if (prompt.includes('[DELTA-CREATE-NEGATIVE]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, create_time: -1 }));
@@ -150,11 +226,14 @@ createInterface({ input: process.stdin }).on('line', async line => {
 `;
   const executable = join(bin, 'codex'), priorPath = process.env.PATH;
   const priorPid = process.env.PROBE_NATIVE_PID_FILE, priorArgs = process.env.PROBE_NATIVE_ARGS_FILE;
+  const priorProjection = process.env.PROBE_NATIVE_PROJECTION_FILE;
   await writeFile(executable, fake); await chmod(executable, 0o755); process.env.PATH = `${bin}:${priorPath}`;
   let runIndex = 0;
   async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }) {
     const index = runIndex++, pidFile = join(root, `pid-${index}`), argsFile = join(root, `args-${index}`);
+    const projectionFile = join(root, `projection-${index}`);
     process.env.PROBE_NATIVE_PID_FILE = pidFile; process.env.PROBE_NATIVE_ARGS_FILE = argsFile;
+    process.env.PROBE_NATIVE_PROJECTION_FILE = projectionFile;
     const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [...TOOLS],
       governedCodexProfile: profile(root), searchDelegate: false, disableMermaidValidation: true });
     const events = []; agent.events.on('toolCall', (event) => events.push(event));
@@ -164,7 +243,8 @@ createInterface({ input: process.stdin }).on('line', async line => {
     finally { await agent.close().catch(() => {}); }
     const pid = Number(await readFile(pidFile, 'utf8'));
     assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
-    return { result, error, events, args: JSON.parse(await readFile(argsFile, 'utf8')) };
+    const projection = await readFile(projectionFile, 'utf8').then(JSON.parse).catch(() => null);
+    return { result, error, events, args: JSON.parse(await readFile(argsFile, 'utf8')), projection };
   }
   try {
     const zero = await run('[ZERO]'); assert.ifError(zero.error);
@@ -206,22 +286,48 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const secret of ['SECRET_', 'raw-secret', 'developer-safe', 'user-safe', 'commentary-safe', 'final-safe',
       'call-item-safe', 'call-safe', 'output-item-safe', 'create_time', 'content_item_kinds'])
       assert.equal(attempt7Serialized.includes(secret), false);
+    const attempt8 = await run('[ATTEMPT8-SAFE]'); assert.ifError(attempt8.error);
+    assert.deepEqual(attempt8.result.runtimeAttestation.observed.nativeTools,
+      { total: 4, tools: [{ name: 'exec', status: 'completed', count: 4 }] });
+    assert.deepEqual(attempt8.result.runtimeAttestation.evidence,
+      { sessionEventCount: 1, nativeCallCount: 4, probeMcpCallCount: 0 });
+    assert.deepEqual(attempt8.events, [{ name: 'exec', status: 'completed', count: 4 }]);
+    assert.deepEqual(attempt8.projection.map(item => item.type), Array(4).fill('custom_tool_call_output'));
+    const attempt8PartCounts = attempt8.projection.map(item => item.outputPartTypes.length);
+    assert.deepEqual(attempt8PartCounts, [2, 5, 3, 4]);
+    assert.equal(attempt8PartCounts.reduce((total, count) => total + count, 0), 14);
+    assert.deepEqual(attempt8.projection.flatMap(item => item.outputPartTypes), Array(14).fill('input_text'));
+    const attempt8Serialized = JSON.stringify({ result: attempt8.result, events: attempt8.events });
+    for (const secret of ['SECRET_', 'raw-secret', 'attempt8-', 'create_time', 'content_item_kinds'])
+      assert.equal(attempt8Serialized.includes(secret), false);
     const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
     assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
 
     for (const marker of ['[UNKNOWN-MCP]', '[UNDECLARED]', '[MALFORMED]', '[UNKNOWN]', '[DUPLICATE]', '[CROSS]', '[OVERFLOW]']) {
-      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar');
+      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar',
+        marker === '[CROSS]' ? 'live_envelope_session' : 'raw_item_predicate');
       assert.deepEqual(rejected.events, []);
     }
+
+    for (const marker of ['[LIVE-ORDER]', '[LIVE-DUPLICATE-SESSION]', '[LIVE-SESSION]'])
+      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session');
 
     for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',
       '[DELTA-KINDS-OVERFLOW]', '[DELTA-KINDS-WRONG]', '[DELTA-KIND-UNSAFE]', '[DELTA-KIND-OVERSIZED]',
       '[DELTA-PARTIAL]', '[DELTA-EXTRA]', '[DELTA-ID-UNSAFE]', '[DELTA-ID-OVERSIZED]', '[DELTA-DUP-ID]',
       '[DELTA-OUTPUT-DUP-ID]', '[COMMENTARY-ONLY]', '[DOUBLE-FINAL]', '[PHASE-UNKNOWN]', '[OVERFLOW-MESSAGES]'])
-      assertFailure(await run(marker), 'native_event_grammar');
+      assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate');
 
     assertFailure(await run('[PROVIDER-ERROR]'), 'provider_engine');
     assertFailure(await run('[AMBIGUOUS]'), 'unknown');
+    assert.equal(governedAnswerFailure('native_event_grammar').nativeEventFailureBoundary, null);
+    assert.equal(governedAnswerFailure('native_event_grammar', ['raw_item_predicate', 'live_envelope_session'])
+      .nativeEventFailureBoundary, null);
+    assert.equal(governedAnswerFailure('native_event_grammar', 'raw_item_predicate|live_envelope_session')
+      .nativeEventFailureBoundary, null);
+    assert.equal(governedAnswerFailure('native_event_grammar', 'future_boundary').nativeEventFailureBoundary, null);
+    assert.equal(JSON.stringify(governedAnswerFailure('native_event_grammar', 'SECRET_raw_item_predicate'))
+      .includes('SECRET_'), false);
 
     const invalidAnswer = await run('[BADJSON]');
     assertFailure(invalidAnswer, 'schema_result_validation');
@@ -235,6 +341,8 @@ createInterface({ input: process.stdin }).on('line', async line => {
     process.env.PATH = priorPath;
     if (priorPid === undefined) delete process.env.PROBE_NATIVE_PID_FILE; else process.env.PROBE_NATIVE_PID_FILE = priorPid;
     if (priorArgs === undefined) delete process.env.PROBE_NATIVE_ARGS_FILE; else process.env.PROBE_NATIVE_ARGS_FILE = priorArgs;
+    if (priorProjection === undefined) delete process.env.PROBE_NATIVE_PROJECTION_FILE;
+    else process.env.PROBE_NATIVE_PROJECTION_FILE = priorProjection;
     await rm(root, { recursive: true, force: true });
   }
 });
