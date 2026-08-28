@@ -103,6 +103,7 @@ import {
 } from './tasks/index.js';
 import { z } from 'zod';
 import { validateGovernedCodexProfile } from './engines/governed-codex-profile.js';
+import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './engines/governed-answer-failure.js';
 
 const GOVERNED_RESULT_IDENTITY = 'probe.governed-result-identity/v1';
 const GOVERNED_RESULT_DOMAIN = 'probe.governed-result-identity/data/v1';
@@ -3499,10 +3500,11 @@ Follow these instructions carefully:
       throw new TypeError('answerGoverned resultIdentity requires an own invocationDigest');
     }
 
-    let engine;
+    let engine, answerFailure = null;
     try {
-      engine = await this.getEngine();
-      if (!engine?.query) throw new Error('Governed Codex engine is unavailable');
+      try { engine = await this.getEngine(); }
+      catch { throw governedAnswerFailure('provider_engine'); }
+      if (!engine?.query) throw governedAnswerFailure('provider_engine');
       const candidateChunks = [];
       let runtimeAttestation;
       let attestationCount = 0;
@@ -3519,7 +3521,7 @@ Follow these instructions carefully:
         } else if (chunk.type === 'toolBatch') {
           nativeToolBatch = chunk;
           nativeToolBatchCount++;
-        } else if (chunk.type === 'error') throw chunk.error || new Error('Governed Codex query failed');
+        } else if (chunk.type === 'error') throw normalizeGovernedAnswerFailure(chunk.error, 'unknown');
       }
       if (hasInvocationDigest) {
         const expectedAttestation = this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2'
@@ -3537,15 +3539,24 @@ Follow these instructions carefully:
         for (const toolEvent of nativeToolBatch.tools) this.events.emit('toolCall', toolEvent);
       } else if (nativeToolBatchCount !== 0) throw new Error('Unexpected governed native capability aggregate');
       const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
-      if (!validation.isValid) throw new Error(validation.errorSummary || validation.error || 'Governed answer failed schema validation');
+      if (!validation.isValid) throw governedAnswerFailure('schema_result_validation');
       if (hasResultIdentity) {
-        const { data, resultIdentity } = identifyGovernedResult(validation.parsed);
+        let identified;
+        try { identified = identifyGovernedResult(validation.parsed); }
+        catch { throw governedAnswerFailure('schema_result_validation'); }
+        const { data, resultIdentity } = identified;
         freezeGovernedTree(runtimeAttestation);
         return Object.freeze({ data, runtimeAttestation, resultIdentity });
       }
       return { data: validation.parsed, runtimeAttestation };
+    } catch (error) {
+      answerFailure = normalizeGovernedAnswerFailure(error, 'unknown');
+      throw answerFailure;
     } finally {
-      if (engine) await engine.close();
+      if (engine) {
+        try { await engine.close(); }
+        catch { if (!answerFailure) throw governedAnswerFailure('unknown'); }
+      }
     }
   }
 

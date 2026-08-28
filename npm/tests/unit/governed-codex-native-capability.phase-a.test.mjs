@@ -27,6 +27,16 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     call_id: `raw-secret-call-${index}`, name: 'exec', input: 'SECRET_ARGUMENT_BODY',
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
+function assertFailure(result, stage) {
+  assert.equal(result.result, undefined);
+  assert.equal(result.error?.name, 'GovernedAnswerFailure');
+  assert.equal(result.error?.message, '');
+  assert.equal(result.error?.answerFailureStage, stage);
+  assert.equal(result.error?.stack, undefined);
+  assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
+  const serialized = JSON.stringify(result.error);
+  for (const forbidden of ['SECRET_', 'raw-secret', 'Error:', 'at file:']) assert.equal(serialized.includes(forbidden), false);
+}
 
 test('Phase A profile attests only a bounded disjoint native capability aggregate', async () => {
   const cwd = await mkdtemp(join(tmpdir(), 'probe-native-capability-'));
@@ -66,12 +76,50 @@ const permission = ${permission.toString()};
 const session = ${session.toString()};
 const native = ${native.toString()};
 const passthrough = { turn_id: 'raw-secret-turn' };
+const currentPassthrough = { turn_id: 'raw-secret-turn', create_time: 7.25 };
+const currentMessagePassthrough = { turn_id: 'raw-secret-turn', create_time: 7.25, content_item_kinds: ['input_text'] };
 createInterface({ input: process.stdin }).on('line', async line => {
   const request = JSON.parse(line);
   if (request.method === 'initialize') return send({ jsonrpc: '2.0', id: request.id, result: {} });
   const args = request.params.arguments, cwd = args.cwd, prompt = args.prompt;
   writeFileSync(process.env.PROBE_NATIVE_ARGS_FILE, JSON.stringify(args));
   send((session)(cwd));
+  const raw = item => send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item } } });
+  const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
+    content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
+    ...(role === 'assistant' ? { phase } : {}), internal_chat_message_metadata_passthrough: metadata });
+  if (prompt.includes('[ATTEMPT7]')) {
+    raw(message('developer-safe', 'developer'));
+    raw(message('user-safe', 'user'));
+    raw(message('commentary-safe', 'assistant', 'commentary', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+    raw({ type: 'custom_tool_call', id: 'call-item-safe', status: 'completed', call_id: 'call-safe', name: 'exec',
+      input: 'SECRET_ARGUMENT_BODY', internal_chat_message_metadata_passthrough: currentPassthrough });
+    raw({ type: 'custom_tool_call_output', id: 'output-item-safe', call_id: 'call-safe',
+      output: [{ type: 'input_text', text: 'SECRET_RESULT_BODY' }], internal_chat_message_metadata_passthrough: currentPassthrough });
+    raw(message('final-safe', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  }
+  if (prompt.includes('[BOUNDS]')) raw(message('a'.repeat(128), 'user', null, {
+    turn_id: 'raw-secret-turn', create_time: 9007199254740991, content_item_kinds: Array(16).fill('a'.repeat(64)) }));
+  if (prompt.includes('[DELTA-CREATE-NEGATIVE]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, create_time: -1 }));
+  if (prompt.includes('[DELTA-CREATE-NONFINITE]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, create_time: NaN }));
+  if (prompt.includes('[DELTA-CREATE-UNSAFE]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, create_time: 9007199254740992 }));
+  if (prompt.includes('[DELTA-KINDS-OVERFLOW]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, content_item_kinds: Array(17).fill('input_text') }));
+  if (prompt.includes('[DELTA-KINDS-WRONG]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, content_item_kinds: 'input_text' }));
+  if (prompt.includes('[DELTA-KIND-UNSAFE]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, content_item_kinds: ['unsafe/kind'] }));
+  if (prompt.includes('[DELTA-KIND-OVERSIZED]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, content_item_kinds: ['a'.repeat(65)] }));
+  if (prompt.includes('[DELTA-PARTIAL]')) raw(message('delta-safe', 'user', null, { turn_id: 'raw-secret-turn', create_time: 7 }));
+  if (prompt.includes('[DELTA-EXTRA]')) raw(message('delta-safe', 'user', null, { ...currentMessagePassthrough, extra: true }));
+  if (prompt.includes('[DELTA-ID-UNSAFE]')) raw(message('unsafe id', 'user'));
+  if (prompt.includes('[DELTA-ID-OVERSIZED]')) raw(message('a'.repeat(129), 'user'));
+  if (prompt.includes('[DELTA-DUP-ID]')) { raw(message('duplicate-safe', 'user')); raw(message('duplicate-safe', 'developer')); }
+  if (prompt.includes('[DELTA-OUTPUT-DUP-ID]')) {
+    raw({ type: 'custom_tool_call', id: 'duplicate-safe', status: 'completed', call_id: 'call-safe', name: 'exec', input: '', internal_chat_message_metadata_passthrough: currentPassthrough });
+    raw({ type: 'custom_tool_call_output', id: 'duplicate-safe', call_id: 'call-safe', output: [], internal_chat_message_metadata_passthrough: currentPassthrough });
+  }
+  if (prompt.includes('[COMMENTARY-ONLY]')) raw(message('commentary-safe', 'assistant', 'commentary', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  if (prompt.includes('[DOUBLE-FINAL]')) { raw(message('final-one', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] })); raw(message('final-two', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] })); }
+  if (prompt.includes('[PHASE-UNKNOWN]')) raw(message('phase-safe', 'assistant', 'future_phase', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  if (prompt.includes('[OVERFLOW-MESSAGES]')) for (let index = 0; index < 257; index++) raw(message('message-' + index, 'user'));
   if (prompt.includes('[NONTOOL]')) {
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'content is not retained' }], internal_chat_message_metadata_passthrough: passthrough } } } });
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'reasoning', id: 'reasoning-safe', summary: [], encrypted_content: 'opaque', internal_chat_message_metadata_passthrough: passthrough } } } });
@@ -93,21 +141,25 @@ createInterface({ input: process.stdin }).on('line', async line => {
   else if (prompt.includes('[DUPLICATE]')) { emitCall(0); emitCall(0); }
   else if (prompt.includes('[CROSS]')) { const event = (native)(0); event.params._meta.threadId = 'other-session'; send(event); }
   else if (prompt.includes('[OVERFLOW]')) for (let index = 0; index < 257; index++) emitCall(index);
-  send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: prompt.includes('[BADJSON]') ? 'not-json' : '{"ok":true}' }] } });
+  if (prompt.includes('[AMBIGUOUS]')) { const event = (native)(0); delete event.params.msg.item.status; send(event); send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
+  if (prompt.includes('[PROVIDER-ERROR]')) { send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
+  const text = prompt.includes('[BADJSON]') ? 'not-json' : prompt.includes('[BADSCHEMA]') ? '{"ok":"wrong"}'
+    : prompt.includes('[NONCANONICAL]') ? '{"ok":1e309}' : '{"ok":true}';
+  send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
 });
 `;
   const executable = join(bin, 'codex'), priorPath = process.env.PATH;
   const priorPid = process.env.PROBE_NATIVE_PID_FILE, priorArgs = process.env.PROBE_NATIVE_ARGS_FILE;
   await writeFile(executable, fake); await chmod(executable, 0o755); process.env.PATH = `${bin}:${priorPath}`;
   let runIndex = 0;
-  async function run(marker) {
+  async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }) {
     const index = runIndex++, pidFile = join(root, `pid-${index}`), argsFile = join(root, `args-${index}`);
     process.env.PROBE_NATIVE_PID_FILE = pidFile; process.env.PROBE_NATIVE_ARGS_FILE = argsFile;
     const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [...TOOLS],
       governedCodexProfile: profile(root), searchDelegate: false, disableMermaidValidation: true });
     const events = []; agent.events.on('toolCall', (event) => events.push(event));
     let result, error;
-    try { result = await agent.answerGoverned(marker, { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }); }
+    try { result = await agent.answerGoverned(marker, options); }
     catch (caught) { error = caught; }
     finally { await agent.close().catch(() => {}); }
     const pid = Number(await readFile(pidFile, 'utf8'));
@@ -145,14 +197,40 @@ createInterface({ input: process.stdin }).on('line', async line => {
       for (const secret of ['SECRET_ARGUMENT_BODY', 'SECRET_RESULT_BODY', 'raw-secret-id', 'raw-secret-call', 'raw-secret-turn']) assert.equal(serialized.includes(secret), false);
     }
 
+    const attempt7 = await run('[ATTEMPT7]'); assert.ifError(attempt7.error);
+    assert.deepEqual(attempt7.result.runtimeAttestation.observed.nativeTools,
+      { total: 1, tools: [{ name: 'exec', status: 'completed', count: 1 }] });
+    assert.deepEqual(attempt7.result.runtimeAttestation.evidence,
+      { sessionEventCount: 1, nativeCallCount: 1, probeMcpCallCount: 0 });
+    const attempt7Serialized = JSON.stringify({ result: attempt7.result, events: attempt7.events });
+    for (const secret of ['SECRET_', 'raw-secret', 'developer-safe', 'user-safe', 'commentary-safe', 'final-safe',
+      'call-item-safe', 'call-safe', 'output-item-safe', 'create_time', 'content_item_kinds'])
+      assert.equal(attempt7Serialized.includes(secret), false);
+    const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
+    assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+
     for (const marker of ['[UNKNOWN-MCP]', '[UNDECLARED]', '[MALFORMED]', '[UNKNOWN]', '[DUPLICATE]', '[CROSS]', '[OVERFLOW]']) {
-      const rejected = await run(marker); assert.match(rejected.error?.message || '', /Invalid governed Codex native event evidence/);
+      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar');
       assert.deepEqual(rejected.events, []);
     }
 
+    for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',
+      '[DELTA-KINDS-OVERFLOW]', '[DELTA-KINDS-WRONG]', '[DELTA-KIND-UNSAFE]', '[DELTA-KIND-OVERSIZED]',
+      '[DELTA-PARTIAL]', '[DELTA-EXTRA]', '[DELTA-ID-UNSAFE]', '[DELTA-ID-OVERSIZED]', '[DELTA-DUP-ID]',
+      '[DELTA-OUTPUT-DUP-ID]', '[COMMENTARY-ONLY]', '[DOUBLE-FINAL]', '[PHASE-UNKNOWN]', '[OVERFLOW-MESSAGES]'])
+      assertFailure(await run(marker), 'native_event_grammar');
+
+    assertFailure(await run('[PROVIDER-ERROR]'), 'provider_engine');
+    assertFailure(await run('[AMBIGUOUS]'), 'unknown');
+
     const invalidAnswer = await run('[BADJSON]');
-    assert.match(invalidAnswer.error?.message || '', /schema|JSON/i);
+    assertFailure(invalidAnswer, 'schema_result_validation');
     assert.deepEqual(invalidAnswer.events, [{ name: 'exec', status: 'completed', count: 1 }]);
+    assertFailure(await run('[BADSCHEMA]'), 'schema_result_validation');
+    const numericSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
+      properties: { ok: { type: 'number' } } });
+    assertFailure(await run('[NONCANONICAL]', { schema: numericSchema, invocationDigest: `sha256:${'0'.repeat(64)}`,
+      resultIdentity: 'probe.governed-result-identity/v1' }), 'schema_result_validation');
   } finally {
     process.env.PATH = priorPath;
     if (priorPid === undefined) delete process.env.PROBE_NATIVE_PID_FILE; else process.env.PROBE_NATIVE_PID_FILE = priorPid;

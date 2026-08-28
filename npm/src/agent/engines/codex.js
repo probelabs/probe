@@ -10,15 +10,17 @@ import { BuiltInMCPServer } from '../mcp/built-in-server.js';
 import { governSpawnedProcess } from '../processSupervisor.js';
 import { Session } from '../shared/Session.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs, validateGovernedCodexProfile } from './governed-codex-profile.js';
+import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './governed-answer-failure.js';
 
 const GOVERNED_NATIVE_EVENT_LIMIT = 256;
 const GOVERNED_SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const GOVERNED_SAFE_KIND = /^[A-Za-z0-9._:-]{1,64}$/;
 const GOVERNED_CODEX_NATIVE_CALLS = new Map([['exec', 'exec']]);
 const GOVERNED_PROBE_MCP_CALLS = new Map([
   ['mcp__probe__search', 'search'], ['mcp__probe__extract', 'extract'], ['mcp__probe__listFiles', 'listFiles'],
 ]);
 
-function governedInvalid() { throw new Error('Invalid governed Codex native event evidence'); }
+function governedInvalid() { throw governedAnswerFailure('native_event_grammar'); }
 function governedExactObject(value, keys) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) governedInvalid();
   const proto = Object.getPrototypeOf(value);
@@ -29,26 +31,39 @@ function governedExactObject(value, keys) {
   return value;
 }
 function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedInvalid(); }
-function governedPassthrough(value) {
-  governedExactObject(value, ['turn_id']); governedSafeId(value.turn_id);
+function governedPassthrough(value, message = false) {
+  const keys = Object.keys(value ?? {}).sort().join(',');
+  const legacy = keys === 'turn_id';
+  const current = keys === (message ? 'content_item_kinds,create_time,turn_id' : 'create_time,turn_id');
+  if (!legacy && !current) governedInvalid();
+  governedSafeId(value.turn_id);
+  if (current) {
+    if (typeof value.create_time !== 'number' || !Number.isFinite(value.create_time) ||
+      value.create_time < 0 || value.create_time > Number.MAX_SAFE_INTEGER) governedInvalid();
+    if (message) {
+      if (!Array.isArray(value.content_item_kinds) || value.content_item_kinds.length > 16) governedInvalid();
+      for (const kind of value.content_item_kinds) if (typeof kind !== 'string' || !GOVERNED_SAFE_KIND.test(kind)) governedInvalid();
+    }
+  }
 }
 function validateGovernedRawMessage(item) {
   const assistant = item.role === 'assistant';
-  governedExactObject(item, assistant
+  const keys = assistant
     ? ['type', 'id', 'role', 'content', 'phase', 'internal_chat_message_metadata_passthrough']
-    : ['type', 'role', 'content', 'internal_chat_message_metadata_passthrough']);
+    : Object.prototype.hasOwnProperty.call(item ?? {}, 'id')
+      ? ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough']
+      : ['type', 'role', 'content', 'internal_chat_message_metadata_passthrough'];
+  governedExactObject(item, keys);
   if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedInvalid();
-  if (assistant) {
-    governedSafeId(item.id);
-    if (item.phase !== 'final_answer') governedInvalid();
-  }
+  if (Object.prototype.hasOwnProperty.call(item, 'id')) governedSafeId(item.id);
+  if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedInvalid();
   if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedInvalid();
   for (const part of item.content) {
     governedExactObject(part, ['type', 'text']);
     const allowed = assistant ? part.type === 'output_text' : part.type === 'input_text';
     if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedInvalid();
   }
-  governedPassthrough(item.internal_chat_message_metadata_passthrough);
+  governedPassthrough(item.internal_chat_message_metadata_passthrough, true);
 }
 function validateGovernedRawReasoning(item) {
   governedExactObject(item, ['type', 'id', 'summary', 'encrypted_content', 'internal_chat_message_metadata_passthrough']);
@@ -58,7 +73,7 @@ function validateGovernedRawReasoning(item) {
 }
 function createGovernedNativeCollector(profile) {
   let sessionEvent = null, requestId = null, threadId = null, nativeCallCount = 0, probeMcpCallCount = 0;
-  let relevantEventCount = 0, totalCallCount = 0;
+  let relevantEventCount = 0, totalCallCount = 0, rawResponseItemCount = 0, assistantMessageCount = 0, finalAnswerCount = 0;
   const rawIds = new Set(), callOrigins = new Map(), outputIds = new Set();
   function observe(event) {
     const type = event?.params?.msg?.type;
@@ -79,8 +94,20 @@ function createGovernedNativeCollector(profile) {
     const msg = governedExactObject(params.msg, ['type', 'item']);
     if (msg.type !== 'raw_response_item') governedInvalid();
     const item = msg.item;
-    if (item?.type === 'message') return validateGovernedRawMessage(item);
-    if (item?.type === 'reasoning') return validateGovernedRawReasoning(item);
+    if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedInvalid();
+    if (item?.type === 'message') {
+      validateGovernedRawMessage(item);
+      if (Object.prototype.hasOwnProperty.call(item, 'id')) {
+        if (rawIds.has(item.id)) governedInvalid(); rawIds.add(item.id);
+      }
+      if (item.role === 'assistant') { assistantMessageCount++; if (item.phase === 'final_answer') finalAnswerCount++; }
+      return;
+    }
+    if (item?.type === 'reasoning') {
+      validateGovernedRawReasoning(item);
+      if (rawIds.has(item.id)) governedInvalid(); rawIds.add(item.id);
+      return;
+    }
     if (item?.type === 'custom_tool_call') {
       governedExactObject(item, ['type', 'id', 'status', 'call_id', 'name', 'input', 'internal_chat_message_metadata_passthrough']);
       governedSafeId(item.id); governedSafeId(item.call_id);
@@ -99,7 +126,11 @@ function createGovernedNativeCollector(profile) {
       return;
     }
     if (item?.type === 'custom_tool_call_output') {
-      governedExactObject(item, ['type', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']);
+      const hasId = Object.prototype.hasOwnProperty.call(item, 'id');
+      governedExactObject(item, hasId
+        ? ['type', 'id', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']
+        : ['type', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']);
+      if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedInvalid(); }
       governedSafeId(item.call_id);
       if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id) || !Array.isArray(item.output) || item.output.length > 64) governedInvalid();
       for (const part of item.output) {
@@ -108,6 +139,7 @@ function createGovernedNativeCollector(profile) {
       }
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
       if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedInvalid();
+      if (hasId) rawIds.add(item.id);
       outputIds.add(item.call_id);
       return;
     }
@@ -115,6 +147,7 @@ function createGovernedNativeCollector(profile) {
   }
   function evidence() {
     if (!sessionEvent) governedInvalid();
+    if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedInvalid();
     const tools = nativeCallCount === 0 ? [] : [{ name: 'exec', status: 'completed', count: nativeCallCount }];
     return { sessionEvent, capabilities: { nativeTools: { total: nativeCallCount, tools }, probeMcpCallCount } };
   }
@@ -404,9 +437,9 @@ export async function createCodexEngine(options = {}) {
         let fullResponse = '';
         let gotSessionId = false;
         const collector = governedProfile ? createGovernedNativeCollector(governedProfile) : null;
-        let evidenceInvalid = false;
+        let evidenceFailure = null;
         if (governedProfile) governedEvidenceHandler = (event) => {
-          try { collector.observe(event); } catch { evidenceInvalid = true; }
+          try { collector.observe(event); } catch (error) { evidenceFailure ??= normalizeGovernedAnswerFailure(error, 'native_event_grammar'); }
         };
         if (opts.abortSignal) {
           if (opts.abortSignal.aborted) throw new Error('Codex query cancelled');
@@ -445,17 +478,26 @@ export async function createCodexEngine(options = {}) {
         });
 
         // Wait for result
-        const result = await resultPromise;
+        let result;
+        try { result = await resultPromise; }
+        catch (error) {
+          throw governedProfile
+            ? governedAnswerFailure(evidenceFailure ? 'unknown' : 'provider_engine')
+            : error;
+        }
 
         // Clean up event handler
         eventHandlers.delete(reqId);
         let attestation = null;
         if (governedProfile) {
-          if (evidenceInvalid) throw new Error('Invalid governed Codex native event evidence');
-          const collected = collector.evidence();
-          const internal = attestGovernedCodexSession({ profile: governedProfile,
-            events: governedProfile.version === 'probe.governed-codex-profile/v2'
-              ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
+          if (evidenceFailure) throw evidenceFailure;
+          let collected, internal;
+          try {
+            collected = collector.evidence();
+            internal = attestGovernedCodexSession({ profile: governedProfile,
+              events: governedProfile.version === 'probe.governed-codex-profile/v2'
+                ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
+          } catch (error) { throw normalizeGovernedAnswerFailure(error, 'native_event_grammar'); }
           attestation = hasInvocationDigest
             ? externalBoundReceipt(internal, dispatch, invocationDigest, {
               nativeCallCount: collected.capabilities.nativeTools.total,
@@ -506,6 +548,7 @@ export async function createCodexEngine(options = {}) {
         };
 
       } catch (error) {
+        if (governedProfile) error = normalizeGovernedAnswerFailure(error, 'unknown');
         queryError = error;
         if (debug) {
           console.error('[DEBUG] Codex query error:', error);
