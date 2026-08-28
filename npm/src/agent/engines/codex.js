@@ -19,7 +19,7 @@ function externalReceipt(attestation) {
   };
 }
 
-function governedCodexDispatch(prompt) {
+export function governedCodexDispatch(prompt) {
   const promptBytes = Buffer.byteLength(prompt, 'utf8');
   const byteLength = Buffer.alloc(8);
   byteLength.writeBigUInt64BE(BigInt(promptBytes));
@@ -27,6 +27,15 @@ function governedCodexDispatch(prompt) {
     .update('probe.governed-codex-dispatch/prompt/v1', 'utf8')
     .update(Buffer.from([0])).update(byteLength).update(prompt, 'utf8').digest('hex')}`;
   return Object.freeze({ source: 'probe-host-tools-call', tool: 'codex', promptDigest, promptBytes });
+}
+
+export function composeCodexInitialPrompt({ systemPrompt, customPrompt, prompt }) {
+  const fullPrompt = combinePrompts(systemPrompt, customPrompt);
+  return fullPrompt ? `${fullPrompt}\n\n${prompt}` : prompt;
+}
+
+export function previewGovernedCodexInitialDispatch(input) {
+  return governedCodexDispatch(composeCodexInitialPrompt(input));
 }
 
 function externalBoundReceipt(internal, dispatch, invocationDigest) {
@@ -195,8 +204,6 @@ export async function createCodexEngine(options = {}) {
     console.log('[DEBUG] Session:', session.id);
   }
 
-  const fullPrompt = combinePrompts(systemPrompt, customPrompt, agent);
-
   return {
     sessionId: session.id,
     session,
@@ -207,8 +214,8 @@ export async function createCodexEngine(options = {}) {
     async *query(prompt, opts = {}) {
       // Build prompt
       let finalPrompt = prompt;
-      if (!session.conversationId && fullPrompt) {
-        finalPrompt = `${fullPrompt}\n\n${prompt}`;
+      if (!session.conversationId) {
+        finalPrompt = composeCodexInitialPrompt({ systemPrompt, customPrompt, prompt });
       }
 
       const isFollowUp = session.conversationId !== null;
@@ -370,7 +377,7 @@ export async function createCodexEngine(options = {}) {
 /**
  * Combine prompts intelligently
  */
-function combinePrompts(systemPrompt, customPrompt, agent) {
+function combinePrompts(systemPrompt, customPrompt) {
   if (!systemPrompt && customPrompt) {
     return customPrompt;
   }

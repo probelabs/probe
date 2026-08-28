@@ -1,9 +1,5 @@
 // Core ProbeAgent class adapted from examples/chat/probeChat.js
 
-// Load .env file if present (silent fail if not found)
-import dotenv from 'dotenv';
-dotenv.config();
-
 // ============================================================================
 // Timeout Configuration Constants
 // ============================================================================
@@ -70,7 +66,7 @@ import {
   clearToolExecutionData
 } from './probeTool.js';
 import { createMockProvider } from './mockProvider.js';
-import { listFilesByLevel } from '../index.js';
+import { listFilesByLevel } from '../utils/file-lister.js';
 import {
   cleanSchemaResponse,
   isJsonSchema,
@@ -322,6 +318,7 @@ export class ProbeAgent {
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this._abortController = new AbortController();
+    this._codexNativeSystemPromptPromise = null;
     this._activeSubagents = new Map(); // sessionId → subagent ProbeAgent instance
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
@@ -2457,7 +2454,7 @@ export class ProbeAgent {
 
         // For Codex CLI, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
-        const systemPrompt = await this.getCodexNativeSystemPrompt();
+        const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
 
         this.engine = await createCodexEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
@@ -3275,6 +3272,43 @@ ${extractGuidance2}
   }
 
   /**
+   * Resolve the Codex system prompt once so preview and runtime bind identical bytes.
+   * @returns {Promise<string>}
+   * @private
+   */
+  _getCachedCodexNativeSystemPrompt() {
+    if (!this._codexNativeSystemPromptPromise) {
+      this._codexNativeSystemPromptPromise = this.getCodexNativeSystemPrompt();
+    }
+    return this._codexNativeSystemPromptPromise;
+  }
+
+  _prepareGovernedAnswerPrompt(message, options) {
+    if (!this.governedCodexProfile) throw new Error('answerGoverned requires governedCodexProfile');
+    if (!message || typeof message !== 'string' || message.trim().length === 0) throw new Error('Message is required and must be a non-empty string');
+    if (!options) throw new Error('answerGoverned requires a valid JSON schema string');
+    const schema = options.schema;
+    if (typeof schema !== 'string' || !schema.trim() || !isJsonSchema(schema)) throw new Error('answerGoverned requires a valid JSON schema string');
+    return { schema, prompt: message.trim() + generateSchemaInstructions(schema, { debug: this.debug }) };
+  }
+
+  /**
+   * Preview the exact governed initial Codex dispatch without acquiring an engine or MCP server.
+   * @param {string} message
+   * @param {{schema: string}} options
+   * @returns {Promise<{source: 'probe-host-tools-call', tool: 'codex', promptDigest: string, promptBytes: number}>}
+   */
+  async previewGovernedAnswerDispatch(message, options) {
+    if (!options || Reflect.ownKeys(options).length !== 1 || !Object.prototype.hasOwnProperty.call(options, 'schema')) {
+      throw new Error('previewGovernedAnswerDispatch requires exactly {schema}');
+    }
+    const { prompt } = this._prepareGovernedAnswerPrompt(message, options);
+    const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
+    const { previewGovernedCodexInitialDispatch } = await import('./engines/codex.js');
+    return previewGovernedCodexInitialDispatch({ systemPrompt, customPrompt: this.customPrompt, prompt });
+  }
+
+  /**
    * Get the system message with instructions for the AI (XML Tool Format)
    */
   async getSystemMessage() {
@@ -3445,11 +3479,7 @@ Follow these instructions carefully:
    * @returns {Promise<{data: unknown, runtimeAttestation: Object}>}
    */
   async answerGoverned(message, options, images = []) {
-    if (!this.governedCodexProfile) throw new Error('answerGoverned requires governedCodexProfile');
-    if (!message || typeof message !== 'string' || message.trim().length === 0) throw new Error('Message is required and must be a non-empty string');
-    if (!options) throw new Error('answerGoverned requires a valid JSON schema string');
-    const schema = options.schema;
-    if (typeof schema !== 'string' || !schema.trim() || !isJsonSchema(schema)) throw new Error('answerGoverned requires a valid JSON schema string');
+    const { schema, prompt } = this._prepareGovernedAnswerPrompt(message, options);
     if (!Array.isArray(images) || images.length > 0) throw new Error('answerGoverned does not support images');
 
     const hasInvocationDigest = Object.prototype.hasOwnProperty.call(options,
@@ -3468,7 +3498,6 @@ Follow these instructions carefully:
       throw new TypeError('answerGoverned resultIdentity requires an own invocationDigest');
     }
 
-    const prompt = message.trim()+generateSchemaInstructions(schema,{debug:this.debug});
     let engine;
     try {
       engine = await this.getEngine();

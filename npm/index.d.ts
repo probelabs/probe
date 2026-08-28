@@ -317,6 +317,17 @@ export interface GovernedIdentifiedAnswerOptions extends GovernedInvocationAnswe
   resultIdentity: 'probe.governed-result-identity/v1';
 }
 
+export interface GovernedAnswerDispatchOptions {
+  schema: string;
+}
+
+export interface GovernedAnswerDispatch {
+  readonly source: 'probe-host-tools-call';
+  readonly tool: 'codex';
+  readonly promptDigest: `sha256:${string}`;
+  readonly promptBytes: number;
+}
+
 export interface GovernedResultIdentity {
   version: 'probe.governed-result-identity/v1';
   source: 'probe-host-schema-valid-json';
@@ -430,6 +441,7 @@ export declare class ProbeAgent {
   answerGoverned(message: string, options: GovernedIdentifiedAnswerOptions, images?: any[]): Promise<GovernedIdentifiedAnswerResult>;
   answerGoverned(message: string, options: GovernedInvocationAnswerOptions, images?: any[]): Promise<GovernedInvocationAnswerResult>;
   answerGoverned(message: string, options: GovernedAnswerOptions, images?: any[]): Promise<GovernedAnswerResult>;
+  previewGovernedAnswerDispatch(message: string, options: GovernedAnswerDispatchOptions): Promise<Readonly<GovernedAnswerDispatch>>;
 
   /**
    * Get token usage statistics
