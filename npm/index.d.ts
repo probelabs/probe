@@ -1,6 +1,50 @@
 // TypeScript definitions for ProbeAgent SDK
 import { EventEmitter } from 'events';
 
+export interface GovernedProcessSpec {
+  command: string;
+  args?: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  executionTimeoutMs?: number;
+  terminationGraceMs?: number;
+  /** Must be greater than or equal to terminationGraceMs. */
+  cleanupTimeoutMs?: number;
+  stdoutByteCap?: number;
+  stderrByteCap?: number;
+  signalScope?: 'child' | 'process-group';
+}
+
+export interface GovernedProcessFact {
+  sequence: number;
+  fact: 'exit' | 'signal' | 'signal-attempt' | 'barrier' | 'spawn-error';
+  [key: string]: unknown;
+}
+
+export interface GovernedProcessReceipt {
+  id: string;
+  classification: 'exited' | 'execution_timeout' | 'terminated' | 'aborted' | 'output_overflow' | 'spawn_error' | 'cleanup_timeout';
+  reason: string | null;
+  error?: string;
+  stdout: string;
+  stderr: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  barriers: Readonly<{ close: boolean; stdoutEOF: boolean; stderrEOF: boolean }>;
+  observed: readonly GovernedProcessFact[];
+}
+
+export interface GovernedProcessHandle {
+  id: string;
+  terminate(reason?: string): Promise<GovernedProcessReceipt>;
+  result: Promise<GovernedProcessReceipt>;
+}
+
+export declare function spawnGovernedProcess(spec: GovernedProcessSpec): GovernedProcessHandle;
+
 /**
  * Configuration options for creating a ProbeAgent instance
  */
