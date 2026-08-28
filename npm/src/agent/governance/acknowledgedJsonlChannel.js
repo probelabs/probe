@@ -1,5 +1,5 @@
 /**
- * Internal acknowledged JSONL channel.
+ * Acknowledged JSONL channel exposed by the package governance subpath.
  *
  * Semantics are derived from the accepted ReqProof EXP-0171 cooperative
  * channel at commit dcc888120cfbeb04f8bfe59147f272c2396723e0. This is the

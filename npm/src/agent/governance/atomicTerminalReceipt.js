@@ -1,9 +1,9 @@
 /**
- * Internal guarded atomic terminal-receipt writer.
+ * Guarded atomic terminal-receipt writer exposed by the package governance subpath.
  *
  * Semantics are derived from the accepted ReqProof EXP-0164 finalizer at
  * source commit dc1a80476c89699e4d9a4921b6ef5d7f980a3c60. The caller owns a
- * unique attempt directory and a single writer; this adds no public surface.
+ * unique attempt directory and a single writer.
  * Publication is process-observed atomicity, not power-loss durability for the
  * directory entry: this narrow primitive intentionally does not fsync the directory.
  */
