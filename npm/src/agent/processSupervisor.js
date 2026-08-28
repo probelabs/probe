@@ -71,7 +71,7 @@ function makeSettledHandle(id, error) {
  * @param {'child'|'process-group'} [spec.signalScope='child']
  * @returns {{id: string, terminate: (reason?: string) => Promise<Object>, result: Promise<Object>}}
  */
-export function spawnGovernedProcess(spec) {
+function governProcess(spec, attachedChild = null) {
   if (!spec || typeof spec !== 'object') {
     throw new TypeError('spec must be an object');
   }
@@ -99,6 +99,7 @@ export function spawnGovernedProcess(spec) {
   }
   const stdoutByteCap = byteCap(spec.stdoutByteCap, DEFAULT_STREAM_BYTE_CAP, 'stdoutByteCap');
   const stderrByteCap = byteCap(spec.stderrByteCap, DEFAULT_STREAM_BYTE_CAP, 'stderrByteCap');
+  const captureStdout = !attachedChild || spec.captureStdout !== false;
   const signalScope = spec.signalScope ?? 'child';
   if (signalScope !== 'child' && signalScope !== 'process-group') {
     throw new TypeError("signalScope must be 'child' or 'process-group'");
@@ -106,17 +107,21 @@ export function spawnGovernedProcess(spec) {
 
   const id = makeId();
   let child;
-  try {
-    child = spawn(spec.command, spec.args ?? [], {
-      cwd: spec.cwd,
-      env: spec.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: false,
-      detached: signalScope === 'process-group',
-      windowsHide: true
-    });
-  } catch (error) {
-    return makeSettledHandle(id, error);
+  if (attachedChild) {
+    child = attachedChild;
+  } else {
+    try {
+      child = spawn(spec.command, spec.args ?? [], {
+        cwd: spec.cwd,
+        env: spec.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: false,
+        detached: signalScope === 'process-group',
+        windowsHide: true
+      });
+    } catch (error) {
+      return makeSettledHandle(id, error);
+    }
   }
 
   let resolveResult;
@@ -272,7 +277,7 @@ export function spawnGovernedProcess(spec) {
 
   const onAbort = () => beginTermination('aborted', 'aborted');
 
-  child.stdout.on('data', data => appendChunk('stdout', data));
+  if (captureStdout) child.stdout.on('data', data => appendChunk('stdout', data));
   child.stderr.on('data', data => appendChunk('stderr', data));
   child.stdout.once('end', () => observeBarrier('stdoutEOF'));
   child.stderr.once('end', () => observeBarrier('stderrEOF'));
@@ -322,4 +327,25 @@ export function spawnGovernedProcess(spec) {
     terminate: reason => beginTermination(reason),
     result
   });
+}
+
+export function spawnGovernedProcess(spec) {
+  return governProcess(spec);
+}
+
+/**
+ * Internal duplex adapter for engines that must retain protocol access to a child.
+ * The returned handle keeps the same bounded termination and close/EOF barriers as
+ * spawnGovernedProcess without exposing the child through the public governance API.
+ *
+ * @param {import('child_process').ChildProcess} child
+ * @param {Object} [spec]
+ * @returns {{id: string, terminate: (reason?: string) => Promise<Object>, result: Promise<Object>}}
+ */
+export function governSpawnedProcess(child, spec = {}) {
+  if (!child || typeof child !== 'object' || typeof child.kill !== 'function' ||
+      !child.stdout || !child.stderr) {
+    throw new TypeError('child must be a spawned process with stdout and stderr pipes');
+  }
+  return governProcess({ ...spec, command: 'attached-child' }, child);
 }

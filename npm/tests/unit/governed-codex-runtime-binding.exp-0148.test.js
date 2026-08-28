@@ -22,8 +22,9 @@ const LINEAGE_SCHEMA = JSON.stringify({ type: 'object', required: ['subjectId', 
 const fakeCodex = `#!/usr/bin/env node
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { spawn } from 'node:child_process';
 const file = process.env.PROBE_EXP0148_STATE + '/' + process.pid + '.json';
-const seen = []; const save = () => writeFileSync(file, JSON.stringify({ pid: process.pid, seen }));
+const seen = []; const phases = []; let descendantPid = null; const save = () => writeFileSync(file, JSON.stringify({ pid: process.pid, descendantPid, seen, phases }));
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\\n');
 const configured = (requestId, args, patch = {}, identity = process.pid) => ({ jsonrpc: '2.0', method: 'codex/event', params: {
   _meta: { requestId, threadId: 'session-' + identity }, id: '', msg: {
@@ -50,6 +51,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const foreign = /\\[FOREIGN:(\\d+):([^\\]]+)\\]/.exec(prompt);
   if (foreign) { const cwd = decodeURIComponent(foreign[2]); events = [configured(request.id, { ...args, cwd }, {}, Number(foreign[1]))]; }
   for (const event of events) send(event);
+  if (prompt.includes('[TERMINAL-WITHHELD]')) {
+    phases.push('terminal-evidence'); save();
+    send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: request.id }, msg: { type: 'task_complete' } } });
+    return;
+  }
   let text = 'candidate-' + process.pid;
   const lineage = { subjectId: 'SYS-REQ-048', subjectFingerprint: '636e9230b39a705f4dc1488038718281791f82f31e917296af090e9c0638fef7', role: 'spec-review', coverageKey: 'SYS-REQ-048::spec-review', findings: [{ type: 'ambiguity', severity: 'medium', message: 'timeout semantics are underspecified' }] };
   if (prompt.includes('[VALID]')) text = JSON.stringify(lineage);
@@ -60,6 +66,14 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const url = Object.values(args.config.mcp_servers)[0].url.replace('/mcp', '/rpc');
     const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'mcp__probe__bash', arguments: {} } }) });
     text = (await response.json()).error ? 'host-denied' : 'host-allowed';
+  }
+  if (prompt.includes('[RESPONSE-CLOSE-STALL]')) {
+    process.on('SIGTERM', () => { phases.push('shutdown-observed'); save(); });
+    const descendant = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)'], { stdio: ['ignore', 1, 2] });
+    descendantPid = descendant.pid; save();
+    setInterval(() => {}, 1000);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    phases.push('response-delivered'); save();
   }
   send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
 });
@@ -105,8 +119,21 @@ async function waitForState(dir, before = [], marker = null) {
 async function readState(file) {
   return JSON.parse(await readFile(file, 'utf8'));
 }
+async function waitForPhase(file, phase, delay = setTimeout) {
+  for (let i = 0; i < 100; i++) {
+    try { const state = await readState(file); if (state.phases.includes(phase)) return state; }
+    catch { /* Child may be replacing its state snapshot. */ }
+    await new Promise(resolve => delay(resolve, 5));
+  }
+  throw new Error(`fake Codex phase timeout: ${phase}`);
+}
 async function collect(iterator) {
   const output = []; for await (const item of iterator) output.push(item); return output;
+}
+async function settleWithin(promise, timeoutMs) {
+  let timer;
+  try { return await Promise.race([promise, new Promise(resolve => { timer = setTimeout(() => resolve({ timeout: true }), timeoutMs); })]); }
+  finally { clearTimeout(timer); }
 }
 function alive(pid) {
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -291,6 +318,60 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     const state = await readState(await waitForState(stateDir, before, '[WAIT]')); const call = state.seen.find(item => item.method === 'tools/call'); const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
     agent.cancel(); const settled = await pending; assert.ok(settled.error); assert.equal('value' in settled, false);
     assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
+  });
+
+  await t.test('EXP-0171 terminal evidence with a withheld tools/call response aborts and leaves no lifecycle survivor', async () => {
+    const before = await stateFiles(stateDir); const agent = governedAgent(root); let state; let pending;
+    const signal = agent._abortController.signal; let abortListeners = 0;
+    const add = signal.addEventListener.bind(signal); const remove = signal.removeEventListener.bind(signal);
+    signal.addEventListener = (...args) => { if (args[0] === 'abort') abortListeners++; return add(...args); };
+    signal.removeEventListener = (...args) => { if (args[0] === 'abort') abortListeners--; return remove(...args); };
+    const originalSetTimeout = globalThis.setTimeout; const requestTimers = [];
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      const timer = originalSetTimeout(callback, delay, ...args); if (delay === 600000) requestTimers.push(timer); return timer;
+    };
+    try {
+      pending = agent.answerGoverned('[TERMINAL-WITHHELD]', { schema: LINEAGE_SCHEMA }).then(value => ({ value }), error => ({ error }));
+      const file = await waitForState(stateDir, before, '[TERMINAL-WITHHELD]');
+      state = await readState(file); const call = state.seen.find(item => item.method === 'tools/call'); const url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
+      state = await waitForPhase(file, 'terminal-evidence', originalSetTimeout);
+      assert.deepEqual(state.phases, ['terminal-evidence']); agent.cancel();
+      const settled = await settleWithin(pending, 500);
+      assert.equal(settled.timeout, undefined); assert.equal(settled.error?.message, 'Codex query cancelled'); assert.equal('value' in settled, false);
+      assert.equal(abortListeners, 0); assert.equal(requestTimers.length, 2); assert.equal(requestTimers.every(timer => timer._destroyed), true);
+      assert.equal(alive(state.pid), false); assert.equal(await closed(url), true);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      if (state?.pid && alive(state.pid)) { agent.cancel(); if (pending) await settleWithin(pending, 500); }
+    }
+  });
+
+  await t.test('EXP-0171 delivered response localizes a TERM-resistant stall to bounded cleanup with no survivor', async () => {
+    const before = await stateFiles(stateDir); const agent = governedAgent(root); let state; let url; let settled;
+    const originalSetTimeout = globalThis.setTimeout; const lifecycleTimers = [];
+    globalThis.setTimeout = (callback, delay, ...args) => {
+      const timer = originalSetTimeout(callback, delay === 5000 ? 30 : delay === 10000 ? 500 : delay, ...args);
+      if (delay === 5000 || delay === 10000) lifecycleTimers.push(timer); return timer;
+    };
+    const pending = agent.answerGoverned('[VALID][RESPONSE-CLOSE-STALL]', { schema: LINEAGE_SCHEMA }).then(value => ({ value }), error => ({ error }));
+    try {
+      const file = await waitForState(stateDir, before, '[RESPONSE-CLOSE-STALL]'); state = await readState(file);
+      const call = state.seen.find(item => item.method === 'tools/call'); url = Object.values(call.params.arguments.config.mcp_servers)[0].url;
+      state = await waitForPhase(file, 'response-delivered');
+      assert.equal(state.phases[0], 'response-delivered');
+      state = await waitForPhase(file, 'shutdown-observed');
+      assert.deepEqual(state.phases, ['response-delivered', 'shutdown-observed']);
+      settled = await settleWithin(pending, 500);
+    } finally {
+      globalThis.setTimeout = originalSetTimeout;
+      if (state?.pid && alive(state.pid)) {
+        try { process.kill(-state.pid, 'SIGKILL'); } catch { process.kill(state.pid, 'SIGKILL'); }
+        await settleWithin(pending, 500);
+      }
+    }
+    assert.equal(settled.timeout, undefined); assert.ifError(settled.error); assert.deepEqual(settled.value.data, LINEAGE);
+    assert.equal(lifecycleTimers.length, 2); assert.equal(lifecycleTimers.every(timer => timer._destroyed), true);
+    assert.equal(alive(state.pid), false); assert.equal(alive(state.descendantPid), false); assert.equal(await closed(url), true);
   });
 
   await t.test('O8 answer keeps its string-returning behavior', async () => {
@@ -578,7 +659,7 @@ agent.answerGoverned('x', { schema, resultIdentity: 'probe.governed-result-ident
 
   await t.test('EXP-0152 T15 frozen files and legacy function/declaration regions remain exact', async () => {
     const sha = value => createHash('sha256').update(value).digest('hex'); const read = path => readFile(new URL(path, import.meta.url), 'utf8');
-    assert.equal(sha(await read('../../src/agent/engines/codex.js')), '90a265026162ee666ec0b262bbdaac746a1b705755511e3422756575c0a20a78'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), 'de56ab543afb61224bdba860bbad0a6734d48bbb5393d3da7807cfb5baf54936');
+    assert.equal(sha(await read('../../src/agent/engines/codex.js')), '726dd693632639999fe1be2ddf562caf9c03ea352de0788f136136da3937c0eb'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), 'de56ab543afb61224bdba860bbad0a6734d48bbb5393d3da7807cfb5baf54936');
     const source = await read('../../src/agent/ProbeAgent.js'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message'))); assert.equal(sha(answer), '53ee9f207963f5b991aaf89e143211039ad632d9cc7535d91af66bcae95b135f');
     const governed = source.slice(source.indexOf('  async answerGoverned(message'), source.indexOf('\n  /**\n   * Answer a question', source.indexOf('  async answerGoverned(message'))); assert.equal((governed.match(/_prepareGovernedAnswerPrompt\(/g) || []).length, 1); assert.equal((governed.match(/options\.schema/g) || []).length, 0); assert.equal((governed.match(/options\.resultIdentity/g) || []).length, 1); assert.equal((governed.match(/validateJsonResponse\(/g) || []).length, 1); assert.match(governed, /return \{ data: validation\.parsed, runtimeAttestation \};/);
     const prepared = source.slice(source.indexOf('  _prepareGovernedAnswerPrompt'), source.indexOf('\n  /**\n   * Preview', source.indexOf('  _prepareGovernedAnswerPrompt'))); assert.equal((prepared.match(/options\.schema/g) || []).length, 1); assert.equal((prepared.match(/generateSchemaInstructions\(/g) || []).length, 1);

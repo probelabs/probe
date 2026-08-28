@@ -7,6 +7,7 @@ import { spawn } from 'child_process';
 import { createHash, randomBytes } from 'crypto';
 import { createInterface } from 'readline';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
+import { governSpawnedProcess } from '../processSupervisor.js';
 import { Session } from '../shared/Session.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs, validateGovernedCodexProfile } from './governed-codex-profile.js';
 
@@ -89,7 +90,13 @@ export async function createCodexEngine(options = {}) {
   }
 
   const codexProcess = spawn('codex', ['mcp-server'], {
-    stdio: ['pipe', 'pipe', 'pipe']
+    stdio: ['pipe', 'pipe', 'pipe'],
+    detached: true
+  });
+  const governedProcess = governSpawnedProcess(codexProcess, {
+    captureStdout: false,
+    signalScope: 'process-group',
+    stdoutByteCap: 0
   });
 
   // Setup JSON-RPC communication
@@ -97,7 +104,6 @@ export async function createCodexEngine(options = {}) {
   const pendingRequests = new Map();
   const eventHandlers = new Map();
   let governedEvidenceHandler = null, governedQueryStarted = false, closePromise = null;
-  const processClosed = new Promise((resolve) => codexProcess.once('close', resolve));
 
   // Read stdout line by line
   const stdoutReader = createInterface({
@@ -184,9 +190,11 @@ export async function createCodexEngine(options = {}) {
     closePromise = (async () => {
       rejectPending(reason); eventHandlers.clear(); governedEvidenceHandler = null;
       stdoutReader.close(); codexProcess.stdin.destroy();
-      if (codexProcess.exitCode === null && !codexProcess.killed) codexProcess.kill();
-      await processClosed;
+      const receipt = await governedProcess.terminate('codex_engine_closed');
+      const processCleanupFailed = receipt.classification === 'cleanup_timeout' ||
+        !receipt.barriers.close || !receipt.barriers.stdoutEOF || !receipt.barriers.stderrEOF;
       if (mcpServer) await mcpServer.stop();
+      if (processCleanupFailed) throw new Error('Codex process cleanup failed');
     })();
     return closePromise;
   }
@@ -220,7 +228,7 @@ export async function createCodexEngine(options = {}) {
 
       const isFollowUp = session.conversationId !== null;
       const toolName = isFollowUp ? 'codex-reply' : 'codex';
-      let abortHandler;
+      let abortHandler, queryError = null;
 
       try {
         const hasInvocationDigest = Object.prototype.hasOwnProperty.call(opts,
@@ -264,7 +272,7 @@ export async function createCodexEngine(options = {}) {
         const evidence = []; if (governedProfile) governedEvidenceHandler = (event) => evidence.push(event);
         if (opts.abortSignal) {
           if (opts.abortSignal.aborted) throw new Error('Codex query cancelled');
-          abortHandler = () => cleanup(new Error('Codex query cancelled'));
+          abortHandler = () => { void cleanup(new Error('Codex query cancelled')).catch(() => {}); };
           opts.abortSignal.addEventListener('abort', abortHandler, { once: true });
         }
 
@@ -345,6 +353,7 @@ export async function createCodexEngine(options = {}) {
         };
 
       } catch (error) {
+        queryError = error;
         if (debug) {
           console.error('[DEBUG] Codex query error:', error);
         }
@@ -354,7 +363,10 @@ export async function createCodexEngine(options = {}) {
         };
       } finally {
         if (opts.abortSignal && abortHandler) opts.abortSignal.removeEventListener('abort', abortHandler);
-        if (governedProfile) await cleanup();
+        if (governedProfile) {
+          try { await cleanup(); }
+          catch (cleanupError) { if (!queryError) throw cleanupError; }
+        }
       }
     },
 
