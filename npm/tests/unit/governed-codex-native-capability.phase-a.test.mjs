@@ -178,7 +178,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[LIVE-RESPONSE-ID-EMPTY]')) liveEnvelope(event => { event.params.id = ''; });
   if (prompt.includes('[LIVE-RESPONSE-ID-MISSING]')) liveEnvelope(event => { delete event.params.id; });
   if (prompt.includes('[LIVE-RESPONSE-ID-EXTRA]')) liveEnvelope(event => { event.params.responseId = 'extra-safe-id'; });
-  if (prompt.includes('[LIVE-RESPONSE-ID-NONSTRING]')) liveEnvelope(event => { event.params.id = 2; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-NUMBER]')) liveEnvelope(event => { event.params.id = 2; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-NULL]')) liveEnvelope(event => { event.params.id = null; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-BOOLEAN]')) liveEnvelope(event => { event.params.id = true; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-ARRAY]')) liveEnvelope(event => { event.params.id = []; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-OBJECT]')) liveEnvelope(event => { event.params.id = {}; });
   const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
     content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
     ...(role === 'assistant' ? { phase } : {}), internal_chat_message_metadata_passthrough: metadata });
@@ -413,7 +417,9 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'session_sequence');
 
     for (const marker of ['[LIVE-RAW-OBJECT]', '[LIVE-JSONRPC]', '[LIVE-PARAMS]', '[LIVE-META]', '[LIVE-MSG]',
-      '[LIVE-RESPONSE-ID-MISSING]', '[LIVE-RESPONSE-ID-EXTRA]', '[LIVE-RESPONSE-ID-NONSTRING]'])
+      '[LIVE-RESPONSE-ID-MISSING]', '[LIVE-RESPONSE-ID-EXTRA]', '[LIVE-RESPONSE-ID-NUMBER]',
+      '[LIVE-RESPONSE-ID-NULL]', '[LIVE-RESPONSE-ID-BOOLEAN]', '[LIVE-RESPONSE-ID-ARRAY]',
+      '[LIVE-RESPONSE-ID-OBJECT]'])
       assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'envelope_shape');
 
     assertFailure(await run('[CROSS]'), 'native_event_grammar', 'live_envelope_session', 'correlation', 'thread_id');
