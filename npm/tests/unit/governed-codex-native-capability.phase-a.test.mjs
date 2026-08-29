@@ -19,10 +19,10 @@ const profile = (cwd) => ({ version: 'probe.governed-codex-profile/v2', profileI
 const permission = () => ({ type: 'managed', file_system: { type: 'restricted', entries: [
   { access: 'read', path: { type: 'special', value: { kind: 'root' } } }
 ] }, network: 'restricted' });
-const session = (cwd) => ({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '', msg: {
+const session = (cwd, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '', msg: {
   type: 'session_configured', session_id: 'session-safe', thread_id: 'session-safe', model: 'gpt-5.6-luna',
   model_provider_id: 'openai', approval_policy: 'never', approvals_reviewer: 'user', permission_profile: permission(),
-  reasoning_effort: 'xhigh', rollout_path: `${cwd}/sessions/2026/08/28/rollout-2026-08-28T12-00-00-00000000-0000-4000-8000-000000000001.jsonl`, cwd
+  reasoning_effort: 'xhigh', rollout_path: `${cwd}/sessions/2026/08/28/rollout-2026-08-28T12-00-00-00000000-0000-4000-8000-000000000001.jsonl`, cwd, ...patch
 } } });
 const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, msg: {
   type: 'raw_response_item', item: { type: 'custom_tool_call', id: `raw-secret-id-${index}`, status: 'completed',
@@ -74,6 +74,25 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     assert.equal(attestation.version, 'probe.governed-codex-attestation/v3');
     assert.equal(attestation.profileId, PROFILE_ID);
     assert.deepEqual(attestation.observed.nativeTools, aggregate);
+    assert.doesNotThrow(() => attestGovernedCodexSession({ profile: normalized,
+      events: [session(cwd), aggregate] }), 'historical 11-key session shape');
+    assert.doesNotThrow(() => attestGovernedCodexSession({ profile: normalized,
+      events: [session(cwd, { service_tier: 'default' }), aggregate] }), 'current 12-key session shape');
+    for (const service_tier of ['default', 'priority', 'flex'])
+      assert.doesNotThrow(() => attestGovernedCodexSession({ profile: normalized,
+        events: [session(cwd, { service_tier }), aggregate] }), `service tier ${service_tier}`);
+    for (const service_tier of [null, '', 'batch', 1, true, [], {}])
+      assert.throws(() => attestGovernedCodexSession({ profile: normalized,
+        events: [session(cwd, { service_tier }), aggregate] }), /Invalid event\.msg/);
+    for (const optional of ['forked_from_id', 'parent_thread_id', 'thread_source', 'thread_name',
+      'active_permission_profile', 'initial_messages', 'network_proxy'])
+      assert.throws(() => attestGovernedCodexSession({ profile: normalized,
+        events: [session(cwd, { [optional]: 'SECRET_OPTIONAL_FIELD' }), aggregate] }), /Invalid event\.msg/);
+    assert.throws(() => attestGovernedCodexSession({ profile: normalized,
+      events: [session(cwd, { unknown_extra: 'SECRET_UNKNOWN_FIELD' }), aggregate] }), /Invalid event\.msg/);
+    const missingRequired = session(cwd, { service_tier: 'default' }); delete missingRequired.params.msg.model;
+    assert.throws(() => attestGovernedCodexSession({ profile: normalized,
+      events: [missingRequired, aggregate] }), /Invalid event\.msg/);
     assert.doesNotThrow(() => attestGovernedCodexSession({ profile: normalized,
       events: [session(cwd), { total: 256, tools: [{ name: 'exec', status: 'completed', count: 256 }] }] }));
     for (const rejected of [
@@ -155,6 +174,14 @@ createInterface({ input: process.stdin }).on('line', async line => {
     }
   } });
   if (prompt.includes('[LIVE-SESSION]')) configured.params.msg.model = 'SECRET_INVALID_MODEL';
+  if (prompt.includes('[SERVICE-TIER-CURRENT]') || prompt.includes('[SERVICE-TIER-DEFAULT]')) configured.params.msg.service_tier = 'default';
+  if (prompt.includes('[SERVICE-TIER-PRIORITY]')) configured.params.msg.service_tier = 'priority';
+  if (prompt.includes('[SERVICE-TIER-FLEX]')) configured.params.msg.service_tier = 'flex';
+  if (prompt.includes('[SERVICE-TIER-INVALID]')) configured.params.msg.service_tier = 'SECRET_INVALID_TIER';
+  for (const optional of ['forked_from_id', 'parent_thread_id', 'thread_source', 'thread_name',
+    'active_permission_profile', 'initial_messages', 'network_proxy'])
+    if (prompt.includes('[SESSION-OPTIONAL-' + optional + ']')) configured.params.msg[optional] = 'SECRET_OPTIONAL_FIELD';
+  if (prompt.includes('[SESSION-UNKNOWN-EXTRA]')) configured.params.msg.unknown_extra = 'SECRET_UNKNOWN_FIELD';
   if (prompt.includes('[ATTEST-RESPONSE-ID]')) configured.params.id = 'opaque-session-response-id';
   if (prompt.includes('[ATTEST-SESSION-SHAPE]')) delete configured.params.msg.model;
   if (prompt.includes('[ATTEST-IDENTITY]')) configured.params.msg.session_id = 'SECRET_INVALID_IDENTITY';
@@ -415,6 +442,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
     assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
 
+    for (const marker of ['[SERVICE-TIER-CURRENT]', '[SERVICE-TIER-DEFAULT]', '[SERVICE-TIER-PRIORITY]',
+      '[SERVICE-TIER-FLEX]']) {
+      const compatible = await run(marker); assert.ifError(compatible.error);
+      assert.deepEqual(compatible.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+      assert.equal(JSON.stringify(compatible.result).includes('service_tier'), false);
+    }
+
     for (const marker of ['[UNKNOWN-MCP]', '[UNDECLARED]', '[MALFORMED]', '[UNKNOWN]', '[DUPLICATE]', '[OVERFLOW]']) {
       const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar', 'raw_item_predicate');
       assert.deepEqual(rejected.events, []);
@@ -445,9 +479,14 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const [marker, predicate] of [
       ['[ATTEST-RESPONSE-ID]', 'response_id'], ['[LIVE-SESSION]', 'model'],
       ['[ATTEST-PERMISSION-TYPE]', 'permission_type'],
-      ['[ATTEST-SESSION-SHAPE]', 'session_shape'], ['[ATTEST-IDENTITY]', 'session_identity'],
+      ['[ATTEST-SESSION-SHAPE]', 'session_shape'], ['[SERVICE-TIER-INVALID]', 'session_shape'],
+      ['[SESSION-UNKNOWN-EXTRA]', 'session_shape'], ['[ATTEST-IDENTITY]', 'session_identity'],
       ['[ATTEST-PERMISSION]', 'network'], ['[ATTEST-ROLLOUT]', 'rollout_path'], ['[ATTEST-CWD]', 'cwd']
     ]) assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'attestation', null, predicate);
+    for (const optional of ['forked_from_id', 'parent_thread_id', 'thread_source', 'thread_name',
+      'active_permission_profile', 'initial_messages', 'network_proxy'])
+      assertFailure(await run('[SESSION-OPTIONAL-' + optional + ']'), 'native_event_grammar',
+        'live_envelope_session', 'attestation', null, 'session_shape');
 
     for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',
       '[DELTA-KINDS-OVERFLOW]', '[DELTA-KINDS-WRONG]', '[DELTA-KIND-UNSAFE]', '[DELTA-KIND-OVERSIZED]',

@@ -15,6 +15,9 @@ const PROFILE_V2_VALUES = { ...PROFILE_VALUES, version: 'probe.governed-codex-pr
 const PROBE_TOOLS = ['search', 'extract', 'listFiles'];
 const CODEX_NATIVE_TOOLS = ['exec'];
 const ENABLED_TOOLS = ['mcp__probe__search', 'mcp__probe__extract', 'mcp__probe__listFiles'];
+const SESSION_MSG_KEYS = ['type', 'session_id', 'thread_id', 'model', 'model_provider_id', 'approval_policy',
+  'approvals_reviewer', 'permission_profile', 'reasoning_effort', 'rollout_path', 'cwd'];
+const SESSION_SERVICE_TIERS = ['default', 'priority', 'flex'];
 const FEATURE_NAMES = [
   'shell_tool', 'multi_agent', 'multi_agent_v2', 'enable_fanout', 'apps', 'enable_mcp_apps',
   'tool_suggest', 'plugins', 'in_app_browser', 'browser_use', 'browser_use_full_cdp_access',
@@ -151,7 +154,9 @@ export function attestGovernedCodexSession(input) {
   requireValue(event.jsonrpc, '2.0', 'event.jsonrpc'); requireValue(event.method, 'codex/event', 'event.method');
   const params = exactObject(event.params, ['_meta', 'id', 'msg'], 'event.params'); requireValue(params.id, '', 'event.params.id');
   const meta = exactObject(params._meta, ['requestId', 'threadId'], 'event._meta'); requireValue(meta.requestId, 2, 'requestId');
-  const msg = exactObject(params.msg, ['type', 'session_id', 'thread_id', 'model', 'model_provider_id', 'approval_policy', 'approvals_reviewer', 'permission_profile', 'reasoning_effort', 'rollout_path', 'cwd'], 'event.msg');
+  const hasServiceTier = Object.prototype.propertyIsEnumerable.call(params.msg, 'service_tier');
+  const msg = exactObject(params.msg, hasServiceTier ? [...SESSION_MSG_KEYS, 'service_tier'] : SESSION_MSG_KEYS, 'event.msg');
+  if (hasServiceTier && !SESSION_SERVICE_TIERS.includes(msg.service_tier)) invalid('event.msg');
   for (const id of [meta.threadId, msg.session_id, msg.thread_id]) if (typeof id !== 'string' || !SAFE_ID.test(id)) invalid('session identity');
   if (meta.threadId !== msg.session_id || msg.session_id !== msg.thread_id) invalid('session identity');
   requireValue(msg.type, 'session_configured', 'msg.type'); requireValue(msg.model, profile.model, 'msg.model');
