@@ -144,7 +144,26 @@ function governedSchemaResultValidationFailure(validation) {
     validation?.error === 'Schema compilation failed' ? 'schema_definition'
     : validation?.error === 'Schema validation failed' ? 'schema_mismatch'
       : 'response_json';
-  return governedAnswerFailure('schema_result_validation', null, null, null, null, subreason);
+  const schemaResultValidationKeyword = subreason === 'schema_mismatch'
+    ? classifyGovernedSchemaResultValidationKeyword(validation) : null;
+  return governedAnswerFailure('schema_result_validation', null, null, null, null, subreason,
+    schemaResultValidationKeyword);
+}
+
+const GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS = new Set([
+  'required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems',
+]);
+
+function classifyGovernedSchemaResultValidationKeyword(validation) {
+  const errors = validation?.schemaErrors;
+  if (!Array.isArray(errors) || errors.length === 0) return 'unknown';
+  const recognized = new Set();
+  for (const error of errors) {
+    const keyword = error?.keyword;
+    if (!GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS.has(keyword)) return 'unknown';
+    recognized.add(keyword);
+  }
+  return recognized.size === 1 ? [...recognized][0] : 'multiple';
 }
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var

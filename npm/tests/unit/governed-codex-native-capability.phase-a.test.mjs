@@ -30,7 +30,7 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
 function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null,
-  attestationPredicate = null, schemaSubreason = null) {
+  attestationPredicate = null, schemaSubreason = null, schemaKeyword = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
@@ -56,7 +56,12 @@ function assertFailure(result, stage, boundary = null, subreason = null, correla
   if (stage === 'schema_result_validation') {
     assert.equal(Object.hasOwn(result.error ?? {}, 'schemaResultValidationSubreason'), true);
     assert.equal(result.error?.schemaResultValidationSubreason, schemaSubreason);
-  } else assert.equal(Object.hasOwn(result.error ?? {}, 'schemaResultValidationSubreason'), false);
+    assert.equal(Object.hasOwn(result.error ?? {}, 'schemaResultValidationKeyword'), true);
+    assert.equal(result.error?.schemaResultValidationKeyword, schemaKeyword);
+  } else {
+    assert.equal(Object.hasOwn(result.error ?? {}, 'schemaResultValidationSubreason'), false);
+    assert.equal(Object.hasOwn(result.error ?? {}, 'schemaResultValidationKeyword'), false);
+  }
   assert.equal(result.error?.stack, undefined);
   assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
   const serialized = JSON.stringify(result.error);
@@ -353,6 +358,10 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const text = prompt.includes('[BADJSON]') ? 'not-json'
     : prompt.includes('[SCHEMA-REQUIRED]') ? '{}'
     : prompt.includes('[SCHEMA-EXTRA]') ? '{"ok":true,"extra":true}'
+    : prompt.includes('[SCHEMA-MULTIPLE]') ? '{"extra":true}'
+    : prompt.includes('[SCHEMA-RECOGNIZED-UNKNOWN]') ? '{"value":0}'
+    : prompt.includes('[SCHEMA-ARRAY]') ? '{"ok":[]}'
+    : prompt.includes('[SCHEMA-ARRAY-TWO]') ? '{"ok":[1,2]}'
     : prompt.includes('[BADSCHEMA]') || prompt.includes('[SCHEMA-ENUM]') ? '{"ok":"wrong"}'
     : prompt.includes('[NONCANONICAL]') ? '{"ok":1e309}' : '{"ok":true}';
   send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
@@ -638,15 +647,52 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const invalidAnswer = await run('[BADJSON]');
     assertFailure(invalidAnswer, 'schema_result_validation', null, null, null, null, 'response_json');
     assert.deepEqual(invalidAnswer.events, [{ name: 'exec', status: 'completed', count: 1 }]);
-    assertFailure(await run('[BADSCHEMA]'), 'schema_result_validation', null, null, null, null, 'schema_mismatch');
+    assertFailure(await run('[BADSCHEMA]'), 'schema_result_validation', null, null, null, null, 'schema_mismatch',
+      'type');
     assertFailure(await run('[SCHEMA-REQUIRED]'), 'schema_result_validation', null, null, null, null,
-      'schema_mismatch');
+      'schema_mismatch', 'required');
     assertFailure(await run('[SCHEMA-EXTRA]'), 'schema_result_validation', null, null, null, null,
-      'schema_mismatch');
+      'schema_mismatch', 'additionalProperties');
     const enumSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
       properties: { ok: { enum: [true] } } });
     assertFailure(await run('[SCHEMA-ENUM]', { schema: enumSchema, invocationDigest: `sha256:${'0'.repeat(64)}` }),
-      'schema_result_validation', null, null, null, null, 'schema_mismatch');
+      'schema_result_validation', null, null, null, null, 'schema_mismatch', 'enum');
+    const patternSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
+      properties: { ok: { type: 'string', pattern: '^right$' } } });
+    assertFailure(await run('[SCHEMA-ENUM]', { schema: patternSchema,
+      invocationDigest: `sha256:${'0'.repeat(64)}` }), 'schema_result_validation', null, null, null, null,
+      'schema_mismatch', 'pattern');
+    const minItemsSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
+      properties: { ok: { type: 'array', minItems: 1 } } });
+    assertFailure(await run('[SCHEMA-ARRAY]', { schema: minItemsSchema,
+      invocationDigest: `sha256:${'0'.repeat(64)}` }), 'schema_result_validation', null, null, null, null,
+      'schema_mismatch', 'minItems');
+    const maxItemsSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
+      properties: { ok: { type: 'array', maxItems: 1 } } });
+    assertFailure(await run('[SCHEMA-ARRAY-TWO]', { schema: maxItemsSchema,
+      invocationDigest: `sha256:${'0'.repeat(64)}` }), 'schema_result_validation', null, null, null, null,
+      'schema_mismatch', 'maxItems');
+    const repeatedSchema = JSON.stringify({ type: 'object', required: ['ok', 'other'],
+      additionalProperties: false, properties: { ok: { type: 'boolean' }, other: { type: 'boolean' } } });
+    assertFailure(await run('[SCHEMA-REQUIRED]', { schema: repeatedSchema,
+      invocationDigest: `sha256:${'0'.repeat(64)}` }), 'schema_result_validation', null, null, null, null,
+      'schema_mismatch', 'required');
+    const multipleFailure = await run('[SCHEMA-MULTIPLE]');
+    assertFailure(multipleFailure, 'schema_result_validation', null, null, null, null,
+      'schema_mismatch', 'multiple');
+    assert.deepEqual(multipleFailure.events, []);
+    const reorderedMultipleSchema = JSON.stringify({ additionalProperties: false,
+      properties: { ok: { type: 'boolean' } }, required: ['ok'], type: 'object' });
+    const reorderedMultipleFailure = await run('[SCHEMA-MULTIPLE]', { schema: reorderedMultipleSchema,
+      invocationDigest: `sha256:${'0'.repeat(64)}` });
+    assertFailure(reorderedMultipleFailure, 'schema_result_validation', null, null, null, null,
+      'schema_mismatch', 'multiple');
+    assert.deepEqual(reorderedMultipleFailure.events, []);
+    const unknownSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
+      properties: { ok: { type: 'number', minimum: 1 } } });
+    assertFailure(await run('[SCHEMA-RECOGNIZED-UNKNOWN]', { schema: unknownSchema,
+      invocationDigest: `sha256:${'0'.repeat(64)}` }), 'schema_result_validation', null, null, null, null,
+      'schema_mismatch', 'unknown');
     assertFailure(await run('[ZERO]', { schema: '{invalid}', invocationDigest: `sha256:${'0'.repeat(64)}` }),
       'schema_result_validation', null, null, null, null, 'schema_definition');
     const invalidDefinition = JSON.stringify({ type: 'future-secret-type' });
@@ -661,23 +707,64 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const value of [null, 'future-secret-value']) {
       const sanitized = governedAnswerFailure('schema_result_validation', null, null, null, null, value);
       assert.equal(sanitized.schemaResultValidationSubreason, null);
+      assert.equal(sanitized.schemaResultValidationKeyword, null);
       assert.equal(JSON.stringify(sanitized).includes('secret'), false);
     }
-    for (const stage of ['native_event_grammar', 'provider_engine', 'unknown'])
+    for (const malformed of [null, ['required'], { keyword: 'required' }, 'required|type',
+      'future-secret-keyword', 'SECRET_required']) {
+      const sanitized = governedAnswerFailure('schema_result_validation', null, null, null, null,
+        'schema_mismatch', malformed);
+      assert.equal(sanitized.schemaResultValidationKeyword, 'unknown');
+      assert.equal(JSON.stringify(sanitized).includes('secret'), false);
+    }
+    for (const keyword of ['required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems',
+      'maxItems', 'multiple', 'unknown']) {
+      const sanitized = governedAnswerFailure('schema_result_validation', null, null, null, null,
+        'schema_mismatch', keyword);
+      assert.equal(sanitized.schemaResultValidationKeyword, keyword);
+      assert.deepEqual(Object.keys(sanitized), ['answerFailureStage', 'schemaResultValidationSubreason',
+        'schemaResultValidationKeyword']);
+      assert.equal(Object.getOwnPropertyDescriptor(sanitized, 'schemaResultValidationKeyword').enumerable, true);
+      assert.equal(Object.getOwnPropertyDescriptor(sanitized, 'schemaResultValidationKeyword').writable, false);
+      assert.equal(Object.isFrozen(sanitized), true);
+    }
+    for (const subreason of ['response_json', 'schema_definition', 'result_identity'])
+      assert.equal(governedAnswerFailure('schema_result_validation', null, null, null, null, subreason,
+        'required').schemaResultValidationKeyword, null);
+    for (const stage of ['native_event_grammar', 'provider_engine', 'unknown']) {
       assert.equal(Object.hasOwn(governedAnswerFailure(stage, null, null, null, null, 'response_json'),
         'schemaResultValidationSubreason'), false);
+      assert.equal(Object.hasOwn(governedAnswerFailure(stage, null, null, null, null, 'schema_mismatch', 'required'),
+        'schemaResultValidationKeyword'), false);
+    }
     const schemaFailureSource = await readFile(new URL('../../src/agent/engines/governed-answer-failure.js',
       import.meta.url), 'utf8');
     assert.equal((schemaFailureSource.match(/Object\.defineProperty\(this, 'schemaResultValidationSubreason'/g) ?? []).length, 1);
+    assert.equal((schemaFailureSource.match(/Object\.defineProperty\(this, 'schemaResultValidationKeyword'/g) ?? []).length, 1);
     const subreasonSetStart = schemaFailureSource.indexOf('const GOVERNED_SCHEMA_RESULT_VALIDATION_SUBREASONS');
     const subreasonSetEnd = schemaFailureSource.indexOf('\n]);', subreasonSetStart);
     const productionSubreasons = [...schemaFailureSource.slice(subreasonSetStart, subreasonSetEnd)
       .matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
     assert.deepEqual(productionSubreasons,
       ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity']);
+    const keywordSetStart = schemaFailureSource.indexOf('const GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS');
+    const keywordSetEnd = schemaFailureSource.indexOf('\n]);', keywordSetStart);
+    const productionKeywords = [...schemaFailureSource.slice(keywordSetStart, keywordSetEnd)
+      .matchAll(/'([A-Za-z]+)'/g)].map((match) => match[1]);
+    assert.deepEqual(productionKeywords, ['required', 'additionalProperties', 'type', 'pattern', 'enum',
+      'minItems', 'maxItems', 'multiple', 'unknown']);
     assert.equal(normalizeGovernedAnswerFailure(new Error('SECRET_NORMALIZE_BODY'),
       'schema_result_validation').schemaResultValidationSubreason, null);
     const agentSource = await readFile(new URL('../../src/agent/ProbeAgent.js', import.meta.url), 'utf8');
+    const classifierStart = agentSource.indexOf('function classifyGovernedSchemaResultValidationKeyword');
+    const classifierEnd = agentSource.indexOf('\n}\n\n// Maximum tool iterations', classifierStart) + 2;
+    const classifierSource = agentSource.slice(classifierStart, classifierEnd);
+    assert.ok(classifierStart >= 0 && classifierEnd > classifierStart);
+    assert.equal((classifierSource.match(/schemaErrors/g) ?? []).length, 1);
+    assert.equal((classifierSource.match(/\.keyword/g) ?? []).length, 1);
+    for (const forbidden of ['instancePath', 'schemaPath', 'params', 'propertyName', 'message',
+      'parentSchema', 'data', 'formattedErrors', 'errorSummary', 'content'])
+      assert.equal(classifierSource.includes(forbidden), false);
     const governedStart = agentSource.indexOf('  async answerGoverned(message');
     const governedEnd = agentSource.indexOf('\n  /**\n   * Answer a question', governedStart);
     const governedSource = agentSource.slice(governedStart, governedEnd);
