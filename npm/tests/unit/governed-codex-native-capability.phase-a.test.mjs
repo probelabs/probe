@@ -75,6 +75,31 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     ]) assert.throws(() => attestGovernedCodexSession({ profile: normalized, events: [session(cwd), rejected] }), /Invalid/);
     assert.throws(() => validateGovernedCodexProfile({ ...profile(cwd), codexNativeTools: ['search'] }), /Invalid/);
     const source = await readFile(new URL('../../src/agent/engines/codex.js', import.meta.url), 'utf8');
+    const collectorStart = source.indexOf('function createGovernedNativeCollector(profile)');
+    const collectorEnd = source.indexOf('\nfunction externalReceipt(', collectorStart);
+    const collectorSource = source.slice(collectorStart, collectorEnd);
+    const typeExtraction = collectorSource.indexOf('const type = event?.params?.msg?.type;');
+    const rawTypeFilter = collectorSource.indexOf("type !== 'raw_response_item') return;");
+    const msgValidation = collectorSource.indexOf("const msg = governedExactObject(params.msg, ['type', 'item']");
+    const redundantMsgTypeGuard = collectorSource.indexOf("if (msg.type !== 'raw_response_item')");
+    assert.ok(typeExtraction >= 0 && typeExtraction < rawTypeFilter && rawTypeFilter < msgValidation &&
+      msgValidation < redundantMsgTypeGuard);
+    assert.equal((collectorSource.match(/if \(profile\.version !== 'probe\.governed-codex-profile\/v2' \|\| type !== 'raw_response_item'\) return;/g) ?? []).length, 1);
+    assert.equal((collectorSource.match(/msg\.type !== 'raw_response_item'/g) ?? []).length, 1);
+    const routingStart = source.indexOf('// Handle notifications (codex/event)');
+    const routingEnd = source.indexOf('\n    } catch (e)', routingStart);
+    const routingSource = source.slice(routingStart, routingEnd);
+    const methodRoutingGate = routingSource.indexOf("message.method === 'codex/event'");
+    const requestIdExtraction = routingSource.indexOf('const requestId = message.params._meta?.requestId;');
+    const governedHas = routingSource.indexOf('governedEvidenceHandlers.has(requestId)');
+    const governedGet = routingSource.indexOf('governedEvidenceHandlers.get(requestId)(message)');
+    assert.ok(methodRoutingGate >= 0 && methodRoutingGate < requestIdExtraction &&
+      requestIdExtraction < governedHas && governedHas < governedGet);
+    assert.match(source, /governedEvidenceHandlers\.set\(reqId,[\s\S]*?collector\.observe\(event\)/);
+    assert.match(collectorSource,
+      /meta\.requestId !== requestId \|\| meta\.threadId !== threadId \|\| params\.id !== String\(requestId\)/);
+    assert.match(collectorSource,
+      /event\.jsonrpc !== '2\.0' \|\| event\.method !== 'codex\/event'/);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('session_sequence'\)/g) ?? []).length, 3);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('envelope_shape'\)/g) ?? []).length, 6);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation'\)/g) ?? []).length, 1);
@@ -126,6 +151,9 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const event = foreignSession(); delete event.params._meta.requestId; send(event);
   }
   if (prompt.includes('[MALFORMED-REQUEST-ID]')) send(foreignSession('2'));
+  if (prompt.includes('[METHOD-MISMATCH]')) {
+    const event = (native)(0); event.method = 'other'; send(event);
+  }
   if (!prompt.includes('[LIVE-ORDER]') && !prompt.includes('[LIVE-MISSING-SESSION]')) send(configured);
   if (prompt.includes('[FOREIGN-RAW]') || prompt.includes('[CONCURRENT-FOREIGN]')) foreignRaw();
   if (prompt.includes('[FOREIGN-DUPLICATE-SESSION]') || prompt.includes('[CONCURRENT-FOREIGN]')) send(foreignSession());
@@ -301,14 +329,15 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.deepEqual(zero.events, []);
 
     for (const marker of ['[FOREIGN-SESSION-BEFORE]', '[FOREIGN-RAW]', '[FOREIGN-DUPLICATE-SESSION]',
-      '[MISSING-REQUEST-ID]', '[MALFORMED-REQUEST-ID]', '[CONCURRENT-FOREIGN]']) {
+      '[MISSING-REQUEST-ID]', '[MALFORMED-REQUEST-ID]', '[METHOD-MISMATCH]', '[CONCURRENT-FOREIGN]']) {
       const routed = await run(marker); assert.ifError(routed.error);
       assert.deepEqual(routed.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
       assert.deepEqual(routed.result.runtimeAttestation.evidence,
         { sessionEventCount: 1, nativeCallCount: 0, probeMcpCallCount: 0 });
       assert.deepEqual(routed.events, []);
       const serialized = JSON.stringify({ result: routed.result, events: routed.events });
-      assert.equal(serialized.includes('SECRET_FOREIGN'), false);
+      for (const secret of ['SECRET_FOREIGN', 'SECRET_ARGUMENT_BODY', 'raw-secret'])
+        assert.equal(serialized.includes(secret), false);
     }
 
     const mcp = await run('[MCP]'); assert.ifError(mcp.error);
