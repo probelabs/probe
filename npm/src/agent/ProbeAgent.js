@@ -139,6 +139,14 @@ function identifyGovernedResult(value) {
   return { data, resultIdentity };
 }
 
+function governedSchemaResultValidationFailure(validation) {
+  const subreason = validation?.error === 'Invalid schema provided' ||
+    validation?.error === 'Schema compilation failed' ? 'schema_definition'
+    : validation?.error === 'Schema validation failed' ? 'schema_mismatch'
+      : 'response_json';
+  return governedAnswerFailure('schema_result_validation', null, null, null, null, subreason);
+}
+
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
   const val = parseInt(process.env.MAX_TOOL_ITERATIONS || '30', 10);
@@ -3539,11 +3547,11 @@ Follow these instructions carefully:
         for (const toolEvent of nativeToolBatch.tools) this.events.emit('toolCall', toolEvent);
       } else if (nativeToolBatchCount !== 0) throw new Error('Unexpected governed native capability aggregate');
       const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
-      if (!validation.isValid) throw governedAnswerFailure('schema_result_validation');
+      if (!validation.isValid) throw governedSchemaResultValidationFailure(validation);
       if (hasResultIdentity) {
         let identified;
         try { identified = identifyGovernedResult(validation.parsed); }
-        catch { throw governedAnswerFailure('schema_result_validation'); }
+        catch { throw governedAnswerFailure('schema_result_validation', null, null, null, null, 'result_identity'); }
         const { data, resultIdentity } = identified;
         freezeGovernedTree(runtimeAttestation);
         return Object.freeze({ data, runtimeAttestation, resultIdentity });

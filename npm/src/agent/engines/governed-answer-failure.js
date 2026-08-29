@@ -18,6 +18,9 @@ const GOVERNED_NATIVE_EVENT_FAILURE_ATTESTATION_PREDICATES = new Set([
   'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape',
   'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract',
 ]);
+const GOVERNED_SCHEMA_RESULT_VALIDATION_SUBREASONS = new Set([
+  'response_json', 'schema_definition', 'schema_mismatch', 'result_identity',
+]);
 const GOVERNED_ATTESTATION_ERROR_PREDICATES = new Map([
   ['Invalid event', 'event_shape'], ['Invalid event.method', 'event_shape'],
   ['Invalid event.jsonrpc', 'jsonrpc'], ['Invalid event.params', 'params_shape'],
@@ -65,7 +68,8 @@ function governedAttestationPredicate(error) {
 
 export class GovernedAnswerFailure extends Error {
   constructor(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
-    nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null) {
+    nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
+    schemaResultValidationSubreason = null) {
     super();
     delete this.stack;
     const answerFailureStage = GOVERNED_ANSWER_FAILURE_STAGES.has(stage) ? stage : 'unknown';
@@ -105,21 +109,32 @@ export class GovernedAnswerFailure extends Error {
         enumerable: true,
       });
     }
+    if (answerFailureStage === 'schema_result_validation') {
+      Object.defineProperty(this, 'schemaResultValidationSubreason', {
+        value: GOVERNED_SCHEMA_RESULT_VALIDATION_SUBREASONS.has(schemaResultValidationSubreason)
+          ? schemaResultValidationSubreason : null,
+        enumerable: true,
+      });
+    }
     Object.freeze(this);
   }
 }
 
 export function governedAnswerFailure(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
-  nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null) {
+  nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
+  schemaResultValidationSubreason = null) {
   return new GovernedAnswerFailure(stage, nativeEventFailureBoundary, nativeEventFailureSubreason,
-    nativeEventFailureCorrelationOperand, nativeEventFailureAttestationPredicate);
+    nativeEventFailureCorrelationOperand, nativeEventFailureAttestationPredicate,
+    schemaResultValidationSubreason);
 }
 
 export function normalizeGovernedAnswerFailure(error, fallback = 'unknown', nativeEventFailureBoundary = null,
-  nativeEventFailureSubreason = null, nativeEventFailureCorrelationOperand = null) {
+  nativeEventFailureSubreason = null, nativeEventFailureCorrelationOperand = null,
+  schemaResultValidationSubreason = null) {
   return error instanceof GovernedAnswerFailure ? error
     : governedAnswerFailure(fallback, nativeEventFailureBoundary, nativeEventFailureSubreason,
       nativeEventFailureCorrelationOperand,
       fallback === 'native_event_grammar' && nativeEventFailureBoundary === 'live_envelope_session' &&
-        nativeEventFailureSubreason === 'attestation' ? governedAttestationPredicate(error) : null);
+        nativeEventFailureSubreason === 'attestation' ? governedAttestationPredicate(error) : null,
+      schemaResultValidationSubreason);
 }

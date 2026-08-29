@@ -30,7 +30,7 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
 function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null,
-  attestationPredicate = null) {
+  attestationPredicate = null, schemaSubreason = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
@@ -53,6 +53,10 @@ function assertFailure(result, stage, boundary = null, subreason = null, correla
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureAttestationPredicate'), true);
     assert.equal(result.error?.nativeEventFailureAttestationPredicate, attestationPredicate);
   } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureAttestationPredicate'), false);
+  if (stage === 'schema_result_validation') {
+    assert.equal(Object.hasOwn(result.error ?? {}, 'schemaResultValidationSubreason'), true);
+    assert.equal(result.error?.schemaResultValidationSubreason, schemaSubreason);
+  } else assert.equal(Object.hasOwn(result.error ?? {}, 'schemaResultValidationSubreason'), false);
   assert.equal(result.error?.stack, undefined);
   assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
   const serialized = JSON.stringify(result.error);
@@ -346,7 +350,10 @@ createInterface({ input: process.stdin }).on('line', async line => {
   else if (prompt.includes('[OVERFLOW]')) for (let index = 0; index < 257; index++) emitCall(index);
   if (prompt.includes('[AMBIGUOUS]')) { const event = (native)(0); delete event.params.msg.item.status; send(event); send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
   if (prompt.includes('[PROVIDER-ERROR]')) { send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
-  const text = prompt.includes('[BADJSON]') ? 'not-json' : prompt.includes('[BADSCHEMA]') ? '{"ok":"wrong"}'
+  const text = prompt.includes('[BADJSON]') ? 'not-json'
+    : prompt.includes('[SCHEMA-REQUIRED]') ? '{}'
+    : prompt.includes('[SCHEMA-EXTRA]') ? '{"ok":true,"extra":true}'
+    : prompt.includes('[BADSCHEMA]') || prompt.includes('[SCHEMA-ENUM]') ? '{"ok":"wrong"}'
     : prompt.includes('[NONCANONICAL]') ? '{"ok":1e309}' : '{"ok":true}';
   send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
 });
@@ -629,13 +636,56 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.equal(JSON.stringify(sanitizedCorrelation).includes('SECRET_'), false);
 
     const invalidAnswer = await run('[BADJSON]');
-    assertFailure(invalidAnswer, 'schema_result_validation');
+    assertFailure(invalidAnswer, 'schema_result_validation', null, null, null, null, 'response_json');
     assert.deepEqual(invalidAnswer.events, [{ name: 'exec', status: 'completed', count: 1 }]);
-    assertFailure(await run('[BADSCHEMA]'), 'schema_result_validation');
+    assertFailure(await run('[BADSCHEMA]'), 'schema_result_validation', null, null, null, null, 'schema_mismatch');
+    assertFailure(await run('[SCHEMA-REQUIRED]'), 'schema_result_validation', null, null, null, null,
+      'schema_mismatch');
+    assertFailure(await run('[SCHEMA-EXTRA]'), 'schema_result_validation', null, null, null, null,
+      'schema_mismatch');
+    const enumSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
+      properties: { ok: { enum: [true] } } });
+    assertFailure(await run('[SCHEMA-ENUM]', { schema: enumSchema, invocationDigest: `sha256:${'0'.repeat(64)}` }),
+      'schema_result_validation', null, null, null, null, 'schema_mismatch');
+    assertFailure(await run('[ZERO]', { schema: '{invalid}', invocationDigest: `sha256:${'0'.repeat(64)}` }),
+      'schema_result_validation', null, null, null, null, 'schema_definition');
+    const invalidDefinition = JSON.stringify({ type: 'future-secret-type' });
+    assertFailure(await run('[ZERO]', { schema: invalidDefinition, invocationDigest: `sha256:${'0'.repeat(64)}` }),
+      'schema_result_validation', null, null, null, null, 'schema_definition');
     const numericSchema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
       properties: { ok: { type: 'number' } } });
     assertFailure(await run('[NONCANONICAL]', { schema: numericSchema, invocationDigest: `sha256:${'0'.repeat(64)}`,
-      resultIdentity: 'probe.governed-result-identity/v1' }), 'schema_result_validation');
+      resultIdentity: 'probe.governed-result-identity/v1' }), 'schema_result_validation', null, null, null, null,
+      'result_identity');
+
+    for (const value of [null, 'future-secret-value']) {
+      const sanitized = governedAnswerFailure('schema_result_validation', null, null, null, null, value);
+      assert.equal(sanitized.schemaResultValidationSubreason, null);
+      assert.equal(JSON.stringify(sanitized).includes('secret'), false);
+    }
+    for (const stage of ['native_event_grammar', 'provider_engine', 'unknown'])
+      assert.equal(Object.hasOwn(governedAnswerFailure(stage, null, null, null, null, 'response_json'),
+        'schemaResultValidationSubreason'), false);
+    const schemaFailureSource = await readFile(new URL('../../src/agent/engines/governed-answer-failure.js',
+      import.meta.url), 'utf8');
+    assert.equal((schemaFailureSource.match(/Object\.defineProperty\(this, 'schemaResultValidationSubreason'/g) ?? []).length, 1);
+    const subreasonSetStart = schemaFailureSource.indexOf('const GOVERNED_SCHEMA_RESULT_VALIDATION_SUBREASONS');
+    const subreasonSetEnd = schemaFailureSource.indexOf('\n]);', subreasonSetStart);
+    const productionSubreasons = [...schemaFailureSource.slice(subreasonSetStart, subreasonSetEnd)
+      .matchAll(/'([a-z_]+)'/g)].map((match) => match[1]);
+    assert.deepEqual(productionSubreasons,
+      ['response_json', 'schema_definition', 'schema_mismatch', 'result_identity']);
+    assert.equal(normalizeGovernedAnswerFailure(new Error('SECRET_NORMALIZE_BODY'),
+      'schema_result_validation').schemaResultValidationSubreason, null);
+    const agentSource = await readFile(new URL('../../src/agent/ProbeAgent.js', import.meta.url), 'utf8');
+    const governedStart = agentSource.indexOf('  async answerGoverned(message');
+    const governedEnd = agentSource.indexOf('\n  /**\n   * Answer a question', governedStart);
+    const governedSource = agentSource.slice(governedStart, governedEnd);
+    assert.equal((governedSource.match(/governedSchemaResultValidationFailure\(validation\)/g) ?? []).length, 1);
+    assert.equal((governedSource.match(/'result_identity'/g) ?? []).length, 1);
+    assert.equal((governedSource.match(/await engine\.close\(\)/g) ?? []).length, 1);
+    for (const forbidden of ['schemaErrors', 'formattedErrors', 'errorSummary', 'schemaError'])
+      assert.equal(governedSource.includes(forbidden), false);
   } finally {
     process.env.PATH = priorPath;
     if (priorPid === undefined) delete process.env.PROBE_NATIVE_PID_FILE; else process.env.PROBE_NATIVE_PID_FILE = priorPid;
