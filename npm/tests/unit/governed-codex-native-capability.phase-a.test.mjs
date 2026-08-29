@@ -29,7 +29,7 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     call_id: `raw-secret-call-${index}`, name: 'exec', input: 'SECRET_ARGUMENT_BODY',
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
-function assertFailure(result, stage, boundary = null, subreason = null) {
+function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
@@ -44,6 +44,10 @@ function assertFailure(result, stage, boundary = null, subreason = null) {
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureBoundary'), false);
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), false);
   }
+  if (stage === 'native_event_grammar' && boundary === 'live_envelope_session' && subreason === 'correlation') {
+    assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureCorrelationOperand'), true);
+    assert.equal(result.error?.nativeEventFailureCorrelationOperand, correlationOperand);
+  } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureCorrelationOperand'), false);
   assert.equal(result.error?.stack, undefined);
   assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
   const serialized = JSON.stringify(result.error);
@@ -96,13 +100,18 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     assert.ok(methodRoutingGate >= 0 && methodRoutingGate < requestIdExtraction &&
       requestIdExtraction < governedHas && governedHas < governedGet);
     assert.match(source, /governedEvidenceHandlers\.set\(reqId,[\s\S]*?collector\.observe\(event\)/);
-    assert.match(collectorSource,
-      /meta\.requestId !== requestId \|\| meta\.threadId !== threadId \|\| params\.id !== String\(requestId\)/);
+    const requestCorrelationGuard = collectorSource.indexOf('if (meta.requestId !== requestId)');
+    const threadCorrelationGuard = collectorSource.indexOf("if (meta.threadId !== threadId) governedLiveEnvelopeInvalid('correlation', 'thread_id');");
+    const responseCorrelationGuard = collectorSource.indexOf("if (params.id !== String(requestId)) governedLiveEnvelopeInvalid('correlation', 'response_id');");
+    assert.ok(requestCorrelationGuard >= 0 && requestCorrelationGuard < threadCorrelationGuard &&
+      threadCorrelationGuard < responseCorrelationGuard && responseCorrelationGuard < msgValidation);
     assert.match(collectorSource,
       /event\.jsonrpc !== '2\.0' \|\| event\.method !== 'codex\/event'/);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('session_sequence'\)/g) ?? []).length, 3);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('envelope_shape'\)/g) ?? []).length, 6);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation'\)/g) ?? []).length, 1);
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation', 'thread_id'\)/g) ?? []).length, 1);
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation', 'response_id'\)/g) ?? []).length, 1);
     assert.equal((source.match(/'attestation'/g) ?? []).length, 1);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\(\)/g) ?? []).length, 0);
   } finally { await rm(cwd, { recursive: true, force: true }); }
@@ -401,8 +410,9 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const marker of ['[LIVE-RAW-OBJECT]', '[LIVE-JSONRPC]', '[LIVE-PARAMS]', '[LIVE-META]', '[LIVE-MSG]'])
       assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'envelope_shape');
 
-    for (const marker of ['[CROSS]', '[LIVE-RESPONSE-ID]'])
-      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'correlation');
+    assertFailure(await run('[CROSS]'), 'native_event_grammar', 'live_envelope_session', 'correlation', 'thread_id');
+    assertFailure(await run('[LIVE-RESPONSE-ID]'), 'native_event_grammar', 'live_envelope_session', 'correlation',
+      'response_id');
 
     for (const marker of ['[LIVE-SESSION]', '[ATTEST-SESSION-SHAPE]', '[ATTEST-IDENTITY]',
       '[ATTEST-PERMISSION]', '[ATTEST-ROLLOUT]', '[ATTEST-CWD]'])
@@ -435,17 +445,46 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const subreason of ['session_sequence', 'envelope_shape', 'correlation', 'attestation'])
       assert.equal(governedAnswerFailure('native_event_grammar', 'live_envelope_session', subreason)
         .nativeEventFailureSubreason, subreason);
+    for (const operand of ['thread_id', 'response_id']) {
+      const failure = governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'correlation', operand);
+      assert.equal(failure.nativeEventFailureCorrelationOperand, operand);
+      assert.deepEqual(Object.keys(failure), ['answerFailureStage', 'nativeEventFailureBoundary',
+        'nativeEventFailureSubreason', 'nativeEventFailureCorrelationOperand']);
+      assert.equal(Object.isFrozen(failure), true);
+      assert.deepEqual(Object.getOwnPropertySymbols(failure), []);
+      assert.equal(failure.message, ''); assert.equal(failure.stack, undefined);
+      assert.equal(Object.hasOwn(failure, 'cause'), false);
+    }
+    for (const invalid of [['thread_id'], { operand: 'thread_id' }, 'thread_id|response_id', 'future_operand',
+      'x'.repeat(129), 'SECRET_thread_id']) {
+      const failure = governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'correlation', invalid);
+      assert.equal(Object.hasOwn(failure, 'nativeEventFailureCorrelationOperand'), true);
+      assert.equal(failure.nativeEventFailureCorrelationOperand, null);
+      assert.equal(JSON.stringify(failure).includes('SECRET_'), false);
+    }
+    assert.equal(governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'correlation')
+      .nativeEventFailureCorrelationOperand, null);
     assert.equal(Object.hasOwn(governedAnswerFailure('native_event_grammar', 'raw_item_predicate', 'correlation'),
       'nativeEventFailureSubreason'), false);
     assert.equal(Object.hasOwn(governedAnswerFailure('provider_engine', 'live_envelope_session', 'attestation'),
       'nativeEventFailureSubreason'), false);
+    for (const failure of [
+      governedAnswerFailure('native_event_grammar', 'raw_item_predicate', 'correlation', 'thread_id'),
+      governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', 'response_id'),
+      governedAnswerFailure('provider_engine', 'live_envelope_session', 'correlation', 'thread_id')
+    ]) assert.equal(Object.hasOwn(failure, 'nativeEventFailureCorrelationOperand'), false);
     const classified = governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'session_sequence');
+    assert.equal(Object.hasOwn(classified, 'nativeEventFailureCorrelationOperand'), false);
     assert.equal(normalizeGovernedAnswerFailure(classified, 'native_event_grammar',
       'live_envelope_session', 'attestation'), classified);
     const sanitized = normalizeGovernedAnswerFailure(new Error('SECRET_ATTESTATION_BODY'),
       'native_event_grammar', 'live_envelope_session', 'attestation');
     assert.equal(sanitized.nativeEventFailureSubreason, 'attestation');
     assert.equal(JSON.stringify(sanitized).includes('SECRET_'), false);
+    const sanitizedCorrelation = normalizeGovernedAnswerFailure(new Error('SECRET_CORRELATION_BODY'),
+      'native_event_grammar', 'live_envelope_session', 'correlation', 'response_id');
+    assert.equal(sanitizedCorrelation.nativeEventFailureCorrelationOperand, 'response_id');
+    assert.equal(JSON.stringify(sanitizedCorrelation).includes('SECRET_'), false);
 
     const invalidAnswer = await run('[BADJSON]');
     assertFailure(invalidAnswer, 'schema_result_validation');

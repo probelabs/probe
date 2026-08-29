@@ -21,8 +21,8 @@ const GOVERNED_PROBE_MCP_CALLS = new Map([
 ]);
 
 function governedRawItemInvalid() { throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate'); }
-function governedLiveEnvelopeInvalid(subreason) {
-  throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', subreason);
+function governedLiveEnvelopeInvalid(subreason, correlationOperand = null) {
+  throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', subreason, correlationOperand);
 }
 function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) invalid();
@@ -93,8 +93,9 @@ function createGovernedNativeCollector(profile) {
     if (event.jsonrpc !== '2.0' || event.method !== 'codex/event') governedLiveEnvelopeInvalid('envelope_shape');
     const params = governedExactObject(event.params, ['_meta', 'msg', 'id'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     const meta = governedExactObject(params._meta, ['requestId', 'threadId'], () => governedLiveEnvelopeInvalid('envelope_shape'));
-    if (meta.requestId !== requestId || meta.threadId !== threadId || params.id !== String(requestId))
-      governedLiveEnvelopeInvalid('correlation');
+    if (meta.requestId !== requestId) governedLiveEnvelopeInvalid('correlation');
+    if (meta.threadId !== threadId) governedLiveEnvelopeInvalid('correlation', 'thread_id');
+    if (params.id !== String(requestId)) governedLiveEnvelopeInvalid('correlation', 'response_id');
     const msg = governedExactObject(params.msg, ['type', 'item'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid('envelope_shape');
     const item = msg.item;
