@@ -728,14 +728,19 @@ export class BuiltInMCPServer extends EventEmitter {
       throw new Error(`Tool ${name} not found`);
     }
 
+    const id = randomUUID();
+    const startTime = Date.now();
     let validated;
     try { validated = await validateToolArguments(toolName, rawArgs); } catch (error) {
+      const rejectedEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, argumentsDigest: null };
+      try { emitToolCall(this.agent, { ...rejectedEvent, status: 'in_progress' }); } catch { /* Rejection remains authoritative. */ }
+      const endTime = Date.now();
+      try { emitToolCall(this.agent, { ...rejectedEvent, status: 'failed', endTime, duration: endTime - startTime }); }
+      catch { /* Rejection remains authoritative. */ }
       return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
     }
     const { value: args, digest: argumentsDigest } = validated;
 
-    const id = randomUUID();
-    const startTime = Date.now();
     const baseEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, ...(argumentsDigest && { argumentsDigest }) };
     const fail = error => {
       const endTime = Date.now();

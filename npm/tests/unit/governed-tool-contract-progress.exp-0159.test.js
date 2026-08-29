@@ -46,7 +46,7 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
         import type { ProbeAgent } from '@probelabs/probe/agent';
         declare const agent: ProbeAgent; declare const rootAgent: RootProbeAgent; declare const subpathAgent: AgentProbeAgent;
         const signals: AbortSignal[] = [agent.abortSignal, rootAgent.abortSignal, subpathAgent.abortSignal]; void signals;
-        declare const event: import('@probelabs/probe').ToolCallEvent; const digest: string | undefined = event.argumentsDigest; void digest;
+        declare const event: import('@probelabs/probe').ToolCallEvent; const digest: string | null | undefined = event.argumentsDigest; void digest;
         const server = new BuiltInMCPServer(agent, { port: 0, debug: false });
         const same: typeof BuiltInMCPServer = MCP.BuiltInMCPServer;
         void same; void server.start(); void server.stop(); void server.handleListTools();
@@ -124,8 +124,8 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
     assert.equal(events.at(-2).argumentsDigest, digests[0]);
   });
 
-  await t.test('invalid values and containers fail before lifecycle without leaking details', async () => {
-    const { agent, server, calls } = fixture();
+  await t.test('invalid values and containers emit paired failed lifecycle without leaking details', async () => {
+    const { agent, server, calls, lifecycle } = fixture();
     const events = []; agent.events.on('toolCall', event => events.push(event));
     const accessor = {}; Object.defineProperty(accessor, 'query', { enumerable: true, get() { throw new Error('ACCESSOR_SECRET'); } });
     const hidden = { query: 'safe' }; Object.defineProperty(hidden, 'HIDDEN_SECRET', { value: true });
@@ -148,9 +148,28 @@ test('EXP-0159 canonical governed tool contracts and progress', async t => {
       assert.equal(result.isError, true);
       assert.equal(result.content[0].text, 'Error executing mcp__probe__search: TOOL_ARGUMENT_VALIDATION_FAILED');
     }
-    assert.equal(calls.length, 0); assert.deepEqual(events, []);
+    assert.equal(calls.length, 0);
     const diagnostics = containerCases.length + invalidCases.length;
     assert.equal(diagnostics, 17);
+    assert.equal(events.filter(event => event.status === 'in_progress').length, diagnostics);
+    assert.equal(events.filter(event => event.status === 'failed').length, diagnostics);
+    assert.equal(events.length, diagnostics * 2);
+    for (let i = 0; i < events.length; i += 2) {
+      const start = events[i], terminal = events[i + 1];
+      assert.equal(start.name, 'search'); assert.equal(terminal.name, 'search');
+      assert.equal(start.status, 'in_progress'); assert.equal(terminal.status, 'failed');
+      assert.equal(start.id, terminal.id); assert.equal(start.argumentsDigest, null); assert.equal(terminal.argumentsDigest, null);
+      assert.equal(typeof terminal.duration, 'number'); assert.equal(typeof terminal.endTime, 'number');
+      for (const key of ['params', 'args', 'arguments', 'input', 'result', 'resultPreview', 'preview', 'body', 'source',
+        'error', 'errorBody', 'errorMessage', 'message']) {
+        assert.equal(Object.prototype.hasOwnProperty.call(start, key), false);
+        assert.equal(Object.prototype.hasOwnProperty.call(terminal, key), false);
+      }
+    }
+    const publicTrace = JSON.stringify(events);
+    for (const secret of ['ACCESSOR_SECRET', 'HIDDEN_SECRET', 'SYMBOL_SECRET', 'EXOTIC_SECRET', 'HOOK_SECRET',
+      'PROXY_SECRET', 'VALUE_SECRET']) assert.equal(publicTrace.includes(secret), false);
+    await agent.close(); assert.equal(lifecycle.closes, 1);
   });
 
   await t.test('failed lifecycle exposes one stable code and retains its digest', async () => {

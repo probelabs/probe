@@ -139,7 +139,8 @@ export interface ProbeAgentOptions {
  * Tool execution event data
  */
 export interface ToolCallEvent {
-  argumentsDigest?: string;
+  /** Digest of validated arguments, or null only when an admitted call is rejected before validation. */
+  argumentsDigest?: string | null;
   /** Unique tool call identifier */
   id: string;
   /** Name of the tool being called */
