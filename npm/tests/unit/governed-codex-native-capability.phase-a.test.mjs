@@ -359,7 +359,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
     : prompt.includes('[SCHEMA-REQUIRED]') ? '{}'
     : prompt.includes('[SCHEMA-EXTRA]') ? '{"ok":true,"extra":true}'
     : prompt.includes('[SCHEMA-MULTIPLE]') ? '{"extra":true}'
-    : prompt.includes('[SCHEMA-RECOGNIZED-UNKNOWN]') ? '{"value":0}'
+    : prompt.includes('[SCHEMA-RECOGNIZED-UNKNOWN]') ? '{"ok":0,"extra":true}'
     : prompt.includes('[SCHEMA-ARRAY]') ? '{"ok":[]}'
     : prompt.includes('[SCHEMA-ARRAY-TWO]') ? '{"ok":[1,2]}'
     : prompt.includes('[BADSCHEMA]') || prompt.includes('[SCHEMA-ENUM]') ? '{"ok":"wrong"}'
