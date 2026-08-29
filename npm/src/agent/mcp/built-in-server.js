@@ -29,6 +29,8 @@ const TOOL_DESCRIPTORS = Object.freeze({
 });
 
 const ARGUMENT_DOMAIN = Buffer.from('reqproof.probe.tool-arguments/v1', 'utf8');
+const GOVERNED_CODEX_PROFILE_V2 = 'probe.governed-codex-profile/v2';
+const GOVERNED_CALL_LIMIT = 256;
 
 function ownData(value, arrays, stack = new Set()) {
   if (value === null || typeof value !== 'object') return;
@@ -168,6 +170,10 @@ export class BuiltInMCPServer extends EventEmitter {
     this.streamableTransports = new Map();  // Map of sessionId -> StreamableHTTPServerTransport
     this.connections = new Set();
     this.debug = options.debug || false;
+    this.governedCallAccounting = options.governedProfileVersion === GOVERNED_CODEX_PROFILE_V2;
+    this.governedCallsAdmitted = 0;
+    this.governedCallsClosed = 0;
+    this.governedCallOverflow = false;
   }
 
   /**
@@ -728,49 +734,68 @@ export class BuiltInMCPServer extends EventEmitter {
       throw new Error(`Tool ${name} not found`);
     }
 
-    const id = randomUUID();
-    const startTime = Date.now();
-    let validated;
-    try { validated = await validateToolArguments(toolName, rawArgs); } catch (error) {
-      const rejectedEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, argumentsDigest: null };
-      try { emitToolCall(this.agent, { ...rejectedEvent, status: 'in_progress' }); } catch { /* Rejection remains authoritative. */ }
-      const endTime = Date.now();
-      try { emitToolCall(this.agent, { ...rejectedEvent, status: 'failed', endTime, duration: endTime - startTime }); }
-      catch { /* Rejection remains authoritative. */ }
-      return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
+    let governedCallAdmitted = false;
+    if (this.governedCallAccounting) {
+      if (this.governedCallsAdmitted >= GOVERNED_CALL_LIMIT) {
+        this.governedCallOverflow = true;
+        throw new Error('Governed tool call limit exceeded');
+      }
+      this.governedCallsAdmitted++;
+      governedCallAdmitted = true;
     }
-    const { value: args, digest: argumentsDigest } = validated;
-
-    const baseEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, ...(argumentsDigest && { argumentsDigest }) };
-    const fail = error => {
-      const endTime = Date.now();
-      try { emitToolCall(this.agent, { ...baseEvent, status: 'failed', error: 'TOOL_EXECUTION_FAILED', endTime, duration: endTime - startTime }); }
-      catch (listenerError) { error = listenerError; }
-      return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
-    };
-
-    try { emitToolCall(this.agent, { ...baseEvent, status: 'in_progress' }); }
-    catch (error) { return fail(error); }
 
     try {
-      // Execute tool directly (no spawning!)
-      const signal = this.agent.abortSignal;
-      const execution = Promise.resolve().then(() => tool.execute({ ...args, sessionId: this.agent.sessionId, workingDirectory: this.agent.workspaceRoot || this.agent.cwd || process.cwd(), abortSignal: signal }));
-      const result = await abortable(execution, signal);
+      const id = randomUUID();
+      const startTime = Date.now();
+      let validated;
+      try { validated = await validateToolArguments(toolName, rawArgs); } catch (error) {
+        const rejectedEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, argumentsDigest: null };
+        try { emitToolCall(this.agent, { ...rejectedEvent, status: 'in_progress' }); } catch { /* Rejection remains authoritative. */ }
+        const endTime = Date.now();
+        try { emitToolCall(this.agent, { ...rejectedEvent, status: 'failed', endTime, duration: endTime - startTime }); }
+        catch { /* Rejection remains authoritative. */ }
+        return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
+      }
+      const { value: args, digest: argumentsDigest } = validated;
 
-      const endTime = Date.now();
-      try { emitToolCall(this.agent, { ...baseEvent, status: 'completed', endTime, duration: endTime - startTime }); }
-      catch { /* Execution already succeeded; observer failure is non-authoritative. */ }
-
-      return {
-        content: [{
-          type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-        }]
+      const baseEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, ...(argumentsDigest && { argumentsDigest }) };
+      const fail = error => {
+        const endTime = Date.now();
+        try { emitToolCall(this.agent, { ...baseEvent, status: 'failed', error: 'TOOL_EXECUTION_FAILED', endTime, duration: endTime - startTime }); }
+        catch (listenerError) { error = listenerError; }
+        return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
       };
-    } catch (error) {
-      return fail(error);
+
+      try { emitToolCall(this.agent, { ...baseEvent, status: 'in_progress' }); }
+      catch (error) { return fail(error); }
+
+      try {
+        // Execute tool directly (no spawning!)
+        const signal = this.agent.abortSignal;
+        const execution = Promise.resolve().then(() => tool.execute({ ...args, sessionId: this.agent.sessionId, workingDirectory: this.agent.workspaceRoot || this.agent.cwd || process.cwd(), abortSignal: signal }));
+        const result = await abortable(execution, signal);
+
+        const endTime = Date.now();
+        try { emitToolCall(this.agent, { ...baseEvent, status: 'completed', endTime, duration: endTime - startTime }); }
+        catch { /* Execution already succeeded; observer failure is non-authoritative. */ }
+
+        return {
+          content: [{
+            type: 'text',
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+          }]
+        };
+      } catch (error) {
+        return fail(error);
+      }
+    } finally {
+      if (governedCallAdmitted) this.governedCallsClosed++;
     }
+  }
+
+  getGovernedCallEvidence() {
+    return Object.freeze({ admitted: this.governedCallsAdmitted, closed: this.governedCallsClosed,
+      overflow: this.governedCallOverflow });
   }
 
   /**

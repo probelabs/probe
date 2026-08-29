@@ -34,6 +34,15 @@ function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
   return value;
 }
 function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedRawItemInvalid(); }
+function governedProbeMcpCallCount(evidence) {
+  const invalid = () => { throw new TypeError('Invalid attester input'); };
+  const snapshot = governedExactObject(evidence, ['admitted', 'closed', 'overflow'], invalid);
+  if (!Object.isFrozen(snapshot) || !Number.isInteger(snapshot.admitted) || snapshot.admitted < 0 ||
+    snapshot.admitted > GOVERNED_NATIVE_EVENT_LIMIT || !Number.isInteger(snapshot.closed) ||
+    snapshot.closed < 0 || snapshot.closed > GOVERNED_NATIVE_EVENT_LIMIT ||
+    typeof snapshot.overflow !== 'boolean' || snapshot.admitted !== snapshot.closed || snapshot.overflow) invalid();
+  return snapshot.closed;
+}
 function governedPassthrough(value, message = false) {
   const keys = Object.keys(value ?? {}).sort().join(',');
   const legacy = keys === 'turn_id';
@@ -75,7 +84,7 @@ function validateGovernedRawReasoning(item) {
   governedPassthrough(item.internal_chat_message_metadata_passthrough);
 }
 function createGovernedNativeCollector(profile) {
-  let sessionEvent = null, requestId = null, threadId = null, nativeCallCount = 0, probeMcpCallCount = 0;
+  let sessionEvent = null, requestId = null, threadId = null, nativeCallCount = 0;
   let relevantEventCount = 0, totalCallCount = 0, rawResponseItemCount = 0, assistantMessageCount = 0, finalAnswerCount = 0;
   const rawIds = new Set(), callOrigins = new Map(), outputIds = new Set();
   function observe(event) {
@@ -127,7 +136,7 @@ function createGovernedNativeCollector(profile) {
       if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
       const origin = nativeName !== undefined ? 'codex-native' : 'probe-mcp';
       rawIds.add(item.id); callOrigins.set(item.call_id, origin);
-      if (origin === 'codex-native') nativeCallCount++; else probeMcpCallCount++;
+      if (origin === 'codex-native') nativeCallCount++;
       return;
     }
     if (item?.type === 'custom_tool_call_output') {
@@ -154,7 +163,7 @@ function createGovernedNativeCollector(profile) {
     if (!sessionEvent) governedLiveEnvelopeInvalid('session_sequence');
     if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedRawItemInvalid();
     const tools = nativeCallCount === 0 ? [] : [{ name: 'exec', status: 'completed', count: nativeCallCount }];
-    return { sessionEvent, capabilities: { nativeTools: { total: nativeCallCount, tools }, probeMcpCallCount } };
+    return { sessionEvent, capabilities: { nativeTools: { total: nativeCallCount, tools } } };
   }
   return { observe, evidence };
 }
@@ -243,7 +252,9 @@ export async function createCodexEngine(options = {}) {
     mcpServer = new BuiltInMCPServer(agent, {
       port: 0,
       host: '127.0.0.1',
-      debug: debug
+      debug: debug,
+      ...(governedProfile?.version === 'probe.governed-codex-profile/v2'
+        ? { governedProfileVersion: governedProfile.version } : {})
     });
 
     const { host, port } = await mcpServer.start();
@@ -500,7 +511,7 @@ export async function createCodexEngine(options = {}) {
         let attestation = null;
         if (governedProfile) {
           if (evidenceFailure) throw evidenceFailure;
-          let collected, internal;
+          let collected, internal, probeMcpCallCount;
           try {
             collected = collector.evidence();
           } catch (error) {
@@ -510,17 +521,19 @@ export async function createCodexEngine(options = {}) {
             internal = attestGovernedCodexSession({ profile: governedProfile,
               events: governedProfile.version === 'probe.governed-codex-profile/v2'
                 ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
+            probeMcpCallCount = governedProfile.version === 'probe.governed-codex-profile/v2'
+              ? governedProbeMcpCallCount(mcpServer?.getGovernedCallEvidence()) : 0;
           } catch (error) {
             throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session', 'attestation');
           }
           attestation = hasInvocationDigest
             ? externalBoundReceipt(internal, dispatch, invocationDigest, {
               nativeCallCount: collected.capabilities.nativeTools.total,
-              probeMcpCallCount: collected.capabilities.probeMcpCallCount,
+              probeMcpCallCount,
             })
             : externalReceipt(internal, {
               nativeCallCount: collected.capabilities.nativeTools.total,
-              probeMcpCallCount: collected.capabilities.probeMcpCallCount,
+              probeMcpCallCount,
             });
           session.setConversationId(collected.sessionEvent.params.msg.session_id);
         }

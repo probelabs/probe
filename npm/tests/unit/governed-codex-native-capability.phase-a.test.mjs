@@ -4,6 +4,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
+import { BuiltInMCPServer } from '../../src/agent/mcp/built-in-server.js';
 import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs,
   validateGovernedCodexProfile } from '../../src/agent/engines/governed-codex-profile.js';
 import { governedAnswerFailure,
@@ -149,6 +150,32 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     assert.equal((source.match(/'attestation'/g) ?? []).length, 1);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\(\)/g) ?? []).length, 0);
   } finally { await rm(cwd, { recursive: true, force: true }); }
+});
+
+test('Phase A Probe MCP accounting is opt-in, bounded, closed, and scalar-only', async () => {
+  const enabled = new Set(['listFiles']);
+  const agent = { allowedTools: { isEnabled: (name) => enabled.has(name) },
+    toolImplementations: { listFiles: { execute: async () => [] } }, sessionId: 'session-safe' };
+  const governed = new BuiltInMCPServer(agent,
+    { governedProfileVersion: 'probe.governed-codex-profile/v2' });
+  const initial = governed.getGovernedCallEvidence();
+  assert.deepEqual(initial, { admitted: 0, closed: 0, overflow: false });
+  assert.deepEqual(Object.keys(initial), ['admitted', 'closed', 'overflow']);
+  assert.equal(Object.isFrozen(initial), true);
+  await governed.handleCallTool({ name: 'mcp__probe__listFiles', arguments: { directory: '.' } });
+  await governed.handleCallTool({ name: 'mcp__probe__listFiles', arguments: { directory: 7 } });
+  assert.deepEqual(governed.getGovernedCallEvidence(), { admitted: 2, closed: 2, overflow: false });
+  await assert.rejects(governed.handleCallTool({ name: 'mcp__probe__bash', arguments: {} }), /not enabled/);
+  assert.deepEqual(governed.getGovernedCallEvidence(), { admitted: 2, closed: 2, overflow: false });
+  for (let index = 2; index < 256; index++)
+    await governed.handleCallTool({ name: 'mcp__probe__listFiles', arguments: { directory: '.' } });
+  await assert.rejects(governed.handleCallTool(
+    { name: 'mcp__probe__listFiles', arguments: { directory: '.' } }), /limit exceeded/);
+  assert.deepEqual(governed.getGovernedCallEvidence(), { admitted: 256, closed: 256, overflow: true });
+
+  const ungoverned = new BuiltInMCPServer(agent);
+  await ungoverned.handleCallTool({ name: 'mcp__probe__listFiles', arguments: { directory: '.' } });
+  assert.deepEqual(ungoverned.getGovernedCallEvidence(), { admitted: 0, closed: 0, overflow: false });
 });
 
 test('Phase A fake engine covers native exec admission, separation, rejection, observability, and cleanup', async () => {
@@ -340,12 +367,35 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[EXEC]') || prompt.includes('[BADJSON]') || prompt.includes('[NONTOOL]')) {
     emitCall(0);
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'input_text', text: 'SECRET_RESULT_BODY' }], internal_chat_message_metadata_passthrough: passthrough } } } });
-  } else if (prompt.includes('[MCP]')) {
-    emitCall(0, { name: 'mcp__probe__listFiles', input: 'SECRET_MCP_ARGUMENT_BODY' });
+  } else if (prompt.includes('[MCP]') || prompt.includes('[MCP-INTERLEAVED]') ||
+    prompt.includes('[MCP-HANDLER-INVALID]') || prompt.includes('[MCP-PREHANDLER-REJECT]')) {
     const url = Object.values(args.config.mcp_servers)[0].url.replace('/mcp', '/rpc');
-    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'mcp__probe__listFiles', arguments: { directory: '.' } } }) });
-    const body = await response.text();
-    send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'input_text', text: body }], internal_chat_message_metadata_passthrough: passthrough } } } });
+    const invokeProbe = async (id, name, toolArguments) => {
+      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call',
+          params: { name, arguments: toolArguments } }) });
+      return response.text();
+    };
+    const emitProbeOutput = (index, body) => send({ jsonrpc: '2.0', method: 'codex/event', params: {
+      _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: {
+        type: 'custom_tool_call_output', call_id: 'raw-secret-call-' + index,
+        output: [{ type: 'input_text', text: body }], internal_chat_message_metadata_passthrough: passthrough
+      } } } });
+    if (prompt.includes('[MCP-INTERLEAVED]')) {
+      emitCall(0, { name: 'mcp__probe__listFiles', input: 'SECRET_MCP_ARGUMENT_BODY_0' });
+      emitCall(1, { name: 'mcp__probe__listFiles', input: 'SECRET_MCP_ARGUMENT_BODY_1' });
+      const bodies = await Promise.all([
+        invokeProbe(1, 'mcp__probe__listFiles', { directory: '.' }),
+        invokeProbe(2, 'mcp__probe__listFiles', { directory: '.' })
+      ]);
+      emitProbeOutput(1, bodies[1]); emitProbeOutput(0, bodies[0]);
+    } else {
+      emitCall(0, { name: 'mcp__probe__listFiles', input: 'SECRET_MCP_ARGUMENT_BODY' });
+      const body = await invokeProbe(1,
+        prompt.includes('[MCP-PREHANDLER-REJECT]') ? 'mcp__probe__bash' : 'mcp__probe__listFiles',
+        prompt.includes('[MCP-HANDLER-INVALID]') ? { directory: 7 } : { directory: '.' });
+      emitProbeOutput(0, body);
+    }
   } else if (prompt.includes('[UNKNOWN-MCP]')) emitCall(0, { name: 'mcp__probe__bash' });
   else if (prompt.includes('[UNDECLARED]')) emitCall(0, { name: 'bash' });
   else if (prompt.includes('[MALFORMED]')) { const event = (native)(0); delete event.params.msg.item.status; send(event); }
@@ -417,6 +467,31 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const mcpSerialized = JSON.stringify({ result: mcp.result, events: mcp.events });
     for (const secret of ['SECRET_MCP_ARGUMENT_BODY', 'raw-secret-id', 'raw-secret-call', 'raw-secret-turn'])
       assert.equal(mcpSerialized.includes(secret), false);
+
+    const interleaved = await run('[MCP-INTERLEAVED]'); assert.ifError(interleaved.error);
+    assert.deepEqual(interleaved.result.runtimeAttestation.evidence,
+      { sessionEventCount: 1, nativeCallCount: 0, probeMcpCallCount: 2 });
+    assert.equal(interleaved.events.filter(({ status }) => status === 'in_progress').length, 2);
+    assert.equal(interleaved.events.filter(({ status }) => status === 'completed').length, 2);
+
+    const handlerInvalid = await run('[MCP-HANDLER-INVALID]'); assert.ifError(handlerInvalid.error);
+    assert.deepEqual(handlerInvalid.result.runtimeAttestation.evidence,
+      { sessionEventCount: 1, nativeCallCount: 0, probeMcpCallCount: 1 });
+    assert.deepEqual(handlerInvalid.events.map(({ name, status, argumentsDigest }) =>
+      ({ name, status, argumentsDigest })), [
+      { name: 'listFiles', status: 'in_progress', argumentsDigest: null },
+      { name: 'listFiles', status: 'failed', argumentsDigest: null }
+    ]);
+
+    const prehandlerRejected = await run('[MCP-PREHANDLER-REJECT]'); assert.ifError(prehandlerRejected.error);
+    assert.deepEqual(prehandlerRejected.result.runtimeAttestation.evidence,
+      { sessionEventCount: 1, nativeCallCount: 0, probeMcpCallCount: 0 });
+    assert.deepEqual(prehandlerRejected.events, []);
+    for (const observed of [interleaved, handlerInvalid, prehandlerRejected]) {
+      const serialized = JSON.stringify({ result: observed.result, events: observed.events });
+      for (const secret of ['SECRET_MCP_ARGUMENT_BODY', 'raw-secret-id', 'raw-secret-call',
+        'raw-secret-turn', 'mcp__probe__bash']) assert.equal(serialized.includes(secret), false);
+    }
 
     for (const marker of ['[EXEC]', '[NONTOOL]']) {
       const valid = await run(marker); assert.ifError(valid.error);

@@ -1,7 +1,9 @@
 import type { ProbeAgent } from '../ProbeAgent.js';
 
 export type MCPRecord = Record<string, unknown>;
-export interface BuiltInMCPServerOptions { port?: number; host?: string; debug?: boolean; }
+export interface BuiltInMCPServerOptions { port?: number; host?: string; debug?: boolean;
+  governedProfileVersion?: 'probe.governed-codex-profile/v2'; }
+export interface GovernedCallEvidence { admitted: number; closed: number; overflow: boolean; }
 export interface MCPToolDefinition { name: string; description: string; inputSchema: MCPRecord; }
 export interface MCPToolResult { content: Array<{ type: string; text: string }>; isError?: boolean; }
 
@@ -11,6 +13,7 @@ export class BuiltInMCPServer {
   stop(): Promise<void>;
   handleListTools(): Promise<{ tools: MCPToolDefinition[] }>;
   handleCallTool(params: { name: string; arguments?: MCPRecord }): Promise<MCPToolResult>;
+  getGovernedCallEvidence(): Readonly<GovernedCallEvidence>;
   getToolCount(): number;
   getConfig(): { transport: 'http'; url: string };
 }
