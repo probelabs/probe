@@ -102,16 +102,17 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     assert.match(source, /governedEvidenceHandlers\.set\(reqId,[\s\S]*?collector\.observe\(event\)/);
     const requestCorrelationGuard = collectorSource.indexOf('if (meta.requestId !== requestId)');
     const threadCorrelationGuard = collectorSource.indexOf("if (meta.threadId !== threadId) governedLiveEnvelopeInvalid('correlation', 'thread_id');");
-    const responseCorrelationGuard = collectorSource.indexOf("if (params.id !== String(requestId)) governedLiveEnvelopeInvalid('correlation', 'response_id');");
+    const responseEnvelopeShapeGuard = collectorSource.indexOf("if (typeof params.id !== 'string') governedLiveEnvelopeInvalid('envelope_shape');");
     assert.ok(requestCorrelationGuard >= 0 && requestCorrelationGuard < threadCorrelationGuard &&
-      threadCorrelationGuard < responseCorrelationGuard && responseCorrelationGuard < msgValidation);
+      threadCorrelationGuard < responseEnvelopeShapeGuard && responseEnvelopeShapeGuard < msgValidation);
+    assert.equal(collectorSource.includes('params.id !== String(requestId)'), false);
     assert.match(collectorSource,
       /event\.jsonrpc !== '2\.0' \|\| event\.method !== 'codex\/event'/);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('session_sequence'\)/g) ?? []).length, 3);
-    assert.equal((source.match(/governedLiveEnvelopeInvalid\('envelope_shape'\)/g) ?? []).length, 6);
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\('envelope_shape'\)/g) ?? []).length, 7);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation'\)/g) ?? []).length, 1);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation', 'thread_id'\)/g) ?? []).length, 1);
-    assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation', 'response_id'\)/g) ?? []).length, 1);
+    assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation', 'response_id'\)/g) ?? []).length, 0);
     assert.equal((source.match(/'attestation'/g) ?? []).length, 1);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\(\)/g) ?? []).length, 0);
   } finally { await rm(cwd, { recursive: true, force: true }); }
@@ -173,7 +174,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[LIVE-PARAMS]')) liveEnvelope(event => { event.params.extra = 'SECRET_PARAMS_EXTRA'; });
   if (prompt.includes('[LIVE-META]')) liveEnvelope(event => { event.params._meta.extra = 'SECRET_META_EXTRA'; });
   if (prompt.includes('[LIVE-MSG]')) liveEnvelope(event => { event.params.msg.extra = 'SECRET_MSG_EXTRA'; });
-  if (prompt.includes('[LIVE-RESPONSE-ID]')) liveEnvelope(event => { event.params.id = 'SECRET_RESPONSE_ID'; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-OPAQUE]')) liveEnvelope(event => { event.params.id = 'opaque-safe-response-id'; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-EMPTY]')) liveEnvelope(event => { event.params.id = ''; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-MISSING]')) liveEnvelope(event => { delete event.params.id; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-EXTRA]')) liveEnvelope(event => { event.params.responseId = 'extra-safe-id'; });
+  if (prompt.includes('[LIVE-RESPONSE-ID-NONSTRING]')) liveEnvelope(event => { event.params.id = 2; });
   const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
     content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
     ...(role === 'assistant' ? { phase } : {}), internal_chat_message_metadata_passthrough: metadata });
@@ -407,12 +412,22 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const marker of ['[LIVE-MISSING-SESSION]', '[LIVE-ORDER]', '[LIVE-DUPLICATE-SESSION]'])
       assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'session_sequence');
 
-    for (const marker of ['[LIVE-RAW-OBJECT]', '[LIVE-JSONRPC]', '[LIVE-PARAMS]', '[LIVE-META]', '[LIVE-MSG]'])
+    for (const marker of ['[LIVE-RAW-OBJECT]', '[LIVE-JSONRPC]', '[LIVE-PARAMS]', '[LIVE-META]', '[LIVE-MSG]',
+      '[LIVE-RESPONSE-ID-MISSING]', '[LIVE-RESPONSE-ID-EXTRA]', '[LIVE-RESPONSE-ID-NONSTRING]'])
       assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'envelope_shape');
 
     assertFailure(await run('[CROSS]'), 'native_event_grammar', 'live_envelope_session', 'correlation', 'thread_id');
-    assertFailure(await run('[LIVE-RESPONSE-ID]'), 'native_event_grammar', 'live_envelope_session', 'correlation',
-      'response_id');
+    for (const marker of ['[LIVE-RESPONSE-ID-OPAQUE]', '[LIVE-RESPONSE-ID-EMPTY]']) {
+      const compatible = await run(marker); assert.ifError(compatible.error);
+      assert.deepEqual(compatible.result.runtimeAttestation.observed.nativeTools,
+        { total: 1, tools: [{ name: 'exec', status: 'completed', count: 1 }] });
+      assert.deepEqual(compatible.result.runtimeAttestation.evidence,
+        { sessionEventCount: 1, nativeCallCount: 1, probeMcpCallCount: 0 });
+      assert.deepEqual(compatible.events, [{ name: 'exec', status: 'completed', count: 1 }]);
+      const serialized = JSON.stringify({ result: compatible.result, events: compatible.events });
+      for (const forbidden of ['opaque-safe-response-id', 'raw-secret', 'SECRET_'])
+        assert.equal(serialized.includes(forbidden), false);
+    }
 
     for (const marker of ['[LIVE-SESSION]', '[ATTEST-SESSION-SHAPE]', '[ATTEST-IDENTITY]',
       '[ATTEST-PERMISSION]', '[ATTEST-ROLLOUT]', '[ATTEST-CWD]'])

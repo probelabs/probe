@@ -95,7 +95,7 @@ function createGovernedNativeCollector(profile) {
     const meta = governedExactObject(params._meta, ['requestId', 'threadId'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     if (meta.requestId !== requestId) governedLiveEnvelopeInvalid('correlation');
     if (meta.threadId !== threadId) governedLiveEnvelopeInvalid('correlation', 'thread_id');
-    if (params.id !== String(requestId)) governedLiveEnvelopeInvalid('correlation', 'response_id');
+    if (typeof params.id !== 'string') governedLiveEnvelopeInvalid('envelope_shape');
     const msg = governedExactObject(params.msg, ['type', 'item'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid('envelope_shape');
     const item = msg.item;
