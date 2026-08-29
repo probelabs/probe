@@ -159,6 +159,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[ATTEST-SESSION-SHAPE]')) delete configured.params.msg.model;
   if (prompt.includes('[ATTEST-IDENTITY]')) configured.params.msg.session_id = 'SECRET_INVALID_IDENTITY';
   if (prompt.includes('[ATTEST-PERMISSION]')) configured.params.msg.permission_profile.network = 'enabled';
+  if (prompt.includes('[ATTEST-PERMISSION-TYPE]')) configured.params.msg.permission_profile.type = 'SECRET_TYPE';
   if (prompt.includes('[ATTEST-ROLLOUT]')) configured.params.msg.rollout_path += '/SECRET_INVALID_ROLLOUT';
   if (prompt.includes('[ATTEST-CWD]')) configured.params.msg.cwd = '/SECRET_INVALID_CWD';
   if (prompt.includes('[FOREIGN-SESSION-BEFORE]') || prompt.includes('[FOREIGN-DUPLICATE-SESSION]') ||
@@ -443,6 +444,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
 
     for (const [marker, predicate] of [
       ['[ATTEST-RESPONSE-ID]', 'response_id'], ['[LIVE-SESSION]', 'model'],
+      ['[ATTEST-PERMISSION-TYPE]', 'permission_type'],
       ['[ATTEST-SESSION-SHAPE]', 'session_shape'], ['[ATTEST-IDENTITY]', 'session_identity'],
       ['[ATTEST-PERMISSION]', 'network'], ['[ATTEST-ROLLOUT]', 'rollout_path'], ['[ATTEST-CWD]', 'cwd']
     ]) assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'attestation', null, predicate);
@@ -513,7 +515,8 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.equal(JSON.stringify(sanitized).includes('SECRET_'), false);
     const predicates = ['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape',
       'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer',
-      'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'type', 'network', 'filesystem_shape',
+      'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'session_type', 'permission_type',
+      'network', 'filesystem_shape',
       'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind',
       'native_tool_evidence', 'internal_contract'];
     for (const predicate of predicates) {
@@ -533,21 +536,38 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assert.equal(JSON.stringify(failure).includes('SECRET_'), false);
     }
     const exactMappings = [
-      ['event', 'event_shape'], ['event.jsonrpc', 'jsonrpc'], ['event.params', 'params_shape'],
-      ['event.params.id', 'response_id'], ['event._meta', 'meta_shape'], ['event.msg', 'session_shape'],
-      ['session identity', 'session_identity'], ['msg.model', 'model'],
-      ['msg.model_provider_id', 'model_provider'], ['msg.approval_policy', 'approval_policy'],
-      ['msg.approvals_reviewer', 'approvals_reviewer'], ['msg.reasoning_effort', 'reasoning_effort'],
-      ['rollout_path', 'rollout_path'], ['msg.cwd', 'cwd'], ['permission_profile', 'permission_shape'],
-      ['permission_profile.type', 'type'], ['permission_profile.network', 'network'],
+      ['event', 'event_shape'], ['event.method', 'event_shape'], ['event.jsonrpc', 'jsonrpc'],
+      ['event.params', 'params_shape'], ['event.params.id', 'response_id'], ['event._meta', 'meta_shape'],
+      ['requestId', 'meta_shape'], ['event.msg', 'session_shape'], ['session identity', 'session_identity'],
+      ['msg.model', 'model'], ['msg.model_provider_id', 'model_provider'],
+      ['msg.approval_policy', 'approval_policy'], ['msg.approvals_reviewer', 'approvals_reviewer'],
+      ['msg.reasoning_effort', 'reasoning_effort'], ['rollout_path', 'rollout_path'], ['msg.cwd', 'cwd'],
+      ['cwd', 'cwd'], ['permission_profile', 'permission_shape'],
+      ['permission_profile.type', 'permission_type'], ['permission_profile.network', 'network'],
       ['file_system', 'filesystem_shape'], ['file_system.type', 'filesystem_type'],
       ['file_system.entries', 'entries'], ['file_system entry', 'entry'],
       ['file_system entry access', 'access'], ['permission path', 'path_shape'],
       ['permission path type', 'path_type'], ['permission path value', 'value_shape'],
-      ['permission path kind', 'kind'], ['native tool evidence', 'native_tool_evidence'],
-      ['attester input', 'internal_contract']
+      ['permission path kind', 'kind'], ['msg.type', 'session_type'],
+      ['native tool evidence', 'native_tool_evidence'], ['native tool total', 'native_tool_evidence'],
+      ['native tool aggregates', 'native_tool_evidence'], ['native tool aggregate', 'native_tool_evidence'],
+      ['undeclared native tool evidence', 'native_tool_evidence'],
+      ['native tool status', 'native_tool_evidence'], ['native tool count', 'native_tool_evidence'],
+      ['attester input', 'internal_contract'], ['events', 'internal_contract'],
+      ['canonical JSON value', 'internal_contract'], ['profile', 'internal_contract'],
+      ['profile.version', 'internal_contract'], ['profile.profileId', 'internal_contract'],
+      ['profile.engine', 'internal_contract'], ['profile.model', 'internal_contract'],
+      ['profile.reasoningEffort', 'internal_contract'], ['profile.sandbox', 'internal_contract'],
+      ['profile.approvalPolicy', 'internal_contract'], ['profile.fallback', 'internal_contract'],
+      ['profile.retries', 'internal_contract'], ['profile.probeTools', 'internal_contract'],
+      ['profile.probeTools[0]', 'internal_contract'], ['profile.probeTools[1]', 'internal_contract'],
+      ['profile.probeTools[2]', 'internal_contract'], ['profile.probeMcpTools', 'internal_contract'],
+      ['profile.probeMcpTools[0]', 'internal_contract'], ['profile.probeMcpTools[1]', 'internal_contract'],
+      ['profile.probeMcpTools[2]', 'internal_contract'], ['profile.codexNativeTools', 'internal_contract'],
+      ['profile.codexNativeTools[0]', 'internal_contract'], ['profile capability overlap', 'internal_contract']
     ];
-    assert.deepEqual(exactMappings.map(([, predicate]) => predicate), predicates);
+    assert.equal(exactMappings.length, 61);
+    assert.equal(new Set(exactMappings.map(([label]) => label)).size, 61);
     for (const [label, predicate] of exactMappings) {
       const classified = normalizeGovernedAnswerFailure(new TypeError(`Invalid ${label}`),
         'native_event_grammar', 'live_envelope_session', 'attestation');
@@ -557,6 +577,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
       import.meta.url), 'utf8');
     assert.equal((failureSource.match(/Object\.defineProperty\(this, 'nativeEventFailureAttestationPredicate'/g)
       ?? []).length, 1);
+    const mapStart = failureSource.indexOf('const GOVERNED_ATTESTATION_ERROR_PREDICATES = new Map([');
+    const mapEnd = failureSource.indexOf('\n]);', mapStart);
+    assert.ok(mapStart >= 0 && mapEnd > mapStart);
+    const productionLabels = [...failureSource.slice(mapStart, mapEnd)
+      .matchAll(/\['Invalid ([^']+)', '[^']+'\]/g)].map((match) => match[1]);
+    assert.equal(productionLabels.length, 61);
+    assert.deepEqual(productionLabels, exactMappings.map(([label]) => label));
     const sanitizedCorrelation = normalizeGovernedAnswerFailure(new Error('SECRET_CORRELATION_BODY'),
       'native_event_grammar', 'live_envelope_session', 'correlation', 'response_id');
     assert.equal(sanitizedCorrelation.nativeEventFailureCorrelationOperand, 'response_id');
