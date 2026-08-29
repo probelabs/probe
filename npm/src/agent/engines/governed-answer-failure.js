@@ -10,10 +10,61 @@ const GOVERNED_NATIVE_EVENT_FAILURE_SUBREASONS = new Set([
 const GOVERNED_NATIVE_EVENT_FAILURE_CORRELATION_OPERANDS = new Set([
   'thread_id', 'response_id',
 ]);
+const GOVERNED_NATIVE_EVENT_FAILURE_ATTESTATION_PREDICATES = new Set([
+  'event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape',
+  'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer',
+  'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'type', 'network',
+  'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape',
+  'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract',
+]);
+const GOVERNED_ATTESTATION_ERROR_PREDICATES = new Map([
+  ['Invalid event', 'event_shape'], ['Invalid event.method', 'event_shape'],
+  ['Invalid event.jsonrpc', 'jsonrpc'], ['Invalid event.params', 'params_shape'],
+  ['Invalid event.params.id', 'response_id'], ['Invalid event._meta', 'meta_shape'],
+  ['Invalid requestId', 'meta_shape'], ['Invalid event.msg', 'session_shape'],
+  ['Invalid session identity', 'session_identity'], ['Invalid msg.model', 'model'],
+  ['Invalid msg.model_provider_id', 'model_provider'], ['Invalid msg.approval_policy', 'approval_policy'],
+  ['Invalid msg.approvals_reviewer', 'approvals_reviewer'],
+  ['Invalid msg.reasoning_effort', 'reasoning_effort'], ['Invalid rollout_path', 'rollout_path'],
+  ['Invalid msg.cwd', 'cwd'], ['Invalid cwd', 'cwd'],
+  ['Invalid permission_profile', 'permission_shape'], ['Invalid permission_profile.type', 'type'],
+  ['Invalid permission_profile.network', 'network'], ['Invalid file_system', 'filesystem_shape'],
+  ['Invalid file_system.type', 'filesystem_type'], ['Invalid file_system.entries', 'entries'],
+  ['Invalid file_system entry', 'entry'], ['Invalid file_system entry access', 'access'],
+  ['Invalid permission path', 'path_shape'], ['Invalid permission path type', 'path_type'],
+  ['Invalid permission path value', 'value_shape'], ['Invalid permission path kind', 'kind'],
+  ['Invalid msg.type', 'type'],
+  ['Invalid native tool evidence', 'native_tool_evidence'],
+  ['Invalid native tool total', 'native_tool_evidence'],
+  ['Invalid native tool aggregates', 'native_tool_evidence'],
+  ['Invalid native tool aggregate', 'native_tool_evidence'],
+  ['Invalid undeclared native tool evidence', 'native_tool_evidence'],
+  ['Invalid native tool status', 'native_tool_evidence'],
+  ['Invalid native tool count', 'native_tool_evidence'],
+  ['Invalid attester input', 'internal_contract'], ['Invalid events', 'internal_contract'],
+  ['Invalid canonical JSON value', 'internal_contract'], ['Invalid profile', 'internal_contract'],
+  ['Invalid profile.version', 'internal_contract'], ['Invalid profile.profileId', 'internal_contract'],
+  ['Invalid profile.engine', 'internal_contract'], ['Invalid profile.model', 'internal_contract'],
+  ['Invalid profile.reasoningEffort', 'internal_contract'], ['Invalid profile.sandbox', 'internal_contract'],
+  ['Invalid profile.approvalPolicy', 'internal_contract'], ['Invalid profile.fallback', 'internal_contract'],
+  ['Invalid profile.retries', 'internal_contract'], ['Invalid profile.probeTools', 'internal_contract'],
+  ['Invalid profile.probeTools[0]', 'internal_contract'], ['Invalid profile.probeTools[1]', 'internal_contract'],
+  ['Invalid profile.probeTools[2]', 'internal_contract'], ['Invalid profile.probeMcpTools', 'internal_contract'],
+  ['Invalid profile.probeMcpTools[0]', 'internal_contract'],
+  ['Invalid profile.probeMcpTools[1]', 'internal_contract'],
+  ['Invalid profile.probeMcpTools[2]', 'internal_contract'],
+  ['Invalid profile.codexNativeTools', 'internal_contract'],
+  ['Invalid profile.codexNativeTools[0]', 'internal_contract'],
+  ['Invalid profile capability overlap', 'internal_contract'],
+]);
+
+function governedAttestationPredicate(error) {
+  return error instanceof TypeError ? GOVERNED_ATTESTATION_ERROR_PREDICATES.get(error.message) ?? null : null;
+}
 
 export class GovernedAnswerFailure extends Error {
   constructor(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
-    nativeEventFailureCorrelationOperand = null) {
+    nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null) {
     super();
     delete this.stack;
     const answerFailureStage = GOVERNED_ANSWER_FAILURE_STAGES.has(stage) ? stage : 'unknown';
@@ -44,19 +95,30 @@ export class GovernedAnswerFailure extends Error {
         enumerable: true,
       });
     }
+    if (answerFailureStage === 'native_event_grammar' &&
+      nativeEventFailureBoundary === 'live_envelope_session' &&
+      nativeEventFailureSubreason === 'attestation') {
+      Object.defineProperty(this, 'nativeEventFailureAttestationPredicate', {
+        value: GOVERNED_NATIVE_EVENT_FAILURE_ATTESTATION_PREDICATES.has(nativeEventFailureAttestationPredicate)
+          ? nativeEventFailureAttestationPredicate : null,
+        enumerable: true,
+      });
+    }
     Object.freeze(this);
   }
 }
 
 export function governedAnswerFailure(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
-  nativeEventFailureCorrelationOperand = null) {
+  nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null) {
   return new GovernedAnswerFailure(stage, nativeEventFailureBoundary, nativeEventFailureSubreason,
-    nativeEventFailureCorrelationOperand);
+    nativeEventFailureCorrelationOperand, nativeEventFailureAttestationPredicate);
 }
 
 export function normalizeGovernedAnswerFailure(error, fallback = 'unknown', nativeEventFailureBoundary = null,
   nativeEventFailureSubreason = null, nativeEventFailureCorrelationOperand = null) {
   return error instanceof GovernedAnswerFailure ? error
     : governedAnswerFailure(fallback, nativeEventFailureBoundary, nativeEventFailureSubreason,
-      nativeEventFailureCorrelationOperand);
+      nativeEventFailureCorrelationOperand,
+      fallback === 'native_event_grammar' && nativeEventFailureBoundary === 'live_envelope_session' &&
+        nativeEventFailureSubreason === 'attestation' ? governedAttestationPredicate(error) : null);
 }

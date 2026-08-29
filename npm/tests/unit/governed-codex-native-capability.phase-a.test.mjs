@@ -29,7 +29,8 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     call_id: `raw-secret-call-${index}`, name: 'exec', input: 'SECRET_ARGUMENT_BODY',
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
-function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null) {
+function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null,
+  attestationPredicate = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
@@ -48,6 +49,10 @@ function assertFailure(result, stage, boundary = null, subreason = null, correla
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureCorrelationOperand'), true);
     assert.equal(result.error?.nativeEventFailureCorrelationOperand, correlationOperand);
   } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureCorrelationOperand'), false);
+  if (stage === 'native_event_grammar' && boundary === 'live_envelope_session' && subreason === 'attestation') {
+    assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureAttestationPredicate'), true);
+    assert.equal(result.error?.nativeEventFailureAttestationPredicate, attestationPredicate);
+  } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureAttestationPredicate'), false);
   assert.equal(result.error?.stack, undefined);
   assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
   const serialized = JSON.stringify(result.error);
@@ -150,6 +155,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
     }
   } });
   if (prompt.includes('[LIVE-SESSION]')) configured.params.msg.model = 'SECRET_INVALID_MODEL';
+  if (prompt.includes('[ATTEST-RESPONSE-ID]')) configured.params.id = 'opaque-session-response-id';
   if (prompt.includes('[ATTEST-SESSION-SHAPE]')) delete configured.params.msg.model;
   if (prompt.includes('[ATTEST-IDENTITY]')) configured.params.msg.session_id = 'SECRET_INVALID_IDENTITY';
   if (prompt.includes('[ATTEST-PERMISSION]')) configured.params.msg.permission_profile.network = 'enabled';
@@ -435,9 +441,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
         assert.equal(serialized.includes(forbidden), false);
     }
 
-    for (const marker of ['[LIVE-SESSION]', '[ATTEST-SESSION-SHAPE]', '[ATTEST-IDENTITY]',
-      '[ATTEST-PERMISSION]', '[ATTEST-ROLLOUT]', '[ATTEST-CWD]'])
-      assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'attestation');
+    for (const [marker, predicate] of [
+      ['[ATTEST-RESPONSE-ID]', 'response_id'], ['[LIVE-SESSION]', 'model'],
+      ['[ATTEST-SESSION-SHAPE]', 'session_shape'], ['[ATTEST-IDENTITY]', 'session_identity'],
+      ['[ATTEST-PERMISSION]', 'network'], ['[ATTEST-ROLLOUT]', 'rollout_path'], ['[ATTEST-CWD]', 'cwd']
+    ]) assertFailure(await run(marker), 'native_event_grammar', 'live_envelope_session', 'attestation', null, predicate);
 
     for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',
       '[DELTA-KINDS-OVERFLOW]', '[DELTA-KINDS-WRONG]', '[DELTA-KIND-UNSAFE]', '[DELTA-KIND-OVERSIZED]',
@@ -501,7 +509,54 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const sanitized = normalizeGovernedAnswerFailure(new Error('SECRET_ATTESTATION_BODY'),
       'native_event_grammar', 'live_envelope_session', 'attestation');
     assert.equal(sanitized.nativeEventFailureSubreason, 'attestation');
+    assert.equal(sanitized.nativeEventFailureAttestationPredicate, null);
     assert.equal(JSON.stringify(sanitized).includes('SECRET_'), false);
+    const predicates = ['event_shape', 'jsonrpc', 'params_shape', 'response_id', 'meta_shape', 'session_shape',
+      'session_identity', 'model', 'model_provider', 'approval_policy', 'approvals_reviewer',
+      'reasoning_effort', 'rollout_path', 'cwd', 'permission_shape', 'type', 'network', 'filesystem_shape',
+      'filesystem_type', 'entries', 'entry', 'access', 'path_shape', 'path_type', 'value_shape', 'kind',
+      'native_tool_evidence', 'internal_contract'];
+    for (const predicate of predicates) {
+      const failure = governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+        predicate);
+      assert.equal(failure.nativeEventFailureAttestationPredicate, predicate);
+      assert.deepEqual(Object.keys(failure), ['answerFailureStage', 'nativeEventFailureBoundary',
+        'nativeEventFailureSubreason', 'nativeEventFailureAttestationPredicate']);
+      assert.equal(failure.message, ''); assert.equal(failure.stack, undefined);
+      assert.equal(Object.hasOwn(failure, 'cause'), false);
+    }
+    for (const unknown of [new TypeError('Invalid future predicate'), new Error('Invalid msg.model'),
+      new TypeError('SECRET_Invalid msg.model'), { message: 'Invalid msg.model' }]) {
+      const failure = normalizeGovernedAnswerFailure(unknown, 'native_event_grammar',
+        'live_envelope_session', 'attestation');
+      assert.equal(failure.nativeEventFailureAttestationPredicate, null);
+      assert.equal(JSON.stringify(failure).includes('SECRET_'), false);
+    }
+    const exactMappings = [
+      ['event', 'event_shape'], ['event.jsonrpc', 'jsonrpc'], ['event.params', 'params_shape'],
+      ['event.params.id', 'response_id'], ['event._meta', 'meta_shape'], ['event.msg', 'session_shape'],
+      ['session identity', 'session_identity'], ['msg.model', 'model'],
+      ['msg.model_provider_id', 'model_provider'], ['msg.approval_policy', 'approval_policy'],
+      ['msg.approvals_reviewer', 'approvals_reviewer'], ['msg.reasoning_effort', 'reasoning_effort'],
+      ['rollout_path', 'rollout_path'], ['msg.cwd', 'cwd'], ['permission_profile', 'permission_shape'],
+      ['permission_profile.type', 'type'], ['permission_profile.network', 'network'],
+      ['file_system', 'filesystem_shape'], ['file_system.type', 'filesystem_type'],
+      ['file_system.entries', 'entries'], ['file_system entry', 'entry'],
+      ['file_system entry access', 'access'], ['permission path', 'path_shape'],
+      ['permission path type', 'path_type'], ['permission path value', 'value_shape'],
+      ['permission path kind', 'kind'], ['native tool evidence', 'native_tool_evidence'],
+      ['attester input', 'internal_contract']
+    ];
+    assert.deepEqual(exactMappings.map(([, predicate]) => predicate), predicates);
+    for (const [label, predicate] of exactMappings) {
+      const classified = normalizeGovernedAnswerFailure(new TypeError(`Invalid ${label}`),
+        'native_event_grammar', 'live_envelope_session', 'attestation');
+      assert.equal(classified.nativeEventFailureAttestationPredicate, predicate);
+    }
+    const failureSource = await readFile(new URL('../../src/agent/engines/governed-answer-failure.js',
+      import.meta.url), 'utf8');
+    assert.equal((failureSource.match(/Object\.defineProperty\(this, 'nativeEventFailureAttestationPredicate'/g)
+      ?? []).length, 1);
     const sanitizedCorrelation = normalizeGovernedAnswerFailure(new Error('SECRET_CORRELATION_BODY'),
       'native_event_grammar', 'live_envelope_session', 'correlation', 'response_id');
     assert.equal(sanitizedCorrelation.nativeEventFailureCorrelationOperand, 'response_id');
