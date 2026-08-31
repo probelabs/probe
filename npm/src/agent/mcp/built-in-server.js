@@ -5,15 +5,100 @@
 
 import { createServer } from 'http';
 import { EventEmitter } from 'events';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { Server as MCPServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { asSchema } from 'ai';
+import { searchSchema, extractSchema, listFilesSchema } from '../../tools/common.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
   isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
+
+function descriptor(description, schema) {
+  const canonical = asSchema(schema);
+  return Object.freeze({ description, inputSchema: canonical.jsonSchema, validate: canonical.validate });
+}
+
+const TOOL_DESCRIPTORS = Object.freeze({
+  search: descriptor('Search for code patterns using semantic search', searchSchema),
+  extract: descriptor('Extract code from files or symbols', extractSchema),
+  listFiles: descriptor('List files in a directory', listFilesSchema)
+});
+
+const ARGUMENT_DOMAIN = Buffer.from('reqproof.probe.tool-arguments/v1', 'utf8');
+const GOVERNED_CODEX_PROFILE_V2 = 'probe.governed-codex-profile/v2';
+const GOVERNED_CALL_LIMIT = 256;
+
+function ownData(value, arrays, stack = new Set()) {
+  if (value === null || typeof value !== 'object') return;
+  if (stack.has(value)) throw new TypeError('cycle');
+  stack.add(value);
+  const proto = Object.getPrototypeOf(value);
+  const isArray = Array.isArray(value);
+  if (isArray ? proto !== Array.prototype : proto !== Object.prototype && proto !== null) throw new TypeError('prototype');
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.some(key => typeof key === 'symbol')) throw new TypeError('symbol');
+  if (isArray) {
+    if (!arrays) throw new TypeError('array');
+    if (keys.some(key => key !== 'length' && (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length))) throw new TypeError('array key');
+    for (let i = 0; i < value.length; i++) if (!Object.prototype.hasOwnProperty.call(descriptors, i)) throw new TypeError('array hole');
+  }
+  for (const key of keys) {
+    if (isArray && key === 'length') continue;
+    const property = descriptors[key];
+    if (!property.enumerable || !Object.prototype.hasOwnProperty.call(property, 'value') || key === 'toJSON') throw new TypeError('property');
+    ownData(property.value, arrays, stack);
+  }
+  stack.delete(value);
+}
+
+function canonicalJSON(value, stack = new Set()) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') { if (!Number.isFinite(value)) throw new TypeError('number'); return Object.is(value, -0) ? '0' : JSON.stringify(value); }
+  if (typeof value !== 'object' || stack.has(value)) throw new TypeError('value');
+  ownData(value, true); stack.add(value);
+  let encoded;
+  if (Array.isArray(value)) encoded = `[${value.map(item => canonicalJSON(item, stack)).join(',')}]`;
+  else encoded = `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonicalJSON(value[key], stack)}`).join(',')}}`;
+  stack.delete(value); return encoded;
+}
+
+function argumentDigest(value) {
+  const payload = Buffer.from(canonicalJSON(value), 'utf8');
+  const length = bytes => { const out = Buffer.alloc(8); out.writeBigUInt64BE(BigInt(bytes.length)); return out; };
+  return `sha256:${createHash('sha256').update(length(ARGUMENT_DOMAIN)).update(ARGUMENT_DOMAIN).update(length(payload)).update(payload).digest('hex')}`;
+}
+
+async function validateToolArguments(name, args) {
+  const contract = TOOL_DESCRIPTORS[name];
+  if (!contract) return { value: args };
+  try { if (!args || Array.isArray(args) || typeof args !== 'object') throw new TypeError(); ownData(args, false); }
+  catch { throw new TypeError('TOOL_ARGUMENT_CONTAINER_INVALID'); }
+  try {
+    for (const key of Object.keys(args)) if (!Object.prototype.hasOwnProperty.call(contract.inputSchema.properties, key)) throw new TypeError();
+    const validated = await contract.validate(args);
+    if (!validated.success) throw new TypeError();
+    return { value: validated.value, digest: argumentDigest(validated.value) };
+  } catch { throw new TypeError('TOOL_ARGUMENT_VALIDATION_FAILED'); }
+}
+
+function emitToolCall(agent, event) {
+  agent.events?.emit('toolCall', Object.freeze(event));
+}
+
+function abortable(promise, signal) {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(new Error('Tool execution cancelled'));
+  return new Promise((resolve, reject) => {
+    const aborted = () => reject(new Error('Tool execution cancelled'));
+    signal.addEventListener('abort', aborted, { once: true });
+    promise.then(value => { signal.removeEventListener('abort', aborted); resolve(value); }, error => { signal.removeEventListener('abort', aborted); reject(error); });
+  });
+}
 
 /**
  * Simple in-memory event store for resumability
@@ -85,6 +170,10 @@ export class BuiltInMCPServer extends EventEmitter {
     this.streamableTransports = new Map();  // Map of sessionId -> StreamableHTTPServerTransport
     this.connections = new Set();
     this.debug = options.debug || false;
+    this.governedCallAccounting = options.governedProfileVersion === GOVERNED_CODEX_PROFILE_V2;
+    this.governedCallsAdmitted = 0;
+    this.governedCallsClosed = 0;
+    this.governedCallOverflow = false;
   }
 
   /**
@@ -586,40 +675,7 @@ export class BuiltInMCPServer extends EventEmitter {
 
     // Get tools from agent
     if (this.agent && this.agent.allowedTools) {
-      const toolDefs = {
-        search: {
-          description: 'Search for code patterns using semantic search',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              query: { type: 'string', description: 'Search query' },
-              path: { type: 'string', description: 'Directory to search', default: '.' },
-              maxResults: { type: 'integer', default: 10 }
-            },
-            required: ['query']
-          }
-        },
-        extract: {
-          description: 'Extract code from specific file location',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'File path with optional line number' }
-            },
-            required: ['path']
-          }
-        },
-        listFiles: {
-          description: 'List files in a directory',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string', description: 'Directory path' },
-              pattern: { type: 'string', description: 'File pattern' }
-            },
-            required: ['path']
-          }
-        },
+      const toolDefs = { ...TOOL_DESCRIPTORS,
         searchFiles: {
           description: 'Search for files by name pattern',
           inputSchema: {
@@ -662,7 +718,7 @@ export class BuiltInMCPServer extends EventEmitter {
    * Handle tool execution
    */
   async handleCallTool(params) {
-    const { name, arguments: args } = params;
+    const { name, arguments: rawArgs } = params;
 
     // Extract tool name from MCP format
     const toolName = name.replace('mcp__probe__', '');
@@ -678,25 +734,68 @@ export class BuiltInMCPServer extends EventEmitter {
       throw new Error(`Tool ${name} not found`);
     }
 
-    try {
-      // Execute tool directly (no spawning!)
-      const result = await tool.execute(args);
-
-      return {
-        content: [{
-          type: 'text',
-          text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-        }]
-      };
-    } catch (error) {
-      return {
-        content: [{
-          type: 'text',
-          text: `Error executing ${name}: ${error.message}`
-        }],
-        isError: true
-      };
+    let governedCallAdmitted = false;
+    if (this.governedCallAccounting) {
+      if (this.governedCallsAdmitted >= GOVERNED_CALL_LIMIT) {
+        this.governedCallOverflow = true;
+        throw new Error('Governed tool call limit exceeded');
+      }
+      this.governedCallsAdmitted++;
+      governedCallAdmitted = true;
     }
+
+    try {
+      const id = randomUUID();
+      const startTime = Date.now();
+      let validated;
+      try { validated = await validateToolArguments(toolName, rawArgs); } catch (error) {
+        const rejectedEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, argumentsDigest: null };
+        try { emitToolCall(this.agent, { ...rejectedEvent, status: 'in_progress' }); } catch { /* Rejection remains authoritative. */ }
+        const endTime = Date.now();
+        try { emitToolCall(this.agent, { ...rejectedEvent, status: 'failed', endTime, duration: endTime - startTime }); }
+        catch { /* Rejection remains authoritative. */ }
+        return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
+      }
+      const { value: args, digest: argumentsDigest } = validated;
+
+      const baseEvent = { id, name: toolName, sessionId: this.agent.sessionId, startTime, ...(argumentsDigest && { argumentsDigest }) };
+      const fail = error => {
+        const endTime = Date.now();
+        try { emitToolCall(this.agent, { ...baseEvent, status: 'failed', error: 'TOOL_EXECUTION_FAILED', endTime, duration: endTime - startTime }); }
+        catch (listenerError) { error = listenerError; }
+        return { content: [{ type: 'text', text: `Error executing ${name}: ${error.message}` }], isError: true };
+      };
+
+      try { emitToolCall(this.agent, { ...baseEvent, status: 'in_progress' }); }
+      catch (error) { return fail(error); }
+
+      try {
+        // Execute tool directly (no spawning!)
+        const signal = this.agent.abortSignal;
+        const execution = Promise.resolve().then(() => tool.execute({ ...args, sessionId: this.agent.sessionId, workingDirectory: this.agent.workspaceRoot || this.agent.cwd || process.cwd(), abortSignal: signal }));
+        const result = await abortable(execution, signal);
+
+        const endTime = Date.now();
+        try { emitToolCall(this.agent, { ...baseEvent, status: 'completed', endTime, duration: endTime - startTime }); }
+        catch { /* Execution already succeeded; observer failure is non-authoritative. */ }
+
+        return {
+          content: [{
+            type: 'text',
+            text: typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+          }]
+        };
+      } catch (error) {
+        return fail(error);
+      }
+    } finally {
+      if (governedCallAdmitted) this.governedCallsClosed++;
+    }
+  }
+
+  getGovernedCallEvidence() {
+    return Object.freeze({ admitted: this.governedCallsAdmitted, closed: this.governedCallsClosed,
+      overflow: this.governedCallOverflow });
   }
 
   /**

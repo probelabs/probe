@@ -63,7 +63,7 @@ export interface ProbeAgentOptions {
   /** Use a delegated code-search subagent for the search tool (default: true) */
   searchDelegate?: boolean;
   /** Force specific AI provider */
-  provider?: 'anthropic' | 'openai' | 'google' | 'bedrock';
+  provider?: 'anthropic' | 'openai' | 'google' | 'bedrock' | 'codex';
   /** Override model name */
   model?: string;
   /** Enable debug mode */
@@ -80,6 +80,8 @@ export interface ProbeAgentOptions {
   mcpServers?: any[];
   /** List of allowed tool names. Use ['*'] for all tools (default), [] or null for no tools (raw AI mode), or specific tool names like ['search', 'query', 'extract']. Supports exclusion with '!' prefix (e.g., ['*', '!bash']). */
   allowedTools?: string[] | null;
+  /** Attested, fail-closed Codex runtime profile. Requires provider codex and an exact allowedTools match. */
+  governedCodexProfile?: GovernedCodexProfile;
   /** Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set. */
   disableTools?: boolean;
   /** Retry configuration for handling transient API failures */
@@ -154,6 +156,8 @@ export interface TimeoutWindingDownEvent {
  * Tool execution event data
  */
 export interface ToolCallEvent {
+  /** Digest of validated arguments, or null only when an admitted call is rejected before validation. */
+  argumentsDigest?: string | null;
   /** Unique tool call identifier */
   id: string;
   /** Name of the tool being called */
@@ -174,6 +178,13 @@ export interface ToolCallEvent {
   endTime?: number;
   /** Execution duration in milliseconds */
   duration?: number;
+}
+
+/** Content-free aggregate for attested Codex-native execution capability use. */
+export interface GovernedCodexNativeToolAggregate {
+  name: 'exec';
+  status: 'completed';
+  count: number;
 }
 
 /**
@@ -228,6 +239,88 @@ export interface AnswerOptions {
   maxIterations?: number;
 }
 
+export interface GovernedAnswerOptions extends AnswerOptions {
+  schema: string;
+}
+
+export interface GovernedInvocationAnswerOptions extends GovernedAnswerOptions {
+  invocationDigest: string;
+}
+
+export interface GovernedIdentifiedAnswerOptions extends GovernedInvocationAnswerOptions {
+  resultIdentity: 'probe.governed-result-identity/v1';
+}
+
+export interface GovernedAnswerDispatchOptions {
+  schema: string;
+}
+
+export interface GovernedAnswerDispatch {
+  readonly source: 'probe-host-tools-call';
+  readonly tool: 'codex';
+  readonly promptDigest: `sha256:${string}`;
+  readonly promptBytes: number;
+}
+
+export interface GovernedResultIdentity {
+  version: 'probe.governed-result-identity/v1';
+  source: 'probe-host-schema-valid-json';
+  resultDigest: string;
+  canonicalBytes: number;
+}
+
+export type GovernedCodexProfile =
+  { version: 'probe.governed-codex-profile/v1'; profileId: 'luna-xhigh-readonly-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeTools: ['search', 'extract', 'listFiles']; fallback: false; retries: 0; }
+  /** Admits pinned-protocol `exec` inside the attested sandbox; does not claim commands are semantically safe. */
+  | { version: 'probe.governed-codex-profile/v2'; profileId: 'luna-xhigh-readonly-native-exec-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; fallback: false; retries: 0; };
+
+export interface GovernedCodexRuntimeAttestation {
+  version: 'probe.governed-codex-attestation/v1';
+  profileId: 'luna-xhigh-readonly-v1';
+  requested: { profileDigest: string; cwdDigest: string; probeToolsDigest: string; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; };
+  observed: { source: 'session_configured'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; };
+  evidence: { eventCount: 1; };
+  usage: { status: 'unavailable'; };
+}
+
+export interface GovernedAnswerResult {
+  data: unknown;
+  runtimeAttestation: GovernedCodexRuntimeAttestation | GovernedCodexRuntimeAttestationV3;
+}
+
+export interface GovernedCodexRuntimeAttestationV2 {
+  version: 'probe.governed-codex-attestation/v2';
+  profileId: 'luna-xhigh-readonly-v1';
+  requested: { profileDigest: string; cwdDigest: string; probeToolsDigest: string; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; };
+  observed: { source: 'session_configured'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; };
+  executionContext: { source: 'caller'; invocationDigest: string; };
+  dispatch: { source: 'probe-host-tools-call'; tool: 'codex'; promptDigest: string; promptBytes: number; };
+  evidence: { eventCount: 1; };
+  usage: { status: 'unavailable'; };
+}
+
+export interface GovernedInvocationAnswerResult {
+  data: unknown;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3;
+}
+
+export interface GovernedIdentifiedAnswerResult {
+  data: unknown;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3;
+  resultIdentity: GovernedResultIdentity;
+}
+
+export interface GovernedCodexRuntimeAttestationV3 {
+  version: 'probe.governed-codex-attestation/v3';
+  profileId: 'luna-xhigh-readonly-native-exec-v1';
+  requested: { profileDigest: string; cwdDigest: string; probeMcpToolsDigest: string; codexNativeToolsDigest: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; };
+  observed: { source: 'session_configured+raw_response_item'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; nativeTools: { total: number; tools: GovernedCodexNativeToolAggregate[]; }; };
+  executionContext?: { source: 'caller'; invocationDigest: string; };
+  dispatch?: { source: 'probe-host-tools-call'; tool: 'codex'; promptDigest: string; promptBytes: number; };
+  evidence: { sessionEventCount: 1; nativeCallCount: number; probeMcpCallCount: number; };
+  usage: { status: 'unavailable'; };
+}
+
 /**
  * Clone options for creating a new agent with shared history
  */
@@ -268,6 +361,7 @@ export declare class ProbeAgent {
   
   /** Whether operations have been cancelled */
   cancelled: boolean;
+  readonly abortSignal: AbortSignal;
 
   /** AI provider being used */
   readonly clientApiProvider?: string;
@@ -297,6 +391,11 @@ export declare class ProbeAgent {
    */
   answer(message: string, images?: any[], options?: AnswerOptions): Promise<string>;
 
+  answerGoverned(message: string, options: GovernedIdentifiedAnswerOptions, images?: any[]): Promise<GovernedIdentifiedAnswerResult>;
+  answerGoverned(message: string, options: GovernedInvocationAnswerOptions, images?: any[]): Promise<GovernedInvocationAnswerResult>;
+  answerGoverned(message: string, options: GovernedAnswerOptions, images?: any[]): Promise<GovernedAnswerResult>;
+  previewGovernedAnswerDispatch(message: string, options: GovernedAnswerDispatchOptions): Promise<Readonly<GovernedAnswerDispatch>>;
+
   /**
    * Get token usage statistics
    * @returns Current token usage information
@@ -307,6 +406,8 @@ export declare class ProbeAgent {
    * Cancel any ongoing operations
    */
   cancel(): void;
+
+  /** Close engine subprocess and MCP resources. */ close(): Promise<void>;
 
   /**
    * Clear the conversation history
@@ -337,9 +438,9 @@ export declare class ProbeAgent {
  * ProbeAgent Events interface
  */
 export interface ProbeAgentEvents {
-  on(event: 'toolCall', listener: (event: ToolCallEvent) => void): this;
-  emit(event: 'toolCall', event: ToolCallEvent): boolean;
-  removeListener(event: 'toolCall', listener: (event: ToolCallEvent) => void): this;
+  on(event: 'toolCall', listener: (event: ToolCallEvent | GovernedCodexNativeToolAggregate) => void): this;
+  emit(event: 'toolCall', event: ToolCallEvent | GovernedCodexNativeToolAggregate): boolean;
+  removeListener(event: 'toolCall', listener: (event: ToolCallEvent | GovernedCodexNativeToolAggregate) => void): this;
   removeAllListeners(event?: 'toolCall'): this;
 }
 

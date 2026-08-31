@@ -1,9 +1,5 @@
 // Core ProbeAgent class adapted from examples/chat/probeChat.js
 
-// Load .env file if present (silent fail if not found)
-import dotenv from 'dotenv';
-dotenv.config();
-
 // ============================================================================
 // Timeout Configuration Constants
 // ============================================================================
@@ -29,7 +25,7 @@ export const ENGINE_ACTIVITY_TIMEOUT_MAX = 600000;
 
 import { createProviderInstance, DEFAULT_MODELS } from '../utils/provider.js';
 import { streamText, generateText, tool, stepCountIs, jsonSchema, Output } from 'ai';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { existsSync } from 'fs';
 import { readFile, stat, readdir } from 'fs/promises';
@@ -70,7 +66,7 @@ import {
   clearToolExecutionData
 } from './probeTool.js';
 import { createMockProvider } from './mockProvider.js';
-import { listFilesByLevel } from '../index.js';
+import { listFilesByLevel } from '../utils/file-lister.js';
 import {
   cleanSchemaResponse,
   isJsonSchema,
@@ -106,6 +102,69 @@ import {
   createTaskCompletionBlockedMessage
 } from './tasks/index.js';
 import { z } from 'zod';
+import { validateGovernedCodexProfile } from './engines/governed-codex-profile.js';
+import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './engines/governed-answer-failure.js';
+
+const GOVERNED_RESULT_IDENTITY = 'probe.governed-result-identity/v1';
+const GOVERNED_RESULT_DOMAIN = 'probe.governed-result-identity/data/v1';
+
+function normalizeGovernedJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('answerGoverned validated result is not canonical JSON');
+    return Object.is(value, -0) ? 0 : value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeGovernedJson);
+  if (typeof value === 'object' && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)) {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, child]) => [key, normalizeGovernedJson(child)]));
+  }
+  throw new TypeError('answerGoverned validated result is not canonical JSON');
+}
+
+function freezeGovernedTree(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) freezeGovernedTree(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function identifyGovernedResult(value) {
+  const data = freezeGovernedTree(normalizeGovernedJson(value));
+  const canonical = Buffer.from(JSON.stringify(data), 'utf8');
+  const byteLength = Buffer.alloc(8);
+  byteLength.writeBigUInt64BE(BigInt(canonical.length));
+  const resultDigest = `sha256:${createHash('sha256').update(GOVERNED_RESULT_DOMAIN, 'utf8').update(Buffer.from([0])).update(byteLength).update(canonical).digest('hex')}`;
+  const resultIdentity = Object.freeze({ version: GOVERNED_RESULT_IDENTITY, source: 'probe-host-schema-valid-json', resultDigest, canonicalBytes: canonical.length });
+  return { data, resultIdentity };
+}
+
+function governedSchemaResultValidationFailure(validation) {
+  const subreason = validation?.error === 'Invalid schema provided' ||
+    validation?.error === 'Schema compilation failed' ? 'schema_definition'
+    : validation?.error === 'Schema validation failed' ? 'schema_mismatch'
+      : 'response_json';
+  const schemaResultValidationKeyword = subreason === 'schema_mismatch'
+    ? classifyGovernedSchemaResultValidationKeyword(validation) : null;
+  return governedAnswerFailure('schema_result_validation', null, null, null, null, subreason,
+    schemaResultValidationKeyword);
+}
+
+const GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS = new Set([
+  'required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems',
+]);
+
+function classifyGovernedSchemaResultValidationKeyword(validation) {
+  const errors = validation?.schemaErrors;
+  if (!Array.isArray(errors) || errors.length === 0) return 'unknown';
+  const recognized = new Set();
+  for (const error of errors) {
+    const keyword = error?.keyword;
+    if (!GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS.has(keyword)) return 'unknown';
+    recognized.add(keyword);
+  }
+  return recognized.size === 1 ? [...recognized][0] : 'multiple';
+}
 
 // Maximum tool iterations to prevent infinite loops - configurable via MAX_TOOL_ITERATIONS env var
 const MAX_TOOL_ITERATIONS = (() => {
@@ -287,6 +346,7 @@ export class ProbeAgent {
     this.debug = options.debug || process.env.DEBUG === '1';
     this.cancelled = false;
     this._abortController = new AbortController();
+    this._codexNativeSystemPromptPromise = null;
     this._activeSubagents = new Map(); // sessionId → subagent ProbeAgent instance
     this.tracer = options.tracer || null;
     this.outline = !!options.outline;
@@ -321,6 +381,13 @@ export class ProbeAgent {
     // Native thinking/reasoning effort for LLM providers
     // Accepted values: 'off' (default), 'low', 'medium', 'high', or a number (budget tokens)
     this.thinkingEffort = options.thinkingEffort || null;
+
+    if (options.governedCodexProfile !== undefined) {
+      if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex'); const profile = validateGovernedCodexProfile(options.governedCodexProfile);
+      const probeTools = profile.probeTools ?? profile.probeMcpTools;
+      if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== probeTools.length || options.allowedTools.some((tool, index) => tool !== probeTools[index])) throw new TypeError('allowedTools must exactly match governedCodexProfile Probe MCP tools');
+      this.governedCodexProfile = profile;
+    }
 
     // Tool filtering configuration
     // Parse allowedTools option: ['*'] = all tools, [] or null = no tools, ['tool1', 'tool2'] = specific tools
@@ -1752,6 +1819,7 @@ export class ProbeAgent {
             result = ProbeAgent._wrapEngineStreamWithLimiter(result, limiter, this.debug);
           }
         } catch (error) {
+          if (this.governedCodexProfile) throw error;
           if (this.debug) {
             const engineType = useClaudeCode ? 'Claude Code' : 'Codex';
             console.log(`[DEBUG] Failed to use ${engineType} engine, falling back to Vercel:`, error.message);
@@ -2415,7 +2483,7 @@ export class ProbeAgent {
 
         // For Codex CLI, use a cleaner system prompt without XML formatting
         // since it has native MCP support for tools
-        const systemPrompt = await this.getCodexNativeSystemPrompt();
+        const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
 
         this.engine = await createCodexEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
@@ -2424,7 +2492,8 @@ export class ProbeAgent {
           sessionId: this.options?.sessionId,
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
-          model: this.model  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          model: this.model,  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          governedCodexProfile: this.governedCodexProfile
         });
         if (this.debug) {
           console.log('[DEBUG] Using Codex CLI engine with Probe tools');
@@ -2434,6 +2503,7 @@ export class ProbeAgent {
         }
         return this.engine;
       } catch (error) {
+        if (this.governedCodexProfile) throw error;
         console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
         console.warn('[WARNING] Falling back to Vercel AI SDK');
         this.clientApiProvider = null;
@@ -3231,6 +3301,43 @@ ${extractGuidance2}
   }
 
   /**
+   * Resolve the Codex system prompt once so preview and runtime bind identical bytes.
+   * @returns {Promise<string>}
+   * @private
+   */
+  _getCachedCodexNativeSystemPrompt() {
+    if (!this._codexNativeSystemPromptPromise) {
+      this._codexNativeSystemPromptPromise = this.getCodexNativeSystemPrompt();
+    }
+    return this._codexNativeSystemPromptPromise;
+  }
+
+  _prepareGovernedAnswerPrompt(message, options) {
+    if (!this.governedCodexProfile) throw new Error('answerGoverned requires governedCodexProfile');
+    if (!message || typeof message !== 'string' || message.trim().length === 0) throw new Error('Message is required and must be a non-empty string');
+    if (!options) throw new Error('answerGoverned requires a valid JSON schema string');
+    const schema = options.schema;
+    if (typeof schema !== 'string' || !schema.trim() || !isJsonSchema(schema)) throw new Error('answerGoverned requires a valid JSON schema string');
+    return { schema, prompt: message.trim() + generateSchemaInstructions(schema, { debug: this.debug }) };
+  }
+
+  /**
+   * Preview the exact governed initial Codex dispatch without acquiring an engine or MCP server.
+   * @param {string} message
+   * @param {{schema: string}} options
+   * @returns {Promise<{source: 'probe-host-tools-call', tool: 'codex', promptDigest: string, promptBytes: number}>}
+   */
+  async previewGovernedAnswerDispatch(message, options) {
+    if (!options || Reflect.ownKeys(options).length !== 1 || !Object.prototype.hasOwnProperty.call(options, 'schema')) {
+      throw new Error('previewGovernedAnswerDispatch requires exactly {schema}');
+    }
+    const { prompt } = this._prepareGovernedAnswerPrompt(message, options);
+    const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
+    const { previewGovernedCodexInitialDispatch } = await import('./engines/codex.js');
+    return previewGovernedCodexInitialDispatch({ systemPrompt, customPrompt: this.customPrompt, prompt });
+  }
+
+  /**
    * Get the system message with instructions for the AI (XML Tool Format)
    */
   async getSystemMessage() {
@@ -3390,6 +3497,94 @@ Follow these instructions carefully:
     }
 
     return systemMessage;
+  }
+
+  /**
+   * Return one schema-validated result with its governed Codex attestation.
+   * @param {string} message - The user's question
+   * @param {Object} options - Governed answer options
+   * @param {string} options.schema - Required JSON schema
+   * @param {Array} [images] - Unsupported; must be empty
+   * @returns {Promise<{data: unknown, runtimeAttestation: Object}>}
+   */
+  async answerGoverned(message, options, images = []) {
+    const { schema, prompt } = this._prepareGovernedAnswerPrompt(message, options);
+    if (!Array.isArray(images) || images.length > 0) throw new Error('answerGoverned does not support images');
+
+    const hasInvocationDigest = Object.prototype.hasOwnProperty.call(options,
+      'invocationDigest');
+    const invocationDigest = hasInvocationDigest ? options.invocationDigest : undefined;
+    if (hasInvocationDigest && (typeof invocationDigest !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(invocationDigest))) {
+      throw new TypeError('answerGoverned invocationDigest must match sha256:<64 lowercase hexadecimal digits>');
+    }
+    const hasResultIdentity = Object.prototype.hasOwnProperty.call(options,
+      'resultIdentity');
+    const requestedResultIdentity = hasResultIdentity ? options.resultIdentity : undefined;
+    if (hasResultIdentity && requestedResultIdentity !== GOVERNED_RESULT_IDENTITY) {
+      throw new TypeError('answerGoverned resultIdentity must equal probe.governed-result-identity/v1');
+    }
+    if (hasResultIdentity && !hasInvocationDigest) {
+      throw new TypeError('answerGoverned resultIdentity requires an own invocationDigest');
+    }
+
+    let engine, answerFailure = null;
+    try {
+      try { engine = await this.getEngine(); }
+      catch { throw governedAnswerFailure('provider_engine'); }
+      if (!engine?.query) throw governedAnswerFailure('provider_engine');
+      const candidateChunks = [];
+      let runtimeAttestation;
+      let attestationCount = 0;
+      let nativeToolBatch;
+      let nativeToolBatchCount = 0;
+      const queryOptions = hasInvocationDigest
+        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest }
+        : { abortSignal: this._abortController.signal };
+      for await (const chunk of engine.query(prompt, queryOptions)) {
+        if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
+        else if (chunk.type === 'metadata' && chunk.data?.attestation) {
+          runtimeAttestation = chunk.data.attestation;
+          attestationCount++;
+        } else if (chunk.type === 'toolBatch') {
+          nativeToolBatch = chunk;
+          nativeToolBatchCount++;
+        } else if (chunk.type === 'error') throw normalizeGovernedAnswerFailure(chunk.error, 'unknown');
+      }
+      if (hasInvocationDigest) {
+        const expectedAttestation = this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2'
+          ? 'probe.governed-codex-attestation/v3' : 'probe.governed-codex-attestation/v2';
+        if (attestationCount !== 1 || runtimeAttestation?.version !== expectedAttestation || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
+          throw new Error('Expected exactly one matching governed invocation attestation');
+        }
+      } else if (attestationCount !== 1) throw new Error(`Expected exactly one governed runtime attestation; received ${attestationCount}`);
+      if (this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2') {
+        if (nativeToolBatchCount !== 1 || !Number.isSafeInteger(nativeToolBatch?.total) ||
+          !Array.isArray(nativeToolBatch?.tools) || nativeToolBatch.total !== runtimeAttestation?.observed?.nativeTools?.total ||
+          JSON.stringify(nativeToolBatch.tools) !== JSON.stringify(runtimeAttestation?.observed?.nativeTools?.tools)) {
+          throw new Error('Expected exactly one matching governed native capability aggregate');
+        }
+        for (const toolEvent of nativeToolBatch.tools) this.events.emit('toolCall', toolEvent);
+      } else if (nativeToolBatchCount !== 0) throw new Error('Unexpected governed native capability aggregate');
+      const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
+      if (!validation.isValid) throw governedSchemaResultValidationFailure(validation);
+      if (hasResultIdentity) {
+        let identified;
+        try { identified = identifyGovernedResult(validation.parsed); }
+        catch { throw governedAnswerFailure('schema_result_validation', null, null, null, null, 'result_identity'); }
+        const { data, resultIdentity } = identified;
+        freezeGovernedTree(runtimeAttestation);
+        return Object.freeze({ data, runtimeAttestation, resultIdentity });
+      }
+      return { data: validation.parsed, runtimeAttestation };
+    } catch (error) {
+      answerFailure = normalizeGovernedAnswerFailure(error, 'unknown');
+      throw answerFailure;
+    } finally {
+      if (engine) {
+        try { await engine.close(); }
+        catch { if (!answerFailure) throw governedAnswerFailure('unknown'); }
+      }
+    }
   }
 
   /**
@@ -3643,14 +3838,14 @@ Follow these instructions carefully:
         }
 
         // Send the message directly to Codex and collect the response
-        try {
-          const engine = await this.getEngine();
+        let engine; try {
+          engine = await this.getEngine();
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
 
             // Query Codex directly with the message and schema
-            for await (const chunk of engine.query(message, options)) {
+            for await (const chunk of engine.query(message, this.governedCodexProfile ? { ...options, abortSignal: this._abortController.signal } : options)) {
               if (chunk.type === 'text' && chunk.content) {
                 assistantResponseContent += chunk.content;
                 if (options.onStream) {
@@ -3702,7 +3897,7 @@ Follow these instructions carefully:
             console.error('[DEBUG] Codex error:', error);
           }
           throw error;
-        }
+        } finally { if (this.governedCodexProfile && engine) await engine.close(); }
       }
 
       if (this.debug) {
@@ -5658,6 +5853,8 @@ Double-check your response based on the criteria above. If everything looks good
     if (!this._abortController.signal.aborted) {
       this._abortController.abort();
     }
+
+    if (this.governedCodexProfile && this.engine?.close) await this.engine.close();
 
     // Clean up MCP bridge
     if (this.mcpBridge) {

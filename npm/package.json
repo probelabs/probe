@@ -24,6 +24,10 @@
     "./agent/mcp": {
       "import": "./src/agent/mcp/index.js"
     },
+    "./agent/governance": {
+      "types": "./src/agent/governance/index.d.ts",
+      "import": "./src/agent/governance/index.js"
+    },
     "./agent/imageConfig": {
       "import": "./src/agent/imageConfig.js"
     }
@@ -80,7 +84,7 @@
     "@ai-sdk/openai": "^3.0.41",
     "@anthropic-ai/claude-agent-sdk": "^0.1.46",
     "@modelcontextprotocol/sdk": "^1.0.0",
-    "@nyariv/sandboxjs": "github:probelabs/SandboxJS",
+    "@nyariv/sandboxjs": "git+https://github.com/probelabs/SandboxJS.git#d0d8c8ab3113d3b73e08b79b88a4b834ba3fae11",
     "@probelabs/maid": "^0.0.29",
     "acorn": "^8.15.0",
     "acorn-walk": "^8.3.4",
