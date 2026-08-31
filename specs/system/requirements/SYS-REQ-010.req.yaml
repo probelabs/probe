@@ -1,0 +1,43 @@
+id: SYS-REQ-010
+version: 1
+status: draft
+priority: shall
+category: functional
+req_type: guarantee
+fretish: ""
+description: >-
+    lsp-daemon task lifecycle: every tokio::spawn task in lsp-daemon shall have a defined termination path (shutdown channel, drop-on-dispose, or join handle awaited) and shall not leak across daemon restart.
+formalization_strategy: informal
+informal_verification:
+    method: ""
+    evidence: ""
+    verified: false
+component: lsp_daemon_concurrency
+rationale: Long-running daemon spawns multiple tokio tasks (server pool, broadcast watchers, manager loops); each must terminate cleanly to avoid zombie tasks across LSP server churn.
+tags:
+    - concurrent
+    - task_lifecycle
+variables: []
+traces:
+    satisfies:
+        - SYS-REQ-002
+    verified_by_extra:
+        - tests/lsp_integration_tests.rs
+    implemented_by_extra:
+        - lsp-daemon/src/daemon.rs
+        - lsp-daemon/src/pool.rs
+        - lsp-daemon/src/server_manager.rs
+verification:
+    assurance_level: E
+    formalization_status: none
+    review:
+        status: pending
+        reviewer: ""
+        reviewed_at: ""
+        ai_generated: false
+history:
+    created_by: human:cli
+    created_at: "2026-05-07T07:26:34Z"
+    last_modified_by: human:cli
+    last_modified_at: "2026-05-07T07:26:39Z"
+obligation_class: concurrent
