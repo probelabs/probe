@@ -1,6 +1,6 @@
 {
   "name": "@probelabs/probe",
-  "version": "0.6.0-rc88",
+  "version": "0.6.0-rc89",
   "description": "Node.js wrapper for the probe code search tool",
   "main": "src/index.js",
   "module": "src/index.js",
