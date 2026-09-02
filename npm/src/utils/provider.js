@@ -7,6 +7,7 @@
 
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 
@@ -31,10 +32,19 @@ export function createProviderInstance(config) {
 			});
 
 		case 'openai': {
+			if (config.baseURL) {
+				// Non-OpenAI endpoints (Fireworks, etc.) — use openai-compatible provider
+				// which correctly handles reasoning_content in streaming deltas
+				const provider = createOpenAICompatible({
+					name: 'openai-compatible',
+					baseURL: config.baseURL,
+					apiKey: config.apiKey,
+				});
+				return provider;
+			}
 			const openai = createOpenAI({
 				compatibility: 'strict',
 				apiKey: config.apiKey,
-				...(config.baseURL && { baseURL: config.baseURL })
 			});
 			const chatProvider = (modelId, settings) => openai.chat(modelId, settings);
 			chatProvider.chat = openai.chat.bind(openai);

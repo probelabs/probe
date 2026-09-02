@@ -82,6 +82,7 @@
     "@ai-sdk/anthropic": "^3.0.58",
     "@ai-sdk/google": "^3.0.43",
     "@ai-sdk/openai": "^3.0.41",
+    "@ai-sdk/openai-compatible": "^2.0.74",
     "@anthropic-ai/claude-agent-sdk": "^0.1.46",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "@nyariv/sandboxjs": "git+https://github.com/probelabs/SandboxJS.git#d0d8c8ab3113d3b73e08b79b88a4b834ba3fae11",
