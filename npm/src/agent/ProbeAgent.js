@@ -2503,7 +2503,10 @@ export class ProbeAgent {
         }
         return this.engine;
       } catch (error) {
-        if (this.governedCodexProfile) throw error;
+        if (this.governedCodexProfile) {
+          throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+            null, null, 'acquire');
+        }
         console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
         console.warn('[WARNING] Falling back to Vercel AI SDK');
         this.clientApiProvider = null;
@@ -3530,8 +3533,11 @@ Follow these instructions carefully:
     let engine, answerFailure = null;
     try {
       try { engine = await this.getEngine(); }
-      catch { throw governedAnswerFailure('provider_engine'); }
-      if (!engine?.query) throw governedAnswerFailure('provider_engine');
+      catch (error) {
+        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+          null, null, 'acquire');
+      }
+      if (!engine?.query) throw governedAnswerFailure('internal_contract');
       const candidateChunks = [];
       let runtimeAttestation;
       let attestationCount = 0;
@@ -3540,31 +3546,47 @@ Follow these instructions carefully:
       const queryOptions = hasInvocationDigest
         ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest }
         : { abortSignal: this._abortController.signal };
-      for await (const chunk of engine.query(prompt, queryOptions)) {
-        if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
-        else if (chunk.type === 'metadata' && chunk.data?.attestation) {
-          runtimeAttestation = chunk.data.attestation;
-          attestationCount++;
-        } else if (chunk.type === 'toolBatch') {
-          nativeToolBatch = chunk;
-          nativeToolBatchCount++;
-        } else if (chunk.type === 'error') throw normalizeGovernedAnswerFailure(chunk.error, 'unknown');
+      try {
+        for await (const chunk of engine.query(prompt, queryOptions)) {
+          if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
+          else if (chunk.type === 'metadata' && chunk.data?.attestation) {
+            runtimeAttestation = chunk.data.attestation;
+            attestationCount++;
+          } else if (chunk.type === 'toolBatch') {
+            nativeToolBatch = chunk;
+            nativeToolBatchCount++;
+          } else if (chunk.type === 'error') {
+            throw normalizeGovernedAnswerFailure(chunk.error, 'provider_engine', null, null, null,
+              null, null, 'query');
+          }
+        }
+      } catch (error) {
+        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+          null, null, 'query');
       }
       if (hasInvocationDigest) {
         const expectedAttestation = this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2'
           ? 'probe.governed-codex-attestation/v3' : 'probe.governed-codex-attestation/v2';
         if (attestationCount !== 1 || runtimeAttestation?.version !== expectedAttestation || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
-          throw new Error('Expected exactly one matching governed invocation attestation');
+          throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+            'invocation_attestation');
         }
-      } else if (attestationCount !== 1) throw new Error(`Expected exactly one governed runtime attestation; received ${attestationCount}`);
+      } else if (attestationCount !== 1) {
+        throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+          'invocation_attestation');
+      }
       if (this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2') {
         if (nativeToolBatchCount !== 1 || !Number.isSafeInteger(nativeToolBatch?.total) ||
           !Array.isArray(nativeToolBatch?.tools) || nativeToolBatch.total !== runtimeAttestation?.observed?.nativeTools?.total ||
           JSON.stringify(nativeToolBatch.tools) !== JSON.stringify(runtimeAttestation?.observed?.nativeTools?.tools)) {
-          throw new Error('Expected exactly one matching governed native capability aggregate');
+          throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+            'native_capability_aggregate');
         }
         for (const toolEvent of nativeToolBatch.tools) this.events.emit('toolCall', toolEvent);
-      } else if (nativeToolBatchCount !== 0) throw new Error('Unexpected governed native capability aggregate');
+      } else if (nativeToolBatchCount !== 0) {
+        throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+          'native_capability_aggregate');
+      }
       const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
       if (!validation.isValid) throw governedSchemaResultValidationFailure(validation);
       if (hasResultIdentity) {
@@ -3577,12 +3599,15 @@ Follow these instructions carefully:
       }
       return { data: validation.parsed, runtimeAttestation };
     } catch (error) {
-      answerFailure = normalizeGovernedAnswerFailure(error, 'unknown');
+      answerFailure = normalizeGovernedAnswerFailure(error, 'internal_contract');
       throw answerFailure;
     } finally {
       if (engine) {
         try { await engine.close(); }
-        catch { if (!answerFailure) throw governedAnswerFailure('unknown'); }
+        catch (error) {
+          if (!answerFailure) throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+            null, null, 'close');
+        }
       }
     }
   }
