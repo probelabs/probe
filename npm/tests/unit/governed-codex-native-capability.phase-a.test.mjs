@@ -31,7 +31,8 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
     internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn' }, ...patch }
 }, id: '2' } });
 function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null,
-  attestationPredicate = null, schemaSubreason = null, schemaKeyword = null) {
+  attestationPredicate = null, schemaSubreason = null, schemaKeyword = null,
+  providerEngineFailureBoundary = undefined) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
@@ -65,6 +66,15 @@ function assertFailure(result, stage, boundary = null, subreason = null, correla
   }
   assert.equal(result.error?.stack, undefined);
   assert.equal(Object.hasOwn(result.error ?? {}, 'cause'), false);
+  assert.equal(Object.isFrozen(result.error), true);
+  assert.deepEqual(Object.getOwnPropertySymbols(result.error), []);
+  for (const forbidden of ['raw', 'raw_output', 'prompt', 'output'])
+    assert.equal(Object.hasOwn(result.error ?? {}, forbidden), false);
+  if (stage === 'provider_engine') {
+    assert.equal(Object.hasOwn(result.error ?? {}, 'providerEngineFailureBoundary'), true);
+    if (providerEngineFailureBoundary !== undefined)
+      assert.equal(result.error?.providerEngineFailureBoundary, providerEngineFailureBoundary);
+  } else assert.equal(Object.hasOwn(result.error ?? {}, 'providerEngineFailureBoundary'), false);
   const serialized = JSON.stringify(result.error);
   for (const forbidden of ['SECRET_', 'raw-secret', 'Error:', 'at file:']) assert.equal(serialized.includes(forbidden), false);
 }
@@ -147,7 +157,7 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation'\)/g) ?? []).length, 1);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation', 'thread_id'\)/g) ?? []).length, 1);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\('correlation', 'response_id'\)/g) ?? []).length, 0);
-    assert.equal((source.match(/'attestation'/g) ?? []).length, 1);
+    assert.equal((source.match(/'attestation'/g) ?? []).length, 3);
     assert.equal((source.match(/governedLiveEnvelopeInvalid\(\)/g) ?? []).length, 0);
   } finally { await rm(cwd, { recursive: true, force: true }); }
 });
@@ -585,8 +595,8 @@ createInterface({ input: process.stdin }).on('line', async line => {
       '[DELTA-OUTPUT-DUP-ID]', '[COMMENTARY-ONLY]', '[DOUBLE-FINAL]', '[PHASE-UNKNOWN]', '[OVERFLOW-MESSAGES]'])
       assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate');
 
-    assertFailure(await run('[PROVIDER-ERROR]'), 'provider_engine');
-    assertFailure(await run('[AMBIGUOUS]'), 'unknown');
+    assertFailure(await run('[PROVIDER-ERROR]'), 'provider_engine', null, null, null, null, null, null, 'query');
+    assertFailure(await run('[AMBIGUOUS]'), 'native_event_grammar', 'raw_item_predicate');
     assert.equal(governedAnswerFailure('native_event_grammar').nativeEventFailureBoundary, null);
     assert.equal(governedAnswerFailure('native_event_grammar', ['raw_item_predicate', 'live_envelope_session'])
       .nativeEventFailureBoundary, null);
@@ -806,12 +816,35 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const subreason of ['response_json', 'schema_definition', 'result_identity'])
       assert.equal(governedAnswerFailure('schema_result_validation', null, null, null, null, subreason,
         'required').schemaResultValidationKeyword, null);
-    for (const stage of ['native_event_grammar', 'provider_engine', 'unknown']) {
+    for (const stage of ['native_event_grammar', 'provider_engine', 'internal_contract', 'unknown']) {
       assert.equal(Object.hasOwn(governedAnswerFailure(stage, null, null, null, null, 'response_json'),
         'schemaResultValidationSubreason'), false);
       assert.equal(Object.hasOwn(governedAnswerFailure(stage, null, null, null, null, 'schema_mismatch', 'required'),
         'schemaResultValidationKeyword'), false);
     }
+    for (const predicate of ['invocation_attestation', 'native_capability_aggregate']) {
+      const failure = governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null, predicate);
+      assert.equal(failure.answerFailureStage, 'native_event_grammar');
+      assert.equal(failure.nativeEventFailureAttestationPredicate, predicate);
+      assert.deepEqual(Object.keys(failure), ['answerFailureStage', 'nativeEventFailureBoundary',
+        'nativeEventFailureSubreason', 'nativeEventFailureAttestationPredicate']);
+      assert.equal(Object.isFrozen(failure), true);
+      assert.equal(failure.message, ''); assert.equal(failure.stack, undefined);
+      assert.equal(Object.hasOwn(failure, 'cause'), false);
+      assert.deepEqual(Object.getOwnPropertySymbols(failure), []);
+    }
+    for (const boundary of ['acquire', 'query', 'close']) {
+      const failure = governedAnswerFailure('provider_engine', null, null, null, null, null, null, boundary);
+      assert.equal(failure.providerEngineFailureBoundary, boundary);
+      assert.deepEqual(Object.keys(failure), ['answerFailureStage', 'providerEngineFailureBoundary']);
+    }
+    for (const boundary of [null, 'acquire|query', 'future-boundary', ['acquire'], 'SECRET_acquire']) {
+      const failure = governedAnswerFailure('provider_engine', null, null, null, null, null, null, boundary);
+      assert.equal(failure.providerEngineFailureBoundary, null);
+      assert.deepEqual(Object.keys(failure), ['answerFailureStage', 'providerEngineFailureBoundary']);
+    }
+    const nonProvider = governedAnswerFailure('native_event_grammar', 'acquire');
+    assert.equal(Object.hasOwn(nonProvider, 'providerEngineFailureBoundary'), false);
     const schemaFailureSource = await readFile(new URL('../../src/agent/engines/governed-answer-failure.js',
       import.meta.url), 'utf8');
     assert.equal((schemaFailureSource.match(/Object\.defineProperty\(this, 'schemaResultValidationSubreason'/g) ?? []).length, 1);
@@ -831,6 +864,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.equal(normalizeGovernedAnswerFailure(new Error('SECRET_NORMALIZE_BODY'),
       'schema_result_validation').schemaResultValidationSubreason, null);
     const agentSource = await readFile(new URL('../../src/agent/ProbeAgent.js', import.meta.url), 'utf8');
+    const codexSource = await readFile(new URL('../../src/agent/engines/codex.js', import.meta.url), 'utf8');
+    for (const source of [agentSource, codexSource]) {
+      const normalizedCalls = [...source.matchAll(/normalizeGovernedAnswerFailure\(([^)]*)\)/gs)];
+      assert.equal(normalizedCalls.some(([, args]) => /['"]unknown['"]/.test(args)), false);
+    }
     const classifierStart = agentSource.indexOf('function classifyGovernedSchemaResultValidationKeyword');
     const classifierEnd = agentSource.indexOf('\n}\n\n// Maximum tool iterations', classifierStart) + 2;
     const classifierSource = agentSource.slice(classifierStart, classifierEnd);
