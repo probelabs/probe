@@ -242,6 +242,72 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     assert.equal(receipt.observed.network, 'restricted'); assert.equal(alive(state.pid), false); assert.equal(await closed(server[1].url), true);
   });
 
+  await t.test('governed Codex profile wins over a late Claude environment mutation at engine dispatch', async () => {
+    const before = await stateFiles(stateDir);
+    const agent = governedAgent(root);
+    const previousClaude = process.env.USE_CLAUDE_CODE;
+    let engine;
+    let state;
+    try {
+      process.env.USE_CLAUDE_CODE = 'true';
+      engine = await agent.getEngine();
+      const output = await collect(engine.query('[PROFILE-ENV-DISPATCH]'));
+      state = await readState(await waitForState(stateDir, before, '[PROFILE-ENV-DISPATCH]'));
+      assert.equal(output.filter(item => item.type === 'text').length, 1);
+      assert.equal(state.seen[0].method, 'initialize');
+      assert.ok(state.seen.some(item => item.method === 'tools/call'));
+    } finally {
+      if (previousClaude === undefined) delete process.env.USE_CLAUDE_CODE;
+      else process.env.USE_CLAUDE_CODE = previousClaude;
+      if (engine) await engine.close();
+    }
+    assert.equal(alive(state.pid), false);
+  });
+
+  await t.test('governed ordinary answer keeps the Codex abort binding after late environment mutation', async () => {
+    const agent = governedAgent(root);
+    let queryOptions;
+    let closeCount = 0;
+    agent.engine = {
+      async *query(_prompt, options) {
+        queryOptions = options;
+        yield { type: 'text', content: 'governed-answer' };
+      },
+      async close() { closeCount++; }
+    };
+    const previousClaude = process.env.USE_CLAUDE_CODE;
+    try {
+      process.env.USE_CLAUDE_CODE = 'true';
+      assert.equal(await agent.answer('[PROFILE-ENV-ANSWER]'), 'governed-answer');
+    } finally {
+      if (previousClaude === undefined) delete process.env.USE_CLAUDE_CODE;
+      else process.env.USE_CLAUDE_CODE = previousClaude;
+    }
+    assert.ok(queryOptions?.abortSignal);
+    assert.equal(closeCount, 1);
+  });
+
+  await t.test('profile-free Claude provider keeps its existing direct answer route', async () => {
+    const agent = new ProbeAgent({ provider: 'claude-code', path: root, cwd: root, allowedTools: [...TOOLS], disableMermaidValidation: true });
+    let queryCount = 0;
+    agent.engine = {
+      async *query() {
+        queryCount++;
+        yield { type: 'text', content: 'claude-control' };
+      },
+      async close() {}
+    };
+    const previousClaude = process.env.USE_CLAUDE_CODE;
+    try {
+      delete process.env.USE_CLAUDE_CODE;
+      assert.equal(await agent.answer('[PROFILE-FREE-CLAUDE]'), 'claude-control');
+    } finally {
+      if (previousClaude === undefined) delete process.env.USE_CLAUDE_CODE;
+      else process.env.USE_CLAUDE_CODE = previousClaude;
+    }
+    assert.equal(queryCount, 1);
+  });
+
   await t.test('host rejects a non-allowlisted tool', async () => {
     const run = await runEngine(root, stateDir, '[FORBIDDEN]');
     assert.equal(run.output.find(item => item.type === 'text').content, 'host-denied');
@@ -573,7 +639,7 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     assert.equal(contract(sourceDeclaration), contract(packageDeclaration));
     for (const declaration of [sourceDeclaration, packageDeclaration]) assert.equal(declaration.includes('answer(message: string, images?: any[], options?: AnswerOptions): Promise<string>;'), true);
     const source = await readFile(new URL('../../src/agent/ProbeAgent.js', import.meta.url), 'utf8'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message')));
-    assert.equal(createHash('sha256').update(answer).digest('hex'), '53ee9f207963f5b991aaf89e143211039ad632d9cc7535d91af66bcae95b135f');
+    assert.equal(createHash('sha256').update(answer).digest('hex'), '6267c9f381def9eb2fc794f936228f00e1256fad715d63949df2b1195249a475');
   });
 
   await t.test('EXP-0151 O15 changing own getters are read once at each boundary', async () => {
@@ -738,7 +804,7 @@ agent.answerGoverned('x', { schema, resultIdentity: 'probe.governed-result-ident
   await t.test('EXP-0152 T15 frozen files and legacy function/declaration regions remain exact', async () => {
     const sha = value => createHash('sha256').update(value).digest('hex'); const read = path => readFile(new URL(path, import.meta.url), 'utf8');
     assert.equal(sha(await read('../../src/agent/engines/codex.js')), '0c944e333052b93f6ce017372ed9a1a6a2cb20a1e1e3c507d8c71da220528b18'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), '003cf97adbd0d9212e2d2fadaa14881d50fd1d25a51ae5deff6e927997440db9');
-    const source = await read('../../src/agent/ProbeAgent.js'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message'))); assert.equal(sha(answer), '53ee9f207963f5b991aaf89e143211039ad632d9cc7535d91af66bcae95b135f');
+    const source = await read('../../src/agent/ProbeAgent.js'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message'))); assert.equal(sha(answer), '6267c9f381def9eb2fc794f936228f00e1256fad715d63949df2b1195249a475');
     const governed = source.slice(source.indexOf('  async answerGoverned(message'), source.indexOf('\n  /**\n   * Answer a question', source.indexOf('  async answerGoverned(message'))); assert.equal((governed.match(/_prepareGovernedAnswerPrompt\(/g) || []).length, 1); assert.equal((governed.match(/options\.schema/g) || []).length, 0); assert.equal((governed.match(/options\.resultIdentity/g) || []).length, 1); assert.equal((governed.match(/validateJsonResponse\(/g) || []).length, 1); assert.match(governed, /return \{ data: validation\.parsed, runtimeAttestation \};/);
     const prepared = source.slice(source.indexOf('  _prepareGovernedAnswerPrompt'), source.indexOf('\n  /**\n   * Preview', source.indexOf('  _prepareGovernedAnswerPrompt'))); assert.equal((prepared.match(/options\.schema/g) || []).length, 1); assert.equal((prepared.match(/generateSchemaInstructions\(/g) || []).length, 1);
     const identityHelper = source.slice(source.indexOf('function identifyGovernedResult'), source.indexOf('// Maximum tool iterations')); assert.equal((identityHelper.match(/JSON\.stringify\(/g) || []).length, 1);

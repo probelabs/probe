@@ -2447,8 +2447,10 @@ export class ProbeAgent {
       return this.engine;
     }
 
+    const governedCodex = this.governedCodexProfile !== undefined;
+
     // Try Claude Code engine if requested
-    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
+    if (!governedCodex && (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true')) {
       try {
         const { createEnhancedClaudeCLIEngine } = await import('./engines/enhanced-claude-code.js');
 
@@ -2479,7 +2481,7 @@ export class ProbeAgent {
     }
 
     // Try Codex CLI engine if requested
-    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
+    if (governedCodex || this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
       try {
         const { createCodexEngine } = await import('./engines/codex.js');
 
@@ -3783,8 +3785,9 @@ Follow these instructions carefully:
       const maxIterations = (options._maxIterationsOverride) ? baseMaxIterations : (options.schema ? baseMaxIterations + 4 : baseMaxIterations);
 
       // Check if we're using CLI-based engines which handle their own agentic loop
-      const isClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
-      const isCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
+      const governedCodex = this.governedCodexProfile !== undefined;
+      const isClaudeCode = !governedCodex && (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true');
+      const isCodex = governedCodex || this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
 
       if (isClaudeCode) {
         // For Claude Code, bypass the tool loop entirely - it handles its own internal dialogue
