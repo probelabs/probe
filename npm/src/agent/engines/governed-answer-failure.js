@@ -1,6 +1,7 @@
 const GOVERNED_ANSWER_FAILURE_STAGES = new Set([
-  'native_event_grammar', 'provider_engine', 'schema_result_validation', 'unknown',
+  'native_event_grammar', 'provider_engine', 'schema_result_validation', 'internal_contract', 'unknown',
 ]);
+const GOVERNED_PROVIDER_ENGINE_FAILURE_BOUNDARIES = new Set(['acquire', 'query', 'close']);
 const GOVERNED_NATIVE_EVENT_FAILURE_BOUNDARIES = new Set([
   'raw_item_predicate', 'live_envelope_session',
 ]);
@@ -17,6 +18,7 @@ const GOVERNED_NATIVE_EVENT_FAILURE_ATTESTATION_PREDICATES = new Set([
   'network',
   'filesystem_shape', 'filesystem_type', 'entries', 'entry', 'access', 'path_shape',
   'path_type', 'value_shape', 'kind', 'native_tool_evidence', 'internal_contract',
+  'invocation_attestation', 'native_capability_aggregate',
 ]);
 const GOVERNED_SCHEMA_RESULT_VALIDATION_SUBREASONS = new Set([
   'response_json', 'schema_definition', 'schema_mismatch', 'result_identity',
@@ -73,13 +75,19 @@ function governedAttestationPredicate(error) {
 export class GovernedAnswerFailure extends Error {
   constructor(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
     nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
-    schemaResultValidationSubreason = null, schemaResultValidationKeyword = null) {
+    schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
+    providerEngineFailureBoundary = null) {
     super();
     delete this.stack;
     const answerFailureStage = GOVERNED_ANSWER_FAILURE_STAGES.has(stage) ? stage : 'unknown';
     Object.defineProperty(this, 'name', { value: 'GovernedAnswerFailure' });
     Object.defineProperty(this, 'answerFailureStage', {
       value: answerFailureStage,
+      enumerable: true,
+    });
+    if (answerFailureStage === 'provider_engine') Object.defineProperty(this, 'providerEngineFailureBoundary', {
+      value: GOVERNED_PROVIDER_ENGINE_FAILURE_BOUNDARIES.has(providerEngineFailureBoundary)
+        ? providerEngineFailureBoundary : null,
       enumerable: true,
     });
     if (answerFailureStage === 'native_event_grammar') Object.defineProperty(this, 'nativeEventFailureBoundary', {
@@ -134,19 +142,22 @@ export class GovernedAnswerFailure extends Error {
 
 export function governedAnswerFailure(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
   nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
-  schemaResultValidationSubreason = null, schemaResultValidationKeyword = null) {
+  schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
+  providerEngineFailureBoundary = null) {
   return new GovernedAnswerFailure(stage, nativeEventFailureBoundary, nativeEventFailureSubreason,
     nativeEventFailureCorrelationOperand, nativeEventFailureAttestationPredicate,
-    schemaResultValidationSubreason, schemaResultValidationKeyword);
+    schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary);
 }
 
 export function normalizeGovernedAnswerFailure(error, fallback = 'unknown', nativeEventFailureBoundary = null,
   nativeEventFailureSubreason = null, nativeEventFailureCorrelationOperand = null,
-  schemaResultValidationSubreason = null, schemaResultValidationKeyword = null) {
+  schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
+  providerEngineFailureBoundary = null, nativeEventFailureAttestationPredicate = null) {
   return error instanceof GovernedAnswerFailure ? error
     : governedAnswerFailure(fallback, nativeEventFailureBoundary, nativeEventFailureSubreason,
       nativeEventFailureCorrelationOperand,
       fallback === 'native_event_grammar' && nativeEventFailureBoundary === 'live_envelope_session' &&
-        nativeEventFailureSubreason === 'attestation' ? governedAttestationPredicate(error) : null,
-      schemaResultValidationSubreason, schemaResultValidationKeyword);
+        nativeEventFailureSubreason === 'attestation'
+        ? nativeEventFailureAttestationPredicate ?? governedAttestationPredicate(error) : null,
+      schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary);
 }

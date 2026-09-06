@@ -182,10 +182,18 @@ function expectedResultIdentity(canonical) {
 function assertDeepFrozen(value) {
   if (!value || typeof value !== 'object') return; assert.equal(Object.isFrozen(value), true); for (const child of Object.values(value)) assertDeepFrozen(child);
 }
-function assertFailureStage(error, answerFailureStage) {
+function assertFailureStage(error, answerFailureStage, nativeEventFailureBoundary = undefined,
+  nativeEventFailureSubreason = undefined, nativeEventFailureAttestationPredicate = undefined) {
   assert.equal(error?.name, 'GovernedAnswerFailure'); assert.equal(error?.message, '');
   assert.equal(error?.answerFailureStage, answerFailureStage); assert.equal(error?.stack, undefined); assert.equal(Object.hasOwn(error ?? {}, 'cause'), false);
+  assert.equal(Object.isFrozen(error), true); assert.deepEqual(Object.getOwnPropertySymbols(error), []);
+  for (const forbidden of ['raw', 'raw_output', 'prompt', 'output']) assert.equal(Object.hasOwn(error ?? {}, forbidden), false);
   assert.equal(Object.hasOwn(error ?? {}, 'nativeEventFailureCorrelationOperand'), false);
+  if (nativeEventFailureBoundary !== undefined) {
+    assert.equal(error.nativeEventFailureBoundary, nativeEventFailureBoundary);
+    assert.equal(error.nativeEventFailureSubreason, nativeEventFailureSubreason);
+    assert.equal(error.nativeEventFailureAttestationPredicate, nativeEventFailureAttestationPredicate);
+  }
 }
 
 test('EXP-0148 governed Codex runtime binding', async t => {
@@ -311,7 +319,8 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     for (const copies of [0, 2]) {
       const agent = governedAgent(root); let closeCount = 0; let queryCount = 0;
       agent.engine = { async *query() { queryCount++; yield { type: 'text', content: JSON.stringify(LINEAGE) }; for (let i = 0; i < copies; i++) yield { type: 'metadata', data: { attestation: governedValid.settled.value.runtimeAttestation } }; }, async close() { closeCount++; } };
-      const error = await agent.answerGoverned('[INJECTED]', { schema: LINEAGE_SCHEMA }).then(() => null, caught => caught); assertFailureStage(error, 'unknown');
+      const error = await agent.answerGoverned('[INJECTED]', { schema: LINEAGE_SCHEMA }).then(() => null, caught => caught); assertFailureStage(error,
+        'native_event_grammar', 'live_envelope_session', 'attestation', 'invocation_attestation');
       assert.equal(queryCount, 1); assert.equal(closeCount, 1);
     }
   });
@@ -432,6 +441,50 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     assert.deepEqual(receipt.evidence, { eventCount: 1 }); assert.deepEqual(receipt.usage, { status: 'unavailable' });
   });
 
+  await t.test('EXP-0210 closes acquire/query/close, contract, attestation, and aggregate boundaries', async () => {
+    const settle = (agent, options = { schema: LINEAGE_SCHEMA }) => agent.answerGoverned('[INJECTED]', options).then(value => ({ value }), error => ({ error }));
+    const queryEngine = (query, close = async () => {}) => ({ query, close });
+    const acquire = governedAgent(root); acquire.getEngine = async () => { throw new Error('SECRET_ACQUIRE'); };
+    const acquireFailure = (await settle(acquire)).error; assertFailureStage(acquireFailure, 'provider_engine');
+    assert.equal(acquireFailure.providerEngineFailureBoundary, 'acquire');
+
+    const query = governedAgent(root); query.engine = queryEngine(async function* () { throw new Error('SECRET_QUERY'); });
+    const queryFailure = (await settle(query)).error; assertFailureStage(queryFailure, 'provider_engine');
+    assert.equal(queryFailure.providerEngineFailureBoundary, 'query');
+
+    const closing = governedAgent(root); closing.engine = queryEngine(async function* () {
+      yield { type: 'text', content: JSON.stringify(LINEAGE) };
+      yield { type: 'metadata', data: { attestation: governedValid.settled.value.runtimeAttestation } };
+    }, async () => { throw new Error('SECRET_CLOSE'); });
+    const closeFailure = (await settle(closing)).error; assertFailureStage(closeFailure, 'provider_engine');
+    assert.equal(closeFailure.providerEngineFailureBoundary, 'close');
+
+    const contract = governedAgent(root); contract.engine = { close: async () => {} };
+    assertFailureStage((await settle(contract)).error, 'internal_contract');
+
+    const attestation = governedAgent(root); const wrongReceipt = structuredClone(boundValid.settled.value.runtimeAttestation);
+    wrongReceipt.executionContext.invocationDigest = DIGEST_B;
+    attestation.engine = queryEngine(async function* () {
+      yield { type: 'text', content: JSON.stringify(LINEAGE) };
+      yield { type: 'metadata', data: { attestation: wrongReceipt } };
+    });
+    assertFailureStage((await settle(attestation, { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A })).error,
+      'native_event_grammar', 'live_envelope_session', 'attestation', 'invocation_attestation');
+
+    const v2Profile = { ...profile(root), version: 'probe.governed-codex-profile/v2', profileId: 'luna-xhigh-readonly-native-exec-v1', probeMcpTools: [...TOOLS], codexNativeTools: ['exec'] };
+    delete v2Profile.probeTools;
+    const aggregateReceipt = attestGovernedCodexSession({ profile: v2Profile,
+      events: [configuredEvidence(777, 2, root), { total: 0, tools: [] }] });
+    const aggregate = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [...TOOLS], governedCodexProfile: v2Profile, disableMermaidValidation: true });
+    aggregate.engine = queryEngine(async function* () {
+      yield { type: 'text', content: JSON.stringify(LINEAGE) };
+      yield { type: 'metadata', data: { attestation: aggregateReceipt } };
+      yield { type: 'toolBatch', total: 1, tools: [] };
+    });
+    assertFailureStage((await settle(aggregate)).error, 'native_event_grammar', 'live_envelope_session',
+      'attestation', 'native_capability_aggregate');
+  });
+
   await t.test('EXP-0151 O03 independently recomputes prompt digest and byte length', () => {
     assert.deepEqual(boundValid.settled.value.runtimeAttestation.dispatch, dispatchFor(boundValid.call.params.arguments.prompt));
   });
@@ -473,7 +526,8 @@ test('EXP-0148 governed Codex runtime binding', async t => {
     for (const receipts of cases) {
       const agent = governedAgent(root); let closeCount = 0;
       agent.engine = { async *query() { yield { type: 'text', content: JSON.stringify(LINEAGE) }; for (const attestation of receipts) yield { type: 'metadata', data: { attestation } }; }, async close() { closeCount++; } };
-      const error = await agent.answerGoverned('[INJECTED-V2]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }).then(() => null, caught => caught); assertFailureStage(error, 'unknown'); assert.equal(closeCount, 1);
+      const error = await agent.answerGoverned('[INJECTED-V2]', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A }).then(() => null, caught => caught); assertFailureStage(error,
+        'native_event_grammar', 'live_envelope_session', 'attestation', 'invocation_attestation'); assert.equal(closeCount, 1);
     }
   });
 
@@ -659,7 +713,8 @@ agent.answerGoverned('x', { schema, resultIdentity: 'probe.governed-result-ident
 
   await t.test('EXP-0152 T11 receipt and schema failures emit no identity and clean once', async () => {
     const mismatch = governedAgent(root); const wrong = structuredClone(boundValid.settled.value.runtimeAttestation); wrong.executionContext.invocationDigest = DIGEST_B; const mismatchState = installIdentifiedEngine(mismatch, wrong, '{');
-    const mismatchSettled = await mismatch.answerGoverned('mismatch', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }).then(value => ({ value }), error => ({ error })); assert.equal('value' in mismatchSettled, false); assertFailureStage(mismatchSettled.error, 'unknown'); assert.deepEqual([mismatchState.queries, mismatchState.closes], [1, 1]);
+    const mismatchSettled = await mismatch.answerGoverned('mismatch', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }).then(value => ({ value }), error => ({ error })); assert.equal('value' in mismatchSettled, false); assertFailureStage(mismatchSettled.error,
+      'native_event_grammar', 'live_envelope_session', 'attestation', 'invocation_attestation'); assert.deepEqual([mismatchState.queries, mismatchState.closes], [1, 1]);
     const invalid = governedAgent(root); const invalidState = installIdentifiedEngine(invalid, boundValid.settled.value.runtimeAttestation, '{'); const invalidSettled = await invalid.answerGoverned('invalid', { schema: LINEAGE_SCHEMA, invocationDigest: DIGEST_A, resultIdentity: RESULT_IDENTITY }).then(value => ({ value }), error => ({ error })); assert.equal('value' in invalidSettled, false); assertFailureStage(invalidSettled.error, 'schema_result_validation'); assert.deepEqual([invalidState.queries, invalidState.closes], [1, 1]);
   });
 
@@ -682,7 +737,7 @@ agent.answerGoverned('x', { schema, resultIdentity: 'probe.governed-result-ident
 
   await t.test('EXP-0152 T15 frozen files and legacy function/declaration regions remain exact', async () => {
     const sha = value => createHash('sha256').update(value).digest('hex'); const read = path => readFile(new URL(path, import.meta.url), 'utf8');
-    assert.equal(sha(await read('../../src/agent/engines/codex.js')), 'ffc0f977018cf8baa685265a4a1e5fdc12c8a5adbd4021ff7cb539cb622808ee'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), '003cf97adbd0d9212e2d2fadaa14881d50fd1d25a51ae5deff6e927997440db9');
+    assert.equal(sha(await read('../../src/agent/engines/codex.js')), '46f495f5783f7e9e4e90481b25d12011a9429d9669777cad1eabff6e12048df9'); assert.equal(sha(await read('../../src/agent/schemaUtils.js')), '24332877e019ef29311f03ce9b63e61925c25fd7f83f5dd442b22dc68c60f6e9'); assert.equal(sha(await read('../../src/agent/engines/governed-codex-profile.js')), '003cf97adbd0d9212e2d2fadaa14881d50fd1d25a51ae5deff6e927997440db9');
     const source = await read('../../src/agent/ProbeAgent.js'); const answer = source.slice(source.indexOf('  async answer(message'), source.indexOf('  /**\n   * Get token usage information', source.indexOf('  async answer(message'))); assert.equal(sha(answer), '53ee9f207963f5b991aaf89e143211039ad632d9cc7535d91af66bcae95b135f');
     const governed = source.slice(source.indexOf('  async answerGoverned(message'), source.indexOf('\n  /**\n   * Answer a question', source.indexOf('  async answerGoverned(message'))); assert.equal((governed.match(/_prepareGovernedAnswerPrompt\(/g) || []).length, 1); assert.equal((governed.match(/options\.schema/g) || []).length, 0); assert.equal((governed.match(/options\.resultIdentity/g) || []).length, 1); assert.equal((governed.match(/validateJsonResponse\(/g) || []).length, 1); assert.match(governed, /return \{ data: validation\.parsed, runtimeAttestation \};/);
     const prepared = source.slice(source.indexOf('  _prepareGovernedAnswerPrompt'), source.indexOf('\n  /**\n   * Preview', source.indexOf('  _prepareGovernedAnswerPrompt'))); assert.equal((prepared.match(/options\.schema/g) || []).length, 1); assert.equal((prepared.match(/generateSchemaInstructions\(/g) || []).length, 1);

@@ -461,7 +461,11 @@ export async function createCodexEngine(options = {}) {
           try { collector.observe(event); } catch (error) { evidenceFailure ??= normalizeGovernedAnswerFailure(error, 'native_event_grammar'); }
         });
         if (opts.abortSignal) {
-          if (opts.abortSignal.aborted) throw new Error('Codex query cancelled');
+          if (opts.abortSignal.aborted) {
+            throw governedProfile
+              ? governedAnswerFailure('provider_engine', null, null, null, null, null, null, 'query')
+              : new Error('Codex query cancelled');
+          }
           abortHandler = () => { void cleanup(new Error('Codex query cancelled')).catch(() => {}); };
           opts.abortSignal.addEventListener('abort', abortHandler, { once: true });
         }
@@ -501,7 +505,8 @@ export async function createCodexEngine(options = {}) {
         try { result = await resultPromise; }
         catch (error) {
           throw governedProfile
-            ? governedAnswerFailure(evidenceFailure ? 'unknown' : 'provider_engine')
+            ? evidenceFailure || normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
+              null, null, 'query')
             : error;
         }
 
@@ -521,20 +526,31 @@ export async function createCodexEngine(options = {}) {
             internal = attestGovernedCodexSession({ profile: governedProfile,
               events: governedProfile.version === 'probe.governed-codex-profile/v2'
                 ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
+          } catch (error) {
+            throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session',
+              'attestation');
+          }
+          try {
             probeMcpCallCount = governedProfile.version === 'probe.governed-codex-profile/v2'
               ? governedProbeMcpCallCount(mcpServer?.getGovernedCallEvidence()) : 0;
           } catch (error) {
-            throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session', 'attestation');
+            throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session',
+              'attestation', null, null, null, null, 'native_capability_aggregate');
           }
-          attestation = hasInvocationDigest
-            ? externalBoundReceipt(internal, dispatch, invocationDigest, {
-              nativeCallCount: collected.capabilities.nativeTools.total,
-              probeMcpCallCount,
-            })
-            : externalReceipt(internal, {
-              nativeCallCount: collected.capabilities.nativeTools.total,
-              probeMcpCallCount,
-            });
+          try {
+            attestation = hasInvocationDigest
+              ? externalBoundReceipt(internal, dispatch, invocationDigest, {
+                nativeCallCount: collected.capabilities.nativeTools.total,
+                probeMcpCallCount,
+              })
+              : externalReceipt(internal, {
+                nativeCallCount: collected.capabilities.nativeTools.total,
+                probeMcpCallCount,
+              });
+          } catch (error) {
+            throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session',
+              'attestation', null, null, null, null, 'invocation_attestation');
+          }
           session.setConversationId(collected.sessionEvent.params.msg.session_id);
         }
 
@@ -576,7 +592,7 @@ export async function createCodexEngine(options = {}) {
         };
 
       } catch (error) {
-        if (governedProfile) error = normalizeGovernedAnswerFailure(error, 'unknown');
+        if (governedProfile) error = normalizeGovernedAnswerFailure(error, 'internal_contract');
         queryError = error;
         if (debug) {
           console.error('[DEBUG] Codex query error:', error);
@@ -589,7 +605,10 @@ export async function createCodexEngine(options = {}) {
         if (opts.abortSignal && abortHandler) opts.abortSignal.removeEventListener('abort', abortHandler);
         if (governedProfile) {
           try { await cleanup(); }
-          catch (cleanupError) { if (!queryError) throw cleanupError; }
+          catch (cleanupError) {
+            if (!queryError) throw normalizeGovernedAnswerFailure(cleanupError, 'provider_engine', null, null,
+              null, null, null, 'close');
+          }
         }
       }
     },
