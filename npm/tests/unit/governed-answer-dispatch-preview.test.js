@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,25 @@ function governedAgent(cwd, options = {}) {
   return new ProbeAgent({ provider: 'codex', path: cwd, cwd, allowedTools: [...tools],
     governedCodexProfile: profile(cwd), disableMermaidValidation: true, ...options });
 }
+
+const fakeCodex = `#!/usr/bin/env node
+import { createInterface } from 'node:readline';
+const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
+createInterface({ input: process.stdin }).on('line', line => {
+  const request = JSON.parse(line);
+  if (request.method === 'initialize') return send({ jsonrpc: '2.0', id: request.id, result: {} });
+  if (request.method !== 'tools/call') return;
+  const args = request.params.arguments;
+  const threadId = 'probe-dispatch-custom-thread';
+  send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: request.id, threadId }, id: '', msg: {
+    type: 'session_configured', session_id: threadId, thread_id: threadId, model: 'gpt-5.6-luna', model_provider_id: 'openai',
+    approval_policy: 'never', approvals_reviewer: 'user',
+    permission_profile: { type: 'managed', file_system: { type: 'restricted', entries: [{ access: 'read', path: { type: 'special', value: { kind: 'root' } } }] }, network: 'restricted' },
+    reasoning_effort: 'xhigh', rollout_path: args.cwd + '/sessions/2026/08/26/rollout-2026-08-26T12-00-00-00000000-0000-4000-8000-000000000001.jsonl', cwd: args.cwd
+  } } });
+  send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text: args.prompt }] } });
+});
+`;
 
 test('agent subpath has no dotenv/root side effect while the legacy root retains it', () => {
   const directory = consumer();
@@ -84,6 +103,53 @@ test('preview is frozen, acquires nothing, and equals the subsequent fake runtim
     assert.equal(acquisitions, 1);
     assert.deepEqual(result.runtimeAttestation.dispatch, preview);
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('custom prompt is included exactly once in preview and runtime dispatch', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'probe-dispatch-custom-'));
+  const bin = join(directory, 'bin');
+  const marker = 'UNIQUE_CUSTOM_PROMPT_MARKER_0210';
+  const originalPath = process.env.PATH;
+  mkdirSync(bin);
+  writeFileSync(join(bin, 'codex'), fakeCodex);
+  chmodSync(join(bin, 'codex'), 0o755);
+  process.env.PATH = `${bin}:${originalPath}`;
+  let engine;
+  try {
+    const agent = governedAgent(directory, { systemPrompt: marker });
+    const preview = await agent.previewGovernedAnswerDispatch('review custom', { schema });
+    const { prompt } = agent._prepareGovernedAnswerPrompt('review custom', { schema });
+    const systemPrompt = await agent._getCachedCodexNativeSystemPrompt();
+    const expected = previewGovernedCodexInitialDispatch({ systemPrompt, prompt });
+    engine = await agent.getEngine();
+    const output = [];
+    for await (const chunk of engine.query(prompt, { invocationDigest })) output.push(chunk);
+    const runtimePrompt = output.find(item => item.type === 'text')?.content;
+    const runtimeDispatch = output.find(item => item.type === 'metadata')?.data?.attestation?.dispatch;
+
+    assert.deepEqual(preview, expected);
+    assert.equal((runtimePrompt.match(new RegExp(marker, 'g')) || []).length, 1);
+    assert.deepEqual(runtimeDispatch, preview);
+    assert.equal(runtimeDispatch.promptBytes, Buffer.byteLength(runtimePrompt, 'utf8'));
+  } finally {
+    if (engine) await engine.close();
+    process.env.PATH = originalPath;
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+/*
+ * Keep the source-side custom prompt assertion close to the behavior test so a
+ * future refactor cannot accidentally restore the duplicate option while
+ * changing the fake runtime seam above.
+ */
+test('Codex engine creation relies on the cached native prompt', () => {
+  const source = readFileSync(join(packageRoot, 'src/agent/ProbeAgent.js'), 'utf8');
+  const start = source.indexOf('createCodexEngine({');
+  const codexCreation = source.slice(start, source.indexOf('\n        });', start));
+  assert.ok(start >= 0);
+  assert.match(codexCreation, /systemPrompt: systemPrompt,/);
+  assert.doesNotMatch(codexCreation, /customPrompt: this\.customPrompt/);
 });
 
 test('message, schema, system prompt, and repository guidance bind preview while one agent caches its prompt', async () => {
