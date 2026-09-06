@@ -23,6 +23,10 @@ export const ENGINE_ACTIVITY_TIMEOUT_MIN = 5000;
  */
 export const ENGINE_ACTIVITY_TIMEOUT_MAX = 600000;
 
+const REQUEST_TIMEOUT_DEFAULT = 120000;
+const REQUEST_TIMEOUT_MIN = 1000;
+const REQUEST_TIMEOUT_MAX = 3600000;
+
 import { createProviderInstance, DEFAULT_MODELS } from '../utils/provider.js';
 import { streamText, generateText, tool, stepCountIs, jsonSchema, Output } from 'ai';
 import { createHash, randomUUID } from 'crypto';
@@ -498,19 +502,17 @@ export class ProbeAgent {
     // When set, every AI API call acquires a slot before calling the provider.
     this.concurrencyLimiter = options.concurrencyLimiter || null;
 
-    // Request timeout configuration (default 2 minutes)
-    // Validates env var to prevent NaN or unreasonable values
-    this.requestTimeout = options.requestTimeout ?? (() => {
-      if (process.env.REQUEST_TIMEOUT) {
-        const parsed = parseInt(process.env.REQUEST_TIMEOUT, 10);
-        // Validate: must be positive number between 1s and 1 hour
-        if (isNaN(parsed) || parsed < 1000 || parsed > 3600000) {
-          return 120000; // Default 2 minutes
-        }
-        return parsed;
-      }
-      return 120000;
-    })();
+    // Request timeout configuration (default 2 minutes for ordinary providers).
+    // Codex keeps its standalone 10-minute default unless this is explicitly configured.
+    const optionRequestTimeout = options.requestTimeout;
+    const validOptionRequestTimeout = Number.isInteger(optionRequestTimeout) &&
+      optionRequestTimeout >= REQUEST_TIMEOUT_MIN && optionRequestTimeout <= REQUEST_TIMEOUT_MAX;
+    const parsedRequestTimeout = parseInt(process.env.REQUEST_TIMEOUT, 10);
+    const validEnvRequestTimeout = !isNaN(parsedRequestTimeout) &&
+      parsedRequestTimeout >= REQUEST_TIMEOUT_MIN && parsedRequestTimeout <= REQUEST_TIMEOUT_MAX;
+    this._requestTimeoutExplicit = validOptionRequestTimeout || validEnvRequestTimeout;
+    this.requestTimeout = validOptionRequestTimeout ? optionRequestTimeout
+      : validEnvRequestTimeout ? parsedRequestTimeout : REQUEST_TIMEOUT_DEFAULT;
     if (this.debug) {
       console.log(`[DEBUG] Request timeout: ${this.requestTimeout}ms`);
     }
@@ -1014,7 +1016,7 @@ export class ProbeAgent {
       // Timeout settings for delegate subagents to inherit
       timeoutBehavior: this.timeoutBehavior,
       maxOperationTimeout: this.maxOperationTimeout,
-      requestTimeout: this.requestTimeout,
+      requestTimeout: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
       gracefulTimeoutBonusSteps: this.gracefulTimeoutBonusSteps,
       negotiatedTimeoutBudget: this.negotiatedTimeoutBudget,
       negotiatedTimeoutMaxRequests: this.negotiatedTimeoutMaxRequests,
@@ -2492,6 +2494,7 @@ export class ProbeAgent {
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
           model: this.model,  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          requestTimeout: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
           governedCodexProfile: this.governedCodexProfile
         });
         if (this.debug) {
@@ -5656,6 +5659,7 @@ Double-check your response based on the criteria above. If everything looks good
       cwd: this.cwd, // Preserve explicit working directory
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      requestTimeout: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
       debug: this.debug,
       outline: this.outline,
       searchDelegate: this.searchDelegate,
@@ -5878,7 +5882,7 @@ Double-check your response based on the criteria above. If everything looks good
       this._abortController.abort();
     }
 
-    if (this.governedCodexProfile && this.engine?.close) await this.engine.close();
+    if (this.engine?.close) await this.engine.close();
 
     // Clean up MCP bridge
     if (this.mcpBridge) {

@@ -15,10 +15,18 @@ import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './governe
 const GOVERNED_NATIVE_EVENT_LIMIT = 256;
 const GOVERNED_SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const GOVERNED_SAFE_KIND = /^[A-Za-z0-9._:-]{1,64}$/;
+const CODEX_REQUEST_TIMEOUT_DEFAULT = 600000;
+const CODEX_REQUEST_TIMEOUT_MIN = 1000;
+const CODEX_REQUEST_TIMEOUT_MAX = 3600000;
 const GOVERNED_CODEX_NATIVE_CALLS = new Map([['exec', 'exec']]);
 const GOVERNED_PROBE_MCP_CALLS = new Map([
   ['mcp__probe__search', 'search'], ['mcp__probe__extract', 'extract'], ['mcp__probe__listFiles', 'listFiles'],
 ]);
+
+function validateCodexRequestTimeout(value) {
+  return Number.isInteger(value) && value >= CODEX_REQUEST_TIMEOUT_MIN && value <= CODEX_REQUEST_TIMEOUT_MAX
+    ? value : CODEX_REQUEST_TIMEOUT_DEFAULT;
+}
 
 function governedRawItemInvalid() { throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate'); }
 function governedLiveEnvelopeInvalid(subreason, correlationOperand = null) {
@@ -235,7 +243,9 @@ function externalBoundReceipt(internal, dispatch, invocationDigest, capabilityCo
  * Codex Engine using MCP Server with event streaming
  */
 export async function createCodexEngine(options = {}) {
-  const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools, model } = options;
+  const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools, model,
+    requestTimeout: configuredRequestTimeout } = options;
+  const requestTimeout = validateCodexRequestTimeout(configuredRequestTimeout);
   const governedProfile = options.governedCodexProfile === undefined ? null : validateGovernedCodexProfile(options.governedCodexProfile);
 
   const session = new Session(
@@ -356,13 +366,13 @@ export async function createCodexEngine(options = {}) {
         params
       };
 
-      // Timeout after 10 minutes
+      // Timeout after the configured request duration (10 minutes standalone)
       const timer = setTimeout(() => {
         if (pendingRequests.has(id)) {
           pendingRequests.delete(id);
-          reject(new Error(`Request ${method} timed out after 10 minutes`));
+          reject(new Error(`Request ${method} timed out after ${requestTimeout}ms`));
         }
-      }, 600000);
+      }, requestTimeout);
       pendingRequests.set(id, { resolve, reject, timer });
 
       codexProcess.stdin.write(JSON.stringify(request) + '\n');
@@ -603,10 +613,11 @@ export async function createCodexEngine(options = {}) {
         };
       } finally {
         if (opts.abortSignal && abortHandler) opts.abortSignal.removeEventListener('abort', abortHandler);
-        if (governedProfile) {
-          try { await cleanup(); }
+        if (governedProfile || queryError) {
+          try { await cleanup(queryError || undefined); }
           catch (cleanupError) {
-            if (!queryError) throw normalizeGovernedAnswerFailure(cleanupError, 'provider_engine', null, null,
+            // Preserve the original query failure when process cleanup also fails.
+            if (!queryError && governedProfile) throw normalizeGovernedAnswerFailure(cleanupError, 'provider_engine', null, null,
               null, null, null, 'close');
           }
         }
