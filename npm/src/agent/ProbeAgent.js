@@ -2488,7 +2488,6 @@ export class ProbeAgent {
         this.engine = await createCodexEngine({
           agent: this, // Pass reference to ProbeAgent for tool access
           systemPrompt: systemPrompt,
-          customPrompt: this.customPrompt,
           sessionId: this.options?.sessionId,
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
@@ -3337,7 +3336,7 @@ ${extractGuidance2}
     const { prompt } = this._prepareGovernedAnswerPrompt(message, options);
     const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
     const { previewGovernedCodexInitialDispatch } = await import('./engines/codex.js');
-    return previewGovernedCodexInitialDispatch({ systemPrompt, customPrompt: this.customPrompt, prompt });
+    return previewGovernedCodexInitialDispatch({ systemPrompt, prompt });
   }
 
   /**
