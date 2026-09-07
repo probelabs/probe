@@ -132,7 +132,7 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     const redundantMsgTypeGuard = collectorSource.indexOf("if (msg.type !== 'raw_response_item')");
     assert.ok(typeExtraction >= 0 && typeExtraction < rawTypeFilter && rawTypeFilter < msgValidation &&
       msgValidation < redundantMsgTypeGuard);
-    assert.equal((collectorSource.match(/if \(profile\.version !== 'probe\.governed-codex-profile\/v2' \|\| type !== 'raw_response_item'\) return;/g) ?? []).length, 1);
+    assert.equal((collectorSource.match(/if \(!governedNativeProfile\(profile\) \|\| type !== 'raw_response_item'\) return;/g) ?? []).length, 1);
     assert.equal((collectorSource.match(/msg\.type !== 'raw_response_item'/g) ?? []).length, 1);
     const routingStart = source.indexOf('// Handle notifications (codex/event)');
     const routingEnd = source.indexOf('\n    } catch (e)', routingStart);

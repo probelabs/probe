@@ -112,6 +112,10 @@ import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './engines
 const GOVERNED_RESULT_IDENTITY = 'probe.governed-result-identity/v1';
 const GOVERNED_RESULT_DOMAIN = 'probe.governed-result-identity/data/v1';
 
+function isGovernedCodexNativeProfile(profile) {
+  return Array.isArray(profile?.codexNativeTools);
+}
+
 function normalizeGovernedJson(value) {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
   if (typeof value === 'number') {
@@ -3569,7 +3573,7 @@ Follow these instructions carefully:
           null, null, 'query');
       }
       if (hasInvocationDigest) {
-        const expectedAttestation = this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2'
+        const expectedAttestation = isGovernedCodexNativeProfile(this.governedCodexProfile)
           ? 'probe.governed-codex-attestation/v3' : 'probe.governed-codex-attestation/v2';
         if (attestationCount !== 1 || runtimeAttestation?.version !== expectedAttestation || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
           throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
@@ -3579,7 +3583,7 @@ Follow these instructions carefully:
         throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
           'invocation_attestation');
       }
-      if (this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2') {
+      if (isGovernedCodexNativeProfile(this.governedCodexProfile)) {
         if (nativeToolBatchCount !== 1 || !Number.isSafeInteger(nativeToolBatch?.total) ||
           !Array.isArray(nativeToolBatch?.tools) || nativeToolBatch.total !== runtimeAttestation?.observed?.nativeTools?.total ||
           JSON.stringify(nativeToolBatch.tools) !== JSON.stringify(runtimeAttestation?.observed?.nativeTools?.tools)) {

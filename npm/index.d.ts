@@ -346,7 +346,9 @@ export interface GovernedResultIdentity {
 export type GovernedCodexProfile =
   { version: 'probe.governed-codex-profile/v1'; profileId: 'luna-xhigh-readonly-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeTools: ['search', 'extract', 'listFiles']; fallback: false; retries: 0; }
   /** Admits pinned-protocol `exec` inside the attested sandbox; does not claim commands are semantically safe. */
-  | { version: 'probe.governed-codex-profile/v2'; profileId: 'luna-xhigh-readonly-native-exec-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; fallback: false; retries: 0; };
+  | { version: 'probe.governed-codex-profile/v2'; profileId: 'luna-xhigh-readonly-native-exec-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; fallback: false; retries: 0; }
+  /** Admits observed native `apply_patch` and `exec` inside the configured workspace-write cwd; callers bind that cwd to an isolated worktree. */
+  | { version: 'probe.governed-codex-profile/v3'; profileId: 'luna-xhigh-isolated-writer-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'workspace-write'; approvalPolicy: 'never'; cwd: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['apply_patch', 'exec']; fallback: false; retries: 0; };
 
 export interface GovernedCodexRuntimeAttestation {
   version: 'probe.governed-codex-attestation/v1';
@@ -386,9 +388,13 @@ export interface GovernedIdentifiedAnswerResult {
 
 export interface GovernedCodexRuntimeAttestationV3 {
   version: 'probe.governed-codex-attestation/v3';
-  profileId: 'luna-xhigh-readonly-native-exec-v1';
-  requested: { profileDigest: string; cwdDigest: string; probeMcpToolsDigest: string; codexNativeToolsDigest: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; };
-  observed: { source: 'session_configured+raw_response_item'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; nativeTools: { total: number; tools: GovernedCodexNativeToolAggregate[]; }; };
+  profileId: 'luna-xhigh-readonly-native-exec-v1' | 'luna-xhigh-isolated-writer-v1';
+  requested:
+    | { profileDigest: string; cwdDigest: string; probeMcpToolsDigest: string; codexNativeToolsDigest: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; }
+    | { profileDigest: string; cwdDigest: string; probeMcpToolsDigest: string; codexNativeToolsDigest: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['apply_patch', 'exec']; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'workspace-write'; approvalPolicy: 'never'; };
+  observed:
+    | { source: 'session_configured+raw_response_item'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; nativeTools: { total: number; tools: GovernedCodexNativeToolAggregate[]; }; }
+    | { source: 'session_configured+raw_response_item'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-write-cwd'; network: 'restricted'; nativeTools: { total: number; tools: GovernedCodexNativeToolAggregate[]; }; };
   executionContext?: { source: 'caller'; invocationDigest: string; };
   dispatch?: { source: 'probe-host-tools-call'; tool: 'codex'; promptDigest: string; promptBytes: number; };
   evidence: { sessionEventCount: 1; nativeCallCount: number; probeMcpCallCount: number; };
