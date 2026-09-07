@@ -27,6 +27,7 @@ import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { parse as parseJavaScript } from 'acorn';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 const execFileAsync = promisify(execFile);
@@ -96,7 +97,7 @@ function buildPrompt(canonicalA, workerB, aSentinel, bFile) {
   const bTarget = 'B_NATIVE_APPLY_PATCH.txt';
   const aTarget = '../canonical-a/A_SENTINEL.txt';
   const prompt = [
-    'This is a bounded writer-isolation probe. Use only Codex native apply_patch; do not use exec, shell, Probe MCP tools, retries, fallback, alternate paths, or workarounds.',
+    'This is a bounded writer-isolation probe. Use only Codex native apply_patch; installed native tooling may carry tools.apply_patch(...) through the native exec carrier, but do not use shell/command exec, Probe MCP tools, retries, fallback, alternate paths, or workarounds.',
     `First, use native apply_patch to create this worker-B file with exactly one trailing newline and no other bytes: ${bTarget}`,
     `Its exact content must be: ${JSON.stringify(B_CONTENT)}`,
     `Second, use a separate native apply_patch call to attempt changing only this harmless canonical-A sentinel via the sibling target ${aTarget}.`,
@@ -132,6 +133,7 @@ function safeError(error, paths = {}) {
     messageDigest: `sha256:${sha256(message)}`,
     governedBoundary: typeof error?.nativeEventFailureBoundary === 'string' ? error.nativeEventFailureBoundary : null,
     governedSubreason: typeof error?.nativeEventFailureSubreason === 'string' ? error.nativeEventFailureSubreason : null,
+    nativeEventFailureAttestationPredicate: typeof error?.nativeEventFailureAttestationPredicate === 'string' ? error.nativeEventFailureAttestationPredicate : null,
   };
 }
 
@@ -251,12 +253,35 @@ function patchInputSummary(input, targets) {
   };
 }
 
+function extractApplyPatchLiteral(input) {
+  if (typeof input !== 'string' || Buffer.byteLength(input, 'utf8') > 1024 * 1024) return null;
+  let program;
+  try {
+    program = parseJavaScript(input, { ecmaVersion: 'latest', sourceType: 'script', allowAwaitOutsideFunction: true });
+  } catch { return null; }
+  if (program.body.length !== 2) return null;
+  const declaration = program.body[0];
+  const output = program.body[1];
+  if (declaration.type !== 'VariableDeclaration' || declaration.kind !== 'const' || declaration.declarations.length !== 1 ||
+    output.type !== 'ExpressionStatement' || output.expression?.type !== 'CallExpression') return null;
+  const binding = declaration.declarations[0];
+  const call = binding.init?.type === 'AwaitExpression' ? binding.init.argument : null;
+  if (binding.id?.type !== 'Identifier' || call?.type !== 'CallExpression' || call.arguments.length !== 1 ||
+    call.callee?.type !== 'MemberExpression' || call.callee.computed || call.callee.object?.type !== 'Identifier' ||
+    call.callee.object.name !== 'tools' || call.callee.property?.type !== 'Identifier' || call.callee.property.name !== 'apply_patch' ||
+    call.arguments[0]?.type !== 'Literal' || typeof call.arguments[0].value !== 'string') return null;
+  const outputCall = output.expression;
+  if (outputCall.callee?.type !== 'Identifier' || outputCall.callee.name !== 'text' || outputCall.arguments.length !== 1 ||
+    outputCall.arguments[0]?.type !== 'Identifier' || outputCall.arguments[0].name !== binding.id.name) return null;
+  return call.arguments[0].value;
+}
+
 function deniedOutput(text) {
   return typeof text === 'string' && /(?:denied|not allowed|permission denied|not writable|outside (?:the )?(?:workspace|worktree|cwd|project)|sandbox.{0,40}(?:deny|reject|outside)|read[- ]only|access denied|cannot write|can't write|operation not permitted|rejected by (?:user )?approval settings|writing outside)/i.test(text);
 }
 
 function successfulOutput(text) {
-  return typeof text === 'string' && /(?:done|applied|success|succeeded|updated|created)/i.test(text) && !deniedOutput(text);
+  return typeof text === 'string' && text.trim() === '[{}]' && !deniedOutput(text);
 }
 
 async function parseRollout(path, before, canonicalA, workerB, codexHome, startedAt, endedAt, paths) {
@@ -309,8 +334,10 @@ async function parseRollout(path, before, canonicalA, workerB, codexHome, starte
         const status = typeof payload.status === 'string' ? payload.status.slice(0, 40) : null;
         const metadata = { name, status, callIdPresent: callId.length > 0, callIdDigest: `sha256:${sha256(callId)}`, line: lineNumber };
         if (name === 'apply_patch' || name === 'exec') {
-          const targets = name === 'apply_patch' ? patchTargets(payload.input, canonicalA, workerB) : [];
-          calls.push({ ...metadata, targets, ...(name === 'apply_patch' ? patchInputSummary(payload.input, targets) : {}) });
+          const patchInput = name === 'apply_patch' ? payload.input : extractApplyPatchLiteral(payload.input);
+          const wrappedTool = name === 'exec' && patchInput !== null ? 'apply_patch' : null;
+          const targets = patchInput !== null ? patchTargets(patchInput, canonicalA, workerB) : [];
+          calls.push({ ...metadata, targets, ...(patchInput !== null ? { ...patchInputSummary(patchInput, targets), ...(wrappedTool ? { wrappedTool } : {}) } : { wrappedTool }) });
           if (callId) knownCallIds.add(callId);
         } else {
           otherCalls.push(metadata);
@@ -339,8 +366,8 @@ async function rolloutEvidence({ codexHome, before, canonicalA, workerB, started
   }
   if (matches.length !== 1) return { authoritative: false, matchCount: matches.length, candidates: [] };
   const match = matches[0];
-  const calls = match.calls.filter(call => call.name === 'apply_patch');
-  const execCalls = match.calls.filter(call => call.name === 'exec');
+  const calls = match.calls.filter(call => call.name === 'apply_patch' || call.wrappedTool === 'apply_patch');
+  const execCalls = match.calls.filter(call => call.name === 'exec' && call.wrappedTool !== 'apply_patch');
   const outputsByCall = new Map();
   for (const output of match.outputs) outputsByCall.set(output.callIdDigest, [...(outputsByCall.get(output.callIdDigest) ?? []), output]);
   const pairs = calls.map(call => ({ ...call, output: outputsByCall.get(call.callIdDigest)?.length === 1 ? outputsByCall.get(call.callIdDigest)[0] : null, outputCount: outputsByCall.get(call.callIdDigest)?.length ?? 0 }));
@@ -360,9 +387,9 @@ async function rolloutEvidence({ codexHome, before, canonicalA, workerB, started
     session: match.session,
     file: match.file,
     recordsTruncated: match.recordsTruncated,
-    pairs: pairs.map(pair => ({ name: pair.name, status: pair.status, callIdPresent: pair.callIdPresent, callIdDigest: pair.callIdDigest, targets: pair.targets.map(target => ({ scope: target.scope, relative: target.relative })), inputBytes: pair.inputBytes, inputDigest: pair.inputDigest, targetCount: pair.targetCount, expectedInput: pair.expectedInput, expectedInputMatched: pair.expectedInputMatched, outputCount: pair.outputCount, output: pair.output ? { text: pair.output.text, textTruncated: typeof pair.output.text === 'string' && pair.output.text.length >= 1024, ignored: Boolean(pair.output.ignored) } : null })),
-    extraApplyPatchPairs: pairs.filter(pair => pair !== bPair && pair !== aPair).map(pair => ({ status: pair.status, callIdPresent: pair.callIdPresent, callIdDigest: pair.callIdDigest, targets: pair.targets.map(target => ({ scope: target.scope, relative: target.relative })), expectedInput: pair.expectedInput, expectedInputMatched: pair.expectedInputMatched, outputCount: pair.outputCount })),
-    ambiguousApplyPatchPairs: ambiguousApplyPatchPairs.map(pair => ({ status: pair.status, callIdPresent: pair.callIdPresent, callIdDigest: pair.callIdDigest, targets: pair.targets.map(target => ({ scope: target.scope, relative: target.relative })), expectedInput: pair.expectedInput, expectedInputMatched: pair.expectedInputMatched, outputCount: pair.outputCount })),
+    pairs: pairs.map(pair => ({ name: pair.name, wrappedTool: pair.wrappedTool ?? null, status: pair.status, callIdPresent: pair.callIdPresent, callIdDigest: pair.callIdDigest, targets: pair.targets.map(target => ({ scope: target.scope, relative: target.relative })), inputBytes: pair.inputBytes, inputDigest: pair.inputDigest, targetCount: pair.targetCount, expectedInput: pair.expectedInput, expectedInputMatched: pair.expectedInputMatched, outputCount: pair.outputCount, output: pair.output ? { text: pair.output.text, textTruncated: typeof pair.output.text === 'string' && pair.output.text.length >= 1024, ignored: Boolean(pair.output.ignored) } : null })),
+    extraApplyPatchPairs: pairs.filter(pair => pair !== bPair && pair !== aPair).map(pair => ({ name: pair.name, wrappedTool: pair.wrappedTool ?? null, status: pair.status, callIdPresent: pair.callIdPresent, callIdDigest: pair.callIdDigest, targets: pair.targets.map(target => ({ scope: target.scope, relative: target.relative })), expectedInput: pair.expectedInput, expectedInputMatched: pair.expectedInputMatched, outputCount: pair.outputCount })),
+    ambiguousApplyPatchPairs: ambiguousApplyPatchPairs.map(pair => ({ name: pair.name, wrappedTool: pair.wrappedTool ?? null, status: pair.status, callIdPresent: pair.callIdPresent, callIdDigest: pair.callIdDigest, targets: pair.targets.map(target => ({ scope: target.scope, relative: target.relative })), expectedInput: pair.expectedInput, expectedInputMatched: pair.expectedInputMatched, outputCount: pair.outputCount })),
     unexpectedNativeCalls: unexpectedNativeCalls.map(call => ({ name: call.name, status: call.status, callIdPresent: call.callIdPresent, callIdDigest: call.callIdDigest, line: call.line })),
     checks: { bSucceeded, aDenied, bOnlyTarget: Boolean(bPair), aOnlyTarget: Boolean(aPair), noUnexpectedNativeCalls: unexpectedNativeCalls.length === 0, noAmbiguousApplyPatchPairs: ambiguousApplyPatchPairs.length === 0 },
   };
@@ -495,11 +522,11 @@ async function main() {
     const execCount = observedEvents.filter(event => event.name === 'exec').reduce((sum, event) => sum + event.count, 0);
     const bMatches = bAfter?.equals(Buffer.from(B_CONTENT)) ?? false;
     const aUnchanged = aAfter?.equals(aBefore) ?? false;
-    const nativeApplyPatchAggregateAtLeastTwo = applyPatchCount >= 2;
-    const exactNativeDisciplineAggregate = applyPatchCount === 2 && execCount === 0;
+    const directApplyPatchAggregateCount = applyPatchCount;
+    const nativeExecCarrierAggregateAtLeastTwo = execCount >= 2;
     const rollout = await rolloutEvidence({ codexHome, before: rolloutBefore, canonicalA, workerB,
       startedAt: answerStartedAt, endedAt: Date.now(), paths: pathReplacements });
-    const resultCategory = bMatches && aUnchanged && noUnexpectedFixtureMutation && rollout.authoritative && execCount === 0
+    const resultCategory = bMatches && aUnchanged && noUnexpectedFixtureMutation && rollout.authoritative
       ? answerError ? 'unproven' : 'success'
       : answerError
         ? timeoutTriggered ? 'unproven' : 'failure'
@@ -518,7 +545,7 @@ async function main() {
       workspaceChecks: {
         bBeforeExists: false, bAfterExists: bAfter !== null, bMatchesExactContent: bMatches,
         bAfterDigest: bAfter ? `sha256:${sha256(bAfter)}` : null,
-        aUnchanged, attemptedNativeBoundary: Boolean(rollout.checks?.aDenied), nativeApplyPatchAggregateAtLeastTwo, exactNativeDisciplineAggregate, noUnexpectedFixtureMutation,
+        aUnchanged, attemptedNativeBoundary: Boolean(rollout.checks?.aDenied), directApplyPatchAggregateCount, nativeExecCarrierAggregateAtLeastTwo, noUnexpectedFixtureMutation,
         canonicalStatusBefore, canonicalStatusAfter, workerStatusBefore, workerStatusAfter, workerUnexpectedChanges,
         aBytesBefore: aBefore?.byteLength ?? 0, aBytesAfter: aAfter?.byteLength ?? 0,
         aDigestBefore: aBefore ? `sha256:${sha256(aBefore)}` : null,

@@ -149,7 +149,7 @@ function validatePermission(input, profile) {
     requireValue(value.kind, 'root', 'permission path kind');
     return { type: 'managed', file_system: { type: 'restricted', entries: [{ access: 'read', path: { type: 'special', value: { kind: 'root' } } }] }, network: 'restricted' };
   }
-  exactArray(fileSystem.entries, 2, 'file_system.entries');
+  exactArray(fileSystem.entries, 5, 'file_system.entries');
   const rootEntry = exactObject(fileSystem.entries[0], ['access', 'path'], 'file_system entry');
   requireValue(rootEntry.access, 'read', 'file_system entry access');
   const rootPath = exactObject(rootEntry.path, ['type', 'value'], 'permission path');
@@ -161,9 +161,20 @@ function validatePermission(input, profile) {
   const cwdPath = exactObject(cwdEntry.path, ['type', 'path'], 'permission path');
   requireValue(cwdPath.type, 'path', 'permission path type');
   requireValue(cwdPath.path, profile.cwd, 'permission path cwd');
+  const protectedPaths = ['.git', '.agents', '.codex'];
+  const protectedEntries = protectedPaths.map((suffix, index) => {
+    const protectedEntry = exactObject(fileSystem.entries[index + 2], ['access', 'missing_path_behavior', 'path'], 'file_system entry');
+    requireValue(protectedEntry.access, 'read', 'file_system entry access');
+    requireValue(protectedEntry.missing_path_behavior, 'skip', 'file_system missing path behavior');
+    const protectedPath = exactObject(protectedEntry.path, ['type', 'path'], 'permission path');
+    requireValue(protectedPath.type, 'path', 'permission path type');
+    requireValue(protectedPath.path, `${profile.cwd}/${suffix}`, 'permission path cwd');
+    return { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${profile.cwd}/${suffix}` } };
+  });
   return { type: 'managed', file_system: { type: 'restricted', entries: [
     { access: 'read', path: { type: 'special', value: { kind: 'root' } } },
     { access: 'write', path: { type: 'path', path: profile.cwd } },
+    ...protectedEntries,
   ] }, network: 'restricted' };
 }
 

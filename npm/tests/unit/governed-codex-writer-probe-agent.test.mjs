@@ -35,6 +35,9 @@ function sessionEvent(cwd) {
           file_system: { type: 'restricted', entries: [
             { access: 'read', path: { type: 'special', value: { kind: 'root' } } },
             { access: 'write', path: { type: 'path', path: cwd } },
+            { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.git` } },
+            { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.agents` } },
+            { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.codex` } },
           ] },
           network: 'restricted',
         },
@@ -88,10 +91,15 @@ test('writer attestation rejects temp roots and every permission-scope mutation'
   const mutations = [
     event => { event.params.msg.permission_profile.file_system.entries[1].path = { type: 'special', value: { kind: 'tmpdir' } }; },
     event => { event.params.msg.permission_profile.file_system.entries[1].path = { type: 'special', value: { kind: 'slash_tmp' } }; },
-    event => { event.params.msg.permission_profile.file_system.entries.push({ access: 'write', path: { type: 'path', path: `${cwd}/extra` } }); },
+    event => { event.params.msg.permission_profile.file_system.entries.push({ access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/extra` } }); },
     event => { event.params.msg.permission_profile.file_system.entries[1].path.path = `${cwd}/other`; },
     event => { event.params.msg.permission_profile.file_system.entries.reverse(); },
     event => { event.params.msg.permission_profile.file_system.entries[0].access = 'write'; },
+    event => { event.params.msg.permission_profile.file_system.entries[2].path.path = `${cwd}/.other`; },
+    event => { event.params.msg.permission_profile.file_system.entries[2].missing_path_behavior = 'error'; },
+    event => { event.params.msg.permission_profile.file_system.entries[2].access = 'write'; },
+    event => { event.params.msg.permission_profile.file_system.entries[2].path.type = 'special'; },
+    event => { event.params.msg.permission_profile.file_system.entries[2].path = { type: 'path', path: `${cwd}/.git/` }; },
   ];
   for (const mutate of mutations) {
     const event = sessionEvent(cwd);
