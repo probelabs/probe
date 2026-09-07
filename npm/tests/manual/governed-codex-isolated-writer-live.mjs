@@ -42,6 +42,8 @@ const MAX_PROMPT_BYTES = 8192;
 const MAX_TIMEOUT_MS = 600000;
 const OUTPUT_ENV = 'PROBE_LUNA_WRITER_OUTPUT_DIR';
 const LIVE_VERSION = 'probe.governed-codex-isolated-writer-live/v2-proof-cli';
+const PUBLIC_DIAGNOSTIC_ENV = 'PROBE_LUNA_WRITER_PUBLIC_DIAGNOSTIC';
+const PUBLIC_DIAGNOSTIC_DESCRIPTION = 'The isolated writer shall preserve its B sentinel';
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -123,6 +125,31 @@ function buildPrompt(proofBinary, canonicalA, workerB, aSentinel, bFile) {
   return prompt;
 }
 
+export function publicDiagnosticPlan(proofBinary) {
+  if (typeof proofBinary !== 'string' || !isAbsolute(proofBinary)) throw new TypeError('PROOF_BIN must be absolute');
+  return Object.freeze({
+    mode: 'public-proof-cli-diagnostic',
+    proofNew: Object.freeze(['req', 'new', 'specs/system', '--component', 'writer_b', '--description', PUBLIC_DIAGNOSTIC_DESCRIPTION, '--format', 'json']),
+    proofList: Object.freeze(['req', 'list', '--format', 'json']),
+    proofShow: Object.freeze(['req', 'show', '<id>', '--with', 'file', '--format', 'json']),
+    proofBinary,
+    privateRolloutInspection: false,
+  });
+}
+
+function buildPublicDiagnosticPrompt(proofBinary) {
+  const plan = publicDiagnosticPlan(proofBinary);
+  const prompt = [
+    'This is a public-only Proof CLI capability diagnostic. Use the native exec carrier exactly once for each command below, from the configured worker workspace. Do not use Probe MCP tools, apply_patch, shell writes, sibling paths, retries, fallback, elevation, or alternate roots.',
+    `Run exactly: ${proofBinary} req new specs/system --component writer_b --description ${JSON.stringify(PUBLIC_DIAGNOSTIC_DESCRIPTION)} --format json`,
+    `Read the returned requirement id, then run exactly: ${proofBinary} ${plan.proofList.join(' ')}`,
+    `Finally run ${proofBinary} req show <that-id> --with file --format json and return the id and file path from the result.`,
+    'Return only a concise final answer stating the requirement id and relative file path, without reasoning, environment details, or raw command output.',
+  ].join('\n');
+  if (Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) throw new Error('public diagnostic prompt exceeds bounded size');
+  return prompt;
+}
+
 function sanitizeText(value, paths = {}, maxLength = 1024) {
   let text = typeof value === 'string' ? value : '';
   for (const [path, replacement] of Object.entries(paths)) {
@@ -130,6 +157,12 @@ function sanitizeText(value, paths = {}, maxLength = 1024) {
   }
   return text.replace(/\b(?:OPENAI|ANTHROPIC|CODEX|AWS)_[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\b/gi, '<redacted-secret-name>').slice(0, maxLength);
 }
+
+const GOVERNED_RAW_ITEM_PREDICATES = new Set([
+  'shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
+  'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit',
+  'final_answer_cardinality',
+]);
 
 function safeError(error, paths = {}) {
   const name = typeof error?.name === 'string' ? error.name.slice(0, 80) : 'Error';
@@ -148,7 +181,39 @@ function safeError(error, paths = {}) {
     governedBoundary: typeof error?.nativeEventFailureBoundary === 'string' ? error.nativeEventFailureBoundary : null,
     governedSubreason: typeof error?.nativeEventFailureSubreason === 'string' ? error.nativeEventFailureSubreason : null,
     nativeEventFailureAttestationPredicate: typeof error?.nativeEventFailureAttestationPredicate === 'string' ? error.nativeEventFailureAttestationPredicate : null,
+    nativeEventFailureRawItemPredicate: GOVERNED_RAW_ITEM_PREDICATES.has(error?.nativeEventFailureRawItemPredicate)
+      ? error.nativeEventFailureRawItemPredicate : null,
   };
+}
+
+const GOVERNED_FAILURE_STAGES = new Set(['native_event_grammar', 'provider_engine']);
+const GOVERNED_FAILURE_BOUNDARIES = new Set(['raw_item_predicate', 'live_envelope_session', 'acquire', 'query', 'close']);
+const GOVERNED_FAILURE_SUBREASONS = new Set(['session_sequence', 'envelope_shape', 'correlation', 'attestation']);
+const GOVERNED_FAILURE_CORRELATION_OPERANDS = new Set(['thread_id', 'response_id']);
+
+function ownEnumerableValue(value, key) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null;
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor?.enumerable && Object.prototype.hasOwnProperty.call(descriptor, 'value') ? descriptor.value : null;
+}
+
+export function publicDiagnosticFailure(error) {
+  const stageValue = ownEnumerableValue(error, 'answerFailureStage');
+  const stage = GOVERNED_FAILURE_STAGES.has(stageValue) ? stageValue : 'unknown';
+  const boundaryValue = stage === 'native_event_grammar'
+    ? ownEnumerableValue(error, 'nativeEventFailureBoundary')
+    : stage === 'provider_engine' ? ownEnumerableValue(error, 'providerEngineFailureBoundary') : null;
+  const boundary = GOVERNED_FAILURE_BOUNDARIES.has(boundaryValue) ? boundaryValue : null;
+  const subreasonValue = boundary === 'live_envelope_session' ? ownEnumerableValue(error, 'nativeEventFailureSubreason') : null;
+  const correlationValue = subreasonValue === 'correlation' ? ownEnumerableValue(error, 'nativeEventFailureCorrelationOperand') : null;
+  const predicateValue = boundary === 'raw_item_predicate' ? ownEnumerableValue(error, 'nativeEventFailureRawItemPredicate') : null;
+  return Object.freeze({
+    stage,
+    boundary,
+    subreason: GOVERNED_FAILURE_SUBREASONS.has(subreasonValue) ? subreasonValue : null,
+    correlationOperand: GOVERNED_FAILURE_CORRELATION_OPERANDS.has(correlationValue) ? correlationValue : null,
+    rawItemPredicate: GOVERNED_RAW_ITEM_PREDICATES.has(predicateValue) ? predicateValue : null,
+  });
 }
 
 function safeNativeEvents(events) {
@@ -327,6 +392,150 @@ async function recognizeProofRequirement(proofBinary, workerB, description) {
   return { recognized: true, listCount: listed.length, id: row.id, component: 'writer_b', file, fileHash, descriptionDigest: `sha256:${sha256(description)}` };
 }
 
+async function createPublicDiagnosticFixture(outputDir, proofBinary) {
+  const fixtureRoot = await mkdtemp(join(outputDir, 'probe-luna-public-diagnostic-'));
+  const canonicalA = join(fixtureRoot, 'canonical-a');
+  const workerB = join(fixtureRoot, 'worker-b');
+  await mkdir(canonicalA, { recursive: true });
+  await git(canonicalA, ['init', '-q']);
+  await git(canonicalA, ['checkout', '-q', '-b', 'main']);
+  await git(canonicalA, ['config', 'user.name', 'Probe public diagnostic']);
+  await git(canonicalA, ['config', 'user.email', 'probe-public-diagnostic@example.invalid']);
+  await writeFile(join(canonicalA, 'go.mod'), 'module example.com/probe-public-diagnostic\n\ngo 1.23\n', { encoding: 'utf8', flag: 'wx' });
+  await writeFile(join(canonicalA, 'main.go'), 'package smoke\n\nfunc Sentinel() string { return "A" }\n', { encoding: 'utf8', flag: 'wx' });
+  const canonicalSentinel = join(canonicalA, 'CANONICAL_SENTINEL.txt');
+  await writeFile(canonicalSentinel, SENTINEL, { encoding: 'utf8', flag: 'wx' });
+  await proof(proofBinary, canonicalA, ['init', '--name', 'probe-public-diagnostic', '--template', 'go-package', '--scope', '.', '--strict']);
+  const baselineList = jsonOutput((await proof(proofBinary, canonicalA, ['req', 'list', '--format', 'json'])).stdout, 'baseline proof req list');
+  if (!Array.isArray(baselineList) || baselineList.length !== 0) throw new Error('Proof baseline requirement list was not empty');
+  await git(canonicalA, ['add', '--', 'go.mod', 'main.go', 'CANONICAL_SENTINEL.txt', 'proof.yaml', '.gitignore']);
+  await git(canonicalA, ['commit', '-q', '-m', 'initialized Proof baseline']);
+  const nativeBaselineCommit = (await git(canonicalA, ['rev-parse', 'HEAD'])).stdout.trim();
+  if (!/^[0-9a-f]{40}$/.test(nativeBaselineCommit)) throw new Error('Proof baseline commit was not recorded');
+  await git(canonicalA, ['worktree', 'add', '-q', '--detach', workerB, nativeBaselineCommit]);
+  const canonicalReal = await realpath(canonicalA);
+  const workerReal = await realpath(workerB);
+  return {
+    fixtureRoot, canonicalA: canonicalReal, workerB: workerReal, canonicalSentinel: join(canonicalReal, 'CANONICAL_SENTINEL.txt'),
+    nativeBaselineCommit, baselineRequirementCount: baselineList.length,
+  };
+}
+
+async function runPublicDiagnostic() {
+  if (process.env.PROBE_LUNA_WRITER_RUN !== '1') {
+    console.log('SKIP: set PROBE_LUNA_WRITER_RUN=1 to opt into the public Proof CLI diagnostic');
+    return 0;
+  }
+  const startedAt = Date.now();
+  const codexBinary = await executablePath(process.env.CODEX_BINARY);
+  const proofBinary = await executablePath(process.env.PROOF_BIN, 'PROOF_BIN');
+  const codexHome = await existingDirectory(process.env.CODEX_HOME, 'CODEX_HOME');
+  const outputDir = await existingDirectory(process.env[OUTPUT_ENV], OUTPUT_ENV);
+  const repoRoot = await realpath(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))));
+  if (isOwnedPath(repoRoot, outputDir)) throw new Error(`${OUTPUT_ENV} must not be inside the source repository`);
+  if (isOwnedPath(codexHome, outputDir) || isOwnedPath(outputDir, codexHome)) throw new Error(`${OUTPUT_ENV} and CODEX_HOME must be separate directories`);
+  const requestTimeout = boundedTimeout(process.env.REQUEST_TIMEOUT);
+  const fixture = await createPublicDiagnosticFixture(outputDir, proofBinary);
+  const pathReplacements = { [codexHome]: '<private-codex-home>', [outputDir]: '<output-dir>', [repoRoot]: '<source-repo>', [proofBinary]: '<proof-bin>' };
+  let agent = null;
+  let agentCleaned = false;
+  let originalPath;
+  let pathMutated = false;
+  let answerValue = null;
+  let answerError = null;
+  let proofRecognition = null;
+  let proofError = null;
+  let timeoutTriggered = false;
+  const nativeEvents = [];
+  const timeoutEvents = [];
+  const canonicalBefore = await readBytes(fixture.canonicalSentinel);
+  const canonicalStatusBefore = await gitChangedPaths(fixture.canonicalA);
+  const workerStatusBefore = await gitChangedPaths(fixture.workerB);
+  if (!canonicalBefore?.equals(Buffer.from(SENTINEL)) || canonicalStatusBefore.length || workerStatusBefore.length) throw new Error('public diagnostic fixture precondition failed');
+  try {
+    const shimDir = join(fixture.fixtureRoot, 'bin');
+    await mkdir(shimDir, { recursive: true });
+    await symlink(codexBinary, join(shimDir, 'codex'));
+    originalPath = process.env.PATH;
+    process.env.PATH = `${shimDir}${delimiter}${originalPath ?? ''}`;
+    pathMutated = true;
+    const prompt = buildPublicDiagnosticPrompt(proofBinary);
+    const profile = writerProfile(fixture.workerB);
+    agent = new ProbeAgent({
+      provider: 'codex', path: fixture.workerB, cwd: fixture.workerB, allowedTools: [...TOOLS],
+      governedCodexProfile: profile, requestTimeout, allowEdit: true, disableMermaidValidation: true, disableSkills: true,
+    });
+    agent.events.on('toolCall', event => nativeEvents.push({ name: event?.name, status: event?.status, count: event?.count }));
+    agent.events.on('timeout.request', event => {
+      if (event?.category === 'request_timeout' && typeof event.method === 'string' &&
+        ['acquire', 'query'].includes(event.boundary) && Number.isSafeInteger(event.timeout_ms) &&
+        typeof event.profileId === 'string' && (event.sessionId === null || typeof event.sessionId === 'string')) {
+        timeoutEvents.push({ category: event.category, method: event.method, boundary: event.boundary,
+          timeout_ms: event.timeout_ms, profileId: event.profileId, sessionId: event.sessionId });
+      }
+    });
+    const answerPromise = agent.answer(prompt);
+    let timeoutId;
+    try {
+      answerValue = await Promise.race([
+        answerPromise,
+        new Promise((_, reject) => { timeoutId = setTimeout(() => { timeoutTriggered = true; reject(new Error('bounded public diagnostic timeout')); }, requestTimeout + 10000); }),
+      ]);
+    } catch (error) {
+      answerError = error;
+      if (timeoutTriggered) agent.cancel();
+      try {
+        await Promise.race([answerPromise, new Promise(resolve => setTimeout(resolve, Math.min(5000, requestTimeout)))]);
+      } catch { /* Captured in answerError; no provider payload is exported. */ }
+    } finally {
+      clearTimeout(timeoutId);
+      if (pathMutated) { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; pathMutated = false; }
+    }
+    if (!timeoutTriggered) {
+      try { proofRecognition = await recognizeProofRequirement(proofBinary, fixture.workerB, PUBLIC_DIAGNOSTIC_DESCRIPTION); }
+      catch (error) { proofError = error; }
+    }
+    const canonicalAfter = await readBytes(fixture.canonicalSentinel);
+    const canonicalStatusAfter = await gitChangedPaths(fixture.canonicalA);
+    const workerStatusAfter = await gitChangedPaths(fixture.workerB);
+    const allowedWorkerPaths = new Set([proofRecognition?.file].filter(Boolean));
+    const workerUnexpectedChanges = workerStatusAfter.filter(path => !allowedWorkerPaths.has(path));
+    const noUnexpectedFixtureMutation = canonicalStatusAfter.length === 0 && workerUnexpectedChanges.length === 0 &&
+      workerStatusAfter.length === allowedWorkerPaths.size && canonicalAfter?.equals(canonicalBefore);
+    const finalAnswer = outputText(answerValue, pathReplacements);
+    const diagnosticPass = !answerError && !proofError && Boolean(proofRecognition?.recognized) &&
+      finalAnswer.trim().length > 0 && noUnexpectedFixtureMutation;
+    const observedEvents = safeNativeEvents(nativeEvents);
+    const cleanupResult = await cleanupAgentBounded(agent, Math.min(10000, Math.max(1000, requestTimeout)));
+    agentCleaned = cleanupResult.completed;
+    const category = diagnosticPass && cleanupResult.completed ? 'diagnostic-pass' : 'diagnostic-failure';
+    const record = {
+      version: 'probe.governed-codex-public-diagnostic/v1', mode: 'public-proof-cli-diagnostic', optIn: true, category,
+      profile: { version: PROFILE_VERSION, profileId: PROFILE_ID, model: MODEL, reasoningEffort: 'xhigh', sandbox: 'workspace-write', approvalPolicy: 'never', nativeTools: ['apply_patch', 'exec'] },
+      configuration: { codexBinaryConfigured: true, proofBinaryConfigured: true, privateCodexHomeConfigured: true, requestTimeoutMs: requestTimeout, fallback: false, retries: 0, sessionReuse: false },
+      fixture: { root: fixture.fixtureRoot, canonicalA: fixture.canonicalA, workerB: fixture.workerB, canonicalSentinel: fixture.canonicalSentinel, nativeBaselineCommit: fixture.nativeBaselineCommit },
+      prompt: { bytes: Buffer.byteLength(prompt, 'utf8'), digest: `sha256:${sha256(prompt)}` },
+      finalAnswer: finalAnswer || null,
+      failure: answerError ? publicDiagnosticFailure(answerError) : proofError ? publicDiagnosticFailure(proofError) : null,
+      nativeTools: { aggregates: observedEvents, runtimeAttestationPubliclyExposed: false },
+      proofCli: { mode: 'public-native-exec-plus-local-readback', baselineRequirementCount: fixture.baselineRequirementCount, recognized: proofRecognition ? { recognized: proofRecognition.recognized, id: proofRecognition.id ?? null, component: proofRecognition.component ?? null, file: proofRecognition.file ?? null, fileHash: proofRecognition.fileHash ?? null } : null, failed: Boolean(proofError) },
+      fixtureChecks: { canonicalStatusBefore, canonicalStatusAfter, workerStatusBefore, workerStatusAfter, workerUnexpectedChanges, canonicalUnchanged: Boolean(canonicalAfter?.equals(canonicalBefore)), noUnexpectedFixtureMutation, workerRequirementFile: proofRecognition?.file ?? null, workerRequirementFileHash: proofRecognition?.fileHash ?? null },
+      timeoutEvents,
+      durationMs: Date.now() - startedAt,
+      cleanup: { agentCleanup: agentCleaned, fixtureRetained: true, timeoutMs: Math.min(10000, Math.max(1000, requestTimeout)), ...(cleanupResult.completed ? {} : { failure: publicDiagnosticFailure(cleanupResult.error) }) },
+    };
+    const outputPath = join(outputDir, `governed-codex-public-diagnostic-${Date.now()}-${randomUUID()}.json`);
+    await writeFile(outputPath, `${JSON.stringify({ ...record, outputPath }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    console.log(JSON.stringify({ category, mode: record.mode, outputPath, fixtureRoot: fixture.fixtureRoot, recognized: Boolean(proofRecognition?.recognized), noUnexpectedFixtureMutation }));
+    return category === 'diagnostic-pass' ? 0 : 2;
+  } finally {
+    if (pathMutated) { if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath; }
+    if (agent && !agentCleaned) {
+      try { agent.cancel(); await cleanupAgentBounded(agent, Math.min(10000, Math.max(1000, requestTimeout))); } catch { /* Final cleanup is best effort and never exports provider data. */ }
+    }
+  }
+}
+
 async function parseRollout(path, before, canonicalA, workerB, codexHome, startedAt, endedAt, paths) {
   const details = await stat(path);
   const previous = before.get(path);
@@ -458,7 +667,21 @@ async function writeEarlyFailure(error) {
   }
 }
 
+async function writePublicEarlyFailure(error) {
+  const rawOutputDir = process.env[OUTPUT_ENV];
+  if (typeof rawOutputDir !== 'string' || !isAbsolute(rawOutputDir)) return null;
+  try {
+    const outputDir = await existingDirectory(rawOutputDir, OUTPUT_ENV);
+    const outputPath = join(outputDir, `governed-codex-public-diagnostic-${Date.now()}-${randomUUID()}.json`);
+    await writeFile(outputPath, `${JSON.stringify({ version: 'probe.governed-codex-public-diagnostic/v1', mode: 'public-proof-cli-diagnostic', optIn: true, category: 'diagnostic-failure', fixture: null, failure: publicDiagnosticFailure(error), durationMs: 0, outputPath }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    return outputPath;
+  } catch {
+    return null;
+  }
+}
+
 async function main() {
+  if (process.env[PUBLIC_DIAGNOSTIC_ENV] === '1') return runPublicDiagnostic();
   if (process.env.PROBE_LUNA_WRITER_RUN !== '1') {
     console.log('SKIP: set PROBE_LUNA_WRITER_RUN=1 to opt into the live isolated-writer probe');
     return 0;
@@ -703,7 +926,8 @@ async function main() {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().then(code => { process.exitCode = code; }).catch(async error => {
-    const outputPath = await writeEarlyFailure(error);
+    const outputPath = process.env[PUBLIC_DIAGNOSTIC_ENV] === '1'
+      ? await writePublicEarlyFailure(error) : await writeEarlyFailure(error);
     if (outputPath) console.error(JSON.stringify({ category: 'failure', stage: 'setup', outputPath }));
     else console.error(`LIVE WRITER HARNESS ERROR: ${error?.name ?? 'Error'} (${error?.message ? 'redacted' : 'unknown'})`);
     process.exitCode = 2;
