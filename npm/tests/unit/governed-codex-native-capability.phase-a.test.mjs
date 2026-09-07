@@ -401,6 +401,18 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (let index = 0; index < 1024; index++) raw(message('writer-message-' + index, 'user'));
     raw(message('writer-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
   }
+  const reasoningItem = patch => raw({ type: 'reasoning', id: 'reasoning-invalid', summary: [], encrypted_content: 'opaque',
+    internal_chat_message_metadata_passthrough: passthrough, ...patch });
+  if (prompt.includes('[CONTENT-NONARRAY]')) { const item = message('content-array', 'user'); item.content = {}; raw(item); }
+  if (prompt.includes('[CONTENT-EMPTY]')) { const item = message('content-empty', 'user'); item.content = []; raw(item); }
+  if (prompt.includes('[CONTENT-OVERFLOW]')) { const item = message('content-limit', 'user'); item.content = Array(65).fill({ type: 'input_text', text: 'x' }); raw(item); }
+  if (prompt.includes('[CONTENT-KIND]')) { const item = message('content-kind', 'user'); item.content[0].type = 'output_text'; raw(item); }
+  if (prompt.includes('[CONTENT-TEXT-TYPE]')) { const item = message('content-text-type', 'user'); item.content[0].text = 7; raw(item); }
+  if (prompt.includes('[CONTENT-TEXT-LIMIT]')) { const item = message('content-text-limit', 'user'); item.content[0].text = 'x'.repeat(131073); raw(item); }
+  if (prompt.includes('[REASONING-SUMMARY-ARRAY]')) reasoningItem({ summary: {} });
+  if (prompt.includes('[REASONING-SUMMARY-NONEMPTY]')) reasoningItem({ summary: ['not-empty'] });
+  if (prompt.includes('[REASONING-ENCRYPTED-TYPE]')) reasoningItem({ encrypted_content: 7 });
+  if (prompt.includes('[REASONING-ENCRYPTED-LIMIT]')) reasoningItem({ encrypted_content: 'x'.repeat(1048577) });
   if (prompt.includes('[NONTOOL]')) {
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'content is not retained' }], internal_chat_message_metadata_passthrough: passthrough } } } });
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'reasoning', id: 'reasoning-safe', summary: [], encrypted_content: 'opaque', internal_chat_message_metadata_passthrough: passthrough } } } });
@@ -451,6 +463,21 @@ createInterface({ input: process.stdin }).on('line', async line => {
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2',
       msg: { type: 'raw_response_item', item: { type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
         output: [{ type: 'input_text', text: 7 }], internal_chat_message_metadata_passthrough: passthrough } } } });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-NONARRAY]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: {}, internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-OVERFLOW]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: Array(65).fill({ type: 'input_text', text: 'x' }), internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-KIND]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'output_text', text: 'x' }], internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-TEXT-TYPE]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'input_text', text: 7 }], internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-TEXT-LIMIT]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'input_text', text: 'x'.repeat(1048577) }], internal_chat_message_metadata_passthrough: passthrough });
   }
   else if (prompt.includes('[BAD-PAIR]')) send({ jsonrpc: '2.0', method: 'codex/event', params: {
     _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: {
@@ -632,7 +659,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
     for (const [marker, predicate] of [
       ['[UNKNOWN-MCP]', 'tool_name_or_allow'], ['[UNDECLARED]', 'tool_name_or_allow'],
       ['[MALFORMED]', 'shape'], ['[BAD-STATUS]', 'status'], ['[BAD-INPUT]', 'input'],
-      ['[BAD-PASSTHROUGH]', 'passthrough'], ['[BAD-CONTENT]', 'content'], ['[BAD-PAIR]', 'call_output_pairing'],
+      ['[BAD-PASSTHROUGH]', 'passthrough'], ['[BAD-CONTENT]', 'tool_output_text_type'], ['[BAD-PAIR]', 'call_output_pairing'],
       ['[UNKNOWN]', 'type'], ['[DUPLICATE]', 'duplicate'], ['[OVERFLOW]', 'event_limit'],
     ]) {
       const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar', 'raw_item_predicate',
@@ -688,6 +715,21 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate',
         null, null, null, null, null, undefined, predicate);
 
+    for (const [marker, predicate] of [
+      ['[CONTENT-NONARRAY]', 'message_content_array'], ['[CONTENT-EMPTY]', 'message_content_empty'],
+      ['[CONTENT-OVERFLOW]', 'message_content_limit'], ['[CONTENT-KIND]', 'message_content_kind'],
+      ['[CONTENT-TEXT-TYPE]', 'message_content_text_type'], ['[CONTENT-TEXT-LIMIT]', 'message_content_text_limit'],
+      ['[REASONING-SUMMARY-ARRAY]', 'reasoning_summary_array'],
+      ['[REASONING-SUMMARY-NONEMPTY]', 'reasoning_summary_nonempty'],
+      ['[REASONING-ENCRYPTED-TYPE]', 'reasoning_encrypted_content_type'],
+      ['[REASONING-ENCRYPTED-LIMIT]', 'reasoning_encrypted_content_limit'],
+      ['[TOOL-OUTPUT-NONARRAY]', 'tool_output_array'], ['[TOOL-OUTPUT-OVERFLOW]', 'tool_output_limit'],
+      ['[TOOL-OUTPUT-KIND]', 'tool_output_kind'], ['[TOOL-OUTPUT-TEXT-TYPE]', 'tool_output_text_type'],
+      ['[TOOL-OUTPUT-TEXT-LIMIT]', 'tool_output_text_limit'],
+    ])
+      assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate',
+        null, null, null, null, null, undefined, predicate);
+
     assertFailure(await run('[PROVIDER-ERROR]'), 'provider_engine', null, null, null, null, null, null, 'query');
     assertFailure(await run('[AMBIGUOUS]'), 'native_event_grammar', 'raw_item_predicate',
       null, null, null, null, null, undefined, 'shape');
@@ -701,6 +743,11 @@ createInterface({ input: process.stdin }).on('line', async line => {
       .includes('SECRET_'), false);
     const rawItemPredicates = ['shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
       'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit', 'tool_event_limit', 'tool_call_limit',
+      'message_content_array', 'message_content_empty', 'message_content_limit', 'message_content_kind',
+      'message_content_text_type', 'message_content_text_limit', 'reasoning_summary_array',
+      'reasoning_summary_nonempty', 'reasoning_encrypted_content_type', 'reasoning_encrypted_content_limit',
+      'tool_output_array', 'tool_output_limit', 'tool_output_kind', 'tool_output_text_type',
+      'tool_output_text_limit',
       'final_answer_cardinality'];
     for (const predicate of rawItemPredicates) {
       const failure = governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null,

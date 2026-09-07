@@ -124,18 +124,25 @@ function validateGovernedRawMessage(item) {
   if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedRawItemInvalid('type');
   if (Object.prototype.hasOwnProperty.call(item, 'id')) governedSafeId(item.id);
   if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedRawItemInvalid('phase');
-  if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedRawItemInvalid('content');
+  if (!Array.isArray(item.content)) governedRawItemInvalid('message_content_array');
+  if (item.content.length < 1) governedRawItemInvalid('message_content_empty');
+  if (item.content.length > 64) governedRawItemInvalid('message_content_limit');
   for (const part of item.content) {
     governedExactObject(part, ['type', 'text']);
     const allowed = assistant ? part.type === 'output_text' : part.type === 'input_text';
-    if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedRawItemInvalid('content');
+    if (!allowed) governedRawItemInvalid('message_content_kind');
+    if (typeof part.text !== 'string') governedRawItemInvalid('message_content_text_type');
+    if (Buffer.byteLength(part.text, 'utf8') > 131072) governedRawItemInvalid('message_content_text_limit');
   }
   governedPassthrough(item.internal_chat_message_metadata_passthrough, true);
 }
 function validateGovernedRawReasoning(item) {
   governedExactObject(item, ['type', 'id', 'summary', 'encrypted_content', 'internal_chat_message_metadata_passthrough']);
   if (item.type !== 'reasoning') governedRawItemInvalid('type'); governedSafeId(item.id);
-  if (!Array.isArray(item.summary) || item.summary.length !== 0 || typeof item.encrypted_content !== 'string' || Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedRawItemInvalid('content');
+  if (!Array.isArray(item.summary)) governedRawItemInvalid('reasoning_summary_array');
+  if (item.summary.length !== 0) governedRawItemInvalid('reasoning_summary_nonempty');
+  if (typeof item.encrypted_content !== 'string') governedRawItemInvalid('reasoning_encrypted_content_type');
+  if (Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedRawItemInvalid('reasoning_encrypted_content_limit');
   governedPassthrough(item.internal_chat_message_metadata_passthrough);
 }
 function createGovernedNativeCollector(profile) {
@@ -211,10 +218,13 @@ function createGovernedNativeCollector(profile) {
       if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); }
       governedSafeId(item.call_id);
       if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id)) governedRawItemInvalid('call_output_pairing');
-      if (!Array.isArray(item.output) || item.output.length > 64) governedRawItemInvalid('content');
+      if (!Array.isArray(item.output)) governedRawItemInvalid('tool_output_array');
+      if (item.output.length > 64) governedRawItemInvalid('tool_output_limit');
       for (const part of item.output) {
         governedExactObject(part, ['type', 'text']);
-        if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid('content');
+        if (part.type !== 'input_text') governedRawItemInvalid('tool_output_kind');
+        if (typeof part.text !== 'string') governedRawItemInvalid('tool_output_text_type');
+        if (Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid('tool_output_text_limit');
       }
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
       relevantEventCount++;
