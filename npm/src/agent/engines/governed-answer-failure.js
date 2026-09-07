@@ -7,7 +7,7 @@ const GOVERNED_NATIVE_EVENT_FAILURE_BOUNDARIES = new Set([
 ]);
 const GOVERNED_NATIVE_EVENT_FAILURE_RAW_ITEM_PREDICATES = new Set([
   'shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
-  'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit',
+  'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit', 'tool_event_limit', 'tool_call_limit',
   'final_answer_cardinality',
 ]);
 const GOVERNED_NATIVE_EVENT_FAILURE_SUBREASONS = new Set([

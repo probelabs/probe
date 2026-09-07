@@ -160,7 +160,7 @@ function sanitizeText(value, paths = {}, maxLength = 1024) {
 
 const GOVERNED_RAW_ITEM_PREDICATES = new Set([
   'shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
-  'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit',
+  'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit', 'tool_event_limit', 'tool_call_limit',
   'final_answer_cardinality',
 ]);
 

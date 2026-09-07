@@ -13,6 +13,7 @@ import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs, validate
 import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './governed-answer-failure.js';
 
 const GOVERNED_NATIVE_EVENT_LIMIT = 256;
+const GOVERNED_WRITER_RAW_RESPONSE_ITEM_LIMIT = 1024;
 const GOVERNED_SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const GOVERNED_SAFE_KIND = /^[A-Za-z0-9._:-]{1,64}$/;
 const CODEX_REQUEST_TIMEOUT_DEFAULT = 600000;
@@ -23,6 +24,11 @@ const GOVERNED_PROBE_MCP_CALLS = new Map([
   ['mcp__probe__search', 'search'], ['mcp__probe__extract', 'extract'], ['mcp__probe__listFiles', 'listFiles'],
 ]);
 function governedNativeProfile(profile) { return Array.isArray(profile?.codexNativeTools); }
+function governedRawResponseItemLimit(profile) {
+  return profile?.version === 'probe.governed-codex-profile/v3' &&
+    profile?.profileId === 'luna-xhigh-isolated-writer-v1'
+    ? GOVERNED_WRITER_RAW_RESPONSE_ITEM_LIMIT : GOVERNED_NATIVE_EVENT_LIMIT;
+}
 
 function emitGovernedRequestTimeout(agent, profile, session, method, timeoutMs) {
   if (!profile || typeof agent?.events?.emit !== 'function') return;
@@ -135,6 +141,7 @@ function validateGovernedRawReasoning(item) {
 function createGovernedNativeCollector(profile) {
   let sessionEvent = null, requestId = null, threadId = null, nativeCallCount = 0;
   const nativeToolCounts = new Map(profile.codexNativeTools?.map((name) => [name, 0]) ?? []);
+  const rawResponseItemLimit = governedRawResponseItemLimit(profile);
   let relevantEventCount = 0, totalCallCount = 0, rawResponseItemCount = 0, assistantMessageCount = 0, finalAnswerCount = 0;
   const rawIds = new Set(), callOrigins = new Map(), outputIds = new Set();
   function observe(event) {
@@ -158,7 +165,7 @@ function createGovernedNativeCollector(profile) {
     const msg = governedExactObject(params.msg, ['type', 'item'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid('envelope_shape');
     const item = msg.item;
-    if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('event_limit');
+    if (++rawResponseItemCount > rawResponseItemLimit) governedRawItemInvalid('event_limit');
     if (item?.type === 'message') {
       validateGovernedRawMessage(item);
       if (Object.prototype.hasOwnProperty.call(item, 'id')) {
@@ -184,7 +191,10 @@ function createGovernedNativeCollector(profile) {
       if (item.status !== 'completed') governedRawItemInvalid('status');
       if (typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedRawItemInvalid('input');
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('event_limit');
+      relevantEventCount++;
+      totalCallCount++;
+      if (totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('tool_call_limit');
+      if (relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('tool_event_limit');
       const origin = nativeName !== undefined ? 'codex-native' : 'probe-mcp';
       rawIds.add(item.id); callOrigins.set(item.call_id, origin);
       if (origin === 'codex-native') {
@@ -207,7 +217,8 @@ function createGovernedNativeCollector(profile) {
         if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid('content');
       }
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('event_limit');
+      relevantEventCount++;
+      if (relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('tool_event_limit');
       if (hasId) rawIds.add(item.id);
       outputIds.add(item.call_id);
       return;

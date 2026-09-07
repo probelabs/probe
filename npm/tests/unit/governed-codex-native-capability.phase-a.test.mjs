@@ -12,13 +12,25 @@ import { governedAnswerFailure,
 
 const TOOLS = ['search', 'extract', 'listFiles'];
 const PROFILE_ID = 'luna-xhigh-readonly-native-exec-v1';
+const WRITER_PROFILE_ID = 'luna-xhigh-isolated-writer-v1';
 const schema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
   properties: { ok: { type: 'boolean' } } });
 const profile = (cwd) => ({ version: 'probe.governed-codex-profile/v2', profileId: PROFILE_ID, engine: 'codex',
   model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never', cwd,
   probeMcpTools: [...TOOLS], codexNativeTools: ['exec'], fallback: false, retries: 0 });
+const writerProfile = (cwd) => ({ version: 'probe.governed-codex-profile/v3', profileId: WRITER_PROFILE_ID,
+  engine: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'workspace-write',
+  approvalPolicy: 'never', cwd, probeMcpTools: [...TOOLS], codexNativeTools: ['apply_patch', 'exec'],
+  fallback: false, retries: 0 });
 const permission = () => ({ type: 'managed', file_system: { type: 'restricted', entries: [
   { access: 'read', path: { type: 'special', value: { kind: 'root' } } }
+] }, network: 'restricted' });
+const writerPermission = (cwd) => ({ type: 'managed', file_system: { type: 'restricted', entries: [
+  { access: 'read', path: { type: 'special', value: { kind: 'root' } } },
+  { access: 'write', path: { type: 'path', path: cwd } },
+  { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.git` } },
+  { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.agents` } },
+  { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.codex` } }
 ] }, network: 'restricted' });
 const session = (cwd, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '', msg: {
   type: 'session_configured', session_id: 'session-safe', thread_id: 'session-safe', model: 'gpt-5.6-luna',
@@ -202,6 +214,7 @@ import { createInterface } from 'node:readline';
 writeFileSync(process.env.PROBE_NATIVE_PID_FILE, String(process.pid));
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 const permission = ${permission.toString()};
+const writerPermission = ${writerPermission.toString()};
 const session = ${session.toString()};
 const native = ${native.toString()};
 const passthrough = { turn_id: 'raw-secret-turn' };
@@ -213,6 +226,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const args = request.params.arguments, cwd = args.cwd, prompt = args.prompt;
   writeFileSync(process.env.PROBE_NATIVE_ARGS_FILE, JSON.stringify(args));
   const configured = (session)(cwd);
+  if (args.sandbox === 'workspace-write') configured.params.msg.permission_profile = writerPermission(cwd);
   const foreignSession = (foreignRequestId = 99) => {
     const event = (session)(cwd);
     event.params._meta = { requestId: foreignRequestId, threadId: 'SECRET_FOREIGN_THREAD' };
@@ -375,6 +389,18 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[DOUBLE-FINAL]')) { raw(message('final-one', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] })); raw(message('final-two', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] })); }
   if (prompt.includes('[PHASE-UNKNOWN]')) raw(message('phase-safe', 'assistant', 'future_phase', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
   if (prompt.includes('[OVERFLOW-MESSAGES]')) for (let index = 0; index < 257; index++) raw(message('message-' + index, 'user'));
+  if (prompt.includes('[MESSAGES-256]')) {
+    for (let index = 0; index < 255; index++) raw(message('message-' + index, 'user'));
+    raw(message('readonly-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  }
+  if (prompt.includes('[WRITER-RAW-1024]')) {
+    for (let index = 0; index < 1023; index++) raw(message('writer-message-' + index, 'user'));
+    raw(message('writer-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  }
+  if (prompt.includes('[WRITER-RAW-1025]')) {
+    for (let index = 0; index < 1024; index++) raw(message('writer-message-' + index, 'user'));
+    raw(message('writer-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  }
   if (prompt.includes('[NONTOOL]')) {
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'content is not retained' }], internal_chat_message_metadata_passthrough: passthrough } } } });
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'reasoning', id: 'reasoning-safe', summary: [], encrypted_content: 'opaque', internal_chat_message_metadata_passthrough: passthrough } } } });
@@ -434,6 +460,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
   else if (prompt.includes('[UNKNOWN]')) emitCall(0, { type: 'future_tool_call' });
   else if (prompt.includes('[DUPLICATE]')) { emitCall(0); emitCall(0); }
   else if (prompt.includes('[CROSS]')) { const event = (native)(0); event.params._meta.threadId = 'other-session'; send(event); }
+  else if (prompt.includes('[WRITER-TOOL-256]')) for (let index = 0; index < 256; index++) emitCall(index);
+  else if (prompt.includes('[WRITER-TOOL-257]')) for (let index = 0; index < 257; index++) emitCall(index);
+  else if (prompt.includes('[WRITER-TOOL-EVENT-257]')) {
+    for (let index = 0; index < 129; index++) emitCall(index);
+    for (let index = 0; index < 128; index++) raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-' + index,
+      output: [], internal_chat_message_metadata_passthrough: passthrough });
+  }
   else if (prompt.includes('[OVERFLOW]')) for (let index = 0; index < 257; index++) emitCall(index);
   if (prompt.includes('[AMBIGUOUS]')) { const event = (native)(0); delete event.params.msg.item.status; send(event); send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
   if (prompt.includes('[PROVIDER-ERROR]')) { send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
@@ -454,13 +487,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const priorProjection = process.env.PROBE_NATIVE_PROJECTION_FILE;
   await writeFile(executable, fake); await chmod(executable, 0o755); process.env.PATH = `${bin}:${priorPath}`;
   let runIndex = 0;
-  async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }) {
+  async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, governedProfile = profile(root)) {
     const index = runIndex++, pidFile = join(root, `pid-${index}`), argsFile = join(root, `args-${index}`);
     const projectionFile = join(root, `projection-${index}`);
     process.env.PROBE_NATIVE_PID_FILE = pidFile; process.env.PROBE_NATIVE_ARGS_FILE = argsFile;
     process.env.PROBE_NATIVE_PROJECTION_FILE = projectionFile;
     const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [...TOOLS],
-      governedCodexProfile: profile(root), searchDelegate: false, disableMermaidValidation: true });
+      governedCodexProfile: governedProfile, searchDelegate: false, disableMermaidValidation: true });
     const events = []; agent.events.on('toolCall', (event) => events.push(event));
     let result, error;
     try { result = await agent.answerGoverned(marker, options); }
@@ -564,6 +597,30 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assert.equal(attempt8Serialized.includes(secret), false);
     const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
     assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+    const readonlyRaw256 = await run('[MESSAGES-256]'); assert.ifError(readonlyRaw256.error);
+    assert.deepEqual(readonlyRaw256.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+
+    const writerRaw1024 = await run('[WRITER-RAW-1024]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assert.ifError(writerRaw1024.error);
+    assert.deepEqual(writerRaw1024.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+    const writerRaw1025 = await run('[WRITER-RAW-1025]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assertFailure(writerRaw1025, 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'event_limit');
+    const writerTool256 = await run('[WRITER-TOOL-256]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assert.ifError(writerTool256.error);
+    assert.deepEqual(writerTool256.result.runtimeAttestation.observed.nativeTools,
+      { total: 256, tools: [{ name: 'exec', status: 'completed', count: 256 }] });
+    const writerTool257 = await run('[WRITER-TOOL-257]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assertFailure(writerTool257, 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'tool_call_limit');
+    const writerToolEvents257 = await run('[WRITER-TOOL-EVENT-257]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assertFailure(writerToolEvents257, 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'tool_event_limit');
 
     for (const marker of ['[SERVICE-TIER-CURRENT]', '[SERVICE-TIER-DEFAULT]', '[SERVICE-TIER-PRIORITY]',
       '[SERVICE-TIER-FLEX]']) {
@@ -643,7 +700,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.equal(JSON.stringify(governedAnswerFailure('native_event_grammar', 'SECRET_raw_item_predicate'))
       .includes('SECRET_'), false);
     const rawItemPredicates = ['shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
-      'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit',
+      'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit', 'tool_event_limit', 'tool_call_limit',
       'final_answer_cardinality'];
     for (const predicate of rawItemPredicates) {
       const failure = governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null,
