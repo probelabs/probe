@@ -283,9 +283,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[LIVE-RESPONSE-ID-BOOLEAN]')) liveEnvelope(event => { event.params.id = true; });
   if (prompt.includes('[LIVE-RESPONSE-ID-ARRAY]')) liveEnvelope(event => { event.params.id = []; });
   if (prompt.includes('[LIVE-RESPONSE-ID-OBJECT]')) liveEnvelope(event => { event.params.id = {}; });
-  const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
-    content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
+  const message = (id, role, phase, metadata = currentMessagePassthrough, text = 'SECRET_MESSAGE_BODY') => ({ type: 'message', id, role,
+    content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }],
     ...(role === 'assistant' ? { phase } : {}), internal_chat_message_metadata_passthrough: metadata });
+  if (prompt.includes('[FINAL-OUTPUT-TEXT]')) {
+    raw(message('final-commentary', 'assistant', 'commentary', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }, 'COMMENTARY_SENTINEL_MUST_NOT_BE_PARSED'));
+    raw(message('final-answer', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }, '{"ok":true}'));
+  }
   if (prompt.includes('[ATTEMPT7]')) {
     raw(message('developer-safe', 'developer'));
     raw(message('user-safe', 'user'));
@@ -506,7 +510,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
     : prompt.includes('[SCHEMA-ARRAY-TWO]') ? '{"ok":[1,2]}'
     : prompt.includes('[BADSCHEMA]') || prompt.includes('[SCHEMA-ENUM]') ? '{"ok":"wrong"}'
     : prompt.includes('[NONCANONICAL]') ? '{"ok":1e309}' : '{"ok":true}';
-  send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
+  send({ jsonrpc: '2.0', id: request.id, result: { content: prompt.includes('[FINAL-OUTPUT-TEXT]') ? [] : [{ type: 'text', text }] } });
 });
 `;
   const executable = join(bin, 'codex'), priorPath = process.env.PATH;
@@ -622,6 +626,10 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const attempt8Serialized = JSON.stringify({ result: attempt8.result, events: attempt8.events });
     for (const secret of ['SECRET_', 'raw-secret', 'attempt8-', 'create_time', 'content_item_kinds'])
       assert.equal(attempt8Serialized.includes(secret), false);
+    const finalOutputText = await run('[FINAL-OUTPUT-TEXT]'); assert.ifError(finalOutputText.error);
+    assert.deepEqual(finalOutputText.result.data, { ok: true });
+    assert.equal(finalOutputText.result.runtimeAttestation.version, 'probe.governed-codex-attestation/v3');
+    assert.equal(JSON.stringify(finalOutputText.result).includes('COMMENTARY_SENTINEL_MUST_NOT_BE_PARSED'), false);
     const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
     assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
     const readonlyRaw256 = await run('[MESSAGES-256]'); assert.ifError(readonlyRaw256.error);

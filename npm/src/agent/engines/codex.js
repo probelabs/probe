@@ -568,9 +568,17 @@ export async function createCodexEngine(options = {}) {
           if (msg.type === 'raw_response_item' && msg.item?.role === 'assistant') {
             const content = msg.item.content;
             if (Array.isArray(content)) {
-              for (const part of content) {
-                if (part.type === 'text' && part.text) {
-                  fullResponse += part.text;
+              if (governedProfile) {
+                if (msg.item.phase === 'final_answer') {
+                  for (const part of content) {
+                    if (part.type === 'output_text' && part.text) fullResponse += part.text;
+                  }
+                }
+              } else {
+                for (const part of content) {
+                  if (part.type === 'text' && part.text) {
+                    fullResponse += part.text;
+                  }
                 }
               }
             }
@@ -639,9 +647,11 @@ export async function createCodexEngine(options = {}) {
         }
 
         // Parse result
+        let resultHasText = false;
         if (result && result.content && Array.isArray(result.content)) {
           for (const item of result.content) {
             if (item.type === 'text' && item.text) {
+              resultHasText = true;
               yield {
                 type: 'text',
                 content: item.text
@@ -652,7 +662,7 @@ export async function createCodexEngine(options = {}) {
         }
 
         // If we got a response from events but not from result, yield it
-        if (fullResponse && (!result.content || result.content.length === 0)) {
+        if (fullResponse && (governedProfile ? !resultHasText : (!result.content || result.content.length === 0))) {
           yield {
             type: 'text',
             content: fullResponse
