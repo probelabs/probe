@@ -20,7 +20,7 @@
 
 import { access, mkdir, mkdtemp, readFile, readdir, realpath, stat, symlink, writeFile } from 'node:fs/promises';
 import { constants as fsConstants } from 'node:fs';
-import { delimiter, dirname, isAbsolute, join, normalize, relative } from 'node:path';
+import { delimiter, dirname, isAbsolute, join, normalize, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
@@ -276,12 +276,13 @@ function extractApplyPatchLiteral(input) {
   return call.arguments[0].value;
 }
 
-function deniedOutput(text) {
+export function deniedOutput(text) {
   return typeof text === 'string' && /(?:denied|not allowed|permission denied|not writable|outside (?:the )?(?:workspace|worktree|cwd|project)|sandbox.{0,40}(?:deny|reject|outside)|read[- ]only|access denied|cannot write|can't write|operation not permitted|rejected by (?:user )?approval settings|writing outside)/i.test(text);
 }
 
-function successfulOutput(text) {
-  return typeof text === 'string' && text.trim() === '[{}]' && !deniedOutput(text);
+export function successfulOutput(text) {
+  if (typeof text !== 'string' || deniedOutput(text)) return false;
+  return /^Script completed\nWall time \d+(?:\.\d+)? seconds\nOutput:\n\n\{\}$/.test(text);
 }
 
 async function parseRollout(path, before, canonicalA, workerB, codexHome, startedAt, endedAt, paths) {
@@ -621,9 +622,11 @@ async function main() {
   }
 }
 
-main().then(code => { process.exitCode = code; }).catch(async error => {
-  const outputPath = await writeEarlyFailure(error);
-  if (outputPath) console.error(JSON.stringify({ category: 'failure', stage: 'setup', outputPath }));
-  else console.error(`LIVE WRITER HARNESS ERROR: ${error?.name ?? 'Error'} (${error?.message ? 'redacted' : 'unknown'})`);
-  process.exitCode = 2;
-});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then(code => { process.exitCode = code; }).catch(async error => {
+    const outputPath = await writeEarlyFailure(error);
+    if (outputPath) console.error(JSON.stringify({ category: 'failure', stage: 'setup', outputPath }));
+    else console.error(`LIVE WRITER HARNESS ERROR: ${error?.name ?? 'Error'} (${error?.message ? 'redacted' : 'unknown'})`);
+    process.exitCode = 2;
+  });
+}
