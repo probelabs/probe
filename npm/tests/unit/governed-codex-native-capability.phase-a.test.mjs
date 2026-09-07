@@ -286,9 +286,10 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const message = (id, role, phase, metadata = currentMessagePassthrough, text = 'SECRET_MESSAGE_BODY') => ({ type: 'message', id, role,
     content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }],
     ...(role === 'assistant' ? { phase } : {}), internal_chat_message_metadata_passthrough: metadata });
-  if (prompt.includes('[FINAL-OUTPUT-TEXT]')) {
+  if (prompt.includes('[FINAL-OUTPUT-TEXT]') || prompt.includes('[RESULT-AUTHORITATIVE]') || prompt.includes('[MALFORMED-FINAL]')) {
     raw(message('final-commentary', 'assistant', 'commentary', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }, 'COMMENTARY_SENTINEL_MUST_NOT_BE_PARSED'));
-    raw(message('final-answer', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }, '{"ok":true}'));
+    raw(message('final-answer', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] },
+      prompt.includes('[MALFORMED-FINAL]') ? 'not-json' : '{"ok":true}'));
   }
   if (prompt.includes('[ATTEMPT7]')) {
     raw(message('developer-safe', 'developer'));
@@ -510,7 +511,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
     : prompt.includes('[SCHEMA-ARRAY-TWO]') ? '{"ok":[1,2]}'
     : prompt.includes('[BADSCHEMA]') || prompt.includes('[SCHEMA-ENUM]') ? '{"ok":"wrong"}'
     : prompt.includes('[NONCANONICAL]') ? '{"ok":1e309}' : '{"ok":true}';
-  send({ jsonrpc: '2.0', id: request.id, result: { content: prompt.includes('[FINAL-OUTPUT-TEXT]') ? [] : [{ type: 'text', text }] } });
+  const resultContent = prompt.includes('[FINAL-OUTPUT-TEXT]') || prompt.includes('[MALFORMED-FINAL]') || prompt.includes('[EMPTY-CANDIDATE]')
+    ? [] : prompt.includes('[RESULT-AUTHORITATIVE]')
+      ? [{ type: 'text', text: '{"ok":false}' }] : prompt.includes('[MULTI-RESULT]')
+        ? [{ type: 'text', text: '{"ok":' }, { type: 'text', text: 'true}' }] : prompt.includes('[MIXED-RESULT]')
+          ? [{ type: 'text', text: '' }, { type: 'text', text: '{"ok":true}' }] : prompt.includes('[EMPTY-RESULT-TEXT]')
+          ? [{ type: 'text', text: '' }] : [{ type: 'text', text }];
+  send({ jsonrpc: '2.0', id: request.id, result: { content: resultContent } });
 });
 `;
   const executable = join(bin, 'codex'), priorPath = process.env.PATH;
@@ -518,13 +525,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const priorProjection = process.env.PROBE_NATIVE_PROJECTION_FILE;
   await writeFile(executable, fake); await chmod(executable, 0o755); process.env.PATH = `${bin}:${priorPath}`;
   let runIndex = 0;
-  async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, governedProfile = profile(root)) {
+  async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, governedProfile = profile(root), hooks = undefined) {
     const index = runIndex++, pidFile = join(root, `pid-${index}`), argsFile = join(root, `args-${index}`);
     const projectionFile = join(root, `projection-${index}`);
     process.env.PROBE_NATIVE_PID_FILE = pidFile; process.env.PROBE_NATIVE_ARGS_FILE = argsFile;
     process.env.PROBE_NATIVE_PROJECTION_FILE = projectionFile;
     const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [...TOOLS],
-      governedCodexProfile: governedProfile, searchDelegate: false, disableMermaidValidation: true });
+      governedCodexProfile: governedProfile, searchDelegate: false, disableMermaidValidation: true, ...(hooks ? { hooks } : {}) });
     const events = []; agent.events.on('toolCall', (event) => events.push(event));
     let result, error;
     try { result = await agent.answerGoverned(marker, options); }
@@ -626,10 +633,108 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const attempt8Serialized = JSON.stringify({ result: attempt8.result, events: attempt8.events });
     for (const secret of ['SECRET_', 'raw-secret', 'attempt8-', 'create_time', 'content_item_kinds'])
       assert.equal(attempt8Serialized.includes(secret), false);
-    const finalOutputText = await run('[FINAL-OUTPUT-TEXT]'); assert.ifError(finalOutputText.error);
+    const finalCandidates = [];
+    const finalOutputText = await run('[FINAL-OUTPUT-TEXT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => {
+          finalCandidates.push(candidate);
+          assert.equal(Object.isFrozen(candidate), true);
+          assert.equal(Object.isFrozen(candidate.boundary), true);
+          try { candidate.text = 'MUTATED'; } catch {}
+          try { candidate.boundary.selectedOrigin = 'none'; } catch {}
+          throw new Error('candidate hook failure is observational');
+        }
+      });
+    assert.ifError(finalOutputText.error);
     assert.deepEqual(finalOutputText.result.data, { ok: true });
     assert.equal(finalOutputText.result.runtimeAttestation.version, 'probe.governed-codex-attestation/v3');
     assert.equal(JSON.stringify(finalOutputText.result).includes('COMMENTARY_SENTINEL_MUST_NOT_BE_PARSED'), false);
+    assert.equal(finalCandidates.length, 1);
+    assert.equal(finalCandidates[0].version, 'probe.governed-answer-candidate/v1');
+    assert.equal(finalCandidates[0].text, '{"ok":true}');
+    assert.deepEqual(finalCandidates[0].boundary, {
+      selectedOrigin: 'raw_final', selectedChunkCount: 1, selectedBytes: Buffer.byteLength('{"ok":true}'),
+      resultTextItemCount: 0, resultTextBytes: 0, rawFinalMessageCount: 1, rawFinalPartCount: 1,
+      rawFinalBytes: Buffer.byteLength('{"ok":true}')
+    });
+
+    const resultCandidates = [];
+    const resultAuthoritative = await run('[RESULT-AUTHORITATIVE]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => resultCandidates.push(candidate)
+      });
+    assert.ifError(resultAuthoritative.error);
+    assert.deepEqual(resultAuthoritative.result.data, { ok: false });
+    assert.deepEqual(resultCandidates[0].boundary, {
+      selectedOrigin: 'result_content', selectedChunkCount: 1, selectedBytes: Buffer.byteLength('{"ok":false}'),
+      resultTextItemCount: 1, resultTextBytes: Buffer.byteLength('{"ok":false}'), rawFinalMessageCount: 1,
+      rawFinalPartCount: 1, rawFinalBytes: Buffer.byteLength('{"ok":true}')
+    });
+
+    const multiCandidates = [];
+    const multiResult = await run('[MULTI-RESULT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => multiCandidates.push(candidate)
+      });
+    assert.ifError(multiResult.error);
+    assert.deepEqual(multiResult.result.data, { ok: true });
+    assert.deepEqual(multiCandidates[0].boundary, {
+      selectedOrigin: 'result_content', selectedChunkCount: 2, selectedBytes: Buffer.byteLength('{"ok":true}'),
+      resultTextItemCount: 2, resultTextBytes: Buffer.byteLength('{"ok":true}'), rawFinalMessageCount: 0,
+      rawFinalPartCount: 0, rawFinalBytes: 0
+    });
+
+    const malformedCandidates = [];
+    const malformed = await run('[MALFORMED-FINAL]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => malformedCandidates.push(candidate)
+      });
+    assertFailure(malformed, 'schema_result_validation', null, null, null, null, 'response_json');
+    assert.equal(malformedCandidates[0].text, 'not-json');
+    assert.equal(malformedCandidates[0].boundary.selectedOrigin, 'raw_final');
+
+    const emptyCandidates = [];
+    const empty = await run('[EMPTY-CANDIDATE]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => emptyCandidates.push(candidate)
+      });
+    assertFailure(empty, 'schema_result_validation', null, null, null, null, 'response_json');
+    assert.deepEqual(emptyCandidates[0], {
+      version: 'probe.governed-answer-candidate/v1', text: '',
+      boundary: {
+        selectedOrigin: 'none', selectedChunkCount: 0, selectedBytes: 0,
+        resultTextItemCount: 0, resultTextBytes: 0, rawFinalMessageCount: 0,
+        rawFinalPartCount: 0, rawFinalBytes: 0
+      }
+    });
+
+    const emptyResultTextCandidates = [];
+    const emptyResultText = await run('[EMPTY-RESULT-TEXT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => emptyResultTextCandidates.push(candidate)
+      });
+    assertFailure(emptyResultText, 'schema_result_validation', null, null, null, null, 'response_json');
+    assert.deepEqual(emptyResultTextCandidates[0], {
+      version: 'probe.governed-answer-candidate/v1', text: '',
+      boundary: {
+        selectedOrigin: 'none', selectedChunkCount: 0, selectedBytes: 0,
+        resultTextItemCount: 1, resultTextBytes: 0, rawFinalMessageCount: 0,
+        rawFinalPartCount: 0, rawFinalBytes: 0
+      }
+    });
+
+    const mixedResultCandidates = [];
+    const mixedResult = await run('[MIXED-RESULT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => mixedResultCandidates.push(candidate)
+      });
+    assert.ifError(mixedResult.error);
+    assert.deepEqual(mixedResult.result.data, { ok: true });
+    assert.deepEqual(mixedResultCandidates[0].boundary, {
+      selectedOrigin: 'result_content', selectedChunkCount: 1, selectedBytes: Buffer.byteLength('{"ok":true}'),
+      resultTextItemCount: 2, resultTextBytes: Buffer.byteLength('{"ok":true}'), rawFinalMessageCount: 0,
+      rawFinalPartCount: 0, rawFinalBytes: 0
+    });
     const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
     assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
     const readonlyRaw256 = await run('[MESSAGES-256]'); assert.ifError(readonlyRaw256.error);

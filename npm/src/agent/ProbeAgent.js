@@ -137,6 +137,33 @@ function freezeGovernedTree(value) {
   return value;
 }
 
+const GOVERNED_CANDIDATE_ORIGINS = new Set(['result_content', 'raw_final', 'none']);
+const GOVERNED_CANDIDATE_BOUNDARY_FIELDS = [
+  'selectedChunkCount', 'selectedBytes', 'resultTextItemCount', 'resultTextBytes',
+  'rawFinalMessageCount', 'rawFinalPartCount', 'rawFinalBytes'
+];
+
+function governedCandidateUint(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function governedCandidateOwn(value, key) {
+  if (!value || typeof value !== 'object') return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch { return undefined; }
+}
+
+function projectGovernedCandidateBoundary(value) {
+  const selectedOriginValue = governedCandidateOwn(value, 'selectedOrigin');
+  const selectedOrigin = GOVERNED_CANDIDATE_ORIGINS.has(selectedOriginValue)
+    ? selectedOriginValue : 'none';
+  const projected = { selectedOrigin };
+  for (const field of GOVERNED_CANDIDATE_BOUNDARY_FIELDS) projected[field] = governedCandidateUint(governedCandidateOwn(value, field));
+  return Object.freeze(projected);
+}
+
 function identifyGovernedResult(value) {
   const data = freezeGovernedTree(normalizeGovernedJson(value));
   const canonical = Buffer.from(JSON.stringify(data), 'utf8');
@@ -3548,6 +3575,7 @@ Follow these instructions carefully:
       if (!engine?.query) throw governedAnswerFailure('internal_contract');
       const candidateChunks = [];
       let runtimeAttestation;
+      let candidateBoundary;
       let attestationCount = 0;
       let nativeToolBatch;
       let nativeToolBatchCount = 0;
@@ -3559,6 +3587,7 @@ Follow these instructions carefully:
           if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
           else if (chunk.type === 'metadata' && chunk.data?.attestation) {
             runtimeAttestation = chunk.data.attestation;
+            if (chunk.data.candidateBoundary !== undefined) candidateBoundary = projectGovernedCandidateBoundary(chunk.data.candidateBoundary);
             attestationCount++;
           } else if (chunk.type === 'toolBatch') {
             nativeToolBatch = chunk;
@@ -3595,7 +3624,15 @@ Follow these instructions carefully:
         throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
           'native_capability_aggregate');
       }
-      const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
+      const candidateText = candidateChunks.join('');
+      const candidate = Object.freeze({
+        version: 'probe.governed-answer-candidate/v1',
+        text: candidateText,
+        boundary: candidateBoundary || projectGovernedCandidateBoundary(undefined),
+      });
+      try { await this.hooks.emit(HOOK_TYPES.MESSAGE_ASSISTANT, candidate); }
+      catch { /* Candidate observation is not part of parsing or authority. */ }
+      const validation = validateJsonResponse(candidateText, {debug:this.debug,schema});
       if (!validation.isValid) throw governedSchemaResultValidationFailure(validation);
       if (hasResultIdentity) {
         let identified;

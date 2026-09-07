@@ -538,6 +538,7 @@ export async function createCodexEngine(options = {}) {
 
         const reqId = requestId + 1;
         let fullResponse = '';
+        let rawFinalMessageCount = 0, rawFinalPartCount = 0, rawFinalBytes = 0;
         let gotSessionId = false;
         const collector = governedProfile ? createGovernedNativeCollector(governedProfile) : null;
         let evidenceFailure = null;
@@ -570,8 +571,13 @@ export async function createCodexEngine(options = {}) {
             if (Array.isArray(content)) {
               if (governedProfile) {
                 if (msg.item.phase === 'final_answer') {
+                  rawFinalMessageCount++;
                   for (const part of content) {
-                    if (part.type === 'output_text' && part.text) fullResponse += part.text;
+                    if (part.type === 'output_text') {
+                      rawFinalPartCount++;
+                      if (typeof part.text === 'string') rawFinalBytes += Buffer.byteLength(part.text, 'utf8');
+                      if (part.text) fullResponse += part.text;
+                    }
                   }
                 }
               } else {
@@ -648,8 +654,21 @@ export async function createCodexEngine(options = {}) {
 
         // Parse result
         let resultHasText = false;
+        let resultUsableTextItemCount = 0, resultUsableTextBytes = 0, resultSelectedChunkCount = 0;
+        let resultUsableText = '';
+        let candidateBoundary = null;
         if (result && result.content && Array.isArray(result.content)) {
           for (const item of result.content) {
+            if (governedProfile && item.type === 'text' &&
+              (typeof item.text === 'string' || item.text)) {
+              const selectedText = String(item.text);
+              resultUsableTextItemCount++;
+              resultUsableTextBytes += Buffer.byteLength(selectedText, 'utf8');
+              if (item.text) {
+                resultSelectedChunkCount++;
+                resultUsableText += selectedText;
+              }
+            }
             if (item.type === 'text' && item.text) {
               resultHasText = true;
               yield {
@@ -669,6 +688,21 @@ export async function createCodexEngine(options = {}) {
           };
         }
 
+        if (governedProfile) {
+          const selectedOrigin = resultHasText ? 'result_content' : fullResponse ? 'raw_final' : 'none';
+          const selectedChunk = resultHasText ? resultUsableText : fullResponse;
+          candidateBoundary = Object.freeze({
+            selectedOrigin,
+            selectedChunkCount: resultHasText ? resultSelectedChunkCount : fullResponse ? 1 : 0,
+            selectedBytes: Buffer.byteLength(selectedChunk, 'utf8'),
+            resultTextItemCount: resultUsableTextItemCount,
+            resultTextBytes: resultUsableTextBytes,
+            rawFinalMessageCount,
+            rawFinalPartCount,
+            rawFinalBytes,
+          });
+        }
+
         if (governedNativeProfile(governedProfile)) {
           yield { type: 'toolBatch', total: attestation.observed.nativeTools.total,
             tools: attestation.observed.nativeTools.tools.map((item) => ({ ...item })) };
@@ -678,7 +712,7 @@ export async function createCodexEngine(options = {}) {
 
         yield {
           type: 'metadata',
-          data: governedProfile ? { attestation } : {
+          data: governedProfile ? { attestation, candidateBoundary } : {
             sessionId: session.id,
             conversationId: session.conversationId,
             messageCount: session.messageCount
