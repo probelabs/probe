@@ -119,6 +119,7 @@ export function buildGovernedCodexInitialToolArgs(input) {
   if (typeof input.prompt !== 'string' || Buffer.byteLength(input.prompt, 'utf8') < 1 || Buffer.byteLength(input.prompt, 'utf8') > 131072) invalid('prompt');
   const mcp = validateMcp(input.mcp);
   const features = Object.fromEntries(FEATURE_NAMES.map((name) => [name, false]));
+  if (profile.version === PROFILE_V3_VALUES.version && profile.profileId === PROFILE_V3_VALUES.profileId) features.shell_tool = true;
   const tools = Object.fromEntries(ENABLED_TOOLS.map((name) => [name, { approval_mode: 'approve' }]));
   const server = { url: mcp.url, default_tools_approval_mode: 'prompt', enabled_tools: [...ENABLED_TOOLS], tools };
   const writerSandbox = profile.sandbox === 'workspace-write' ? {

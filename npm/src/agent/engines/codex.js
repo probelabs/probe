@@ -24,6 +24,18 @@ const GOVERNED_PROBE_MCP_CALLS = new Map([
 ]);
 function governedNativeProfile(profile) { return Array.isArray(profile?.codexNativeTools); }
 
+function emitGovernedRequestTimeout(agent, profile, session, method, timeoutMs) {
+  if (!profile || typeof agent?.events?.emit !== 'function') return;
+  const sessionId = typeof session?.id === 'string' && GOVERNED_SAFE_ID.test(session.id) ? session.id : null;
+  const boundary = method === 'initialize' ? 'acquire' : method === 'tools/call' ? 'query' : null;
+  if (!boundary) return;
+  const record = Object.freeze({
+    category: 'request_timeout', method, boundary, timeout_ms: timeoutMs,
+    profileId: profile.profileId, sessionId,
+  });
+  try { agent.events.emit('timeout.request', record); } catch { /* timeout rejection must remain authoritative */ }
+}
+
 function validateCodexRequestTimeout(value) {
   return Number.isInteger(value) && value >= CODEX_REQUEST_TIMEOUT_MIN && value <= CODEX_REQUEST_TIMEOUT_MAX
     ? value : CODEX_REQUEST_TIMEOUT_DEFAULT;
@@ -406,6 +418,7 @@ export async function createCodexEngine(options = {}) {
       const timer = setTimeout(() => {
         if (pendingRequests.has(id)) {
           pendingRequests.delete(id);
+          emitGovernedRequestTimeout(agent, governedProfile, session, method, requestTimeout);
           reject(new Error(`Request ${method} timed out after ${requestTimeout}ms`));
         }
       }, requestTimeout);

@@ -87,6 +87,7 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     const args = buildGovernedCodexInitialToolArgs({ profile: normalized, prompt: 'bounded',
       mcp: { name: 'probe_0123456789abcdef', url: 'http://127.0.0.1:12345/mcp' } });
     const server = args.config.mcp_servers.probe_0123456789abcdef;
+    assert.equal(args.config.features.shell_tool, false);
     assert.deepEqual(server.enabled_tools, ['mcp__probe__search', 'mcp__probe__extract', 'mcp__probe__listFiles']);
     assert.equal(JSON.stringify(server).includes('exec'), false);
     const aggregate = { total: 1, tools: [{ name: 'exec', status: 'completed', count: 1 }] };

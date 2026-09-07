@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
@@ -61,6 +62,15 @@ async function collect(iterator) {
   return chunks;
 }
 
+function isolatedWriterProfile(cwd) {
+  return {
+    version: 'probe.governed-codex-profile/v3', profileId: 'luna-xhigh-isolated-writer-v1', engine: 'codex',
+    model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'workspace-write', approvalPolicy: 'never', cwd,
+    probeMcpTools: ['search', 'extract', 'listFiles'], codexNativeTools: ['apply_patch', 'exec'],
+    fallback: false, retries: 0,
+  };
+}
+
 function alive(pid) {
   try {
     process.kill(pid, 0);
@@ -83,6 +93,39 @@ test('Codex request timeout is bounded, diagnostic, and cleans up a hung child',
       assert.equal(alive(state.pid), false);
     } finally {
       await engine?.close().catch(() => {});
+    }
+  });
+});
+
+test('governed Codex timeout emits one bounded record before normalized failure', async () => {
+  await withFakeCodex(async ({ root, stateFile }) => {
+    const cwd = realpathSync(root);
+    const profile = isolatedWriterProfile(cwd);
+    const agent = new ProbeAgent({ provider: 'codex', path: cwd, cwd, allowedTools: ['search', 'extract', 'listFiles'],
+      governedCodexProfile: profile, requestTimeout: 1000, disableSkills: true });
+    const timeouts = [];
+    agent.events.on('timeout.request', record => timeouts.push(record));
+    let engine;
+    try {
+      engine = await agent.getEngine();
+      const output = await collect(engine.query('[WAIT]'));
+      const error = output.find(chunk => chunk.type === 'error')?.error;
+      assert.equal(error?.name, 'GovernedAnswerFailure');
+      assert.equal(error?.answerFailureStage, 'provider_engine');
+      assert.equal(error?.providerEngineFailureBoundary, 'query');
+      assert.equal(error?.message, '');
+      assert.deepEqual(timeouts, [{
+        category: 'request_timeout', method: 'tools/call', boundary: 'query', timeout_ms: 1000,
+        profileId: profile.profileId, sessionId: engine.sessionId,
+      }]);
+      assert.equal(Object.isFrozen(timeouts[0]), true);
+      const serialized = JSON.stringify(timeouts[0]);
+      for (const forbidden of [cwd, 'WAIT', 'prompt', 'params', 'environment', 'error'])
+        assert.equal(serialized.includes(forbidden), false, forbidden);
+      const state = await readState(stateFile);
+      assert.equal(alive(state.pid), false);
+    } finally {
+      await agent.cleanup().catch(() => {});
     }
   });
 });

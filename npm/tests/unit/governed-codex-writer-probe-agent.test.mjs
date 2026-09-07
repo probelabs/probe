@@ -137,6 +137,9 @@ test('writer dispatch args are closed before Codex process or MCP startup', asyn
   const profile = writerProfile(cwd);
   const args = buildGovernedCodexInitialToolArgs({ profile, prompt: 'bounded writer',
     mcp: { name: 'probe_0123456789abcdef', url: 'http://127.0.0.1:43123/mcp' } });
+  assert.equal(args.config.features.shell_tool, true);
+  assert.equal(Object.isFrozen(args.config.features), true);
+  assert.throws(() => { args.config.features.shell_tool = false; }, TypeError);
   assert.deepEqual(args.config.sandbox_workspace_write, {
     network_access: false, writable_roots: [], exclude_tmpdir_env_var: true, exclude_slash_tmp: true,
   });
@@ -149,7 +152,7 @@ test('writer dispatch args are closed before Codex process or MCP startup', asyn
         'tool_suggest', 'plugins', 'in_app_browser', 'browser_use', 'browser_use_full_cdp_access',
         'browser_use_external', 'computer_use', 'remote_plugin', 'plugin_sharing', 'image_generation',
         'skill_mcp_dependency_install', 'hooks', 'request_permissions_tool', 'standalone_web_search',
-      ].map(name => [name, false])),
+      ].map(name => [name, name === 'shell_tool'])),
       skills: { include_instructions: false },
       sandbox_workspace_write: { network_access: false, writable_roots: [], exclude_tmpdir_env_var: true, exclude_slash_tmp: true },
       mcp_servers: { probe_0123456789abcdef: {
