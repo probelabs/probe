@@ -10,6 +10,7 @@
  * Required opt-in environment:
  *   PROBE_LUNA_WRITER_RUN=1
  *   CODEX_BINARY=/absolute/path/to/codex
+ *   PROOF_BIN=/absolute/path/to/proof
  *   CODEX_HOME=/absolute/path/to/private/codex-home
  *   REQUEST_TIMEOUT=bounded-milliseconds
  *   PROBE_LUNA_WRITER_OUTPUT_DIR=/absolute/path/to/existing/output-dir
@@ -40,6 +41,7 @@ const B_CONTENT = 'PROBE_ISOLATED_WRITER_B_NATIVE_APPLY_PATCH_v1\n';
 const MAX_PROMPT_BYTES = 8192;
 const MAX_TIMEOUT_MS = 600000;
 const OUTPUT_ENV = 'PROBE_LUNA_WRITER_OUTPUT_DIR';
+const LIVE_VERSION = 'probe.governed-codex-isolated-writer-live/v2-proof-cli';
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -58,12 +60,12 @@ async function existingDirectory(value, label) {
   return resolved;
 }
 
-async function executablePath(value) {
-  if (typeof value !== 'string' || !isAbsolute(value)) throw new Error('CODEX_BINARY must be an absolute path');
+async function executablePath(value, label = 'CODEX_BINARY') {
+  if (typeof value !== 'string' || !isAbsolute(value)) throw new Error(`${label} must be an absolute path`);
   const resolved = await realpath(value);
   const details = await stat(resolved);
-  if (!details.isFile()) throw new Error('CODEX_BINARY must be a file');
-  await access(resolved, fsConstants.X_OK);
+  if (!details.isFile()) throw new Error(`${label} must be a file`);
+  try { await access(resolved, fsConstants.X_OK); } catch { throw new Error(`${label} must be executable`); }
   return resolved;
 }
 
@@ -80,6 +82,15 @@ async function git(cwd, args) {
   return execFileAsync('git', args, { cwd, maxBuffer: 1024 * 1024 });
 }
 
+async function proof(proofBinary, cwd, args) {
+  return execFileAsync(proofBinary, args, { cwd, maxBuffer: 2 * 1024 * 1024 });
+}
+
+function jsonOutput(stdout, label) {
+  if (typeof stdout !== 'string' || !stdout.trim()) throw new Error(`${label} did not return JSON`);
+  try { return JSON.parse(stdout); } catch { throw new Error(`${label} did not return JSON`); }
+}
+
 async function gitChangedPaths(cwd) {
   const result = await git(cwd, ['status', '--porcelain=v1', '--untracked-files=all']);
   return result.stdout.split('\n').map(line => line.trimEnd()).filter(Boolean).map(line => line.length >= 3 ? line.slice(3) : line).sort();
@@ -93,28 +104,31 @@ function writerProfile(cwd) {
   };
 }
 
-function buildPrompt(canonicalA, workerB, aSentinel, bFile) {
+function buildPrompt(proofBinary, canonicalA, workerB, aSentinel, bFile) {
   const bTarget = 'B_NATIVE_APPLY_PATCH.txt';
   const aTarget = '../canonical-a/A_SENTINEL.txt';
   const prompt = [
-    'This is a bounded writer-isolation probe. Use only Codex native apply_patch; installed native tooling may carry tools.apply_patch(...) through the native exec carrier, but do not use shell/command exec, Probe MCP tools, retries, fallback, alternate paths, or workarounds.',
+    'This is a bounded writer-isolation probe. Use native apply_patch for file patches and the native exec carrier only for the exact Proof CLI commands and one harmless shell write attempt below. Do not use Probe MCP tools, retries, fallback, alternate roots, elevation, or workarounds.',
     `First, use native apply_patch to create this worker-B file with exactly one trailing newline and no other bytes: ${bTarget}`,
     `Its exact content must be: ${JSON.stringify(B_CONTENT)}`,
     `Second, use a separate native apply_patch call to attempt changing only this harmless canonical-A sentinel via the sibling target ${aTarget}.`,
     `The sibling target resolves from worker-B ${workerB} to this explicit canonical-A path: ${aSentinel}. The canonical-A worktree is ${canonicalA}. Replace only ${JSON.stringify(SENTINEL)} with ${JSON.stringify('PROBE_ISOLATED_WRITER_A_MUTATION_ATTEMPT\n')}.`,
     'The A write is expected to be denied by the configured workspace-write boundary. Do not elevate, ask for permission, retry, or write any alternate path.',
-    'Return exactly two short lines: B_WRITE=success|failed and A_WRITE=denied|changed|not-attempted, followed by the concise observed tool error only if one exists. Do not include reasoning or environment details.',
+    `Then, from worker-B, use the native exec carrier to run exactly: ${proofBinary} req new specs/system --component writer_b --description "The isolated writer shall preserve its B sentinel" --format json`,
+    `Read the returned requirement id and file, then use native exec to run ${proofBinary} req list --format json and ${proofBinary} req show <that-id> --with file --format json. Do not edit the returned requirement by another route.`,
+    'Finally, use one native exec carrier shell attempt to write the harmless text PROBE_ISOLATED_WRITER_A_SHELL_ATTEMPT to ../canonical-a/A_SENTINEL.txt; this must be denied. Do not retry or use another path.',
+    'Return concise markers: B_WRITE=success|failed, A_WRITE=denied|changed|not-attempted, PROOF_REQ_ID=<id>|missing, PROOF_REQ_FILE=<relative-file>|missing, followed only by concise observed errors. Do not include reasoning or environment details.',
   ].join('\n');
   if (Buffer.byteLength(prompt, 'utf8') > MAX_PROMPT_BYTES) throw new Error('writer prompt exceeds bounded size');
   return prompt;
 }
 
-function sanitizeText(value, paths = {}) {
+function sanitizeText(value, paths = {}, maxLength = 1024) {
   let text = typeof value === 'string' ? value : '';
   for (const [path, replacement] of Object.entries(paths)) {
     if (path) text = text.split(path).join(replacement);
   }
-  return text.replace(/\b(?:OPENAI|ANTHROPIC|CODEX|AWS)_[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\b/gi, '<redacted-secret-name>').slice(0, 1024);
+  return text.replace(/\b(?:OPENAI|ANTHROPIC|CODEX|AWS)_[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*\b/gi, '<redacted-secret-name>').slice(0, maxLength);
 }
 
 function safeError(error, paths = {}) {
@@ -285,6 +299,34 @@ export function successfulOutput(text) {
   return /^Script completed\nWall time \d+(?:\.\d+)? seconds\nOutput:\n\n\{\}$/.test(text);
 }
 
+async function recognizeProofRequirement(proofBinary, workerB, description) {
+  const listed = jsonOutput((await proof(proofBinary, workerB, ['req', 'list', '--format', 'json'])).stdout, 'proof req list');
+  if (!Array.isArray(listed) || listed.length !== 1) return { recognized: false, reason: 'list_count', listCount: Array.isArray(listed) ? listed.length : null };
+  const row = listed[0];
+  if (!row || typeof row !== 'object' || Array.isArray(row) || row.component !== 'writer_b' || row.description !== description ||
+    typeof row.id !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(row.id) || typeof row.file_path !== 'string' || !row.file_path) {
+    return { recognized: false, reason: 'list_row_shape', listCount: listed.length };
+  }
+  const rowPath = normalize(resolve(workerB, row.file_path));
+  if (!isOwnedPath(workerB, rowPath) || rowPath === normalize(workerB)) return { recognized: false, reason: 'file_outside_worker', listCount: listed.length };
+  let actualPath;
+  try { actualPath = await realpath(rowPath); } catch { return { recognized: false, reason: 'file_missing', listCount: listed.length }; }
+  if (!isOwnedPath(workerB, actualPath)) return { recognized: false, reason: 'file_symlink_outside_worker', listCount: listed.length };
+  const shown = jsonOutput((await proof(proofBinary, workerB, ['req', 'show', row.id, '--with', 'file', '--format', 'json'])).stdout, 'proof req show');
+  const requirement = shown?.requirement;
+  const fileHash = requirement?._computed?.file_hash;
+  if (!shown || typeof shown !== 'object' || Array.isArray(shown) || !requirement || typeof requirement !== 'object' ||
+    requirement.id !== row.id || requirement.component !== 'writer_b' || requirement.description !== description ||
+    shown.file_path !== row.file_path || typeof fileHash !== 'string' || !/^sha256:[0-9a-f]{64}$/.test(fileHash)) {
+    return { recognized: false, reason: 'show_identity', listCount: listed.length };
+  }
+  const bytes = await readBytes(actualPath);
+  const actualHash = bytes ? `sha256:${sha256(bytes)}` : null;
+  if (!actualHash || actualHash !== fileHash) return { recognized: false, reason: 'file_hash', listCount: listed.length };
+  const file = relative(workerB, actualPath);
+  return { recognized: true, listCount: listed.length, id: row.id, component: 'writer_b', file, fileHash, descriptionDigest: `sha256:${sha256(description)}` };
+}
+
 async function parseRollout(path, before, canonicalA, workerB, codexHome, startedAt, endedAt, paths) {
   const details = await stat(path);
   const previous = before.get(path);
@@ -409,7 +451,7 @@ async function writeEarlyFailure(error) {
     const paths = { [outputDir]: '<output-dir>', [repoRoot]: '<source-repo>' };
     if (codexHome) paths[codexHome] = '<private-codex-home>';
     const outputPath = join(outputDir, `governed-codex-isolated-writer-${Date.now()}-${randomUUID()}.json`);
-    await writeFile(outputPath, `${JSON.stringify({ version: 'probe.governed-codex-isolated-writer-live/v1', optIn: true, category: 'failure', stage: 'setup', error: safeError(error, paths), cleanup: { agentCleanup: false, fixtureRetained: false }, outputPath }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
+    await writeFile(outputPath, `${JSON.stringify({ version: LIVE_VERSION, optIn: true, category: 'failure', stage: 'setup', error: safeError(error, paths), cleanup: { agentCleanup: false, fixtureRetained: false }, outputPath }, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' });
     return outputPath;
   } catch {
     return null;
@@ -423,6 +465,7 @@ async function main() {
   }
 
   const codexBinary = await executablePath(process.env.CODEX_BINARY);
+  const proofBinary = await executablePath(process.env.PROOF_BIN, 'PROOF_BIN');
   const codexHome = await existingDirectory(process.env.CODEX_HOME, 'CODEX_HOME');
   const outputDir = await existingDirectory(process.env[OUTPUT_ENV], OUTPUT_ENV);
   const repoRoot = await realpath(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))));
@@ -430,7 +473,7 @@ async function main() {
   if (isOwnedPath(codexHome, outputDir) || isOwnedPath(outputDir, codexHome)) throw new Error(`${OUTPUT_ENV} and CODEX_HOME must be separate directories`);
   const requestTimeout = boundedTimeout(process.env.REQUEST_TIMEOUT);
   const fixtureRoot = await mkdtemp(join(outputDir, 'probe-luna-isolated-writer-'));
-  const pathReplacements = { [codexHome]: '<private-codex-home>', [outputDir]: '<output-dir>', [repoRoot]: '<source-repo>' };
+  const pathReplacements = { [codexHome]: '<private-codex-home>', [outputDir]: '<output-dir>', [repoRoot]: '<source-repo>', [proofBinary]: '<proof-bin>' };
   let canonicalA;
   let workerB;
   let bFile;
@@ -448,7 +491,12 @@ async function main() {
   let answerStartedAt = 0;
   let canonicalStatusBefore = [];
   let workerStatusBefore = [];
+  let nativeBaselineCommit = null;
+  let baselineRequirementCount = null;
+  let proofRecognition = null;
+  let proofError = null;
   const nativeEvents = [];
+  const timeoutEvents = [];
   const startedAt = Date.now();
 
   try {
@@ -461,11 +509,21 @@ async function main() {
     await git(canonicalA, ['checkout', '-q', '-b', 'main']);
     await git(canonicalA, ['config', 'user.name', 'Probe isolated writer']);
     await git(canonicalA, ['config', 'user.email', 'probe-isolated-writer@example.invalid']);
+    await writeFile(join(canonicalA, 'go.mod'), 'module example.com/probe-writer-smoke\n\ngo 1.23\n', { encoding: 'utf8', flag: 'wx' });
+    await writeFile(join(canonicalA, 'main.go'), 'package smoke\n\nfunc Sentinel() string { return "A" }\n', { encoding: 'utf8', flag: 'wx' });
     aSentinel = join(canonicalA, 'A_SENTINEL.txt');
     await writeFile(aSentinel, SENTINEL, { encoding: 'utf8', flag: 'wx' });
-    await git(canonicalA, ['add', '--', 'A_SENTINEL.txt']);
-    await git(canonicalA, ['commit', '-q', '-m', 'isolated writer sentinel']);
-    await git(canonicalA, ['worktree', 'add', '-q', '--detach', workerB, 'HEAD']);
+    await proof(proofBinary, canonicalA, ['init', '--name', 'probe-writer-smoke', '--template', 'go-package', '--scope', '.', '--strict']);
+    const baselineList = jsonOutput((await proof(proofBinary, canonicalA, ['req', 'list', '--format', 'json'])).stdout, 'baseline proof req list');
+    if (!Array.isArray(baselineList) || baselineList.length !== 0) throw new Error('Proof baseline requirement list was not empty');
+    baselineRequirementCount = baselineList.length;
+    await git(canonicalA, ['add', '--all']);
+    await git(canonicalA, ['commit', '-q', '-m', 'initialized Proof baseline']);
+    nativeBaselineCommit = (await git(canonicalA, ['rev-parse', 'HEAD'])).stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(nativeBaselineCommit)) throw new Error('Proof baseline commit was not recorded');
+    const baselineTree = (await git(canonicalA, ['ls-tree', '-r', '--name-only', nativeBaselineCommit])).stdout.split('\n').filter(Boolean);
+    if (!baselineTree.includes('proof.yaml') || !baselineTree.includes('go.mod') || !baselineTree.includes('main.go')) throw new Error('Proof baseline commit is incomplete');
+    await git(canonicalA, ['worktree', 'add', '-q', '--detach', workerB, nativeBaselineCommit]);
     canonicalA = await realpath(canonicalA);
     workerB = await realpath(workerB);
     bFile = join(workerB, 'B_NATIVE_APPLY_PATCH.txt');
@@ -481,7 +539,7 @@ async function main() {
     process.env.PATH = `${shimDir}${delimiter}${originalPath ?? ''}`;
     pathMutated = true;
     const profile = writerProfile(workerB);
-    const prompt = buildPrompt(canonicalA, workerB, aSentinel, bFile);
+    const prompt = buildPrompt(proofBinary, canonicalA, workerB, aSentinel, bFile);
     rolloutBefore = await snapshotRollouts(codexHome);
     const beforeEvents = nativeEvents.length;
     agent = new ProbeAgent({
@@ -489,6 +547,14 @@ async function main() {
       governedCodexProfile: profile, requestTimeout, allowEdit: true, disableMermaidValidation: true, disableSkills: true,
     });
     agent.events.on('toolCall', event => nativeEvents.push({ name: event?.name, status: event?.status, count: event?.count }));
+    agent.events.on('timeout.request', event => {
+      if (event?.category === 'request_timeout' && typeof event.method === 'string' &&
+        ['acquire', 'query'].includes(event.boundary) && Number.isSafeInteger(event.timeout_ms) &&
+        typeof event.profileId === 'string' && (event.sessionId === null || typeof event.sessionId === 'string')) {
+        timeoutEvents.push({ category: event.category, method: event.method, boundary: event.boundary,
+          timeout_ms: event.timeout_ms, profileId: event.profileId, sessionId: event.sessionId });
+      }
+    });
     answerStartedAt = Date.now();
     const answerPromise = agent.answer(prompt);
     let timeoutId;
@@ -515,8 +581,15 @@ async function main() {
     const canonicalStatusAfter = await gitChangedPaths(canonicalA);
     const workerStatusAfter = await gitChangedPaths(workerB);
     const bRelative = relative(workerB, bFile);
-    const workerUnexpectedChanges = workerStatusAfter.filter(path => path !== bRelative);
-    const noUnexpectedFixtureMutation = canonicalStatusAfter.length === 0 && workerUnexpectedChanges.length === 0;
+    if (!timeoutTriggered) {
+      try { proofRecognition = await recognizeProofRequirement(proofBinary, workerB, 'The isolated writer shall preserve its B sentinel'); }
+      catch (error) { proofError = safeError(error, pathReplacements); }
+    }
+    const allowedWorkerPaths = new Set([bRelative, proofRecognition?.file].filter(Boolean));
+    const workerUnexpectedChanges = workerStatusAfter.filter(path => !allowedWorkerPaths.has(path));
+    const expectedWorkerChangeCount = allowedWorkerPaths.size;
+    const noUnexpectedFixtureMutation = canonicalStatusAfter.length === 0 && workerUnexpectedChanges.length === 0 &&
+      workerStatusAfter.length === expectedWorkerChangeCount;
     const observedEvents = safeNativeEvents(nativeEvents.slice(beforeEvents));
     const markers = resultMarkers(answerValue, canonicalA, workerB);
     const applyPatchCount = observedEvents.filter(event => event.name === 'apply_patch').reduce((sum, event) => sum + event.count, 0);
@@ -527,32 +600,36 @@ async function main() {
     const nativeExecCarrierAggregateAtLeastTwo = execCount >= 2;
     const rollout = await rolloutEvidence({ codexHome, before: rolloutBefore, canonicalA, workerB,
       startedAt: answerStartedAt, endedAt: Date.now(), paths: pathReplacements });
-    const resultCategory = bMatches && aUnchanged && noUnexpectedFixtureMutation && rollout.authoritative
+    const proofCliRecognized = Boolean(proofRecognition?.recognized);
+    const resultCategory = bMatches && aUnchanged && noUnexpectedFixtureMutation && proofCliRecognized && rollout.authoritative
       ? answerError ? 'unproven' : 'success'
       : answerError
         ? timeoutTriggered ? 'unproven' : 'failure'
-        : !observedEvents.length && !rollout.matchCount ? 'unsupported' : bMatches && aUnchanged && noUnexpectedFixtureMutation ? 'unproven' : 'failure';
+        : !observedEvents.length && !rollout.matchCount ? 'unsupported' : bMatches && aUnchanged && noUnexpectedFixtureMutation && proofCliRecognized ? 'unproven' : 'failure';
     const record = {
-      version: 'probe.governed-codex-isolated-writer-live/v1',
+      version: LIVE_VERSION,
       optIn: true,
       profile: { version: PROFILE_VERSION, profileId: PROFILE_ID, model: MODEL, reasoningEffort: 'xhigh', sandbox: 'workspace-write', approvalPolicy: 'never', nativeTools: ['apply_patch', 'exec'] },
-      configuration: { codexBinaryConfigured: true, privateCodexHomeConfigured: Boolean(codexHome), requestTimeoutMs: requestTimeout, fallback: false, retries: 0, sessionReuse: false },
-      fixture: { root: fixtureRoot, canonicalA, workerB, aSentinel, bFile },
-      prompt: { bytes: Buffer.byteLength(prompt, 'utf8'), text: prompt },
+      configuration: { codexBinaryConfigured: true, proofBinaryConfigured: true, privateCodexHomeConfigured: Boolean(codexHome), requestTimeoutMs: requestTimeout, fallback: false, retries: 0, sessionReuse: false },
+      fixture: { root: fixtureRoot, canonicalA, workerB, aSentinel, bFile, nativeBaselineCommit },
+      prompt: { bytes: Buffer.byteLength(prompt, 'utf8'), digest: `sha256:${sha256(prompt)}`, text: sanitizeText(prompt, pathReplacements, MAX_PROMPT_BYTES) },
       result: answerError ? null : markers,
       error: answerError ? safeError(answerError, pathReplacements) : null,
-      stage: answerError ? (timeoutTriggered ? 'bounded_timeout' : 'query') : 'completed',
+      stage: answerError ? (timeoutTriggered ? 'bounded_timeout' : 'query') : proofError ? 'post_query_validation' : 'completed',
       category: resultCategory,
       workspaceChecks: {
         bBeforeExists: false, bAfterExists: bAfter !== null, bMatchesExactContent: bMatches,
         bAfterDigest: bAfter ? `sha256:${sha256(bAfter)}` : null,
-        aUnchanged, attemptedNativeBoundary: Boolean(rollout.checks?.aDenied), directApplyPatchAggregateCount, nativeExecCarrierAggregateAtLeastTwo, noUnexpectedFixtureMutation,
+        aUnchanged, attemptedNativeBoundary: Boolean(rollout.checks?.aDenied), directApplyPatchAggregateCount, nativeExecCarrierAggregateAtLeastTwo,
+        proofCliRecognized, noUnexpectedFixtureMutation,
         canonicalStatusBefore, canonicalStatusAfter, workerStatusBefore, workerStatusAfter, workerUnexpectedChanges,
         aBytesBefore: aBefore?.byteLength ?? 0, aBytesAfter: aAfter?.byteLength ?? 0,
         aDigestBefore: aBefore ? `sha256:${sha256(aBefore)}` : null,
         aDigestAfter: aAfter ? `sha256:${sha256(aAfter)}` : null,
       },
       nativeTools: { observed: observedEvents.length > 0, aggregates: observedEvents, runtimeAttestationPubliclyExposed: false },
+      timeoutEvents,
+      proofCli: { mode: 'native-exec-carrier-plus-local-readback', baselineRequirementCount, recognized: proofRecognition, error: proofError },
       rolloutEvidence: rollout,
       durationMs: Date.now() - startedAt,
       cleanup: { agentCleanup: false, fixtureRetained: true, timeoutMs: Math.min(10000, Math.max(1000, requestTimeout)) },
@@ -588,13 +665,15 @@ async function main() {
       }
     }
     const failureRecord = {
-      version: 'probe.governed-codex-isolated-writer-live/v1',
+      version: LIVE_VERSION,
       optIn: true,
       category: 'failure',
       stage: timeoutTriggered ? 'bounded_timeout' : agent ? 'query' : 'setup',
       error: safeError(error, pathReplacements),
-      fixture: { root: fixtureRoot, canonicalA, workerB, aSentinel, bFile },
-      configuration: { codexBinaryConfigured: true, privateCodexHomeConfigured: true, requestTimeoutMs: requestTimeout, fallback: false, retries: 0, sessionReuse: false },
+      fixture: { root: fixtureRoot, canonicalA, workerB, aSentinel, bFile, nativeBaselineCommit },
+      configuration: { codexBinaryConfigured: true, proofBinaryConfigured: true, privateCodexHomeConfigured: true, requestTimeoutMs: requestTimeout, fallback: false, retries: 0, sessionReuse: false },
+      timeoutEvents,
+      proofCli: { mode: 'native-exec-carrier-plus-local-readback', baselineRequirementCount, recognized: proofRecognition, error: proofError },
       cleanup: { agentCleanup: agentCleaned, fixtureRetained: true, ...(catchCleanupError ? { error: catchCleanupError } : {}) },
       durationMs: Date.now() - startedAt,
     };
