@@ -5,6 +5,11 @@ const GOVERNED_PROVIDER_ENGINE_FAILURE_BOUNDARIES = new Set(['acquire', 'query',
 const GOVERNED_NATIVE_EVENT_FAILURE_BOUNDARIES = new Set([
   'raw_item_predicate', 'live_envelope_session',
 ]);
+const GOVERNED_NATIVE_EVENT_FAILURE_RAW_ITEM_PREDICATES = new Set([
+  'shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
+  'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit',
+  'final_answer_cardinality',
+]);
 const GOVERNED_NATIVE_EVENT_FAILURE_SUBREASONS = new Set([
   'session_sequence', 'envelope_shape', 'correlation', 'attestation',
 ]);
@@ -76,7 +81,7 @@ export class GovernedAnswerFailure extends Error {
   constructor(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
     nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
     schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-    providerEngineFailureBoundary = null) {
+    providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null) {
     super();
     delete this.stack;
     const answerFailureStage = GOVERNED_ANSWER_FAILURE_STAGES.has(stage) ? stage : 'unknown';
@@ -95,6 +100,14 @@ export class GovernedAnswerFailure extends Error {
         ? nativeEventFailureBoundary : null,
       enumerable: true,
     });
+    if (answerFailureStage === 'native_event_grammar' &&
+      nativeEventFailureBoundary === 'raw_item_predicate') {
+      Object.defineProperty(this, 'nativeEventFailureRawItemPredicate', {
+        value: GOVERNED_NATIVE_EVENT_FAILURE_RAW_ITEM_PREDICATES.has(nativeEventFailureRawItemPredicate)
+          ? nativeEventFailureRawItemPredicate : null,
+        enumerable: true,
+      });
+    }
     if (answerFailureStage === 'native_event_grammar' &&
       nativeEventFailureBoundary === 'live_envelope_session') {
       Object.defineProperty(this, 'nativeEventFailureSubreason', {
@@ -143,21 +156,25 @@ export class GovernedAnswerFailure extends Error {
 export function governedAnswerFailure(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
   nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
   schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-  providerEngineFailureBoundary = null) {
+  providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null) {
   return new GovernedAnswerFailure(stage, nativeEventFailureBoundary, nativeEventFailureSubreason,
     nativeEventFailureCorrelationOperand, nativeEventFailureAttestationPredicate,
-    schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary);
+    schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary,
+    nativeEventFailureRawItemPredicate);
 }
 
 export function normalizeGovernedAnswerFailure(error, fallback = 'unknown', nativeEventFailureBoundary = null,
   nativeEventFailureSubreason = null, nativeEventFailureCorrelationOperand = null,
   schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-  providerEngineFailureBoundary = null, nativeEventFailureAttestationPredicate = null) {
+  providerEngineFailureBoundary = null, nativeEventFailureAttestationPredicate = null,
+  nativeEventFailureRawItemPredicate = null) {
   return error instanceof GovernedAnswerFailure ? error
     : governedAnswerFailure(fallback, nativeEventFailureBoundary, nativeEventFailureSubreason,
       nativeEventFailureCorrelationOperand,
       fallback === 'native_event_grammar' && nativeEventFailureBoundary === 'live_envelope_session' &&
         nativeEventFailureSubreason === 'attestation'
         ? nativeEventFailureAttestationPredicate ?? governedAttestationPredicate(error) : null,
-      schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary);
+      schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary,
+      fallback === 'native_event_grammar' && nativeEventFailureBoundary === 'raw_item_predicate'
+        ? nativeEventFailureRawItemPredicate : null);
 }

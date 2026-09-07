@@ -67,11 +67,13 @@ function validateGovernedEngineOverrides(options, profile) {
     parsed.allowed.some((name, index) => name !== expectedTools[index])) invalid('allowedTools');
 }
 
-function governedRawItemInvalid() { throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate'); }
+function governedRawItemInvalid(predicate) {
+  throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null, null, null, null, predicate);
+}
 function governedLiveEnvelopeInvalid(subreason, correlationOperand = null) {
   throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', subreason, correlationOperand);
 }
-function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
+function governedExactObject(value, keys, invalid = () => governedRawItemInvalid('shape')) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) invalid();
   const proto = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) invalid();
@@ -80,7 +82,7 @@ function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
   for (const key of keys) if (!Object.prototype.hasOwnProperty.call(Object.getOwnPropertyDescriptor(value, key), 'value')) invalid();
   return value;
 }
-function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedRawItemInvalid(); }
+function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedRawItemInvalid('id'); }
 function governedProbeMcpCallCount(evidence) {
   const invalid = () => { throw new TypeError('Invalid attester input'); };
   const snapshot = governedExactObject(evidence, ['admitted', 'closed', 'overflow'], invalid);
@@ -94,14 +96,14 @@ function governedPassthrough(value, message = false) {
   const keys = Object.keys(value ?? {}).sort().join(',');
   const legacy = keys === 'turn_id';
   const current = keys === (message ? 'content_item_kinds,create_time,turn_id' : 'create_time,turn_id');
-  if (!legacy && !current) governedRawItemInvalid();
+  if (!legacy && !current) governedRawItemInvalid('passthrough');
   governedSafeId(value.turn_id);
   if (current) {
     if (typeof value.create_time !== 'number' || !Number.isFinite(value.create_time) ||
-      value.create_time < 0 || value.create_time > Number.MAX_SAFE_INTEGER) governedRawItemInvalid();
+      value.create_time < 0 || value.create_time > Number.MAX_SAFE_INTEGER) governedRawItemInvalid('passthrough');
     if (message) {
-      if (!Array.isArray(value.content_item_kinds) || value.content_item_kinds.length > 16) governedRawItemInvalid();
-      for (const kind of value.content_item_kinds) if (typeof kind !== 'string' || !GOVERNED_SAFE_KIND.test(kind)) governedRawItemInvalid();
+      if (!Array.isArray(value.content_item_kinds) || value.content_item_kinds.length > 16) governedRawItemInvalid('passthrough');
+      for (const kind of value.content_item_kinds) if (typeof kind !== 'string' || !GOVERNED_SAFE_KIND.test(kind)) governedRawItemInvalid('passthrough');
     }
   }
 }
@@ -113,21 +115,21 @@ function validateGovernedRawMessage(item) {
       ? ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough']
       : ['type', 'role', 'content', 'internal_chat_message_metadata_passthrough'];
   governedExactObject(item, keys);
-  if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedRawItemInvalid();
+  if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedRawItemInvalid('type');
   if (Object.prototype.hasOwnProperty.call(item, 'id')) governedSafeId(item.id);
-  if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedRawItemInvalid();
-  if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedRawItemInvalid();
+  if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedRawItemInvalid('phase');
+  if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedRawItemInvalid('content');
   for (const part of item.content) {
     governedExactObject(part, ['type', 'text']);
     const allowed = assistant ? part.type === 'output_text' : part.type === 'input_text';
-    if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedRawItemInvalid();
+    if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedRawItemInvalid('content');
   }
   governedPassthrough(item.internal_chat_message_metadata_passthrough, true);
 }
 function validateGovernedRawReasoning(item) {
   governedExactObject(item, ['type', 'id', 'summary', 'encrypted_content', 'internal_chat_message_metadata_passthrough']);
-  if (item.type !== 'reasoning') governedRawItemInvalid(); governedSafeId(item.id);
-  if (!Array.isArray(item.summary) || item.summary.length !== 0 || typeof item.encrypted_content !== 'string' || Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedRawItemInvalid();
+  if (item.type !== 'reasoning') governedRawItemInvalid('type'); governedSafeId(item.id);
+  if (!Array.isArray(item.summary) || item.summary.length !== 0 || typeof item.encrypted_content !== 'string' || Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedRawItemInvalid('content');
   governedPassthrough(item.internal_chat_message_metadata_passthrough);
 }
 function createGovernedNativeCollector(profile) {
@@ -156,32 +158,33 @@ function createGovernedNativeCollector(profile) {
     const msg = governedExactObject(params.msg, ['type', 'item'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid('envelope_shape');
     const item = msg.item;
-    if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
+    if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('event_limit');
     if (item?.type === 'message') {
       validateGovernedRawMessage(item);
       if (Object.prototype.hasOwnProperty.call(item, 'id')) {
-        if (rawIds.has(item.id)) governedRawItemInvalid(); rawIds.add(item.id);
+        if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); rawIds.add(item.id);
       }
       if (item.role === 'assistant') { assistantMessageCount++; if (item.phase === 'final_answer') finalAnswerCount++; }
       return;
     }
     if (item?.type === 'reasoning') {
       validateGovernedRawReasoning(item);
-      if (rawIds.has(item.id)) governedRawItemInvalid(); rawIds.add(item.id);
+      if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); rawIds.add(item.id);
       return;
     }
     if (item?.type === 'custom_tool_call') {
       governedExactObject(item, ['type', 'id', 'status', 'call_id', 'name', 'input', 'internal_chat_message_metadata_passthrough']);
       governedSafeId(item.id); governedSafeId(item.call_id);
-      if (rawIds.has(item.id) || callOrigins.has(item.call_id)) governedRawItemInvalid();
+      if (rawIds.has(item.id) || callOrigins.has(item.call_id)) governedRawItemInvalid('duplicate');
       const nativeName = GOVERNED_CODEX_NATIVE_CALLS.get(item.name);
       const probeMcpName = GOVERNED_PROBE_MCP_CALLS.get(item.name);
-      if ((nativeName !== undefined) === (probeMcpName !== undefined)) governedRawItemInvalid();
-      if (nativeName !== undefined && !profile.codexNativeTools.includes(nativeName)) governedRawItemInvalid();
-      if (probeMcpName !== undefined && !profile.probeMcpTools.includes(probeMcpName)) governedRawItemInvalid();
-      if (item.status !== 'completed' || typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedRawItemInvalid();
+      if ((nativeName !== undefined) === (probeMcpName !== undefined)) governedRawItemInvalid('tool_name_or_allow');
+      if (nativeName !== undefined && !profile.codexNativeTools.includes(nativeName)) governedRawItemInvalid('tool_name_or_allow');
+      if (probeMcpName !== undefined && !profile.probeMcpTools.includes(probeMcpName)) governedRawItemInvalid('tool_name_or_allow');
+      if (item.status !== 'completed') governedRawItemInvalid('status');
+      if (typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedRawItemInvalid('input');
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
+      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('event_limit');
       const origin = nativeName !== undefined ? 'codex-native' : 'probe-mcp';
       rawIds.add(item.id); callOrigins.set(item.call_id, origin);
       if (origin === 'codex-native') {
@@ -195,24 +198,25 @@ function createGovernedNativeCollector(profile) {
       governedExactObject(item, hasId
         ? ['type', 'id', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']
         : ['type', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']);
-      if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedRawItemInvalid(); }
+      if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); }
       governedSafeId(item.call_id);
-      if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id) || !Array.isArray(item.output) || item.output.length > 64) governedRawItemInvalid();
+      if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id)) governedRawItemInvalid('call_output_pairing');
+      if (!Array.isArray(item.output) || item.output.length > 64) governedRawItemInvalid('content');
       for (const part of item.output) {
         governedExactObject(part, ['type', 'text']);
-        if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid();
+        if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid('content');
       }
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
+      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('event_limit');
       if (hasId) rawIds.add(item.id);
       outputIds.add(item.call_id);
       return;
     }
-    governedRawItemInvalid();
+    governedRawItemInvalid('type');
   }
   function evidence() {
     if (!sessionEvent) governedLiveEnvelopeInvalid('session_sequence');
-    if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedRawItemInvalid();
+    if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedRawItemInvalid('final_answer_cardinality');
     const tools = [];
     for (const name of profile.codexNativeTools ?? []) {
       const count = nativeToolCounts.get(name) ?? 0;

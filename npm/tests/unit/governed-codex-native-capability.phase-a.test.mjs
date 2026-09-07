@@ -32,7 +32,7 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
 }, id: '2' } });
 function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null,
   attestationPredicate = null, schemaSubreason = null, schemaKeyword = null,
-  providerEngineFailureBoundary = undefined) {
+  providerEngineFailureBoundary = undefined, rawItemPredicate = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
@@ -43,9 +43,14 @@ function assertFailure(result, stage, boundary = null, subreason = null, correla
       assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), true);
       assert.equal(result.error?.nativeEventFailureSubreason, subreason);
     } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), false);
+    if (boundary === 'raw_item_predicate') {
+      assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureRawItemPredicate'), true);
+      assert.equal(result.error?.nativeEventFailureRawItemPredicate, rawItemPredicate);
+    } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureRawItemPredicate'), false);
   } else {
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureBoundary'), false);
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), false);
+    assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureRawItemPredicate'), false);
   }
   if (stage === 'native_event_grammar' && boundary === 'live_envelope_session' && subreason === 'correlation') {
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureCorrelationOperand'), true);
@@ -410,6 +415,22 @@ createInterface({ input: process.stdin }).on('line', async line => {
   } else if (prompt.includes('[UNKNOWN-MCP]')) emitCall(0, { name: 'mcp__probe__bash' });
   else if (prompt.includes('[UNDECLARED]')) emitCall(0, { name: 'bash' });
   else if (prompt.includes('[MALFORMED]')) { const event = (native)(0); delete event.params.msg.item.status; send(event); }
+  else if (prompt.includes('[BAD-STATUS]')) emitCall(0, { status: 'in_progress' });
+  else if (prompt.includes('[BAD-INPUT]')) emitCall(0, { input: 7 });
+  else if (prompt.includes('[BAD-PASSTHROUGH]')) emitCall(0, {
+    internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn', extra: 'SECRET_EXTRA' }
+  });
+  else if (prompt.includes('[BAD-CONTENT]')) {
+    emitCall(0);
+    send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2',
+      msg: { type: 'raw_response_item', item: { type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+        output: [{ type: 'input_text', text: 7 }], internal_chat_message_metadata_passthrough: passthrough } } } });
+  }
+  else if (prompt.includes('[BAD-PAIR]')) send({ jsonrpc: '2.0', method: 'codex/event', params: {
+    _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: {
+      type: 'custom_tool_call_output', call_id: 'unknown-call', output: [], internal_chat_message_metadata_passthrough: passthrough
+    } }
+  } });
   else if (prompt.includes('[UNKNOWN]')) emitCall(0, { type: 'future_tool_call' });
   else if (prompt.includes('[DUPLICATE]')) { emitCall(0); emitCall(0); }
   else if (prompt.includes('[CROSS]')) { const event = (native)(0); event.params._meta.threadId = 'other-session'; send(event); }
@@ -551,8 +572,14 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assert.equal(JSON.stringify(compatible.result).includes('service_tier'), false);
     }
 
-    for (const marker of ['[UNKNOWN-MCP]', '[UNDECLARED]', '[MALFORMED]', '[UNKNOWN]', '[DUPLICATE]', '[OVERFLOW]']) {
-      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar', 'raw_item_predicate');
+    for (const [marker, predicate] of [
+      ['[UNKNOWN-MCP]', 'tool_name_or_allow'], ['[UNDECLARED]', 'tool_name_or_allow'],
+      ['[MALFORMED]', 'shape'], ['[BAD-STATUS]', 'status'], ['[BAD-INPUT]', 'input'],
+      ['[BAD-PASSTHROUGH]', 'passthrough'], ['[BAD-CONTENT]', 'content'], ['[BAD-PAIR]', 'call_output_pairing'],
+      ['[UNKNOWN]', 'type'], ['[DUPLICATE]', 'duplicate'], ['[OVERFLOW]', 'event_limit'],
+    ]) {
+      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar', 'raw_item_predicate',
+        null, null, null, null, null, undefined, predicate);
       assert.deepEqual(rejected.events, []);
     }
 
@@ -590,14 +617,23 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assertFailure(await run('[SESSION-OPTIONAL-' + optional + ']'), 'native_event_grammar',
         'live_envelope_session', 'attestation', null, 'session_shape');
 
-    for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',
-      '[DELTA-KINDS-OVERFLOW]', '[DELTA-KINDS-WRONG]', '[DELTA-KIND-UNSAFE]', '[DELTA-KIND-OVERSIZED]',
-      '[DELTA-PARTIAL]', '[DELTA-EXTRA]', '[DELTA-ID-UNSAFE]', '[DELTA-ID-OVERSIZED]', '[DELTA-DUP-ID]',
-      '[DELTA-OUTPUT-DUP-ID]', '[COMMENTARY-ONLY]', '[DOUBLE-FINAL]', '[PHASE-UNKNOWN]', '[OVERFLOW-MESSAGES]'])
-      assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate');
+    for (const [marker, predicate] of [
+      ['[DELTA-CREATE-NEGATIVE]', 'passthrough'], ['[DELTA-CREATE-NONFINITE]', 'passthrough'],
+      ['[DELTA-CREATE-UNSAFE]', 'passthrough'], ['[DELTA-KINDS-OVERFLOW]', 'passthrough'],
+      ['[DELTA-KINDS-WRONG]', 'passthrough'], ['[DELTA-KIND-UNSAFE]', 'passthrough'],
+      ['[DELTA-KIND-OVERSIZED]', 'passthrough'], ['[DELTA-PARTIAL]', 'passthrough'],
+      ['[DELTA-EXTRA]', 'passthrough'], ['[DELTA-ID-UNSAFE]', 'id'],
+      ['[DELTA-ID-OVERSIZED]', 'id'], ['[DELTA-DUP-ID]', 'duplicate'],
+      ['[DELTA-OUTPUT-DUP-ID]', 'duplicate'], ['[COMMENTARY-ONLY]', 'final_answer_cardinality'],
+      ['[DOUBLE-FINAL]', 'final_answer_cardinality'], ['[PHASE-UNKNOWN]', 'phase'],
+      ['[OVERFLOW-MESSAGES]', 'event_limit'],
+    ])
+      assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate',
+        null, null, null, null, null, undefined, predicate);
 
     assertFailure(await run('[PROVIDER-ERROR]'), 'provider_engine', null, null, null, null, null, null, 'query');
-    assertFailure(await run('[AMBIGUOUS]'), 'native_event_grammar', 'raw_item_predicate');
+    assertFailure(await run('[AMBIGUOUS]'), 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'shape');
     assert.equal(governedAnswerFailure('native_event_grammar').nativeEventFailureBoundary, null);
     assert.equal(governedAnswerFailure('native_event_grammar', ['raw_item_predicate', 'live_envelope_session'])
       .nativeEventFailureBoundary, null);
@@ -606,6 +642,30 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.equal(governedAnswerFailure('native_event_grammar', 'future_boundary').nativeEventFailureBoundary, null);
     assert.equal(JSON.stringify(governedAnswerFailure('native_event_grammar', 'SECRET_raw_item_predicate'))
       .includes('SECRET_'), false);
+    const rawItemPredicates = ['shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
+      'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit',
+      'final_answer_cardinality'];
+    for (const predicate of rawItemPredicates) {
+      const failure = governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null,
+        null, null, null, predicate);
+      assert.equal(failure.nativeEventFailureRawItemPredicate, predicate);
+      assert.deepEqual(Object.keys(failure), ['answerFailureStage', 'nativeEventFailureBoundary',
+        'nativeEventFailureRawItemPredicate']);
+      assert.equal(Object.getOwnPropertyDescriptor(failure, 'nativeEventFailureRawItemPredicate').enumerable, true);
+      assert.equal(Object.getOwnPropertyDescriptor(failure, 'nativeEventFailureRawItemPredicate').writable, false);
+      assert.equal(Object.isFrozen(failure), true);
+    }
+    for (const invalid of [undefined, null, ['shape'], { predicate: 'shape' }, 'SECRET_shape', '']) {
+      const failure = governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null,
+        null, null, null, invalid);
+      assert.equal(Object.hasOwn(failure, 'nativeEventFailureRawItemPredicate'), true);
+      assert.equal(failure.nativeEventFailureRawItemPredicate, null);
+      assert.equal(JSON.stringify(failure).includes('SECRET_'), false);
+    }
+    assert.equal(Object.hasOwn(governedAnswerFailure('provider_engine', null, null, null, null, null, null,
+      null, 'shape'), 'nativeEventFailureRawItemPredicate'), false);
+    assert.equal(Object.hasOwn(governedAnswerFailure('native_event_grammar', 'live_envelope_session', null, null,
+      null, null, null, null, 'shape'), 'nativeEventFailureRawItemPredicate'), false);
     for (const invalid of [['session_sequence', 'envelope_shape'], 'session_sequence|envelope_shape',
       'future_subreason', 'SECRET_session_sequence']) {
       const failure = governedAnswerFailure('native_event_grammar', 'live_envelope_session', invalid);
