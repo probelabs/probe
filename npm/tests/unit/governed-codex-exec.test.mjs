@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGovernedCodexExecEngine, previewGovernedCodexExecDispatch, validateGovernedCodexExecAttestation } from '../../src/agent/engines/governed-codex-exec.js';
+import { createGovernedCodexExecEngine, normalizeGovernedCodexExecFailure, previewGovernedCodexExecDispatch, projectGovernedCodexExecFailure, validateGovernedCodexExecAttestation } from '../../src/agent/engines/governed-codex-exec.js';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 function profile(cwd) {
@@ -190,6 +190,121 @@ test('governed exec rejects duplicate item identities and exposes only sanitized
       });
     } finally { await engine.close(); }
   } finally { rmSync(fixtureRoot.root, { recursive: true, force: true }); }
+});
+
+test('governed exec reports closed structural metadata for an unknown item key without its value', async () => {
+  const events = validEvents();
+  events[3].item['secret key'] = 'TOP_SECRET_ITEM_VALUE';
+  await withEngine(events, async engine => {
+    await assert.rejects(engine.run(), error => {
+      const diagnostic = projectGovernedCodexExecFailure(error);
+      assert.deepEqual(Object.keys(diagnostic), ['version', 'code', 'event']);
+      assert.equal(diagnostic.code, 'GOVERNED_CODEX_EXEC_ITEM');
+      assert.deepEqual(diagnostic.event, {
+        source: 'codex-exec-rejected-item/v1', predicate: 'item_keys',
+        eventType: 'item.completed', itemType: 'agent_message',
+        eventFields: [{ name: 'item', type: 'object' }, { name: 'type', type: 'string', size: 14 }],
+        itemFields: [
+          { name: '<unsafe>', type: 'string', size: 21 },
+          { name: 'id', type: 'string', size: 8 },
+          { name: 'text', type: 'string', size: 11 },
+          { name: 'type', type: 'string', size: 13 },
+        ],
+      });
+      assert.doesNotMatch(JSON.stringify(diagnostic), /TOP_SECRET_ITEM_VALUE/);
+      assert.equal(Object.isFrozen(diagnostic.event), true);
+      assert.equal(Object.isFrozen(diagnostic.event.itemFields), true);
+      return true;
+    });
+  });
+});
+
+test('exec failure projector drops forged nested event values instead of returning them', () => {
+  const diagnostic = projectGovernedCodexExecFailure({
+    code: 'GOVERNED_CODEX_EXEC_ITEM',
+    event: {
+      source: 'codex-exec-rejected-item/v1', predicate: 'item_text',
+      eventType: 'item.completed', itemType: 'agent_message',
+      eventFields: [{ name: 'item', type: 'object' }, { name: 'type', type: 'string', size: 14 }],
+      itemFields: [{ name: 'text', type: 'string', size: 6, value: 'SECRET' }],
+    },
+  });
+  assert.deepEqual(diagnostic, {
+    version: 'probe.governed-codex-exec-failure/v1', code: 'GOVERNED_CODEX_EXEC_ITEM',
+  });
+  assert.doesNotMatch(JSON.stringify(diagnostic), /SECRET/);
+});
+
+test('governed exec reports the rejected scalar type and never leaks its value', async () => {
+  const events = validEvents();
+  events[3].item.text = 987654321;
+  await withEngine(events, async engine => {
+    await assert.rejects(engine.run(), error => {
+      const diagnostic = projectGovernedCodexExecFailure(error);
+      assert.equal(diagnostic.code, 'GOVERNED_CODEX_EXEC_ITEM');
+      assert.equal(diagnostic.event.predicate, 'item_text');
+      assert.deepEqual(diagnostic.event.itemFields.find(field => field.name === 'text'), {
+        name: 'text', type: 'number',
+      });
+      assert.doesNotMatch(JSON.stringify(diagnostic), /987654321/);
+      assert.doesNotMatch(JSON.stringify(diagnostic), /TOP_SECRET/);
+      return true;
+    });
+  });
+});
+
+test('governed exec reports tool status violations and bounds fields after deterministic sorting', async () => {
+  const statusEvents = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { id: 'tool-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: 'probe', arguments: {}, result: null, status: 'invalid' } },
+  ];
+  await withEngine(statusEvents, async engine => {
+    await assert.rejects(engine.run(), error => {
+      const diagnostic = projectGovernedCodexExecFailure(error);
+      assert.equal(diagnostic.event.predicate, 'item_status');
+      assert.equal(diagnostic.event.eventType, 'item.started');
+      assert.equal(diagnostic.event.itemType, 'mcp_tool_call');
+      assert.deepEqual(diagnostic.event.itemFields.find(field => field.name === 'status'), {
+        name: 'status', type: 'string', size: 7,
+      });
+      return true;
+    });
+  });
+
+  const manyFields = validEvents();
+  for (let index = 0; index < 40; index += 1) manyFields[3].item[`extra${String(index).padStart(2, '0')}`] = index;
+  await withEngine(manyFields, async engine => {
+    await assert.rejects(engine.run(), error => {
+      const diagnostic = projectGovernedCodexExecFailure(error);
+      const fields = diagnostic.event.itemFields;
+      assert.equal(diagnostic.event.predicate, 'item_keys');
+      assert.equal(fields.length, 32);
+      assert.equal(fields[0].name, 'extra00');
+      assert.equal(fields.at(-1).name, 'extra31');
+      assert.equal(fields.some(field => field.name === 'extra29'), true);
+      assert.equal(fields.some(field => field.name === 'extra30'), true);
+      assert.equal(fields.some(field => field.name === 'id'), false);
+      assert.equal(fields.every(field => !Object.hasOwn(field, 'value')), true);
+      return true;
+    });
+  });
+});
+
+test('governed exec retains metadata for an oversized rejected text field', async () => {
+  const events = validEvents();
+  events[3].item.text = 'x'.repeat(131073);
+  await withEngine(events, async engine => {
+    await assert.rejects(engine.run(), error => {
+      const diagnostic = projectGovernedCodexExecFailure(error);
+      assert.equal(diagnostic.event.predicate, 'item_text');
+      assert.equal(diagnostic.event.itemFields.find(field => field.name === 'text').size, 131073);
+      const normalized = normalizeGovernedCodexExecFailure(error, 'query');
+      assert.equal(normalized.providerEngineDiagnostic.event.itemFields.find(field => field.name === 'text').size, 131073);
+      assert.doesNotMatch(JSON.stringify(normalized), /xxxxxxxx/);
+      return true;
+    });
+  });
 });
 
 test('governed exec cancellation and timeout terminate the process group without retry', async () => {

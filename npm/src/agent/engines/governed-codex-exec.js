@@ -40,6 +40,14 @@ const GOVERNED_CODEX_EXEC_FAILURE_CODES = new Set([
   'ITEM_ORDER', 'ITEM_STATUS', 'JSONL', 'MCP', 'MCP_EVIDENCE', 'ONE_QUERY', 'OUTPUT_OVERFLOW',
   'SETUP', 'SPAWN', 'TIMEOUT', 'TOOL_POLICY', 'USAGE', 'VERSION', 'EXIT',
 ].map(code => `GOVERNED_CODEX_EXEC_${code}`));
+const GOVERNED_CODEX_EXEC_ITEM_PREDICATES = new Set([
+  'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
+  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_changes', 'item_status', 'tool_id',
+]);
+const GOVERNED_CODEX_EXEC_ITEM_TYPES = new Set(['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change']);
+const GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES = new Set(['item.started', 'item.completed']);
+const GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
+const GOVERNED_CODEX_EXEC_FIELD_TYPES = new Set(['null', 'array', 'object', 'string', 'number', 'boolean']);
 const USAGE_KEYS = new Set([
   'input_tokens', 'cached_input_tokens', 'cache_write_input_tokens',
   'output_tokens', 'reasoning_output_tokens'
@@ -59,11 +67,12 @@ function summarizeStderr(value) {
   return Object.freeze({ source: 'codex-exec-stderr/v1', bytes, digest: sha256(value), ...(safeMessage ? { safeMessage } : {}) });
 }
 
-function fail(code, diagnostic = undefined) {
+function fail(code, diagnostic = undefined, event = undefined) {
   const error = new Error(`GOVERNED_CODEX_EXEC_${code}`);
   error.code = `GOVERNED_CODEX_EXEC_${code}`;
   const stderr = summarizeStderr(diagnostic);
   if (stderr) Object.defineProperty(error, 'diagnostic', { value: stderr, enumerable: true });
+  if (event !== undefined) Object.defineProperty(error, 'event', { value: event, enumerable: true });
   return error;
 }
 
@@ -73,6 +82,52 @@ function ownDataValue(value, key) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor && 'value' in descriptor ? descriptor.value : undefined;
   } catch { return undefined; }
+}
+
+function describeFieldType(descriptor) {
+  if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, 'value')) return 'object';
+  const value = descriptor.value;
+  if (value === null) return 'null';
+  if (Array.isArray(value)) return 'array';
+  const type = typeof value;
+  return GOVERNED_CODEX_EXEC_FIELD_TYPES.has(type) ? type : 'object';
+}
+
+function describeFields(value) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return Object.freeze([]);
+  let keys;
+  try { keys = Object.keys(value); } catch { return Object.freeze([]); }
+  const fields = [];
+  for (const key of keys.sort().slice(0, 32)) {
+    let descriptor;
+    try { descriptor = Object.getOwnPropertyDescriptor(value, key); } catch { continue; }
+    if (!descriptor) continue;
+    const rawName = key;
+    const name = GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME.test(rawName) ? rawName : '<unsafe>';
+    const type = describeFieldType(descriptor);
+    const field = { name, type };
+    if (Object.prototype.hasOwnProperty.call(descriptor, 'value') && typeof descriptor.value === 'string') {
+      field.size = Buffer.byteLength(descriptor.value, 'utf8');
+    } else if (Object.prototype.hasOwnProperty.call(descriptor, 'value') && Array.isArray(descriptor.value)) {
+      field.size = descriptor.value.length;
+    }
+    fields.push(field);
+  }
+  fields.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+  return Object.freeze(fields.map(field => Object.freeze(field)));
+}
+
+function rejectedItemEvent(event, predicate) {
+  const item = ownDataValue(event, 'item');
+  const itemType = ownDataValue(item, 'type');
+  if (!GOVERNED_CODEX_EXEC_ITEM_PREDICATES.has(predicate) ||
+      !GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES.has(ownDataValue(event, 'type')) ||
+      !GOVERNED_CODEX_EXEC_ITEM_TYPES.has(itemType)) return undefined;
+  return freeze({
+    source: 'codex-exec-rejected-item/v1', predicate,
+    eventType: ownDataValue(event, 'type'), itemType,
+    eventFields: describeFields(event), itemFields: describeFields(item),
+  });
 }
 
 function projectExecStderr(value) {
@@ -86,12 +141,50 @@ function projectExecStderr(value) {
   return Object.freeze({ source, bytes, digest, ...(safeMessage === 'access_token_refresh_revoked' ? { safeMessage } : {}) });
 }
 
+function projectExecItemFields(value) {
+  if (!Array.isArray(value) || value.length > 32) return undefined;
+  const fields = [];
+  let previousName = null;
+  for (const field of value) {
+    if (!ownObject(field)) return undefined;
+    const keys = Object.keys(field).sort();
+    if (keys.join(',') !== 'name,type' && keys.join(',') !== 'name,size,type') return undefined;
+    const name = ownDataValue(field, 'name');
+    const type = ownDataValue(field, 'type');
+    if (typeof name !== 'string' || (name !== '<unsafe>' && !GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME.test(name)) ||
+        !GOVERNED_CODEX_EXEC_FIELD_TYPES.has(type) || (previousName !== null && name < previousName)) return undefined;
+    const hasSize = keys.includes('size');
+    const size = ownDataValue(field, 'size');
+    if (hasSize && (type !== 'string' && type !== 'array' || !Number.isSafeInteger(size) || size < 0)) return undefined;
+    if (!hasSize && (type === 'string' || type === 'array')) return undefined;
+    fields.push(Object.freeze({ name, type, ...(hasSize ? { size } : {}) }));
+    previousName = name;
+  }
+  return Object.freeze(fields);
+}
+
+function projectExecItemEvent(value) {
+  if (!ownObject(value) || Object.keys(value).sort().join(',') !== 'eventFields,eventType,itemFields,itemType,predicate,source') return undefined;
+  const source = ownDataValue(value, 'source');
+  const predicate = ownDataValue(value, 'predicate');
+  const eventType = ownDataValue(value, 'eventType');
+  const itemType = ownDataValue(value, 'itemType');
+  const eventFields = projectExecItemFields(ownDataValue(value, 'eventFields'));
+  const itemFields = projectExecItemFields(ownDataValue(value, 'itemFields'));
+  if (source !== 'codex-exec-rejected-item/v1' || !GOVERNED_CODEX_EXEC_ITEM_PREDICATES.has(predicate) ||
+      !GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES.has(eventType) || !GOVERNED_CODEX_EXEC_ITEM_TYPES.has(itemType) ||
+      !eventFields || !itemFields) return undefined;
+  return freeze({ source, predicate, eventType, itemType, eventFields, itemFields });
+}
+
 /** Project an exec error into the closed public diagnostic carried by Probe. */
 export function projectGovernedCodexExecFailure(error) {
   const code = ownDataValue(error, 'code');
   if (typeof code !== 'string' || !GOVERNED_CODEX_EXEC_FAILURE_CODES.has(code)) return null;
   const stderr = projectExecStderr(ownDataValue(error, 'diagnostic'));
-  return Object.freeze({ version: 'probe.governed-codex-exec-failure/v1', code, ...(stderr ? { stderr } : {}) });
+  const event = projectExecItemEvent(ownDataValue(error, 'event'));
+  return Object.freeze({ version: 'probe.governed-codex-exec-failure/v1', code,
+    ...(stderr ? { stderr } : {}), ...(event ? { event } : {}) });
 }
 
 /** Normalize only the explicit exec transport; legacy paths retain their old shape. */
@@ -566,19 +659,19 @@ function validateItem(event, state, profile) {
       : item.type === 'mcp_tool_call' ? ['arguments', 'id', 'name', 'result', 'server', 'status', 'type']
         : item.type === 'command_execution' ? ['aggregated_output', 'command', 'exit_code', 'id', 'status', 'type']
           : ['changes', 'id', 'status', 'type'];
-  if (Object.keys(item).some(key => !allowedKeys.includes(key)) ||
-      (item.id !== undefined && (typeof item.id !== 'string' || !SAFE_ID.test(item.id)))) throw fail('ITEM');
+  if (Object.keys(item).some(key => !allowedKeys.includes(key))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_keys'));
+  if (item.id !== undefined && (typeof item.id !== 'string' || !SAFE_ID.test(item.id))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_id'));
   if ((item.type === 'agent_message' || item.type === 'reasoning') && item.text !== undefined &&
-      (typeof item.text !== 'string' || Buffer.byteLength(item.text, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM');
-  if (item.phase !== undefined && (typeof item.phase !== 'string' || !/^[A-Za-z0-9._:-]{1,64}$/.test(item.phase))) throw fail('ITEM');
-  if (item.summary !== undefined && (!Array.isArray(item.summary) || item.summary.length > 32)) throw fail('ITEM');
-  if (item.server !== undefined && (typeof item.server !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(item.server))) throw fail('ITEM');
-  if (item.command !== undefined && (typeof item.command !== 'string' || Buffer.byteLength(item.command, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM');
-  if (item.aggregated_output !== undefined && (typeof item.aggregated_output !== 'string' || Buffer.byteLength(item.aggregated_output, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM');
-  if (item.exit_code !== undefined && item.exit_code !== null && (!Number.isSafeInteger(item.exit_code) || item.exit_code < -255 || item.exit_code > 255)) throw fail('ITEM');
-  if (item.changes !== undefined && (!Array.isArray(item.changes) || item.changes.length > 128)) throw fail('ITEM');
+      (typeof item.text !== 'string' || Buffer.byteLength(item.text, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_text'));
+  if (item.phase !== undefined && (typeof item.phase !== 'string' || !/^[A-Za-z0-9._:-]{1,64}$/.test(item.phase))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_phase'));
+  if (item.summary !== undefined && (!Array.isArray(item.summary) || item.summary.length > 32)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_summary'));
+  if (item.server !== undefined && (typeof item.server !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(item.server))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_server'));
+  if (item.command !== undefined && (typeof item.command !== 'string' || Buffer.byteLength(item.command, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_command'));
+  if (item.aggregated_output !== undefined && (typeof item.aggregated_output !== 'string' || Buffer.byteLength(item.aggregated_output, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_aggregated_output'));
+  if (item.exit_code !== undefined && item.exit_code !== null && (!Number.isSafeInteger(item.exit_code) || item.exit_code < -255 || item.exit_code > 255)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_exit_code'));
+  if (item.changes !== undefined && (!Array.isArray(item.changes) || item.changes.length > 128)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_changes'));
   const isTool = item.type === 'mcp_tool_call' || NATIVE_ITEM_TYPES.has(item.type);
-  if (isTool && (typeof item.id !== 'string' || !SAFE_ID.test(item.id))) throw fail('ITEM');
+  if (isTool && (typeof item.id !== 'string' || !SAFE_ID.test(item.id))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'tool_id'));
   let previous;
   if (item.id !== undefined) {
     previous = state.itemStates.get(item.id);
@@ -591,7 +684,9 @@ function validateItem(event, state, profile) {
     if (item.type === 'mcp_tool_call') {
       if (!mcpNameAllowed(item.name, profile)) throw fail('TOOL_POLICY');
     } else if (item.name !== undefined && item.name !== null) throw fail('TOOL_POLICY');
-    if (item.status !== undefined && !['in_progress', 'completed'].includes(item.status)) throw fail('ITEM');
+    if (item.status !== undefined && !['in_progress', 'completed'].includes(item.status)) {
+      throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_status'));
+    }
   }
   if (event.type === 'item.completed') {
     if (item.status !== undefined && item.status !== 'completed') throw fail('ITEM_STATUS');

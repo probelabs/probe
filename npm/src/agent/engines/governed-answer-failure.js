@@ -45,6 +45,14 @@ const GOVERNED_CODEX_EXEC_FAILURE_CODES = new Set([
   'SETUP', 'SPAWN', 'TIMEOUT', 'TOOL_POLICY', 'USAGE', 'VERSION', 'EXIT',
 ].map(code => `GOVERNED_CODEX_EXEC_${code}`));
 const GOVERNED_CODEX_EXEC_STDERR_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const GOVERNED_CODEX_EXEC_ITEM_PREDICATES = new Set([
+  'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
+  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_changes', 'item_status', 'tool_id',
+]);
+const GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES = new Set(['item.started', 'item.completed']);
+const GOVERNED_CODEX_EXEC_ITEM_TYPES = new Set(['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change']);
+const GOVERNED_CODEX_EXEC_FIELD_TYPES = new Set(['null', 'array', 'object', 'string', 'number', 'boolean']);
+const GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const GOVERNED_ATTESTATION_ERROR_PREDICATES = new Map([
   ['Invalid event', 'event_shape'], ['Invalid event.method', 'event_shape'],
   ['Invalid event.jsonrpc', 'jsonrpc'], ['Invalid event.params', 'params_shape'],
@@ -90,6 +98,45 @@ function governedAttestationPredicate(error) {
   return error instanceof TypeError ? GOVERNED_ATTESTATION_ERROR_PREDICATES.get(error.message) ?? null : null;
 }
 
+function closeRejectedItemFields(value) {
+  if (!Array.isArray(value) || value.length > 32) return null;
+  let previousName = null;
+  const fields = [];
+  for (const field of value) {
+    if (!field || typeof field !== 'object' || Array.isArray(field)) return null;
+    const keys = Object.keys(field);
+    if (keys.length < 2 || keys.length > 3 || !keys.includes('name') || !keys.includes('type') ||
+        (keys.length === 3 && !keys.includes('size'))) return null;
+    const name = ownDataValue(field, 'name');
+    const type = ownDataValue(field, 'type');
+    if (typeof name !== 'string' || (name !== '<unsafe>' && !GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME.test(name)) ||
+        !GOVERNED_CODEX_EXEC_FIELD_TYPES.has(type) || (previousName !== null && name < previousName)) return null;
+    const hasSize = Object.prototype.hasOwnProperty.call(field, 'size');
+    const size = ownDataValue(field, 'size');
+    if (hasSize && (type !== 'string' && type !== 'array' || !Number.isSafeInteger(size) || size < 0)) return null;
+    if (!hasSize && (type === 'string' || type === 'array')) return null;
+    fields.push(Object.freeze({ name, type, ...(hasSize ? { size } : {}) }));
+    previousName = name;
+  }
+  return Object.freeze(fields);
+}
+
+function closeRejectedItemEvent(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).length !== 6 || Object.keys(value).some(key =>
+        !['source', 'predicate', 'eventType', 'itemType', 'eventFields', 'itemFields'].includes(key))) return null;
+  const source = ownDataValue(value, 'source');
+  const predicate = ownDataValue(value, 'predicate');
+  const eventType = ownDataValue(value, 'eventType');
+  const itemType = ownDataValue(value, 'itemType');
+  const eventFields = closeRejectedItemFields(ownDataValue(value, 'eventFields'));
+  const itemFields = closeRejectedItemFields(ownDataValue(value, 'itemFields'));
+  if (source !== 'codex-exec-rejected-item/v1' || !GOVERNED_CODEX_EXEC_ITEM_PREDICATES.has(predicate) ||
+      !GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES.has(eventType) || !GOVERNED_CODEX_EXEC_ITEM_TYPES.has(itemType) ||
+      !eventFields || !itemFields) return null;
+  return Object.freeze({ source, predicate, eventType, itemType, eventFields, itemFields });
+}
+
 function ownDataValue(value, key) {
   if (!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
   try {
@@ -101,8 +148,8 @@ function ownDataValue(value, key) {
 function closeProviderEngineDiagnostic(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const keys = Object.keys(value);
-  if (keys.length < 2 || keys.length > 3 || !keys.includes('version') || !keys.includes('code') ||
-      (keys.length === 3 && !keys.includes('stderr'))) return null;
+  if (keys.length < 2 || keys.length > 4 || !keys.includes('version') || !keys.includes('code') ||
+      keys.some(key => !['version', 'code', 'stderr', 'event'].includes(key))) return null;
   const version = ownDataValue(value, 'version');
   const code = ownDataValue(value, 'code');
   if (version !== GOVERNED_CODEX_EXEC_FAILURE_VERSION || typeof code !== 'string' || !GOVERNED_CODEX_EXEC_FAILURE_CODES.has(code)) return null;
@@ -119,7 +166,10 @@ function closeProviderEngineDiagnostic(value) {
     closedStderr = Object.freeze({ source: 'codex-exec-stderr/v1', bytes: ownDataValue(stderr, 'bytes'), digest: ownDataValue(stderr, 'digest'),
       ...(safeMessage === 'access_token_refresh_revoked' ? { safeMessage } : {}) });
   }
-  return Object.freeze({ version, code, ...(closedStderr ? { stderr: closedStderr } : {}) });
+  const event = ownDataValue(value, 'event');
+  const closedEvent = event === undefined ? null : closeRejectedItemEvent(event);
+  if (event !== undefined && !closedEvent) return null;
+  return Object.freeze({ version, code, ...(closedStderr ? { stderr: closedStderr } : {}), ...(closedEvent ? { event: closedEvent } : {}) });
 }
 
 export class GovernedAnswerFailure extends Error {
