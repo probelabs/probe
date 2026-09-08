@@ -37,9 +37,18 @@ const source = `#!/usr/bin/env node
 const fs = require('node:fs');
 const events = ${JSON.stringify(events)};
 fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ args: process.argv.slice(2), codexHome: process.env.CODEX_HOME }));
-if (process.argv.includes('--version')) { process.stdout.write('codex 0.153.4\\n'); process.exit(0); }
-${behavior === 'hang' ? 'setInterval(() => {}, 1000);' : `for (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');
-${behavior === 'exit-7' ? 'process.exitCode = 7;' : ''}`}
+const mcpUrlArg = process.argv.find(value => /^mcp_servers\\.[^.]+\\.url=/.test(value));
+const mcpServerName = mcpUrlArg?.match(/^mcp_servers\\.([^.]+)\\.url=/)?.[1] ?? null;
+const mcpUrl = mcpUrlArg ? JSON.parse(mcpUrlArg.slice(mcpUrlArg.indexOf('=') + 1)) : null;
+const preparedEvents = events.map(event => event.item?.server === '__MCP_SERVER__'
+  ? { ...event, item: { ...event.item, server: mcpServerName } } : event);
+(async () => {
+  if (process.argv.includes('--version')) { process.stdout.write('codex 0.153.4\\n'); return; }
+  ${behavior === 'hang' ? 'setInterval(() => {}, 1000); return;' : ''}
+  ${behavior === 'mcp-success' ? `await fetch(mcpUrl.replace(/\\/mcp$/, '/rpc'), { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'mcp__probe__search', arguments: { query: 'dummy' } } }) });` : ''}
+  for (const event of preparedEvents) process.stdout.write(JSON.stringify(event) + '\\n');
+  ${behavior === 'exit-7' ? 'process.exitCode = 7;' : ''}
+})().catch(() => { process.exitCode = 1; });
 `;
   writeFileSync(script, source);
   chmodSync(script, 0o700);
@@ -149,7 +158,7 @@ test('governed exec rejects an incomplete tool item at terminal turn completion'
   const events = [
     { type: 'thread.started', thread_id: 'thread-1' },
     { type: 'turn.started' },
-    { type: 'item.started', item: { id: 'mcp-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: 'probe', arguments: {}, result: null, status: 'in_progress' } },
+    { type: 'item.started', item: { id: 'mcp-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: '__MCP_SERVER__', arguments: {}, result: null, status: 'in_progress' } },
     { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
     { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
   ];
@@ -160,11 +169,100 @@ test('governed exec requires a tool completion to pair with its start', async ()
   const events = [
     { type: 'thread.started', thread_id: 'thread-1' },
     { type: 'turn.started' },
-    { type: 'item.completed', item: { id: 'mcp-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: 'probe', arguments: {}, result: {}, status: 'completed' } },
+    { type: 'item.completed', item: { id: 'mcp-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: '__MCP_SERVER__', arguments: {}, result: {}, status: 'completed' } },
     { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
     { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
   ];
   await withEngine(events, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_ORDER/));
+});
+
+test('governed exec accepts the observed split MCP item shape with exact server binding and evidence', async () => {
+  const events = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: {
+      arguments: { query: 'dummy' }, error: null, id: 'mcp-1', result: null,
+      server: '__MCP_SERVER__', status: 'in_progress', tool: 'mcp__probe__search', type: 'mcp_tool_call',
+    } },
+    { type: 'item.completed', item: {
+      arguments: { query: 'dummy' }, error: null, id: 'mcp-1', result: { content: [{ type: 'text', text: 'dummy result' }] },
+      server: '__MCP_SERVER__', status: 'completed', tool: 'mcp__probe__search', type: 'mcp_tool_call',
+    } },
+    { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+  ];
+  await withEngine(events, async (engine, fixtureRoot) => {
+    const result = await engine.run();
+    assert.deepEqual(result.answer, '{"ok":true}');
+    assert.deepEqual(result.evidence.usedToolItems, [{
+      category: 'mcp_tool_call', name: 'mcp__probe__search', status: 'completed', count: 1,
+    }]);
+    assert.equal(result.evidence.probeMcpCallCount, 1);
+    assert.equal(result.attestation.observed.probeMcpCallCount, 1);
+    assert.equal(result.attestation.observed.usedToolItems[0].name, 'mcp__probe__search');
+    assert.equal(JSON.stringify(result).includes('dummy result'), false);
+    const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
+    assert.equal(observed.codexHome, undefined);
+  }, {}, 'mcp-success');
+
+  const combinedEvents = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: {
+      arguments: { query: 'dummy' }, id: 'mcp-1', name: 'mcp__probe__search', result: null,
+      server: '__MCP_SERVER__', status: 'in_progress', type: 'mcp_tool_call',
+    } },
+    { type: 'item.completed', item: {
+      arguments: { query: 'dummy' }, id: 'mcp-1', name: 'mcp__probe__search', result: { content: [{ type: 'text', text: 'dummy result' }] },
+      server: '__MCP_SERVER__', status: 'completed', type: 'mcp_tool_call',
+    } },
+    { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+  ];
+  await withEngine(combinedEvents, async engine => {
+    const result = await engine.run();
+    assert.deepEqual(result.evidence.usedToolItems, [{
+      category: 'mcp_tool_call', name: 'mcp__probe__search', status: 'completed', count: 1,
+    }]);
+    assert.equal(result.attestation.observed.probeMcpCallCount, 1);
+  }, {}, 'mcp-success');
+});
+
+test('governed exec rejects split MCP shape mixtures, foreign servers, non-null errors, and unallowed tools', async () => {
+  const base = {
+    arguments: { query: 'dummy' }, error: null, id: 'mcp-1', result: null,
+    server: '__MCP_SERVER__', status: 'in_progress', tool: 'mcp__probe__search', type: 'mcp_tool_call',
+  };
+  const cases = [
+    ['foreign server', { ...base, server: 'probe_foreign' }, 'GOVERNED_CODEX_EXEC_MCP'],
+    ['combined foreign server', { ...base, error: undefined, name: 'mcp__probe__search', tool: undefined, server: 'probe_foreign' }, 'GOVERNED_CODEX_EXEC_MCP'],
+    ['name/tool mixture', { ...base, name: 'mcp__probe__search' }, 'GOVERNED_CODEX_EXEC_ITEM', 'item_keys'],
+    ['non-null error', { ...base, error: 'SECRET_ERROR' }, 'GOVERNED_CODEX_EXEC_ITEM', 'item_error'],
+    ['invalid started payload', { ...base, arguments: [] }, 'GOVERNED_CODEX_EXEC_ITEM', 'item_started_payload'],
+    ['unallowed tool', { ...base, tool: 'mcp__probe__unknown' }, 'GOVERNED_CODEX_EXEC_TOOL_POLICY'],
+  ];
+  for (const [label, item, expectedCode, expectedPredicate] of cases) {
+    await withEngine([
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.started' },
+      { type: 'item.started', item },
+    ], async engine => {
+      await assert.rejects(engine.run(), error => {
+        assert.equal(error.code, expectedCode, label);
+        if (expectedPredicate) assert.equal(projectGovernedCodexExecFailure(error).event.predicate, expectedPredicate, label);
+        assert.doesNotMatch(error.message, /SECRET_ERROR/);
+        return true;
+      });
+    });
+  }
+
+  const mismatch = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: base },
+    { type: 'item.completed', item: { ...base, error: null, result: {}, status: 'completed', tool: 'mcp__probe__extract' } },
+  ];
+  await withEngine(mismatch, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_ORDER/));
 });
 
 test('governed exec rejects duplicate item identities and exposes only sanitized startup diagnostics', async () => {
@@ -257,7 +355,7 @@ test('governed exec reports tool status violations and bounds fields after deter
   const statusEvents = [
     { type: 'thread.started', thread_id: 'thread-1' },
     { type: 'turn.started' },
-    { type: 'item.started', item: { id: 'tool-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: 'probe', arguments: {}, result: null, status: 'invalid' } },
+    { type: 'item.started', item: { id: 'tool-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: '__MCP_SERVER__', arguments: {}, result: null, status: 'invalid' } },
   ];
   await withEngine(statusEvents, async engine => {
     await assert.rejects(engine.run(), error => {

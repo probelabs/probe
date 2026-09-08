@@ -42,7 +42,8 @@ const GOVERNED_CODEX_EXEC_FAILURE_CODES = new Set([
 ].map(code => `GOVERNED_CODEX_EXEC_${code}`));
 const GOVERNED_CODEX_EXEC_ITEM_PREDICATES = new Set([
   'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
-  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_changes', 'item_status', 'tool_id',
+  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_changes', 'item_status',
+  'item_error', 'item_started_payload', 'tool_id',
 ]);
 const GOVERNED_CODEX_EXEC_ITEM_TYPES = new Set(['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change']);
 const GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES = new Set(['item.started', 'item.completed']);
@@ -654,11 +655,20 @@ function validateItem(event, state, profile) {
       !ownObject(event.item) || typeof event.item.type !== 'string' || !itemCategoryAllowed(event.item.type, profile) ||
       state.phase !== 'turn') throw fail('EVENT_CATEGORY');
   const item = event.item;
-  const allowedKeys = item.type === 'agent_message' ? ['id', 'phase', 'text', 'type']
+  const mcpItem = item.type === 'mcp_tool_call';
+  const mcpHasName = mcpItem && Object.prototype.hasOwnProperty.call(item, 'name');
+  const mcpHasTool = mcpItem && Object.prototype.hasOwnProperty.call(item, 'tool');
+  const mcpHasError = mcpItem && Object.prototype.hasOwnProperty.call(item, 'error');
+  const mcpSplitVariant = mcpItem && (mcpHasTool || mcpHasError);
+  let allowedKeys = item.type === 'agent_message' ? ['id', 'phase', 'text', 'type']
     : item.type === 'reasoning' ? ['id', 'summary', 'text', 'type']
-      : item.type === 'mcp_tool_call' ? ['arguments', 'id', 'name', 'result', 'server', 'status', 'type']
+      : mcpItem ? (mcpSplitVariant ? ['arguments', 'error', 'id', 'result', 'server', 'status', 'tool', 'type']
+        : ['arguments', 'id', 'name', 'result', 'server', 'status', 'type'])
         : item.type === 'command_execution' ? ['aggregated_output', 'command', 'exit_code', 'id', 'status', 'type']
           : ['changes', 'id', 'status', 'type'];
+  if (mcpSplitVariant && (!mcpHasTool || !mcpHasError || mcpHasName)) {
+    throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_keys'));
+  }
   if (Object.keys(item).some(key => !allowedKeys.includes(key))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_keys'));
   if (item.id !== undefined && (typeof item.id !== 'string' || !SAFE_ID.test(item.id))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_id'));
   if ((item.type === 'agent_message' || item.type === 'reasoning') && item.text !== undefined &&
@@ -672,21 +682,38 @@ function validateItem(event, state, profile) {
   if (item.changes !== undefined && (!Array.isArray(item.changes) || item.changes.length > 128)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_changes'));
   const isTool = item.type === 'mcp_tool_call' || NATIVE_ITEM_TYPES.has(item.type);
   if (isTool && (typeof item.id !== 'string' || !SAFE_ID.test(item.id))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'tool_id'));
+  const toolName = mcpItem ? (mcpSplitVariant ? item.tool : item.name) : undefined;
+  if (mcpSplitVariant && item.error !== null) {
+    throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_error'));
+  }
+  if (mcpSplitVariant && event.type === 'item.started' &&
+      (!ownObject(item.arguments) || item.result !== null)) {
+    throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_started_payload'));
+  }
+  if (mcpItem && (typeof item.server !== 'string' || item.server !== state.mcpName)) throw fail('MCP');
   let previous;
   if (item.id !== undefined) {
     previous = state.itemStates.get(item.id);
     if (event.type === 'item.started' && previous !== undefined) throw fail('DUPLICATE');
     if (event.type === 'item.completed' && (previous?.status === 'completed' || (previous && previous.type !== item.type))) throw fail('DUPLICATE');
     if (event.type === 'item.completed' && isTool && previous === undefined) throw fail('ITEM_ORDER');
-    state.itemStates.set(item.id, { status: event.type === 'item.completed' ? 'completed' : 'started', type: item.type });
+    if (event.type === 'item.completed' && mcpSplitVariant &&
+        (previous?.mcpVariant !== 'split' || previous.server !== item.server || previous.tool !== toolName)) throw fail('ITEM_ORDER');
+    if (event.type === 'item.completed' && mcpItem && previous?.mcpVariant !== (mcpSplitVariant ? 'split' : 'combined')) throw fail('ITEM_ORDER');
+    state.itemStates.set(item.id, {
+      status: event.type === 'item.completed' ? 'completed' : 'started', type: item.type,
+      ...(mcpItem ? { mcpVariant: mcpSplitVariant ? 'split' : 'combined', server: item.server, tool: toolName } : {}),
+    });
   }
   if (isTool) {
     if (item.type === 'mcp_tool_call') {
-      if (!mcpNameAllowed(item.name, profile)) throw fail('TOOL_POLICY');
+      if (!mcpNameAllowed(toolName, profile)) throw fail('TOOL_POLICY');
     } else if (item.name !== undefined && item.name !== null) throw fail('TOOL_POLICY');
     if (item.status !== undefined && !['in_progress', 'completed'].includes(item.status)) {
       throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_status'));
     }
+    if (mcpSplitVariant && ((event.type === 'item.started' && item.status !== 'in_progress') ||
+        (event.type === 'item.completed' && item.status !== 'completed'))) throw fail('ITEM_STATUS');
   }
   if (event.type === 'item.completed') {
     if (item.status !== undefined && item.status !== 'completed') throw fail('ITEM_STATUS');
@@ -697,14 +724,15 @@ function validateItem(event, state, profile) {
       state.agentMessageCount++;
     }
     if (isTool) state.completedTools.push({
-      category: item.type, name: item.type === 'mcp_tool_call' ? item.name : null,
+      category: item.type, name: item.type === 'mcp_tool_call' ? toolName : null,
     });
   }
+  const canonicalName = item.type === 'mcp_tool_call' ? toolName : item.name;
   state.itemEvents++;
   state.streamRecords.push(Object.freeze({
     event: event.type, category: item.type,
     ...(item.id === undefined ? {} : { id: item.id }),
-    ...(item.name === undefined ? {} : { name: item.name }),
+    ...(canonicalName === undefined ? {} : { name: canonicalName }),
     ...(item.status === undefined ? {} : { status: item.status }),
     ...(typeof item.text === 'string' ? { textDigest: digestText(item.text), textBytes: Buffer.byteLength(item.text, 'utf8') } : {}),
   }));
@@ -751,7 +779,7 @@ function parserState() {
   return {
     phase: 'initial', threadId: null, turnStarted: false, turnCompleted: false,
     answer: null, usage: null, events: 0, itemEvents: 0, completedItemCount: 0,
-    agentMessageCount: 0, completedTools: [], streamRecords: [], itemStates: new Map(),
+    agentMessageCount: 0, completedTools: [], streamRecords: [], itemStates: new Map(), mcpName: null,
   };
 }
 
@@ -870,6 +898,7 @@ export async function createGovernedCodexExecEngine(options = {}) {
         mcp: { name: `probe_${sessionId}`, url: binding.url },
         ...(instructionPath ? { modelInstructionsPath: instructionPath, modelInstructionsDigest: instructionDigest } : {}),
       });
+      state.mcpName = launch.mcpName;
       runPromise = (async () => {
         let child;
         try {

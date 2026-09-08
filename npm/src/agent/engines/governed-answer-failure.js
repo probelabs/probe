@@ -47,7 +47,8 @@ const GOVERNED_CODEX_EXEC_FAILURE_CODES = new Set([
 const GOVERNED_CODEX_EXEC_STDERR_DIGEST = /^sha256:[0-9a-f]{64}$/;
 const GOVERNED_CODEX_EXEC_ITEM_PREDICATES = new Set([
   'item_keys', 'item_id', 'item_text', 'item_phase', 'item_summary', 'item_server',
-  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_changes', 'item_status', 'tool_id',
+  'item_command', 'item_aggregated_output', 'item_exit_code', 'item_changes', 'item_status',
+  'item_error', 'item_started_payload', 'tool_id',
 ]);
 const GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES = new Set(['item.started', 'item.completed']);
 const GOVERNED_CODEX_EXEC_ITEM_TYPES = new Set(['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change']);
