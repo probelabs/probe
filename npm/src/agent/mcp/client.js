@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { WebSocketClientTransport } from '@modelcontextprotocol/sdk/client/websocket.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { loadMCPConfiguration, parseEnabledServers, DEFAULT_TIMEOUT } from './config.js';
 
 /**
@@ -89,69 +90,22 @@ export function createTransport(serverConfig) {
       }
 
     case 'http':
-    case 'streamable':
-      // For HTTP, we'll use a custom implementation since the SDK
-      // doesn't provide a direct HTTP transport yet
+    case 'streamable': {
       if (!url) {
         throw new Error('HTTP transport requires a URL');
       }
-      // Return a custom HTTP transport wrapper
-      return createHttpTransport(url);
+      const requestInit = {};
+      if (serverConfig.headers && typeof serverConfig.headers === 'object') {
+        requestInit.headers = { ...serverConfig.headers };
+      }
+      return new StreamableHTTPClientTransport(new URL(url), {
+        requestInit: Object.keys(requestInit).length > 0 ? requestInit : undefined,
+      });
+    }
 
     default:
       throw new Error(`Unknown transport type: ${transport}`);
   }
-}
-
-/**
- * Create a custom HTTP transport wrapper
- * This simulates MCP over HTTP REST endpoints
- */
-function createHttpTransport(url) {
-  // This is a simplified HTTP transport
-  // In practice, you'd implement the full MCP protocol over HTTP
-  return {
-    async start() {
-      // Initialize HTTP connection
-      const response = await fetch(`${url}/initialize`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          protocolVersion: '2024-11-05',
-          capabilities: {}
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP initialization failed: ${response.statusText}`);
-      }
-
-      return response.json();
-    },
-
-    async send(message) {
-      const response = await fetch(`${url}/message`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(message)
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP request failed: ${response.statusText}`);
-      }
-
-      return response.json();
-    },
-
-    async close() {
-      // Close HTTP connection
-      await fetch(`${url}/close`, {
-        method: 'POST'
-      }).catch(() => {
-        // Ignore close errors
-      });
-    }
-  };
 }
 
 /**
