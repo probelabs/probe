@@ -128,6 +128,8 @@ function rejectedItemEvent(event, predicate) {
     source: 'codex-exec-rejected-item/v1', predicate,
     eventType: ownDataValue(event, 'type'), itemType,
     eventFields: describeFields(event), itemFields: describeFields(item),
+    ...(predicate === 'item_status' && (item.status === 'failed' || item.status === 'declined')
+      ? { itemStatus: item.status } : {}),
   });
 }
 
@@ -165,17 +167,25 @@ function projectExecItemFields(value) {
 }
 
 function projectExecItemEvent(value) {
-  if (!ownObject(value) || Object.keys(value).sort().join(',') !== 'eventFields,eventType,itemFields,itemType,predicate,source') return undefined;
+  if (!ownObject(value)) return undefined;
+  const keys = Object.keys(value).sort();
+  const baseKeys = 'eventFields,eventType,itemFields,itemType,predicate,source';
+  const statusKeys = 'eventFields,eventType,itemFields,itemStatus,itemType,predicate,source';
+  if (keys.join(',') !== baseKeys && keys.join(',') !== statusKeys) return undefined;
   const source = ownDataValue(value, 'source');
   const predicate = ownDataValue(value, 'predicate');
   const eventType = ownDataValue(value, 'eventType');
   const itemType = ownDataValue(value, 'itemType');
+  const itemStatus = ownDataValue(value, 'itemStatus');
   const eventFields = projectExecItemFields(ownDataValue(value, 'eventFields'));
   const itemFields = projectExecItemFields(ownDataValue(value, 'itemFields'));
   if (source !== 'codex-exec-rejected-item/v1' || !GOVERNED_CODEX_EXEC_ITEM_PREDICATES.has(predicate) ||
       !GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES.has(eventType) || !GOVERNED_CODEX_EXEC_ITEM_TYPES.has(itemType) ||
-      !eventFields || !itemFields) return undefined;
-  return freeze({ source, predicate, eventType, itemType, eventFields, itemFields });
+      !eventFields || !itemFields || (itemStatus !== undefined && predicate !== 'item_status') ||
+      (itemStatus !== undefined && itemStatus !== 'failed' && itemStatus !== 'declined') ||
+      (itemStatus === undefined && keys.includes('itemStatus'))) return undefined;
+  return freeze({ source, predicate, eventType, itemType, eventFields, itemFields,
+    ...(itemStatus === undefined ? {} : { itemStatus }) });
 }
 
 /** Project an exec error into the closed public diagnostic carried by Probe. */
@@ -709,14 +719,16 @@ function validateItem(event, state, profile) {
     if (item.type === 'mcp_tool_call') {
       if (!mcpNameAllowed(toolName, profile)) throw fail('TOOL_POLICY');
     } else if (item.name !== undefined && item.name !== null) throw fail('TOOL_POLICY');
-    if (item.status !== undefined && !['in_progress', 'completed'].includes(item.status)) {
+    const commandFailed = item.type === 'command_execution' && event.type === 'item.completed' && item.status === 'failed';
+    if (item.status !== undefined && !['in_progress', 'completed'].includes(item.status) && !commandFailed) {
       throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_status'));
     }
     if (mcpSplitVariant && ((event.type === 'item.started' && item.status !== 'in_progress') ||
         (event.type === 'item.completed' && item.status !== 'completed'))) throw fail('ITEM_STATUS');
   }
   if (event.type === 'item.completed') {
-    if (item.status !== undefined && item.status !== 'completed') throw fail('ITEM_STATUS');
+    if (item.status !== undefined && item.status !== 'completed' &&
+        !(item.type === 'command_execution' && item.status === 'failed')) throw fail('ITEM_STATUS');
     state.completedItemCount++;
     if (item.type === 'agent_message') {
       if (typeof item.text !== 'string') throw fail('ANSWER_CARDINALITY');

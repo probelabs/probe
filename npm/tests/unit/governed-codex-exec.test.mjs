@@ -16,6 +16,17 @@ function profile(cwd) {
   };
 }
 
+function nativeProfile(cwd, version = 'probe.governed-codex-profile/v2') {
+  return {
+    version, profileId: version === 'probe.governed-codex-profile/v3'
+      ? 'luna-xhigh-isolated-writer-v1' : 'luna-xhigh-readonly-native-exec-v1', engine: 'codex',
+    model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: version === 'probe.governed-codex-profile/v3' ? 'workspace-write' : 'read-only',
+    approvalPolicy: 'never', cwd, probeMcpTools: ['search', 'extract', 'listFiles'],
+    codexNativeTools: version === 'probe.governed-codex-profile/v3' ? ['apply_patch', 'exec'] : ['exec'],
+    fallback: false, retries: 0,
+  };
+}
+
 function agent(cwd) {
   const events = new EventEmitter();
   return {
@@ -263,6 +274,97 @@ test('governed exec rejects split MCP shape mixtures, foreign servers, non-null 
     { type: 'item.completed', item: { ...base, error: null, result: {}, status: 'completed', tool: 'mcp__probe__extract' } },
   ];
   await withEngine(mismatch, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_ORDER/));
+});
+
+test('governed exec accepts only a paired failed command completion and preserves terminal gates', async () => {
+  const failedCommand = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { command: 'echo dummy', id: 'cmd-1', status: 'in_progress', type: 'command_execution' } },
+    { type: 'item.completed', item: {
+      aggregated_output: 'COMMAND_OUTPUT_SECRET', command: 'echo dummy', exit_code: 1,
+      id: 'cmd-1', status: 'failed', type: 'command_execution',
+    } },
+    { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+  ];
+  await withEngine(failedCommand, async engine => {
+    const result = await engine.run();
+    assert.deepEqual(result.evidence.usedToolItems, [{
+      category: 'command_execution', name: null, status: 'completed', count: 1,
+    }]);
+    assert.equal(result.process.exitCode, 0);
+    assert.equal(JSON.stringify(result).includes('COMMAND_OUTPUT_SECRET'), false);
+    assert.equal(JSON.stringify(result).includes('echo dummy'), false);
+  }, { profile: nativeProfile(process.cwd()) });
+
+  for (const [label, events, options, expectedCode] of [
+    ['missing final answer', failedCommand.slice(0, 4).concat([{ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }]), { profile: nativeProfile(process.cwd()) }, 'GOVERNED_CODEX_EXEC_EVENT_ORDER'],
+    ['missing turn completion', failedCommand.slice(0, 5), { profile: nativeProfile(process.cwd()) }, 'GOVERNED_CODEX_EXEC_INCOMPLETE'],
+  ]) {
+    await withEngine(events, async engine => assert.rejects(engine.run(), error => {
+      assert.equal(error.code, expectedCode, label);
+      return true;
+    }, label), options);
+  }
+});
+
+test('governed exec rejects failed or declined statuses outside completed command execution', async () => {
+  const commandStartFailed = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { command: 'echo START_SECRET', id: 'cmd-1', status: 'failed', type: 'command_execution' } },
+  ];
+  await withEngine(commandStartFailed, async engine => {
+    await assert.rejects(engine.run(), error => {
+      const diagnostic = projectGovernedCodexExecFailure(error);
+      assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+      assert.equal(diagnostic.event.predicate, 'item_status');
+      assert.equal(diagnostic.event.itemStatus, 'failed');
+      const normalized = normalizeGovernedCodexExecFailure(error, 'query');
+      assert.equal(normalized.providerEngineDiagnostic.event.itemStatus, 'failed');
+      assert.doesNotMatch(JSON.stringify(normalized), /START_SECRET|echo START_SECRET/);
+      return true;
+    });
+  }, { profile: nativeProfile(process.cwd()) });
+
+  const mcpFailed = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { arguments: {}, id: 'mcp-1', name: 'mcp__probe__search', result: null, server: '__MCP_SERVER__', status: 'in_progress', type: 'mcp_tool_call' } },
+    { type: 'item.completed', item: { arguments: {}, id: 'mcp-1', name: 'mcp__probe__search', result: {}, server: '__MCP_SERVER__', status: 'failed', type: 'mcp_tool_call' } },
+  ];
+  await withEngine(mcpFailed, async engine => assert.rejects(engine.run(), error => {
+    assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+    assert.equal(projectGovernedCodexExecFailure(error).event.itemStatus, 'failed');
+    return true;
+  }));
+
+  const fileFailed = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { changes: [], id: 'file-1', status: 'in_progress', type: 'file_change' } },
+    { type: 'item.completed', item: { changes: [], id: 'file-1', status: 'failed', type: 'file_change' } },
+  ];
+  await withEngine(fileFailed, async engine => assert.rejects(engine.run(), error => {
+    assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+    assert.equal(projectGovernedCodexExecFailure(error).event.itemStatus, 'failed');
+    return true;
+  }), { profile: nativeProfile(process.cwd(), 'probe.governed-codex-profile/v3') });
+
+  const declined = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { command: 'echo declined', id: 'cmd-1', status: 'in_progress', type: 'command_execution' } },
+    { type: 'item.completed', item: { command: 'echo declined', id: 'cmd-1', status: 'declined', type: 'command_execution' } },
+  ];
+  await withEngine(declined, async engine => assert.rejects(engine.run(), error => {
+    const diagnostic = projectGovernedCodexExecFailure(error);
+    assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+    assert.equal(diagnostic.event.itemStatus, 'declined');
+    assert.doesNotMatch(JSON.stringify(diagnostic), /echo declined/);
+    return true;
+  }), { profile: nativeProfile(process.cwd()) });
 });
 
 test('governed exec rejects duplicate item identities and exposes only sanitized startup diagnostics', async () => {

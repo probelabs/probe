@@ -123,19 +123,25 @@ function closeRejectedItemFields(value) {
 }
 
 function closeRejectedItemEvent(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      Object.keys(value).length !== 6 || Object.keys(value).some(key =>
-        !['source', 'predicate', 'eventType', 'itemType', 'eventFields', 'itemFields'].includes(key))) return null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  const baseKeys = 'eventFields,eventType,itemFields,itemType,predicate,source';
+  const statusKeys = 'eventFields,eventType,itemFields,itemStatus,itemType,predicate,source';
+  if (keys.join(',') !== baseKeys && keys.join(',') !== statusKeys) return null;
   const source = ownDataValue(value, 'source');
   const predicate = ownDataValue(value, 'predicate');
   const eventType = ownDataValue(value, 'eventType');
   const itemType = ownDataValue(value, 'itemType');
+  const itemStatus = ownDataValue(value, 'itemStatus');
   const eventFields = closeRejectedItemFields(ownDataValue(value, 'eventFields'));
   const itemFields = closeRejectedItemFields(ownDataValue(value, 'itemFields'));
   if (source !== 'codex-exec-rejected-item/v1' || !GOVERNED_CODEX_EXEC_ITEM_PREDICATES.has(predicate) ||
       !GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES.has(eventType) || !GOVERNED_CODEX_EXEC_ITEM_TYPES.has(itemType) ||
-      !eventFields || !itemFields) return null;
-  return Object.freeze({ source, predicate, eventType, itemType, eventFields, itemFields });
+      !eventFields || !itemFields || (itemStatus !== undefined && predicate !== 'item_status') ||
+      (itemStatus !== undefined && itemStatus !== 'failed' && itemStatus !== 'declined') ||
+      (itemStatus === undefined && keys.includes('itemStatus'))) return null;
+  return Object.freeze({ source, predicate, eventType, itemType, eventFields, itemFields,
+    ...(itemStatus === undefined ? {} : { itemStatus }) });
 }
 
 function ownDataValue(value, key) {
