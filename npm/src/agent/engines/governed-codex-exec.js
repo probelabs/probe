@@ -687,7 +687,9 @@ function validateItem(event, state, profile) {
   if (item.summary !== undefined && (!Array.isArray(item.summary) || item.summary.length > 32)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_summary'));
   if (item.server !== undefined && (typeof item.server !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(item.server))) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_server'));
   if (item.command !== undefined && (typeof item.command !== 'string' || Buffer.byteLength(item.command, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_command'));
-  if (item.aggregated_output !== undefined && (typeof item.aggregated_output !== 'string' || Buffer.byteLength(item.aggregated_output, 'utf8') > MAX_TEXT_BYTES)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_aggregated_output'));
+  // Command transcripts are disposable framing data, not retained semantic
+  // text; JSONL line/stdout/event caps bound them before this parser.
+  if (item.aggregated_output !== undefined && typeof item.aggregated_output !== 'string') throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_aggregated_output'));
   if (item.exit_code !== undefined && item.exit_code !== null && (!Number.isSafeInteger(item.exit_code) || item.exit_code < -255 || item.exit_code > 255)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_exit_code'));
   if (item.changes !== undefined && (!Array.isArray(item.changes) || item.changes.length > 128)) throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_changes'));
   const isTool = item.type === 'mcp_tool_call' || NATIVE_ITEM_TYPES.has(item.type);

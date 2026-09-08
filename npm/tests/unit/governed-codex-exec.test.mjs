@@ -309,6 +309,62 @@ test('governed exec accepts only a paired failed command completion and preserve
   }
 });
 
+test('governed exec accepts a large disposable command transcript without retaining it', async () => {
+  const transcript = 'X'.repeat(154334);
+  const events = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { command: 'echo transcript', id: 'cmd-1', status: 'in_progress', type: 'command_execution' } },
+    { type: 'item.completed', item: {
+      aggregated_output: transcript, command: 'echo transcript', exit_code: 0,
+      id: 'cmd-1', status: 'completed', type: 'command_execution',
+    } },
+    { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+  ];
+  await withEngine(events, async engine => {
+    const result = await engine.run();
+    assert.equal(result.answer, '{"ok":true}');
+    assert.equal(JSON.stringify(result).includes(transcript), false);
+    assert.equal(JSON.stringify(result).includes('echo transcript'), false);
+  }, { profile: nativeProfile(process.cwd()) });
+});
+
+test('governed exec rejects a non-string aggregated command transcript with a closed diagnostic', async () => {
+  const events = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { command: 'echo transcript', id: 'cmd-1', status: 'in_progress', type: 'command_execution' } },
+    { type: 'item.completed', item: {
+      aggregated_output: { secret: 'must-not-cross-the-boundary' }, command: 'echo transcript', exit_code: 0,
+      id: 'cmd-1', status: 'completed', type: 'command_execution',
+    } },
+  ];
+  await withEngine(events, async engine => {
+    await assert.rejects(engine.run(), error => {
+      assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+      assert.equal(projectGovernedCodexExecFailure(error).event.predicate, 'item_aggregated_output');
+      assert.doesNotMatch(JSON.stringify(projectGovernedCodexExecFailure(error)), /must-not-cross-the-boundary/);
+      return true;
+    }, 'non-string aggregated_output');
+  }, { profile: nativeProfile(process.cwd()) });
+});
+
+test('governed exec rejects a command event whose JSONL line exceeds the framing cap', async () => {
+  const oversized = 'X'.repeat(1024 * 1024);
+  const events = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { aggregated_output: oversized, id: 'cmd-1', type: 'command_execution' } },
+  ];
+  await withEngine(events, async engine => {
+    await assert.rejects(engine.run(), error => {
+      assert.equal(error.code, 'GOVERNED_CODEX_EXEC_OUTPUT_OVERFLOW');
+      return true;
+    });
+  });
+});
+
 test('governed exec rejects failed or declined statuses outside completed command execution', async () => {
   const commandStartFailed = [
     { type: 'thread.started', thread_id: 'thread-1' },
