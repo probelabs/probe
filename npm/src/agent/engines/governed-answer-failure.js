@@ -37,6 +37,14 @@ const GOVERNED_SCHEMA_RESULT_VALIDATION_KEYWORDS = new Set([
   'required', 'additionalProperties', 'type', 'pattern', 'enum', 'minItems', 'maxItems',
   'multiple', 'unknown',
 ]);
+const GOVERNED_CODEX_EXEC_FAILURE_VERSION = 'probe.governed-codex-exec-failure/v1';
+const GOVERNED_CODEX_EXEC_FAILURE_CODES = new Set([
+  'ANSWER_CARDINALITY', 'CANCELLED', 'CANONICAL', 'CLEANUP', 'CONFIG', 'DUPLICATE', 'EVENT',
+  'EVENT_CATEGORY', 'EVENT_LIMIT', 'EVENT_ORDER', 'INCOMPLETE', 'INCOMPLETE_ITEM', 'ITEM',
+  'ITEM_ORDER', 'ITEM_STATUS', 'JSONL', 'MCP', 'MCP_EVIDENCE', 'ONE_QUERY', 'OUTPUT_OVERFLOW',
+  'SETUP', 'SPAWN', 'TIMEOUT', 'TOOL_POLICY', 'USAGE', 'VERSION', 'EXIT',
+].map(code => `GOVERNED_CODEX_EXEC_${code}`));
+const GOVERNED_CODEX_EXEC_STDERR_DIGEST = /^sha256:[0-9a-f]{64}$/;
 const GOVERNED_ATTESTATION_ERROR_PREDICATES = new Map([
   ['Invalid event', 'event_shape'], ['Invalid event.method', 'event_shape'],
   ['Invalid event.jsonrpc', 'jsonrpc'], ['Invalid event.params', 'params_shape'],
@@ -82,11 +90,44 @@ function governedAttestationPredicate(error) {
   return error instanceof TypeError ? GOVERNED_ATTESTATION_ERROR_PREDICATES.get(error.message) ?? null : null;
 }
 
+function ownDataValue(value, key) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch { return undefined; }
+}
+
+function closeProviderEngineDiagnostic(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value);
+  if (keys.length < 2 || keys.length > 3 || !keys.includes('version') || !keys.includes('code') ||
+      (keys.length === 3 && !keys.includes('stderr'))) return null;
+  const version = ownDataValue(value, 'version');
+  const code = ownDataValue(value, 'code');
+  if (version !== GOVERNED_CODEX_EXEC_FAILURE_VERSION || typeof code !== 'string' || !GOVERNED_CODEX_EXEC_FAILURE_CODES.has(code)) return null;
+  const stderr = ownDataValue(value, 'stderr');
+  let closedStderr;
+  if (stderr !== undefined) {
+    if (!stderr || typeof stderr !== 'object' || Array.isArray(stderr) ||
+      ![...Object.keys(stderr)].every(key => ['source', 'bytes', 'digest', 'safeMessage'].includes(key)) ||
+      Object.keys(stderr).length < 3 || Object.keys(stderr).length > 4 ||
+      ownDataValue(stderr, 'source') !== 'codex-exec-stderr/v1' ||
+      !Number.isSafeInteger(ownDataValue(stderr, 'bytes')) || ownDataValue(stderr, 'bytes') < 1 || ownDataValue(stderr, 'bytes') > 1048576 ||
+      !GOVERNED_CODEX_EXEC_STDERR_DIGEST.test(ownDataValue(stderr, 'digest'))) return null;
+    const safeMessage = ownDataValue(stderr, 'safeMessage');
+    closedStderr = Object.freeze({ source: 'codex-exec-stderr/v1', bytes: ownDataValue(stderr, 'bytes'), digest: ownDataValue(stderr, 'digest'),
+      ...(safeMessage === 'access_token_refresh_revoked' ? { safeMessage } : {}) });
+  }
+  return Object.freeze({ version, code, ...(closedStderr ? { stderr: closedStderr } : {}) });
+}
+
 export class GovernedAnswerFailure extends Error {
   constructor(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
     nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
     schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-    providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null) {
+    providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null,
+    providerEngineDiagnostic = null) {
     super();
     delete this.stack;
     const answerFailureStage = GOVERNED_ANSWER_FAILURE_STAGES.has(stage) ? stage : 'unknown';
@@ -100,6 +141,14 @@ export class GovernedAnswerFailure extends Error {
         ? providerEngineFailureBoundary : null,
       enumerable: true,
     });
+    if (answerFailureStage === 'provider_engine' && providerEngineDiagnostic !== null &&
+      providerEngineDiagnostic !== undefined) {
+      const closedDiagnostic = closeProviderEngineDiagnostic(providerEngineDiagnostic);
+      if (closedDiagnostic) Object.defineProperty(this, 'providerEngineDiagnostic', {
+        value: closedDiagnostic,
+        enumerable: true,
+      });
+    }
     if (answerFailureStage === 'native_event_grammar') Object.defineProperty(this, 'nativeEventFailureBoundary', {
       value: GOVERNED_NATIVE_EVENT_FAILURE_BOUNDARIES.has(nativeEventFailureBoundary)
         ? nativeEventFailureBoundary : null,
@@ -161,11 +210,12 @@ export class GovernedAnswerFailure extends Error {
 export function governedAnswerFailure(stage, nativeEventFailureBoundary = null, nativeEventFailureSubreason = null,
   nativeEventFailureCorrelationOperand = null, nativeEventFailureAttestationPredicate = null,
   schemaResultValidationSubreason = null, schemaResultValidationKeyword = null,
-  providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null) {
+  providerEngineFailureBoundary = null, nativeEventFailureRawItemPredicate = null,
+  providerEngineDiagnostic = null) {
   return new GovernedAnswerFailure(stage, nativeEventFailureBoundary, nativeEventFailureSubreason,
     nativeEventFailureCorrelationOperand, nativeEventFailureAttestationPredicate,
     schemaResultValidationSubreason, schemaResultValidationKeyword, providerEngineFailureBoundary,
-    nativeEventFailureRawItemPredicate);
+    nativeEventFailureRawItemPredicate, providerEngineDiagnostic);
 }
 
 export function normalizeGovernedAnswerFailure(error, fallback = 'unknown', nativeEventFailureBoundary = null,

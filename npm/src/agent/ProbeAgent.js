@@ -107,10 +107,12 @@ import {
 } from './tasks/index.js';
 import { z } from 'zod';
 import { validateGovernedCodexProfile } from './engines/governed-codex-profile.js';
+import { normalizeGovernedCodexExecFailure, previewGovernedCodexExecDispatch, validateGovernedCodexExecAttestation } from './engines/governed-codex-exec.js';
 import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './engines/governed-answer-failure.js';
 
 const GOVERNED_RESULT_IDENTITY = 'probe.governed-result-identity/v1';
 const GOVERNED_RESULT_DOMAIN = 'probe.governed-result-identity/data/v1';
+const GOVERNED_CODEX_EXEC_TRANSPORT = 'exec-jsonl-default-auth-v1';
 
 function isGovernedCodexNativeProfile(profile) {
   return Array.isArray(profile?.codexNativeTools);
@@ -388,6 +390,9 @@ export class ProbeAgent {
     this.searchDelegate = options.searchDelegate !== undefined ? !!options.searchDelegate : true;
     this.searchDelegateProvider = options.searchDelegateProvider || null;
     this.searchDelegateModel = options.searchDelegateModel || null;
+    this.governedCodexTransport = options.governedCodexTransport || 'mcp-server-v1';
+    this.governedCodexBin = options.codexBin ?? options.codexPath;
+    this.governedCodexSha256 = options.codexSha256;
     this.maxResponseTokens = options.maxResponseTokens || (() => {
       const val = parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10);
       if (isNaN(val) || val < 0 || val > 200000) {
@@ -419,6 +424,10 @@ export class ProbeAgent {
 
     if (options.governedCodexProfile !== undefined) {
       if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex'); const profile = validateGovernedCodexProfile(options.governedCodexProfile);
+      if (!['mcp-server-v1', GOVERNED_CODEX_EXEC_TRANSPORT].includes(this.governedCodexTransport)) throw new TypeError('Invalid governedCodexTransport');
+      if (this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT &&
+        (typeof this.governedCodexBin !== 'string' || !isAbsolute(this.governedCodexBin) ||
+          typeof this.governedCodexSha256 !== 'string')) throw new TypeError('exec-jsonl-default-auth-v1 requires codexBin and codexSha256');
       const probeTools = profile.probeTools ?? profile.probeMcpTools;
       if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== probeTools.length || options.allowedTools.some((tool, index) => tool !== probeTools[index])) throw new TypeError('allowedTools must exactly match governedCodexProfile Probe MCP tools');
       this.governedCodexProfile = profile;
@@ -2514,6 +2523,16 @@ export class ProbeAgent {
     // Try Codex CLI engine if requested
     if (governedCodex || this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
       try {
+        if (governedCodex && this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT) {
+          const { createGovernedCodexExecEngine } = await import('./engines/governed-codex-exec.js');
+          const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
+          this.engine = await createGovernedCodexExecEngine({
+            agent: this, profile: this.governedCodexProfile,
+            codexPath: this.governedCodexBin, codexSha256: this.governedCodexSha256,
+            systemPrompt, timeoutMs: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
+          });
+          return this.engine;
+        }
         const { createCodexEngine } = await import('./engines/codex.js');
 
         // For Codex CLI, use a cleaner system prompt without XML formatting
@@ -2539,8 +2558,9 @@ export class ProbeAgent {
         return this.engine;
       } catch (error) {
         if (this.governedCodexProfile) {
-          throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-            null, null, 'acquire');
+          throw this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT
+            ? normalizeGovernedCodexExecFailure(error, 'acquire')
+            : normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null, null, null, 'acquire');
         }
         console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
         console.warn('[WARNING] Falling back to Vercel AI SDK');
@@ -3371,6 +3391,7 @@ ${extractGuidance2}
     }
     const { prompt } = this._prepareGovernedAnswerPrompt(message, options);
     const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
+    if (this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT) return previewGovernedCodexExecDispatch(prompt, systemPrompt);
     const { previewGovernedCodexInitialDispatch } = await import('./engines/codex.js');
     return previewGovernedCodexInitialDispatch({ systemPrompt, prompt });
   }
@@ -3566,11 +3587,13 @@ Follow these instructions carefully:
     }
 
     let engine, answerFailure = null;
+    const normalizeProviderFailure = (error, boundary) => this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT
+      ? normalizeGovernedCodexExecFailure(error, boundary)
+      : normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null, null, null, boundary);
     try {
       try { engine = await this.getEngine(); }
       catch (error) {
-        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-          null, null, 'acquire');
+        throw normalizeProviderFailure(error, 'acquire');
       }
       if (!engine?.query) throw governedAnswerFailure('internal_contract');
       const candidateChunks = [];
@@ -3593,16 +3616,15 @@ Follow these instructions carefully:
             nativeToolBatch = chunk;
             nativeToolBatchCount++;
           } else if (chunk.type === 'error') {
-            throw normalizeGovernedAnswerFailure(chunk.error, 'provider_engine', null, null, null,
-              null, null, 'query');
+            throw normalizeProviderFailure(chunk.error, 'query');
           }
         }
       } catch (error) {
-        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-          null, null, 'query');
+        throw normalizeProviderFailure(error, 'query');
       }
       if (hasInvocationDigest) {
-        const expectedAttestation = isGovernedCodexNativeProfile(this.governedCodexProfile)
+        const execTransport = this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT;
+        const expectedAttestation = execTransport ? 'probe.governed-codex-exec-attestation/v1' : isGovernedCodexNativeProfile(this.governedCodexProfile)
           ? 'probe.governed-codex-attestation/v3' : 'probe.governed-codex-attestation/v2';
         if (attestationCount !== 1 || runtimeAttestation?.version !== expectedAttestation || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
           throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
@@ -3612,7 +3634,10 @@ Follow these instructions carefully:
         throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
           'invocation_attestation');
       }
-      if (isGovernedCodexNativeProfile(this.governedCodexProfile)) {
+      if (runtimeAttestation?.version === 'probe.governed-codex-exec-attestation/v1') {
+        try { validateGovernedCodexExecAttestation(runtimeAttestation); }
+        catch { throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null, 'invocation_attestation'); }
+      } else if (isGovernedCodexNativeProfile(this.governedCodexProfile)) {
         if (nativeToolBatchCount !== 1 || !Number.isSafeInteger(nativeToolBatch?.total) ||
           !Array.isArray(nativeToolBatch?.tools) || nativeToolBatch.total !== runtimeAttestation?.observed?.nativeTools?.total ||
           JSON.stringify(nativeToolBatch.tools) !== JSON.stringify(runtimeAttestation?.observed?.nativeTools?.tools)) {
@@ -3625,6 +3650,14 @@ Follow these instructions carefully:
           'native_capability_aggregate');
       }
       const candidateText = candidateChunks.join('');
+      if (runtimeAttestation?.version === 'probe.governed-codex-exec-attestation/v1') {
+        const candidateDigest = `sha256:${createHash('sha256').update(candidateText, 'utf8').digest('hex')}`;
+        if (runtimeAttestation.observed?.finalDigest !== candidateDigest ||
+            runtimeAttestation.observed?.finalBytes !== Buffer.byteLength(candidateText, 'utf8')) {
+          throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+            'internal_contract');
+        }
+      }
       const candidate = Object.freeze({
         version: 'probe.governed-answer-candidate/v1',
         text: candidateText,
@@ -3650,8 +3683,7 @@ Follow these instructions carefully:
       if (engine) {
         try { await engine.close(); }
         catch (error) {
-          if (!answerFailure) throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-            null, null, 'close');
+          if (!answerFailure) throw normalizeProviderFailure(error, 'close');
         }
       }
     }

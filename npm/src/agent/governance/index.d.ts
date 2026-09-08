@@ -128,3 +128,21 @@ export interface AtomicTerminalReceiptResult {
 export function writeAtomicTerminalReceipt(
   options: AtomicTerminalReceiptOptions
 ): Promise<Readonly<AtomicTerminalReceiptResult>>;
+
+export const GOVERNED_CODEX_EXEC_PROTOCOL: 'probe.governed-codex-exec/v1';
+export const GOVERNED_CODEX_EXEC_ATTESTATION_VERSION: 'probe.governed-codex-exec-attestation/v1';
+export const GOVERNED_CODEX_EXEC_TRANSPORT: 'exec-jsonl-default-auth-v1';
+export function buildGovernedCodexExecLaunch(options: Record<string, unknown>): Readonly<Record<string, unknown>>;
+export function createGovernedCodexExecEngine(options: Record<string, unknown>): Promise<Readonly<{
+  run(prompt?: string, options?: Record<string, unknown>): Promise<Readonly<Record<string, unknown>>>;
+  query(prompt: string, options?: Record<string, unknown>): AsyncGenerator<Readonly<Record<string, unknown>>>;
+  close(): Promise<void>;
+  readonly launch: Readonly<Record<string, unknown>> | null;
+}>>;
+export function runGovernedCodexExec(options: Record<string, unknown>): Promise<Readonly<Record<string, unknown>>>;
+export function formatGovernedCodexExecAttestation(input: Record<string, unknown>): Readonly<Record<string, unknown>>;
+export const buildGovernedCodexExecAttestation: typeof formatGovernedCodexExecAttestation;
+export function validateGovernedCodexExecAttestation(input: Record<string, unknown>): Readonly<Record<string, unknown>>;
+export function projectGovernedCodexExecFailure(error: unknown): Readonly<Record<string, unknown>> | null;
+export function normalizeGovernedCodexExecFailure(error: unknown, boundary: 'acquire' | 'query' | 'close'): Error;
+export function previewGovernedCodexExecDispatch(prompt: string, systemPrompt?: string): Readonly<{ source: 'probe-host-exec'; tool: 'codex-exec'; promptDigest: `sha256:${string}`; promptBytes: number }>;

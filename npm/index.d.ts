@@ -45,6 +45,24 @@ export interface GovernedProcessHandle {
 
 export declare function spawnGovernedProcess(spec: GovernedProcessSpec): GovernedProcessHandle;
 
+export declare const GOVERNED_CODEX_EXEC_PROTOCOL: 'probe.governed-codex-exec/v1';
+export declare const GOVERNED_CODEX_EXEC_ATTESTATION_VERSION: 'probe.governed-codex-exec-attestation/v1';
+export declare const GOVERNED_CODEX_EXEC_TRANSPORT: 'exec-jsonl-default-auth-v1';
+export declare function buildGovernedCodexExecLaunch(options: Record<string, unknown>): Readonly<Record<string, unknown>>;
+export declare function createGovernedCodexExecEngine(options: Record<string, unknown>): Promise<Readonly<{
+  run(prompt?: string, options?: Record<string, unknown>): Promise<Readonly<Record<string, unknown>>>;
+  query(prompt: string, options?: Record<string, unknown>): AsyncGenerator<Readonly<Record<string, unknown>>>;
+  close(): Promise<void>;
+  readonly launch: Readonly<Record<string, unknown>> | null;
+}>>;
+export declare function runGovernedCodexExec(options: Record<string, unknown>): Promise<Readonly<Record<string, unknown>>>;
+export declare function formatGovernedCodexExecAttestation(input: Record<string, unknown>): Readonly<Record<string, unknown>>;
+export declare const buildGovernedCodexExecAttestation: typeof formatGovernedCodexExecAttestation;
+export declare function validateGovernedCodexExecAttestation(input: Record<string, unknown>): Readonly<Record<string, unknown>>;
+export declare function projectGovernedCodexExecFailure(error: unknown): Readonly<Record<string, unknown>> | null;
+export declare function normalizeGovernedCodexExecFailure(error: unknown, boundary: 'acquire' | 'query' | 'close'): Error;
+export declare function previewGovernedCodexExecDispatch(prompt: string, systemPrompt?: string): Readonly<{ source: 'probe-host-exec'; tool: 'codex-exec'; promptDigest: `sha256:${string}`; promptBytes: number }>;
+
 /**
  * Configuration options for creating a ProbeAgent instance
  */
@@ -91,6 +109,12 @@ export interface ProbeAgentOptions {
   allowedTools?: string[] | null;
   /** Attested, fail-closed Codex runtime profile. Requires provider codex and an exact allowedTools match. */
   governedCodexProfile?: GovernedCodexProfile;
+  /** Transport for an attested governed Codex profile. */
+  governedCodexTransport?: 'mcp-server-v1' | 'exec-jsonl-default-auth-v1';
+  /** Absolute Codex executable for the governed exec transport. */
+  codexBin?: string;
+  /** Caller-supplied SHA-256 for codexBin. */
+  codexSha256?: string;
   /** Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set. */
   disableTools?: boolean;
   /** Disable automatic mermaid diagram validation and fixing */
@@ -359,9 +383,21 @@ export interface GovernedCodexRuntimeAttestation {
   usage: { status: 'unavailable'; };
 }
 
+export interface GovernedCodexExecAttestation {
+  version: 'probe.governed-codex-exec-attestation/v1';
+  profileId: 'luna-xhigh-readonly-v1' | 'luna-xhigh-readonly-native-exec-v1' | 'luna-xhigh-isolated-writer-v1';
+  requested: Record<string, unknown>;
+  enforced: Record<string, unknown>;
+  observed: Record<string, unknown>;
+  executionContext?: { source: 'caller'; invocationDigest: string };
+  dispatch: { source: 'probe-host-exec'; tool: 'codex-exec'; promptDigest: string; promptBytes: number };
+  evidence: { eventCount: number; completedItemCount: number; agentMessageCount: number; probeMcpCallCount: number };
+  usage: { status: 'observed'; inputTokens: number; cachedInputTokens: number; outputTokens: number };
+}
+
 export interface GovernedAnswerResult {
   data: unknown;
-  runtimeAttestation: GovernedCodexRuntimeAttestation | GovernedCodexRuntimeAttestationV3;
+  runtimeAttestation: GovernedCodexRuntimeAttestation | GovernedCodexRuntimeAttestationV3 | GovernedCodexExecAttestation;
 }
 
 export interface GovernedCodexRuntimeAttestationV2 {
@@ -377,12 +413,12 @@ export interface GovernedCodexRuntimeAttestationV2 {
 
 export interface GovernedInvocationAnswerResult {
   data: unknown;
-  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3 | GovernedCodexExecAttestation;
 }
 
 export interface GovernedIdentifiedAnswerResult {
   data: unknown;
-  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3 | GovernedCodexExecAttestation;
   resultIdentity: GovernedResultIdentity;
 }
 

@@ -1,0 +1,316 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createGovernedCodexExecEngine, previewGovernedCodexExecDispatch, validateGovernedCodexExecAttestation } from '../../src/agent/engines/governed-codex-exec.js';
+import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
+
+function profile(cwd) {
+  return {
+    version: 'probe.governed-codex-profile/v1', profileId: 'luna-xhigh-readonly-v1', engine: 'codex',
+    model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never',
+    cwd, probeTools: ['search', 'extract', 'listFiles'], fallback: false, retries: 0,
+  };
+}
+
+function agent(cwd) {
+  const events = new EventEmitter();
+  return {
+    allowedTools: { isEnabled: name => ['search', 'extract', 'listFiles'].includes(name) },
+    toolImplementations: {
+      search: { execute: async () => 'search' },
+      extract: { execute: async () => 'extract' },
+      listFiles: { execute: async () => 'listFiles' },
+    },
+    sessionId: 'governed-exec-test', cwd, workspaceRoot: cwd, events,
+  };
+}
+
+function fixture(events, behavior = 'normal') {
+  const root = mkdtempSync(join(tmpdir(), 'probe-governed-exec-'));
+  const observed = join(root, 'observed.json');
+  const script = join(root, 'fake-codex');
+const source = `#!/usr/bin/env node
+const fs = require('node:fs');
+const events = ${JSON.stringify(events)};
+fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ args: process.argv.slice(2), codexHome: process.env.CODEX_HOME }));
+if (process.argv.includes('--version')) { process.stdout.write('codex 0.153.4\\n'); process.exit(0); }
+${behavior === 'hang' ? 'setInterval(() => {}, 1000);' : `for (const event of events) process.stdout.write(JSON.stringify(event) + '\\n');
+${behavior === 'exit-7' ? 'process.exitCode = 7;' : ''}`}
+`;
+  writeFileSync(script, source);
+  chmodSync(script, 0o700);
+  return { root, script, observed };
+}
+
+const validEvents = () => [
+  { type: 'thread.started', thread_id: 'thread-1' },
+  { type: 'turn.started' },
+  { type: 'item.completed', item: { id: 'reason-1', type: 'reasoning', text: 'discard-me' } },
+  { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+  { type: 'turn.completed', usage: { input_tokens: 12, cached_input_tokens: 4, output_tokens: 3 } },
+];
+
+async function withEngine(events, callback, options = {}, behavior = 'normal') {
+  const fixtureRoot = fixture(events, behavior);
+  try {
+    const engine = await createGovernedCodexExecEngine({
+      agent: agent(fixtureRoot.root), profile: profile(fixtureRoot.root), prompt: 'bounded prompt',
+      codexPath: fixtureRoot.script, codexSha256: `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`, timeoutMs: 1000, ...options,
+    });
+    try { return await callback(engine, fixtureRoot); }
+    finally { await engine.close(); }
+  } finally {
+    rmSync(fixtureRoot.root, { recursive: true, force: true });
+  }
+}
+
+test('governed exec builds scoped no-shell launch and returns only bounded answer/usage', async () => {
+  await withEngine(validEvents(), async (engine, fixtureRoot) => {
+    const result = await engine.run();
+    const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
+    assert.equal(observed.codexHome, undefined);
+    assert.deepEqual(observed.args.slice(0, 7), ['exec', '--ignore-user-config', '--ignore-rules', '--ephemeral', '--json', '--model', 'gpt-5.6-luna']);
+    assert.equal(observed.args.includes('--sandbox'), true);
+    assert.equal(observed.args.includes('--cd'), true);
+    assert.equal(observed.args.includes('-c'), true);
+    assert.equal(observed.args.some(value => value === 'model_reasoning_effort="xhigh"'), true);
+    assert.equal(observed.args.some(value => value === 'approval_policy="never"'), true);
+    assert.equal(observed.args.some(value => value.startsWith('mcp_servers.probe_')), true);
+    assert.deepEqual(result.answer, '{"ok":true}');
+    assert.deepEqual(result.usage, { cached_input_tokens: 4, input_tokens: 12, output_tokens: 3 });
+    assert.deepEqual(result.evidence, { eventCount: 5, completedItemCount: 2, agentMessageCount: 1, usedToolItems: [], probeMcpCallCount: 0 });
+    assert.equal(validateGovernedCodexExecAttestation(result.attestation), result.attestation);
+    assert.equal(result.attestation.enforced.codexHome, 'omitted');
+    assert.equal(result.attestation.observed.terminal, 'turn.completed');
+    assert.equal(result.process.exitCode, 0);
+    assert.equal(Object.prototype.hasOwnProperty.call(result, 'stderr'), false);
+    assert.equal(JSON.stringify(result).includes('discard-me'), false);
+    assert.equal(JSON.stringify(result).includes('mcp__probe__search'), false);
+    await assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ONE_QUERY/);
+  });
+});
+
+test('governed exec keeps system instructions in the supported config channel', async () => {
+  await withEngine(validEvents(), async (engine, fixtureRoot) => {
+    await engine.run();
+    const launch = engine.launch;
+    assert.equal(readFileSync(launch.config.model_instructions_file, 'utf8'), 'closed system instruction');
+    assert.equal(launch.args.at(-1), 'bounded prompt');
+    assert.equal(launch.args.at(-1).includes('closed system instruction'), false);
+    const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
+    assert.equal(observed.args.at(-1), 'bounded prompt');
+  }, { systemPrompt: 'closed system instruction' });
+});
+
+test('governed exec rejects unknown categories, session-shaped events, and order violations closed', async () => {
+  for (const events of [
+    [{ type: 'session_configured' }],
+    [{ type: 'thread.started', thread_id: 'thread-1' }, { type: 'unknown.event' }],
+    [{ type: 'turn.started' }],
+    [
+      { type: 'thread.started', thread_id: 'thread-1' }, { type: 'turn.started' },
+      { type: 'item.completed', item: { id: 'answer-1', type: 'unexpected_tool', text: 'SECRET' } },
+    ],
+  ]) {
+    await withEngine(events, async engine => {
+      await assert.rejects(engine.run(), error => {
+        assert.match(error.message, /^GOVERNED_CODEX_EXEC_/);
+        assert.equal(error.message.includes('SECRET'), false);
+        return true;
+      });
+    });
+  }
+});
+
+test('governed exec binds the last completed agent message and bounded usage', async () => {
+  const duplicate = validEvents();
+  duplicate.splice(3, 0, { type: 'item.completed', item: { id: 'answer-0', type: 'agent_message', text: 'first' } });
+  await withEngine(duplicate, async engine => {
+    const result = await engine.run();
+    assert.equal(result.answer, '{"ok":true}');
+    assert.equal(result.attestation.observed.agentMessageCount, 2);
+  });
+
+  const badUsage = validEvents();
+  badUsage.at(-1).usage = { input_tokens: 1, output_tokens: -1 };
+  await withEngine(badUsage, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_USAGE/));
+});
+
+test('governed exec fails closed for nonzero exit and incomplete EOF', async () => {
+  await withEngine(validEvents(), async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_EXIT/), {}, 'exit-7');
+  await withEngine(validEvents().slice(0, 3), async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_INCOMPLETE/));
+});
+
+test('governed exec rejects an incomplete tool item at terminal turn completion', async () => {
+  const events = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: { id: 'mcp-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: 'probe', arguments: {}, result: null, status: 'in_progress' } },
+    { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+  ];
+  await withEngine(events, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_INCOMPLETE_ITEM/));
+});
+
+test('governed exec requires a tool completion to pair with its start', async () => {
+  const events = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.completed', item: { id: 'mcp-1', type: 'mcp_tool_call', name: 'mcp__probe__search', server: 'probe', arguments: {}, result: {}, status: 'completed' } },
+    { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+  ];
+  await withEngine(events, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_ORDER/));
+});
+
+test('governed exec rejects duplicate item identities and exposes only sanitized startup diagnostics', async () => {
+  const duplicate = validEvents();
+  duplicate.splice(3, 0, { type: 'item.completed', item: { id: 'reason-1', type: 'reasoning', text: 'secret' } });
+  await withEngine(duplicate, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_DUPLICATE/));
+
+  const fixtureRoot = fixture(validEvents(), 'exit-7');
+  try {
+    const original = readFileSync(fixtureRoot.script, 'utf8');
+    writeFileSync(fixtureRoot.script, original.replace("process.exitCode = 7;", "process.stderr.write('refresh_token TOP_SECRET /private/tmp/private-value\\n'); process.exitCode = 7;"));
+    const currentSha = `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`;
+    const engine = await createGovernedCodexExecEngine({ agent: agent(fixtureRoot.root), profile: profile(fixtureRoot.root), prompt: 'bounded prompt', codexPath: fixtureRoot.script, codexSha256: currentSha, timeoutMs: 1000 });
+    try {
+      await assert.rejects(engine.run(), error => {
+        assert.equal(error.code, 'GOVERNED_CODEX_EXEC_EXIT');
+        assert.equal(error.diagnostic.source, 'codex-exec-stderr/v1');
+        assert.equal(error.diagnostic.bytes > 0, true);
+        assert.match(error.diagnostic.digest, /^sha256:[0-9a-f]{64}$/);
+        assert.equal(Object.hasOwn(error.diagnostic, 'text'), false);
+        assert.doesNotMatch(JSON.stringify(error.diagnostic), /TOP_SECRET|private-value/);
+        return true;
+      });
+    } finally { await engine.close(); }
+  } finally { rmSync(fixtureRoot.root, { recursive: true, force: true }); }
+});
+
+test('governed exec cancellation and timeout terminate the process group without retry', async () => {
+  await withEngine(validEvents().slice(0, 2), async engine => {
+    await assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_TIMEOUT/);
+  }, { timeoutMs: 1000, executionTimeoutMs: 30 }, 'hang');
+
+  const controller = new AbortController();
+  await withEngine(validEvents(), async engine => {
+    controller.abort();
+    await assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_CANCELLED/);
+  }, { signal: controller.signal });
+});
+
+test('launch rejects a non-absolute or missing Codex identity before starting MCP work', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'probe-governed-exec-invalid-'));
+  try {
+    await assert.rejects(createGovernedCodexExecEngine({
+      agent: agent(root), profile: profile(root), prompt: 'x', codexPath: 'codex',
+    }), /Invalid Codex executable/);
+    await assert.rejects(createGovernedCodexExecEngine({
+      agent: agent(root), profile: profile(root), prompt: 'x', codexPath: join(root, 'missing'),
+    }), /Invalid Codex executable/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('ProbeAgent selects exec transport only for the explicit governed selector', async () => {
+  const fixtureRoot = fixture(validEvents());
+  const sha256 = `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`;
+  try {
+    const governed = new ProbeAgent({
+      provider: 'codex', path: fixtureRoot.root, cwd: fixtureRoot.root,
+      allowedTools: ['search', 'extract', 'listFiles'], governedCodexProfile: profile(fixtureRoot.root),
+      governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin: fixtureRoot.script, codexSha256: sha256,
+      disableMermaidValidation: true,
+    });
+    const schema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}';
+    const preview = await governed.previewGovernedAnswerDispatch('return ok', { schema });
+    const result = await governed.answerGoverned('return ok', { schema, invocationDigest: `sha256:${'a'.repeat(64)}` });
+    assert.deepEqual(result.data, { ok: true });
+    assert.equal(result.runtimeAttestation.version, 'probe.governed-codex-exec-attestation/v1');
+    assert.deepEqual(preview, result.runtimeAttestation.dispatch);
+    assert.notDeepEqual(
+      previewGovernedCodexExecDispatch('same user prompt', 'system one'),
+      previewGovernedCodexExecDispatch('same user prompt', 'system two'),
+    );
+
+    const tampered = {
+      ...result.runtimeAttestation,
+      observed: { ...result.runtimeAttestation.observed, finalDigest: `sha256:${'0'.repeat(64)}` },
+    };
+    governed.getEngine = async () => ({
+      query: async function* () {
+        yield { type: 'text', content: '{"ok":true}' };
+        yield { type: 'metadata', data: { attestation: tampered } };
+      },
+      close: async () => {},
+    });
+    await assert.rejects(
+      governed.answerGoverned('return ok', { schema, invocationDigest: `sha256:${'a'.repeat(64)}` }),
+      error => error.name === 'GovernedAnswerFailure' && error.answerFailureStage === 'native_event_grammar',
+    );
+  } finally {
+    rmSync(fixtureRoot.root, { recursive: true, force: true });
+  }
+});
+
+test('ProbeAgent preserves only the closed exec failure diagnostic through answerGoverned', async () => {
+  const fixtureRoot = fixture(validEvents());
+  const sha256 = `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`;
+  const schema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}';
+  try {
+    const governed = new ProbeAgent({
+      provider: 'codex', path: fixtureRoot.root, cwd: fixtureRoot.root,
+      allowedTools: ['search', 'extract', 'listFiles'], governedCodexProfile: profile(fixtureRoot.root),
+      governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin: fixtureRoot.script, codexSha256: sha256,
+      disableMermaidValidation: true,
+    });
+    const makeFailure = (code, stderr) => Object.assign(new Error('TOP_SECRET_ERROR'), { code, diagnostic: stderr });
+    const revoked = {
+      source: 'codex-exec-stderr/v1', bytes: 41, digest: `sha256:${'b'.repeat(64)}`,
+      safeMessage: 'access_token_refresh_revoked', text: 'REFRESH_TOKEN_SECRET',
+    };
+    governed.getEngine = async () => { throw makeFailure('GOVERNED_CODEX_EXEC_EXIT', revoked); };
+    await assert.rejects(governed.answerGoverned('return ok', { schema }), error => {
+      assert.equal(error.name, 'GovernedAnswerFailure');
+      assert.equal(error.answerFailureStage, 'provider_engine');
+      assert.equal(error.providerEngineFailureBoundary, 'acquire');
+      assert.deepEqual(Object.keys(error), ['answerFailureStage', 'providerEngineFailureBoundary', 'providerEngineDiagnostic']);
+      assert.deepEqual(error.providerEngineDiagnostic, {
+        version: 'probe.governed-codex-exec-failure/v1', code: 'GOVERNED_CODEX_EXEC_EXIT',
+        stderr: { source: 'codex-exec-stderr/v1', bytes: 41, digest: `sha256:${'b'.repeat(64)}`, safeMessage: 'access_token_refresh_revoked' },
+      });
+      assert.doesNotMatch(JSON.stringify(error), /TOP_SECRET|REFRESH_TOKEN_SECRET/);
+      return true;
+    });
+
+    governed.getEngine = async () => {
+      throw makeFailure('GOVERNED_CODEX_EXEC_EXIT', {
+        source: 'codex-exec-stderr/v1', bytes: 17, digest: `sha256:${'c'.repeat(64)}`, text: 'ARBITRARY_SECRET',
+      });
+    };
+    await assert.rejects(governed.answerGoverned('return ok', { schema }), error => {
+      assert.equal(error.providerEngineFailureBoundary, 'acquire');
+      assert.deepEqual(error.providerEngineDiagnostic, {
+        version: 'probe.governed-codex-exec-failure/v1', code: 'GOVERNED_CODEX_EXEC_EXIT',
+        stderr: { source: 'codex-exec-stderr/v1', bytes: 17, digest: `sha256:${'c'.repeat(64)}` },
+      });
+      assert.doesNotMatch(JSON.stringify(error), /ARBITRARY_SECRET/);
+      return true;
+    });
+
+    governed.getEngine = async () => { throw makeFailure('UNRECOGNIZED_EXEC_CODE', revoked); };
+    await assert.rejects(governed.answerGoverned('return ok', { schema }), error => {
+      assert.equal(error.providerEngineFailureBoundary, 'acquire');
+      assert.equal(Object.hasOwn(error, 'providerEngineDiagnostic'), false);
+      return true;
+    });
+  } finally {
+    rmSync(fixtureRoot.root, { recursive: true, force: true });
+  }
+});
