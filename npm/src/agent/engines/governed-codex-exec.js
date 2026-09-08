@@ -660,6 +660,17 @@ function mcpNameAllowed(name, profile) {
   return typeof name === 'string' && tools.some(tool => name === `mcp__probe__${tool}`);
 }
 
+function lifecycleStatusAllowed(itemType, eventType, status, splitMcp = false) {
+  if (splitMcp) {
+    if (eventType === 'item.started') return status === 'in_progress';
+    return status === 'completed' || (status === 'failed' && itemType === 'mcp_tool_call');
+  }
+  if (status === undefined) return true;
+  if (eventType === 'item.started') return status === 'in_progress' || status === 'completed';
+  return status === 'completed' || (status === 'failed' &&
+    (itemType === 'command_execution' || itemType === 'mcp_tool_call'));
+}
+
 function validateItem(event, state, profile) {
   if (!exactKeys(event, ['item', 'type']) || !['item.started', 'item.completed'].includes(event.type) ||
       !ownObject(event.item) || typeof event.item.type !== 'string' || !itemCategoryAllowed(event.item.type, profile) ||
@@ -721,16 +732,13 @@ function validateItem(event, state, profile) {
     if (item.type === 'mcp_tool_call') {
       if (!mcpNameAllowed(toolName, profile)) throw fail('TOOL_POLICY');
     } else if (item.name !== undefined && item.name !== null) throw fail('TOOL_POLICY');
-    const commandFailed = item.type === 'command_execution' && event.type === 'item.completed' && item.status === 'failed';
-    if (item.status !== undefined && !['in_progress', 'completed'].includes(item.status) && !commandFailed) {
+    if (!lifecycleStatusAllowed(item.type, event.type, item.status)) {
       throw fail('ITEM', undefined, rejectedItemEvent(event, 'item_status'));
     }
-    if (mcpSplitVariant && ((event.type === 'item.started' && item.status !== 'in_progress') ||
-        (event.type === 'item.completed' && item.status !== 'completed'))) throw fail('ITEM_STATUS');
+    if (mcpSplitVariant && !lifecycleStatusAllowed(item.type, event.type, item.status, true)) throw fail('ITEM_STATUS');
   }
   if (event.type === 'item.completed') {
-    if (item.status !== undefined && item.status !== 'completed' &&
-        !(item.type === 'command_execution' && item.status === 'failed')) throw fail('ITEM_STATUS');
+    if (!lifecycleStatusAllowed(item.type, event.type, item.status)) throw fail('ITEM_STATUS');
     state.completedItemCount++;
     if (item.type === 'agent_message') {
       if (typeof item.text !== 'string') throw fail('ANSWER_CARDINALITY');

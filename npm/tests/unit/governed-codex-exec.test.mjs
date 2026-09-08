@@ -276,6 +276,83 @@ test('governed exec rejects split MCP shape mixtures, foreign servers, non-null 
   await withEngine(mismatch, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_ORDER/));
 });
 
+test('governed exec accepts a paired failed split MCP completion and normalizes its lifecycle', async () => {
+  const failedMcp = [
+    { type: 'thread.started', thread_id: 'thread-1' },
+    { type: 'turn.started' },
+    { type: 'item.started', item: {
+      arguments: { query: 'dummy' }, error: null, id: 'mcp-1', result: null,
+      server: '__MCP_SERVER__', status: 'in_progress', tool: 'mcp__probe__search', type: 'mcp_tool_call',
+    } },
+    { type: 'item.completed', item: {
+      arguments: { query: 'dummy' }, error: null, id: 'mcp-1', result: { content: [{ type: 'text', text: 'MCP_RESULT_SECRET' }] },
+      server: '__MCP_SERVER__', status: 'failed', tool: 'mcp__probe__search', type: 'mcp_tool_call',
+    } },
+    { type: 'item.completed', item: { id: 'answer-1', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } },
+  ];
+  await withEngine(failedMcp, async engine => {
+    const result = await engine.run();
+    assert.deepEqual(result.evidence.usedToolItems, [{
+      category: 'mcp_tool_call', name: 'mcp__probe__search', status: 'completed', count: 1,
+    }]);
+    assert.equal(result.evidence.probeMcpCallCount, 1);
+    assert.equal(result.attestation.observed.usedToolItems[0].status, 'completed');
+    assert.doesNotMatch(JSON.stringify(result), /MCP_RESULT_SECRET/);
+  }, {}, 'mcp-success');
+
+  const failedStart = failedMcp.slice(0, 3).map((event, index) => index === 2
+    ? { ...event, item: { ...event.item, status: 'failed' } } : event);
+  await withEngine(failedStart, async engine => assert.rejects(engine.run(), error => {
+    assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+    assert.equal(projectGovernedCodexExecFailure(error).event.predicate, 'item_status');
+    assert.equal(projectGovernedCodexExecFailure(error).event.itemStatus, 'failed');
+    return true;
+  }));
+
+  const missingStartStatus = failedMcp.slice(0, 3).map((event, index) => index === 2
+    ? { ...event, item: { ...event.item, status: undefined } } : event);
+  await withEngine(missingStartStatus, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_STATUS/));
+
+  const missingCompletionStatus = failedMcp.slice(0, 4).map((event, index) => index === 3
+    ? { ...event, item: { ...event.item, status: undefined } } : event);
+  await withEngine(missingCompletionStatus, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_STATUS/));
+
+  const unpaired = failedMcp.filter((event, index) => index !== 2);
+  await withEngine(unpaired, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ITEM_ORDER/));
+
+  const declined = failedMcp.map(event => event.type === 'item.completed' && event.item?.id === 'mcp-1'
+    ? { ...event, item: { ...event.item, status: 'declined' } } : event);
+  await withEngine(declined, async engine => assert.rejects(engine.run(), error => {
+    assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+    assert.equal(projectGovernedCodexExecFailure(error).event.itemStatus, 'declined');
+    return true;
+  }));
+
+  const fileFailed = failedMcp.slice(0, 2).concat([
+    { type: 'item.started', item: { changes: [], id: 'file-1', status: 'in_progress', type: 'file_change' } },
+    { type: 'item.completed', item: { changes: [], id: 'file-1', status: 'failed', type: 'file_change' } },
+  ]);
+  await withEngine(fileFailed, async engine => assert.rejects(engine.run(), error => {
+    assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
+    assert.equal(projectGovernedCodexExecFailure(error).event.itemStatus, 'failed');
+    return true;
+  }), { profile: nativeProfile(process.cwd(), 'probe.governed-codex-profile/v3') });
+
+  for (const events of [
+    failedMcp.slice(0, 4),
+    failedMcp.slice(0, 5),
+    failedMcp.slice(0, 5).concat([{ type: 'turn.failed', error: { message: 'hidden' } }]),
+    failedMcp.slice(0, 5).concat([{ type: 'error', error: { message: 'hidden' } }]),
+  ]) {
+    await withEngine(events, async engine => assert.rejects(engine.run(), error => {
+      assert.match(error.code, /^GOVERNED_CODEX_EXEC_/);
+      assert.doesNotMatch(error.message, /hidden/);
+      return true;
+    }));
+  }
+});
+
 test('governed exec accepts only a paired failed command completion and preserves terminal gates', async () => {
   const failedCommand = [
     { type: 'thread.started', thread_id: 'thread-1' },
@@ -384,15 +461,15 @@ test('governed exec rejects failed or declined statuses outside completed comman
     });
   }, { profile: nativeProfile(process.cwd()) });
 
-  const mcpFailed = [
+  const mcpDeclined = [
     { type: 'thread.started', thread_id: 'thread-1' },
     { type: 'turn.started' },
     { type: 'item.started', item: { arguments: {}, id: 'mcp-1', name: 'mcp__probe__search', result: null, server: '__MCP_SERVER__', status: 'in_progress', type: 'mcp_tool_call' } },
-    { type: 'item.completed', item: { arguments: {}, id: 'mcp-1', name: 'mcp__probe__search', result: {}, server: '__MCP_SERVER__', status: 'failed', type: 'mcp_tool_call' } },
+    { type: 'item.completed', item: { arguments: {}, id: 'mcp-1', name: 'mcp__probe__search', result: {}, server: '__MCP_SERVER__', status: 'declined', type: 'mcp_tool_call' } },
   ];
-  await withEngine(mcpFailed, async engine => assert.rejects(engine.run(), error => {
+  await withEngine(mcpDeclined, async engine => assert.rejects(engine.run(), error => {
     assert.equal(error.code, 'GOVERNED_CODEX_EXEC_ITEM');
-    assert.equal(projectGovernedCodexExecFailure(error).event.itemStatus, 'failed');
+    assert.equal(projectGovernedCodexExecFailure(error).event.itemStatus, 'declined');
     return true;
   }));
 
