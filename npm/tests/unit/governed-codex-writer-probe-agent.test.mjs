@@ -9,6 +9,51 @@ const TOOLS = ['search', 'extract', 'listFiles'];
 const PROFILE_ID = 'luna-xhigh-isolated-writer-v1';
 const SCHEMA = JSON.stringify({ type: 'string' });
 
+function rawExecFailure(code = 'GOVERNED_CODEX_EXEC_ITEM') {
+  const error = new Error('secret raw provider payload');
+  Object.assign(error, {
+    code,
+    hostile: { token: 'must-not-cross-the-boundary' },
+    event: {
+        source: 'codex-exec-rejected-item/v1',
+        predicate: 'item_status',
+        eventType: 'item.completed',
+        itemType: 'command_execution',
+        itemStatus: 'failed',
+        eventFields: [
+          { name: 'item', type: 'object' },
+          { name: 'type', type: 'string', size: 17 },
+        ],
+        itemFields: [
+          { name: 'command', type: 'string', size: 19 },
+          { name: 'status', type: 'string', size: 6 },
+        ],
+    },
+  });
+  return error;
+}
+
+function governedAnswerAgent(engine) {
+  const cwd = realpathSync(process.cwd());
+  const profile = writerProfile(cwd);
+  const agent = new ProbeAgent({ provider: 'codex', path: cwd, cwd, allowedTools: [...TOOLS],
+    governedCodexProfile: profile, governedCodexTransport: 'exec-jsonl-default-auth-v1',
+    codexBin: '/usr/local/bin/codex', codexSha256: 'a'.repeat(64), disableMermaidValidation: true });
+  agent.getSystemMessage = async () => '';
+  agent.engine = engine;
+  return agent;
+}
+
+function legacyGovernedAnswerAgent(engine) {
+  const cwd = realpathSync(process.cwd());
+  const profile = writerProfile(cwd);
+  const agent = new ProbeAgent({ provider: 'codex', path: cwd, cwd, allowedTools: [...TOOLS],
+    governedCodexProfile: profile, governedCodexTransport: 'mcp-server-v1', disableMermaidValidation: true });
+  agent.getSystemMessage = async () => '';
+  agent.engine = engine;
+  return agent;
+}
+
 function writerProfile(cwd) {
   return {
     version: 'probe.governed-codex-profile/v3', profileId: PROFILE_ID, engine: 'codex',
@@ -130,6 +175,97 @@ test('ordinary ProbeAgent.answer consumes writer native evidence and closes', as
   assert.equal(answer, 'ordinary-writer-ok');
   assert.deepEqual(toolEvents, aggregate.tools);
   assert.equal(closed, 1);
+});
+
+test('governed answer preserves a closed exec query diagnostic and closes once', async () => {
+  let closed = 0;
+  const queryError = rawExecFailure();
+  const agent = governedAnswerAgent({
+    async *query() { throw queryError; },
+    async close() { closed++; },
+  });
+
+  const failure = await agent.answer('query failure').then(() => null, error => error);
+  assert.equal(failure?.name, 'GovernedAnswerFailure');
+  assert.equal(failure?.answerFailureStage, 'provider_engine');
+  assert.equal(failure?.providerEngineFailureBoundary, 'query');
+  assert.equal(Object.isFrozen(failure), true);
+  assert.deepEqual(failure?.providerEngineDiagnostic, {
+    version: 'probe.governed-codex-exec-failure/v1',
+    code: 'GOVERNED_CODEX_EXEC_ITEM',
+    event: {
+      source: 'codex-exec-rejected-item/v1',
+      predicate: 'item_status',
+      eventType: 'item.completed',
+      itemType: 'command_execution',
+      itemStatus: 'failed',
+      eventFields: [
+        { name: 'item', type: 'object' },
+        { name: 'type', type: 'string', size: 17 },
+      ],
+      itemFields: [
+        { name: 'command', type: 'string', size: 19 },
+        { name: 'status', type: 'string', size: 6 },
+      ],
+    },
+  });
+  assert.equal(Object.prototype.hasOwnProperty.call(failure, 'hostile'), false);
+  assert.equal(JSON.stringify(failure).includes('must-not-cross-the-boundary'), false);
+  assert.equal(failure.message, '');
+  assert.equal(closed, 1);
+});
+
+test('governed query failure remains authoritative when close also fails', async () => {
+  let closed = 0;
+  const queryError = rawExecFailure();
+  const agent = governedAnswerAgent({
+    async *query() { throw queryError; },
+    async close() { closed++; throw rawExecFailure('GOVERNED_CODEX_EXEC_EXIT'); },
+  });
+
+  const failure = await agent.answer('query and close failure').then(() => null, error => error);
+  assert.equal(failure?.providerEngineFailureBoundary, 'query');
+  assert.equal(failure?.providerEngineDiagnostic?.code, 'GOVERNED_CODEX_EXEC_ITEM');
+  assert.equal(closed, 1);
+});
+
+test('governed close-only failure is normalized at the close boundary', async () => {
+  let closed = 0;
+  const agent = governedAnswerAgent({
+    async *query() { yield { type: 'text', content: 'ok' }; },
+    async close() { closed++; throw rawExecFailure('GOVERNED_CODEX_EXEC_EXIT'); },
+  });
+
+  const failure = await agent.answer('close failure').then(() => null, error => error);
+  assert.equal(failure?.name, 'GovernedAnswerFailure');
+  assert.equal(failure?.answerFailureStage, 'provider_engine');
+  assert.equal(failure?.providerEngineFailureBoundary, 'close');
+  assert.equal(failure?.providerEngineDiagnostic?.code, 'GOVERNED_CODEX_EXEC_EXIT');
+  assert.equal(closed, 1);
+});
+
+test('legacy governed MCP query preserves its raw error and closes directly', async () => {
+  const queryError = new Error('legacy query error');
+  let closed = 0;
+  const agent = legacyGovernedAnswerAgent({
+    async *query() { throw queryError; },
+    async close() { closed++; },
+  });
+
+  const failure = await agent.answer('legacy query failure').then(() => null, error => error);
+  assert.equal(failure, queryError);
+  assert.equal(closed, 1);
+});
+
+test('legacy governed MCP close preserves its raw close error', async () => {
+  const closeError = new Error('legacy close error');
+  const agent = legacyGovernedAnswerAgent({
+    async *query() { yield { type: 'text', content: 'legacy-ok' }; },
+    async close() { throw closeError; },
+  });
+
+  const failure = await agent.answer('legacy close failure').then(() => null, error => error);
+  assert.equal(failure, closeError);
 });
 
 test('writer dispatch args are closed before Codex process or MCP startup', async () => {

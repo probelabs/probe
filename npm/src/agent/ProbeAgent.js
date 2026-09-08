@@ -3941,28 +3941,43 @@ Follow these instructions carefully:
         }
 
         // Send the message directly to Codex and collect the response
-        let engine; try {
-          engine = await this.getEngine();
+        let engine;
+        let queryFailure = null;
+        const governedExecTransport = this.governedCodexProfile &&
+          this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT;
+        const normalizeCodexProviderFailure = (error, boundary) => governedExecTransport
+          ? normalizeGovernedCodexExecFailure(error, boundary) : error;
+        try {
+          try {
+            engine = await this.getEngine();
+          } catch (error) {
+            throw normalizeCodexProviderFailure(error, 'acquire');
+          }
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
 
             // Query Codex directly with the message and schema
-            for await (const chunk of engine.query(message, this.governedCodexProfile ? { ...options, abortSignal: this._abortController.signal } : options)) {
-              if (chunk.type === 'text' && chunk.content) {
-                assistantResponseContent += chunk.content;
-                if (options.onStream) {
-                  options.onStream(chunk.content);
+            try {
+              for await (const chunk of engine.query(message, this.governedCodexProfile ? { ...options, abortSignal: this._abortController.signal } : options)) {
+                if (chunk.type === 'text' && chunk.content) {
+                  assistantResponseContent += chunk.content;
+                  if (options.onStream) {
+                    options.onStream(chunk.content);
+                  }
+                } else if (chunk.type === 'toolBatch' && chunk.tools) {
+                  // Store tool batch for processing after response
+                  toolBatch = chunk.tools;
+                  if (this.debug) {
+                    console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
+                  }
+                } else if (chunk.type === 'error') {
+                  throw normalizeCodexProviderFailure(chunk.error, 'query');
                 }
-              } else if (chunk.type === 'toolBatch' && chunk.tools) {
-                // Store tool batch for processing after response
-                toolBatch = chunk.tools;
-                if (this.debug) {
-                  console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
-                }
-              } else if (chunk.type === 'error') {
-                throw chunk.error;
               }
+            } catch (error) {
+              queryFailure = normalizeCodexProviderFailure(error, 'query');
+              throw queryFailure;
             }
 
             // Emit tool events after response is complete (batch mode)
@@ -4000,7 +4015,19 @@ Follow these instructions carefully:
             console.error('[DEBUG] Codex error:', error);
           }
           throw error;
-        } finally { if (this.governedCodexProfile && engine) await engine.close(); }
+        } finally {
+          if (this.governedCodexProfile && engine) {
+            if (!governedExecTransport) {
+              await engine.close();
+            } else {
+              try {
+                await engine.close();
+              } catch (error) {
+                if (!queryFailure) throw normalizeCodexProviderFailure(error, 'close');
+              }
+            }
+          }
+        }
       }
 
       if (this.debug) {
@@ -5571,7 +5598,12 @@ Double-check your response based on the criteria above. If everything looks good
       return finalResult;
 
     } catch (error) {
-      console.error(`[ERROR] ProbeAgent.answer failed:`, error);
+      // Governed failures are already closed and are surfaced to the caller;
+      // logging the Error object here would re-expose provider-owned fields.
+      // Preserve the historical diagnostic for ordinary answer() calls.
+      if (!this.governedCodexProfile) {
+        console.error(`[ERROR] ProbeAgent.answer failed:`, error);
+      }
       
       // Clean up tool execution data
       clearToolExecutionData(this.sessionId);
