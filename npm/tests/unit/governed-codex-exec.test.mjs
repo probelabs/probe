@@ -160,6 +160,78 @@ test('governed exec binds the last completed agent message and bounded usage', a
   await withEngine(badUsage, async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_USAGE/));
 });
 
+test('governed exec accepts more than the former event quota within framing bounds', async () => {
+  const events = [
+    { type: 'thread.started', thread_id: 'thread-many-events' },
+    { type: 'turn.started' },
+    ...Array.from({ length: 254 }, (_, index) => ({
+      type: 'item.completed', item: { id: `reason-${index}`, type: 'reasoning', text: 'discard-me' },
+    })),
+    { type: 'item.completed', item: { id: 'answer-many-events', type: 'agent_message', text: '{"ok":true}' } },
+    { type: 'turn.completed', usage: { input_tokens: 12, cached_input_tokens: 4, output_tokens: 3 } },
+  ];
+  assert.equal(events.length, 258);
+  await withEngine(events, async engine => {
+    const result = await engine.run();
+    assert.equal(result.answer, '{"ok":true}');
+    assert.equal(result.attestation.observed.eventCount, 258);
+    assert.equal(result.attestation.observed.completedItemCount, 255);
+    assert.equal(result.attestation.observed.agentMessageCount, 1);
+    assert.equal(validateGovernedCodexExecAttestation(result.attestation), result.attestation);
+  });
+});
+
+test('governed exec validates evidence counters relationally and rejects aggregate overflow', async () => {
+  await withEngine(validEvents(), async engine => {
+    const result = await engine.run();
+    const baseObserved = result.attestation.observed;
+    const baseEvidence = result.attestation.evidence;
+    const assertInvalid = observedPatch => {
+      const observed = { ...baseObserved, ...observedPatch };
+      const evidence = {
+        ...baseEvidence,
+        eventCount: observed.eventCount,
+        completedItemCount: observed.completedItemCount,
+        agentMessageCount: observed.agentMessageCount,
+        probeMcpCallCount: observed.probeMcpCallCount,
+      };
+      assert.throws(() => validateGovernedCodexExecAttestation({
+        ...result.attestation, observed, evidence,
+      }), TypeError);
+    };
+
+    assertInvalid({ eventCount: 5, completedItemCount: 3 });
+    assertInvalid({ agentMessageCount: 3 });
+    assertInvalid({ probeMcpCallCount: 3 });
+  });
+
+  await withEngine(validEvents(), async engine => {
+    const result = await engine.run();
+    const maximumCompleted = Number.MAX_SAFE_INTEGER - 3;
+    const observed = {
+      ...result.attestation.observed,
+      eventCount: Number.MAX_SAFE_INTEGER,
+      completedItemCount: maximumCompleted,
+      agentMessageCount: 1,
+      probeMcpCallCount: maximumCompleted,
+      usedToolItems: [
+        { category: 'command_execution', name: null, status: 'completed', count: maximumCompleted },
+        { category: 'mcp_tool_call', name: 'mcp__probe__search', status: 'completed', count: maximumCompleted },
+      ],
+    };
+    const evidence = {
+      ...result.attestation.evidence,
+      eventCount: observed.eventCount,
+      completedItemCount: observed.completedItemCount,
+      agentMessageCount: observed.agentMessageCount,
+      probeMcpCallCount: observed.probeMcpCallCount,
+    };
+    assert.throws(() => validateGovernedCodexExecAttestation({
+      ...result.attestation, observed, evidence,
+    }), TypeError);
+  }, { profile: nativeProfile(process.cwd()) });
+});
+
 test('governed exec fails closed for nonzero exit and incomplete EOF', async () => {
   await withEngine(validEvents(), async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_EXIT/), {}, 'exit-7');
   await withEngine(validEvents().slice(0, 3), async engine => assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_INCOMPLETE/));

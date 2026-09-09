@@ -30,7 +30,6 @@ const MAX_TIMEOUT_MS = 3600000;
 const STDOUT_BYTE_CAP = 4 * 1024 * 1024;
 const STDERR_BYTE_CAP = 1024 * 1024;
 const JSONL_LINE_BYTE_CAP = 1024 * 1024;
-const MAX_EVENTS = 256;
 const MAX_TEXT_BYTES = 131072;
 const MAX_EFFECTIVE_INPUT_BYTES = MAX_TEXT_BYTES;
 const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -465,12 +464,34 @@ export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersio
   });
 }
 
-function validateUsedToolItems(value) {
-  if (!Array.isArray(value) || value.length > MAX_EVENTS) throw new TypeError('Invalid exec used tool evidence');
+function boundedCountSum(items, upperBound, onError) {
+  if (!Number.isSafeInteger(upperBound) || upperBound < 0) throw onError();
+  let total = 0;
+  for (const item of items) {
+    const count = typeof item === 'number' ? item : item?.count;
+    if (!Number.isSafeInteger(count) || count < 1 || total > Number.MAX_SAFE_INTEGER - count) throw onError();
+    total += count;
+    if (total > upperBound) throw onError();
+  }
+  return total;
+}
+
+function nextBoundedCount(current, increment, upperBound, onError) {
+  if (!Number.isSafeInteger(current) || current < 0 || !Number.isSafeInteger(increment) || increment < 1 ||
+      !Number.isSafeInteger(upperBound) || upperBound < 0 || current > Number.MAX_SAFE_INTEGER - increment) throw onError();
+  const next = current + increment;
+  if (next > upperBound) throw onError();
+  return next;
+}
+
+function validateUsedToolItems(value, completedItemCount) {
+  if (!Array.isArray(value) || !Number.isSafeInteger(completedItemCount) || completedItemCount < 1 || value.length > completedItemCount) {
+    throw new TypeError('Invalid exec used tool evidence');
+  }
   const result = value.map(item => {
     if (!exactKeys(item, ['category', 'name', 'status', 'count']) ||
         !['mcp_tool_call', 'command_execution', 'file_change'].includes(item.category) ||
-        item.status !== 'completed' || !Number.isSafeInteger(item.count) || item.count < 1 || item.count > MAX_EVENTS ||
+        item.status !== 'completed' || !Number.isSafeInteger(item.count) || item.count < 1 || item.count > completedItemCount ||
         (item.category === 'mcp_tool_call' ? typeof item.name !== 'string' : item.name !== null)) {
       throw new TypeError('Invalid exec used tool evidence');
     }
@@ -479,6 +500,7 @@ function validateUsedToolItems(value) {
   });
   const keys = result.map(item => `${item.category}\u0000${item.name ?? ''}`);
   if (new Set(keys).size !== keys.length || keys.some((key, index) => index > 0 && key < keys[index - 1])) throw new TypeError('Invalid exec used tool evidence');
+  boundedCountSum(result, completedItemCount, () => new TypeError('Invalid exec used tool evidence'));
   return result;
 }
 
@@ -494,19 +516,21 @@ function validateObserved(value, profileId = null) {
   if (!exactKeys(value, keys) || value.source !== 'codex-exec-jsonl/v1' || value.terminal !== 'turn.completed' ||
       value.processExitCode !== 0 || value.processSignal !== null ||
       !DIGEST.test(value.threadDigest) || !DIGEST.test(value.streamDigest) || !DIGEST.test(value.finalDigest) ||
-      !Number.isSafeInteger(value.eventCount) || value.eventCount < 3 || value.eventCount > MAX_EVENTS ||
-      !Number.isSafeInteger(value.completedItemCount) || value.completedItemCount < 1 || value.completedItemCount > MAX_EVENTS ||
+      !Number.isSafeInteger(value.eventCount) || value.eventCount < 3 ||
+      !Number.isSafeInteger(value.completedItemCount) || value.completedItemCount < 1 || value.completedItemCount > value.eventCount - 3 ||
       !Number.isSafeInteger(value.agentMessageCount) || value.agentMessageCount < 1 || value.agentMessageCount > value.completedItemCount ||
-      !Number.isSafeInteger(value.probeMcpCallCount) || value.probeMcpCallCount < 0 || value.probeMcpCallCount > MAX_EVENTS ||
+      !Number.isSafeInteger(value.probeMcpCallCount) || value.probeMcpCallCount < 0 || value.probeMcpCallCount > value.completedItemCount ||
       !Number.isSafeInteger(value.finalBytes) || value.finalBytes < 0 || value.finalBytes > MAX_TEXT_BYTES) throw new TypeError('Invalid exec observed evidence');
-  const usedToolItems = validateUsedToolItems(value.usedToolItems);
+  const usedToolItems = validateUsedToolItems(value.usedToolItems, value.completedItemCount);
   const allowedNative = profileId === 'luna-xhigh-isolated-writer-v1' ? new Set(['command_execution', 'file_change'])
     : profileId === 'luna-xhigh-readonly-native-exec-v1' ? new Set(['command_execution']) : new Set();
   for (const item of usedToolItems) {
     if (item.category === 'mcp_tool_call' && !['mcp__probe__search', 'mcp__probe__extract', 'mcp__probe__listFiles'].includes(item.name)) throw new TypeError('Invalid exec MCP tool');
     if (item.category !== 'mcp_tool_call' && !allowedNative.has(item.category)) throw new TypeError('Invalid exec native tool');
   }
-  if (value.probeMcpCallCount !== usedToolItems.filter(item => item.category === 'mcp_tool_call').reduce((sum, item) => sum + item.count, 0)) throw new TypeError('Invalid exec MCP evidence');
+  const mcpToolItems = usedToolItems.filter(item => item.category === 'mcp_tool_call');
+  const mcpToolCount = boundedCountSum(mcpToolItems, value.completedItemCount, () => new TypeError('Invalid exec MCP evidence'));
+  if (value.probeMcpCallCount !== mcpToolCount) throw new TypeError('Invalid exec MCP evidence');
   return { ...value, usedToolItems };
 }
 
@@ -789,7 +813,6 @@ function consumeEvent(event, state, profile) {
   if (!ownObject(event) || typeof event.type !== 'string') throw fail('EVENT');
   if (state.turnCompleted) throw fail('EVENT_ORDER');
   state.events++;
-  if (state.events > MAX_EVENTS) throw fail('EVENT_LIMIT');
   if (state.phase === 'initial') return validateThreadStarted(event, state);
   if (state.phase === 'thread') return validateTurnStarted(event, state);
   if (event.type === 'item.started' || event.type === 'item.completed') return validateItem(event, state, profile);
@@ -809,7 +832,9 @@ function aggregateTools(state) {
   const counts = new Map();
   for (const item of state.completedTools) {
     const key = `${item.category}\u0000${item.name ?? ''}`;
-    counts.set(key, { ...item, status: 'completed', count: (counts.get(key)?.count ?? 0) + 1 });
+    const current = counts.get(key)?.count ?? 0;
+    const count = nextBoundedCount(current, 1, state.completedItemCount, () => fail('MCP_EVIDENCE'));
+    counts.set(key, { ...item, status: 'completed', count });
   }
   return [...counts.values()].sort((a, b) => `${a.category}:${a.name ?? ''}`.localeCompare(`${b.category}:${b.name ?? ''}`));
 }
@@ -824,7 +849,11 @@ function makeInternalResult(state, processReceipt, launch, invocationDigest, mcp
   }
   const usedToolItems = aggregateTools(state);
   const probeMcpCallCount = mcpEvidence.closed;
-  if (probeMcpCallCount !== usedToolItems.filter(item => item.category === 'mcp_tool_call').reduce((sum, item) => sum + item.count, 0)) {
+  if (!Number.isSafeInteger(probeMcpCallCount) || probeMcpCallCount < 0 || probeMcpCallCount > state.completedItemCount) {
+    throw fail('MCP_EVIDENCE');
+  }
+  const mcpToolCount = boundedCountSum(usedToolItems.filter(item => item.category === 'mcp_tool_call'), state.completedItemCount, () => fail('MCP_EVIDENCE'));
+  if (probeMcpCallCount !== mcpToolCount) {
     throw fail('MCP_EVIDENCE');
   }
   const observed = {
