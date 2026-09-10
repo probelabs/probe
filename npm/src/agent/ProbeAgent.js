@@ -3603,8 +3603,8 @@ Follow these instructions carefully:
       let nativeToolBatch;
       let nativeToolBatchCount = 0;
       const queryOptions = hasInvocationDigest
-        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest }
-        : { abortSignal: this._abortController.signal };
+        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest, schema }
+        : { abortSignal: this._abortController.signal, schema };
       try {
         for await (const chunk of engine.query(prompt, queryOptions)) {
           if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
@@ -3956,10 +3956,19 @@ Follow these instructions carefully:
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
+            let queryOptions = options;
+            if (this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT) {
+              const { schema: requestedSchema, ...withoutSchema } = options;
+              queryOptions = {
+                ...withoutSchema,
+                ...(typeof requestedSchema === 'string' && isJsonSchema(requestedSchema) ? { schema: requestedSchema } : {}),
+                abortSignal: this._abortController.signal,
+              };
+            }
 
             // Query Codex directly with the message and schema
             try {
-              for await (const chunk of engine.query(message, this.governedCodexProfile ? { ...options, abortSignal: this._abortController.signal } : options)) {
+              for await (const chunk of engine.query(message, this.governedCodexProfile ? queryOptions : options)) {
                 if (chunk.type === 'text' && chunk.content) {
                   assistantResponseContent += chunk.content;
                   if (options.onStream) {

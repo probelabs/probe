@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createGovernedCodexExecEngine, normalizeGovernedCodexExecFailure, previewGovernedCodexExecDispatch, projectGovernedCodexExecFailure, validateGovernedCodexExecAttestation } from '../../src/agent/engines/governed-codex-exec.js';
+import { buildGovernedCodexExecLaunch, createGovernedCodexExecEngine, normalizeGovernedCodexExecFailure, previewGovernedCodexExecDispatch, projectGovernedCodexExecFailure, validateGovernedCodexExecAttestation } from '../../src/agent/engines/governed-codex-exec.js';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
 
 function profile(cwd) {
@@ -47,7 +47,12 @@ function fixture(events, behavior = 'normal') {
 const source = `#!/usr/bin/env node
 const fs = require('node:fs');
 const events = ${JSON.stringify(events)};
-fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ args: process.argv.slice(2), codexHome: process.env.CODEX_HOME }));
+const schemaIndex = process.argv.indexOf('--output-schema');
+const schemaPath = schemaIndex >= 0 ? process.argv[schemaIndex + 1] : null;
+const schemaBytes = schemaPath ? fs.readFileSync(schemaPath) : null;
+const schemaMode = schemaPath ? fs.statSync(schemaPath).mode & 0o777 : null;
+fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify({ args: process.argv.slice(2), codexHome: process.env.CODEX_HOME,
+  schemaPath, schemaText: schemaBytes?.toString('utf8') ?? null, schemaMode }));
 const mcpUrlArg = process.argv.find(value => /^mcp_servers\\.[^.]+\\.url=/.test(value));
 const mcpServerName = mcpUrlArg?.match(/^mcp_servers\\.([^.]+)\\.url=/)?.[1] ?? null;
 const mcpUrl = mcpUrlArg ? JSON.parse(mcpUrlArg.slice(mcpUrlArg.indexOf('=') + 1)) : null;
@@ -112,6 +117,43 @@ test('governed exec builds scoped no-shell launch and returns only bounded answe
     assert.equal(JSON.stringify(result).includes('mcp__probe__search'), false);
     await assert.rejects(engine.run(), /GOVERNED_CODEX_EXEC_ONE_QUERY/);
   });
+});
+
+test('governed exec forwards an explicit output schema as an exact private artifact', async () => {
+  const schema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}';
+  await withEngine(validEvents(), async (engine, fixtureRoot) => {
+    await engine.run();
+    const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
+    assert.equal(observed.schemaPath, null);
+    assert.equal(observed.args.includes('--output-schema'), false);
+    assert.equal(observed.args.at(-1), 'bounded prompt');
+  }, { timeoutMs: 2000 });
+
+  await withEngine(validEvents(), async (engine, fixtureRoot) => {
+    await engine.run(undefined, { schema });
+    const launch = engine.launch;
+    const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
+    const schemaFlag = observed.args.indexOf('--output-schema');
+    assert.equal(schemaFlag >= 0, true);
+    assert.equal(observed.args[schemaFlag + 1], launch.outputSchemaPath);
+    assert.equal(observed.args.at(-3), '--output-schema');
+    assert.equal(observed.args.at(-2), launch.outputSchemaPath);
+    assert.equal(observed.args.at(-1), 'bounded prompt');
+    assert.equal(observed.schemaPath, launch.outputSchemaPath);
+    assert.equal(observed.schemaText, schema);
+    assert.equal(observed.schemaMode, 0o600);
+    assert.equal(readFileSync(launch.outputSchemaPath, 'utf8'), schema);
+    assert.equal(launch.outputSchemaBytes, Buffer.byteLength(schema, 'utf8'));
+    assert.equal(launch.outputSchemaDigest, `sha256:${createHash('sha256').update(schema).digest('hex')}`);
+    const noSchemaLaunch = buildGovernedCodexExecLaunch({
+      codexPath: launch.command, codexSha256: launch.cliSha256, cliVersion: launch.cliVersion,
+      profile: launch.profile, prompt: 'bounded prompt', mcp: { name: launch.mcpName, url: launch.mcpUrl },
+    });
+    assert.notEqual(launch.launchDigest, noSchemaLaunch.launchDigest);
+    const schemaPath = launch.outputSchemaPath;
+    await engine.close();
+    assert.throws(() => readFileSync(schemaPath), { code: 'ENOENT' });
+  }, { timeoutMs: 2000 });
 });
 
 test('governed exec keeps system instructions in the supported config channel', async () => {
@@ -754,6 +796,13 @@ test('ProbeAgent selects exec transport only for the explicit governed selector'
     assert.deepEqual(result.data, { ok: true });
     assert.equal(result.runtimeAttestation.version, 'probe.governed-codex-exec-attestation/v1');
     assert.deepEqual(preview, result.runtimeAttestation.dispatch);
+    const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
+    const schemaFlag = observed.args.indexOf('--output-schema');
+    assert.equal(schemaFlag >= 0, true);
+    assert.equal(observed.args.at(-2), observed.schemaPath);
+    assert.equal(observed.args.at(-1).startsWith('return ok'), true);
+    assert.equal(observed.schemaText, schema);
+    assert.equal(observed.schemaMode, 0o600);
     assert.notDeepEqual(
       previewGovernedCodexExecDispatch('same user prompt', 'system one'),
       previewGovernedCodexExecDispatch('same user prompt', 'system two'),
@@ -776,6 +825,40 @@ test('ProbeAgent selects exec transport only for the explicit governed selector'
     );
   } finally {
     rmSync(fixtureRoot.root, { recursive: true, force: true });
+  }
+});
+
+test('ProbeAgent ordinary answer forwards only serialized JSON schemas to exec', async () => {
+  const schema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}';
+  const schemaFixture = fixture(validEvents());
+  const builtinFixture = fixture(validEvents());
+  const makeAgent = fixtureRoot => new ProbeAgent({
+    provider: 'codex', path: fixtureRoot.root, cwd: fixtureRoot.root,
+    allowedTools: ['search', 'extract', 'listFiles'], governedCodexProfile: profile(fixtureRoot.root),
+    governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin: fixtureRoot.script,
+    codexSha256: `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`,
+    disableMermaidValidation: true,
+  });
+  try {
+    const schemaAgent = makeAgent(schemaFixture);
+    assert.equal(await schemaAgent.answer('return ok', [], { schema }), '{"ok":true}');
+    const schemaObserved = JSON.parse(readFileSync(schemaFixture.observed, 'utf8'));
+    const schemaFlag = schemaObserved.args.indexOf('--output-schema');
+    assert.equal(schemaFlag >= 0, true);
+    assert.equal(schemaObserved.args[schemaFlag + 1], schemaObserved.schemaPath);
+    assert.equal(schemaObserved.args.at(-1), 'return ok');
+    assert.equal(schemaObserved.schemaText, schema);
+    assert.equal(schemaObserved.schemaMode, 0o600);
+
+    const builtinAgent = makeAgent(builtinFixture);
+    assert.equal(await builtinAgent.answer('return ok', [], { schema: 'renderer-name' }), '{"ok":true}');
+    const builtinObserved = JSON.parse(readFileSync(builtinFixture.observed, 'utf8'));
+    assert.equal(builtinObserved.schemaPath, null);
+    assert.equal(builtinObserved.args.includes('--output-schema'), false);
+    assert.equal(builtinObserved.args.at(-1), 'return ok');
+  } finally {
+    rmSync(schemaFixture.root, { recursive: true, force: true });
+    rmSync(builtinFixture.root, { recursive: true, force: true });
   }
 });
 

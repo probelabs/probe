@@ -15,6 +15,7 @@ import { isAbsolute, normalize } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BuiltInMCPServer } from '../mcp/built-in-server.js';
+import Ajv from 'ajv';
 import { governSpawnedProcess } from '../processSupervisor.js';
 import { governedCodexDispatch } from './codex.js';
 import { buildGovernedCodexInitialToolArgs, validateGovernedCodexProfile } from './governed-codex-profile.js';
@@ -366,6 +367,17 @@ function validatePrompt(prompt) {
   return prompt;
 }
 
+function validateOutputSchema(schema) {
+  if (typeof schema !== 'string' || schema.length === 0 || schema.includes('\0') ||
+      Buffer.byteLength(schema, 'utf8') > MAX_TEXT_BYTES) {
+    throw new TypeError('Invalid governed Codex output schema');
+  }
+  let parsed;
+  try { parsed = JSON.parse(schema); } catch { throw new TypeError('Invalid governed Codex output schema'); }
+  try { new Ajv({ strict: false }).compile(parsed); } catch { throw new TypeError('Invalid governed Codex output schema'); }
+  return schema;
+}
+
 async function verifyCodexVersion(command, cwd, signal, timeoutMs) {
   let child;
   try {
@@ -390,7 +402,7 @@ async function verifyCodexVersion(command, cwd, signal, timeoutMs) {
  * Build the no-shell launch description used by the governed exec engine.
  * The returned object deliberately does not expose the inherited environment.
  */
-export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersion, profile, prompt, mcp, modelInstructionsPath, modelInstructionsDigest }) {
+export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersion, profile, prompt, mcp, modelInstructionsPath, modelInstructionsDigest, outputSchemaPath, outputSchemaDigest }) {
   const command = safeAbsoluteFile(codexPath, 'Codex executable');
   const cliSha256 = normalizeCliDigest(codexSha256);
   const normalizedProfile = validateGovernedCodexProfile(profile);
@@ -402,8 +414,14 @@ export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersio
   let effectiveConfig = initial.config;
   let effectiveInstructionsDigest = modelInstructionsDigest;
   let instructionsBytes = 0;
+  let normalizedOutputSchemaPath;
+  let effectiveOutputSchemaDigest;
+  let outputSchemaBytes = 0;
   if (modelInstructionsPath === undefined && modelInstructionsDigest !== undefined) {
     throw new TypeError('Model instructions digest requires a file');
+  }
+  if (outputSchemaPath === undefined && outputSchemaDigest !== undefined) {
+    throw new TypeError('Codex output schema digest requires a file');
   }
   if (modelInstructionsPath !== undefined) {
     const instructionsPath = safeAbsoluteFile(modelInstructionsPath, 'model instructions file');
@@ -417,6 +435,17 @@ export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersio
     requireDigest(effectiveInstructionsDigest, 'model instructions digest');
     effectiveConfig = freeze({ ...initial.config, model_instructions_file: instructionsPath });
   }
+  if (outputSchemaPath !== undefined) {
+    normalizedOutputSchemaPath = safeAbsoluteFile(outputSchemaPath, 'Codex output schema file');
+    const outputSchema = readFileSync(normalizedOutputSchemaPath);
+    outputSchemaBytes = outputSchema.length;
+    const actualOutputSchemaDigest = sha256(outputSchema);
+    if (outputSchemaDigest !== undefined && outputSchemaDigest !== actualOutputSchemaDigest) {
+      throw new TypeError('Codex output schema digest mismatch');
+    }
+    effectiveOutputSchemaDigest = actualOutputSchemaDigest;
+    requireDigest(effectiveOutputSchemaDigest, 'Codex output schema digest');
+  }
   const config = [];
   flattenConfig(effectiveConfig, '', config);
   // The MCP-server engine carries this as a request field. `exec` receives it
@@ -427,6 +456,7 @@ export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersio
     '--model', normalizedProfile.model, '--sandbox', normalizedProfile.sandbox,
     '--cd', normalizedProfile.cwd,
     ...config.flatMap(entry => ['-c', entry]),
+    ...(normalizedOutputSchemaPath === undefined ? [] : ['--output-schema', normalizedOutputSchemaPath]),
     normalizedPrompt,
   ];
   const dispatch = effectiveExecDispatch(normalizedPrompt, effectiveInstructionsDigest ?? null, instructionsBytes);
@@ -438,7 +468,10 @@ export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersio
     args: args.slice(0, -1), config: effectiveConfig, cwd: normalizedProfile.cwd,
     promptDigest, promptBytes,
     environmentPolicy: 'inherit-with-CODEX_HOME-omitted-v1',
-    ...(effectiveInstructionsDigest === undefined ? {} : { instructionsDigest: effectiveInstructionsDigest, instructionsBytes }) });
+    ...(effectiveInstructionsDigest === undefined ? {} : { instructionsDigest: effectiveInstructionsDigest, instructionsBytes }),
+    ...(normalizedOutputSchemaPath === undefined ? {} : {
+      outputSchema: { path: normalizedOutputSchemaPath, digest: effectiveOutputSchemaDigest, bytes: outputSchemaBytes },
+    }) });
   return Object.freeze({
     command,
     cliSha256,
@@ -454,6 +487,11 @@ export function buildGovernedCodexExecLaunch({ codexPath, codexSha256, cliVersio
     promptBytes,
     ...(effectiveInstructionsDigest === undefined ? {} : { instructionsBytes }),
     ...(effectiveInstructionsDigest === undefined ? {} : { instructionsDigest: effectiveInstructionsDigest }),
+    ...(normalizedOutputSchemaPath === undefined ? {} : {
+      outputSchemaPath: normalizedOutputSchemaPath,
+      outputSchemaDigest: effectiveOutputSchemaDigest,
+      outputSchemaBytes,
+    }),
     cwd: normalizedProfile.cwd,
     model: normalizedProfile.model,
     sandbox: normalizedProfile.sandbox,
@@ -902,6 +940,8 @@ export async function createGovernedCodexExecEngine(options = {}) {
   const profile = validateGovernedCodexProfile(options.profile);
   const prompt = options.prompt === undefined ? null : validatePrompt(options.prompt);
   const systemPrompt = options.systemPrompt === undefined ? '' : validatePrompt(options.systemPrompt);
+  const configuredOutputSchema = Object.prototype.hasOwnProperty.call(options, 'schema')
+    ? validateOutputSchema(options.schema) : undefined;
   const codexPath = safeAbsoluteFile(options.codexPath, 'Codex executable');
   const codexSha256 = normalizeCliDigest(options.codexSha256);
   const timeoutMs = validateTimeout(options.timeoutMs);
@@ -929,6 +969,8 @@ export async function createGovernedCodexExecEngine(options = {}) {
   let instructionDirectory = null;
   let instructionPath = null;
   let instructionDigest = null;
+  let outputSchemaDirectory = null;
+  let outputSchemaPath = null;
 
   try {
     if (systemPrompt) {
@@ -944,10 +986,18 @@ export async function createGovernedCodexExecEngine(options = {}) {
       const activePrompt = validatePrompt(runPrompt);
       const activeSignal = runOptions.abortSignal ?? options.signal;
       validateSignal(activeSignal);
+      const outputSchema = Object.prototype.hasOwnProperty.call(runOptions, 'schema')
+        ? validateOutputSchema(runOptions.schema) : configuredOutputSchema;
+      if (outputSchema !== undefined) {
+        outputSchemaDirectory = instructionDirectory ?? mkdtempSync(join(tmpdir(), 'probe-governed-exec-artifacts-'));
+        outputSchemaPath = join(outputSchemaDirectory, 'output-schema.json');
+        writeFileSync(outputSchemaPath, outputSchema, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      }
       launch = buildGovernedCodexExecLaunch({
         codexPath, codexSha256, cliVersion, profile, prompt: activePrompt,
         mcp: { name: `probe_${sessionId}`, url: binding.url },
         ...(instructionPath ? { modelInstructionsPath: instructionPath, modelInstructionsDigest: instructionDigest } : {}),
+        ...(outputSchemaPath ? { outputSchemaPath, outputSchemaDigest: sha256(outputSchema) } : {}),
       });
       state.mcpName = launch.mcpName;
       runPromise = (async () => {
@@ -1040,6 +1090,9 @@ export async function createGovernedCodexExecEngine(options = {}) {
         }
         try { await mcpServer.stop(); } catch { if (!primaryError) primaryError = fail('CLEANUP'); }
         if (instructionDirectory) { try { rmSync(instructionDirectory, { recursive: true, force: true }); } catch { if (!primaryError) primaryError = fail('CLEANUP'); } }
+        if (outputSchemaDirectory && outputSchemaDirectory !== instructionDirectory) {
+          try { rmSync(outputSchemaDirectory, { recursive: true, force: true }); } catch { if (!primaryError) primaryError = fail('CLEANUP'); }
+        }
         if (primaryError && !runPromise) throw primaryError;
       })();
       return closePromise;
@@ -1065,6 +1118,7 @@ export async function createGovernedCodexExecEngine(options = {}) {
   } catch (error) {
     try { await mcpServer.stop(); } catch { /* preserve the setup failure */ }
     if (instructionDirectory) { try { rmSync(instructionDirectory, { recursive: true, force: true }); } catch { /* preserve setup failure */ } }
+    if (outputSchemaDirectory && outputSchemaDirectory !== instructionDirectory) { try { rmSync(outputSchemaDirectory, { recursive: true, force: true }); } catch { /* preserve setup failure */ } }
     if (error instanceof TypeError || error?.code?.startsWith('GOVERNED_CODEX_EXEC_')) throw error;
     throw fail('SETUP');
   }
