@@ -47,6 +47,17 @@ const GOVERNED_CODEX_EXEC_ITEM_PREDICATES = new Set([
 ]);
 const GOVERNED_CODEX_EXEC_ITEM_TYPES = new Set(['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change']);
 const GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES = new Set(['item.started', 'item.completed']);
+const GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES = new Set(['error', 'turn.failed']);
+const GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR = Object.freeze({
+  type: 'invalid_request_error', status: 400, code: 'invalid_json_schema',
+  param: 'text.format.schema', schemaKeyword: 'uniqueItems',
+});
+const GOVERNED_CODEX_EXEC_SCHEMA_MAP_KEYS = new Set(['$defs', 'definitions', 'dependentSchemas', 'patternProperties', 'properties']);
+const GOVERNED_CODEX_EXEC_SCHEMA_CHILD_KEYS = new Set([
+  'additionalItems', 'additionalProperties', 'contains', 'contentSchema', 'else', 'if', 'items',
+  'not', 'propertyNames', 'then', 'unevaluatedItems', 'unevaluatedProperties',
+]);
+const GOVERNED_CODEX_EXEC_SCHEMA_ARRAY_KEYS = new Set(['allOf', 'anyOf', 'oneOf', 'prefixItems']);
 const GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
 const GOVERNED_CODEX_EXEC_FIELD_TYPES = new Set(['null', 'array', 'object', 'string', 'number', 'boolean']);
 const USAGE_KEYS = new Set([
@@ -133,6 +144,58 @@ function rejectedItemEvent(event, predicate) {
   });
 }
 
+function rejectedFailureEvent(event) {
+  const eventType = ownDataValue(event, 'type');
+  if (!GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES.has(eventType)) return undefined;
+  const expectedKeys = eventType === 'error' ? ['message', 'type'] : ['error', 'type'];
+  if (!exactKeys(event, expectedKeys)) return undefined;
+  if (eventType === 'error' && typeof ownDataValue(event, 'message') !== 'string') return undefined;
+  if (eventType === 'turn.failed' &&
+      (!ownObject(ownDataValue(event, 'error')) || typeof ownDataValue(event.error, 'message') !== 'string')) return undefined;
+  const message = eventType === 'error' ? ownDataValue(event, 'message') : ownDataValue(event.error, 'message');
+  const providerError = classifySchemaProviderFailure(message);
+  return freeze({
+    source: 'codex-exec-rejected-failure/v1', category: 'failure', eventType,
+    eventFields: describeFields(event),
+    ...(providerError ? { providerError } : {}),
+  });
+}
+
+function classifySchemaProviderFailure(message) {
+  if (typeof message !== 'string') return undefined;
+  let envelope;
+  try { envelope = JSON.parse(message); } catch { return undefined; }
+  if (!ownObject(envelope) || !exactKeys(envelope, ['error', 'status', 'type']) ||
+      envelope.type !== 'error' || envelope.status !== 400 || !ownObject(envelope.error) ||
+      !exactKeys(envelope.error, ['code', 'message', 'param', 'type']) ||
+      envelope.error.type !== 'invalid_request_error' || envelope.error.code !== 'invalid_json_schema' ||
+      envelope.error.param !== 'text.format.schema' || typeof envelope.error.message !== 'string' ||
+      !/["']uniqueItems["']\s+is\s+not\s+permitted(?:\.|$)/.test(envelope.error.message)) return undefined;
+  return GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR;
+}
+
+function lowerUnsupportedOutputSchema(schemaObject) {
+  let lowered = false;
+  const visitSchema = value => {
+    if (!ownObject(value)) return;
+    if (Object.prototype.hasOwnProperty.call(value, 'uniqueItems')) {
+      delete value.uniqueItems;
+      lowered = true;
+    }
+    for (const key of GOVERNED_CODEX_EXEC_SCHEMA_MAP_KEYS) {
+      const child = value[key];
+      if (ownObject(child)) for (const schema of Object.values(child)) visitSchema(schema);
+    }
+    for (const key of GOVERNED_CODEX_EXEC_SCHEMA_CHILD_KEYS) visitSchema(value[key]);
+    for (const key of GOVERNED_CODEX_EXEC_SCHEMA_ARRAY_KEYS) {
+      const children = value[key];
+      if (Array.isArray(children)) for (const schema of children) visitSchema(schema);
+    }
+  };
+  visitSchema(schemaObject);
+  return lowered ? JSON.stringify(schemaObject) : null;
+}
+
 function projectExecStderr(value) {
   if (!ownObject(value)) return undefined;
   const source = ownDataValue(value, 'source');
@@ -188,12 +251,36 @@ function projectExecItemEvent(value) {
     ...(itemStatus === undefined ? {} : { itemStatus }) });
 }
 
+function projectExecFailureEvent(value) {
+  if (!ownObject(value)) return undefined;
+  const keys = Object.keys(value).sort();
+  const baseKeys = 'category,eventFields,eventType,source';
+  const providerKeys = 'category,eventFields,eventType,providerError,source';
+  if (keys.join(',') !== baseKeys && keys.join(',') !== providerKeys) return undefined;
+  const category = ownDataValue(value, 'category');
+  const eventType = ownDataValue(value, 'eventType');
+  const eventFields = projectExecItemFields(ownDataValue(value, 'eventFields'));
+  const providerError = ownDataValue(value, 'providerError');
+  const providerErrorKeys = providerError && ownObject(providerError) ? Object.keys(providerError).sort().join(',') : null;
+  if (ownDataValue(value, 'source') !== 'codex-exec-rejected-failure/v1' || category !== 'failure' ||
+      !GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES.has(eventType) || !eventFields ||
+      (keys.join(',') === providerKeys && providerErrorKeys !== 'code,param,schemaKeyword,status,type') ||
+      (keys.join(',') === baseKeys && providerError !== undefined)) return undefined;
+  if (providerError !== undefined &&
+      (ownDataValue(providerError, 'type') !== 'invalid_request_error' || ownDataValue(providerError, 'status') !== 400 ||
+       ownDataValue(providerError, 'code') !== 'invalid_json_schema' || ownDataValue(providerError, 'param') !== 'text.format.schema' ||
+       ownDataValue(providerError, 'schemaKeyword') !== 'uniqueItems')) return undefined;
+  return freeze({ source: ownDataValue(value, 'source'), category, eventType, eventFields,
+    ...(providerError === undefined ? {} : { providerError: GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR }) });
+}
+
 /** Project an exec error into the closed public diagnostic carried by Probe. */
 export function projectGovernedCodexExecFailure(error) {
   const code = ownDataValue(error, 'code');
   if (typeof code !== 'string' || !GOVERNED_CODEX_EXEC_FAILURE_CODES.has(code)) return null;
   const stderr = projectExecStderr(ownDataValue(error, 'diagnostic'));
-  const event = projectExecItemEvent(ownDataValue(error, 'event'));
+  const rawEvent = ownDataValue(error, 'event');
+  const event = projectExecItemEvent(rawEvent) ?? projectExecFailureEvent(rawEvent);
   return Object.freeze({ version: 'probe.governed-codex-exec-failure/v1', code,
     ...(stderr ? { stderr } : {}), ...(event ? { event } : {}) });
 }
@@ -375,7 +462,10 @@ function validateOutputSchema(schema) {
   let parsed;
   try { parsed = JSON.parse(schema); } catch { throw new TypeError('Invalid governed Codex output schema'); }
   try { new Ajv({ strict: false }).compile(parsed); } catch { throw new TypeError('Invalid governed Codex output schema'); }
-  return schema;
+  const lowered = lowerUnsupportedOutputSchema(parsed);
+  if (lowered === null) return schema;
+  try { new Ajv({ strict: false }).compile(JSON.parse(lowered)); } catch { throw new TypeError('Invalid governed Codex output schema'); }
+  return lowered;
 }
 
 async function verifyCodexVersion(command, cwd, signal, timeoutMs) {
@@ -853,6 +943,9 @@ function consumeEvent(event, state, profile) {
   state.events++;
   if (state.phase === 'initial') return validateThreadStarted(event, state);
   if (state.phase === 'thread') return validateTurnStarted(event, state);
+  if (GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES.has(event.type)) {
+    throw fail('EVENT_CATEGORY', undefined, rejectedFailureEvent(event));
+  }
   if (event.type === 'item.started' || event.type === 'item.completed') return validateItem(event, state, profile);
   if (event.type === 'turn.completed') return validateTurnCompleted(event, state);
   throw fail('EVENT_CATEGORY');

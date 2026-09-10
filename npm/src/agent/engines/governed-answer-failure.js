@@ -51,6 +51,11 @@ const GOVERNED_CODEX_EXEC_ITEM_PREDICATES = new Set([
   'item_error', 'item_started_payload', 'tool_id',
 ]);
 const GOVERNED_CODEX_EXEC_ITEM_EVENT_TYPES = new Set(['item.started', 'item.completed']);
+const GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES = new Set(['error', 'turn.failed']);
+const GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR = Object.freeze({
+  type: 'invalid_request_error', status: 400, code: 'invalid_json_schema',
+  param: 'text.format.schema', schemaKeyword: 'uniqueItems',
+});
 const GOVERNED_CODEX_EXEC_ITEM_TYPES = new Set(['agent_message', 'reasoning', 'mcp_tool_call', 'command_execution', 'file_change']);
 const GOVERNED_CODEX_EXEC_FIELD_TYPES = new Set(['null', 'array', 'object', 'string', 'number', 'boolean']);
 const GOVERNED_CODEX_EXEC_SAFE_FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_.-]{0,63}$/;
@@ -144,6 +149,31 @@ function closeRejectedItemEvent(value) {
     ...(itemStatus === undefined ? {} : { itemStatus }) });
 }
 
+function closeRejectedFailureEvent(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const keys = Object.keys(value).sort();
+  const baseKeys = 'category,eventFields,eventType,source';
+  const providerKeys = 'category,eventFields,eventType,providerError,source';
+  if (keys.join(',') !== baseKeys && keys.join(',') !== providerKeys) return null;
+  const source = ownDataValue(value, 'source');
+  const category = ownDataValue(value, 'category');
+  const eventType = ownDataValue(value, 'eventType');
+  const eventFields = closeRejectedItemFields(ownDataValue(value, 'eventFields'));
+  const providerError = ownDataValue(value, 'providerError');
+  const providerErrorKeys = providerError && typeof providerError === 'object' && !Array.isArray(providerError)
+    ? Object.keys(providerError).sort().join(',') : null;
+  if (source !== 'codex-exec-rejected-failure/v1' || category !== 'failure' ||
+      !GOVERNED_CODEX_EXEC_FAILURE_EVENT_TYPES.has(eventType) || !eventFields ||
+      (keys.join(',') === providerKeys && providerErrorKeys !== 'code,param,schemaKeyword,status,type') ||
+      (keys.join(',') === baseKeys && providerError !== undefined)) return null;
+  if (providerError !== undefined &&
+      (ownDataValue(providerError, 'type') !== 'invalid_request_error' || ownDataValue(providerError, 'status') !== 400 ||
+       ownDataValue(providerError, 'code') !== 'invalid_json_schema' || ownDataValue(providerError, 'param') !== 'text.format.schema' ||
+       ownDataValue(providerError, 'schemaKeyword') !== 'uniqueItems')) return null;
+  return Object.freeze({ source, category, eventType, eventFields,
+    ...(providerError === undefined ? {} : { providerError: GOVERNED_CODEX_EXEC_SCHEMA_PROVIDER_ERROR }) });
+}
+
 function ownDataValue(value, key) {
   if (!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
   try {
@@ -174,7 +204,7 @@ function closeProviderEngineDiagnostic(value) {
       ...(safeMessage === 'access_token_refresh_revoked' ? { safeMessage } : {}) });
   }
   const event = ownDataValue(value, 'event');
-  const closedEvent = event === undefined ? null : closeRejectedItemEvent(event);
+  const closedEvent = event === undefined ? null : closeRejectedItemEvent(event) ?? closeRejectedFailureEvent(event);
   if (event !== undefined && !closedEvent) return null;
   return Object.freeze({ version, code, ...(closedStderr ? { stderr: closedStderr } : {}), ...(closedEvent ? { event: closedEvent } : {}) });
 }

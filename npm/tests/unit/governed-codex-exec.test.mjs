@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildGovernedCodexExecLaunch, createGovernedCodexExecEngine, normalizeGovernedCodexExecFailure, previewGovernedCodexExecDispatch, projectGovernedCodexExecFailure, validateGovernedCodexExecAttestation } from '../../src/agent/engines/governed-codex-exec.js';
 import { ProbeAgent } from '../../src/agent/ProbeAgent.js';
+import { validateJsonResponse } from '../../src/agent/schemaUtils.js';
 
 function profile(cwd) {
   return {
@@ -154,6 +155,31 @@ test('governed exec forwards an explicit output schema as an exact private artif
     await engine.close();
     assert.throws(() => readFileSync(schemaPath), { code: 'ENOENT' });
   }, { timeoutMs: 2000 });
+
+  const schemaWithUniqueItems = JSON.stringify({
+    type: 'object', additionalProperties: false,
+    properties: {
+      citations: { type: 'array', items: { type: 'string' }, uniqueItems: true },
+      nested: { type: 'object', properties: { values: { type: 'array', uniqueItems: true, items: { type: 'string' } } } },
+    },
+    required: ['citations'], examples: [{ uniqueItems: 'preserve-as-data' }],
+  });
+  const originalSchema = JSON.parse(schemaWithUniqueItems);
+  await withEngine(validEvents(), async (engine, fixtureRoot) => {
+    await engine.run(undefined, { schema: schemaWithUniqueItems });
+    const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
+    const loweredSchema = JSON.parse(observed.schemaText);
+    assert.equal(schemaWithUniqueItems, JSON.stringify(originalSchema));
+    assert.equal(loweredSchema.type, 'object');
+    assert.equal(loweredSchema.additionalProperties, false);
+    assert.deepEqual(loweredSchema.required, ['citations']);
+    assert.deepEqual(loweredSchema.properties.citations.items, { type: 'string' });
+    assert.equal(Object.hasOwn(loweredSchema.properties.citations, 'uniqueItems'), false);
+    assert.equal(Object.hasOwn(loweredSchema.properties.nested.properties.values, 'uniqueItems'), false);
+    assert.deepEqual(loweredSchema.examples, [{ uniqueItems: 'preserve-as-data' }]);
+    assert.equal(engine.launch.outputSchemaDigest, `sha256:${createHash('sha256').update(observed.schemaText).digest('hex')}`);
+    assert.equal(validateJsonResponse('{"citations":["a","a"]}', { schema: schemaWithUniqueItems }).isValid, false);
+  });
 });
 
 test('governed exec keeps system instructions in the supported config channel', async () => {
@@ -182,6 +208,64 @@ test('governed exec rejects unknown categories, session-shaped events, and order
       await assert.rejects(engine.run(), error => {
         assert.match(error.message, /^GOVERNED_CODEX_EXEC_/);
         assert.equal(error.message.includes('SECRET'), false);
+        return true;
+      });
+    });
+  }
+});
+
+test('governed exec rejects documented failure events with a closed category diagnostic', async () => {
+  for (const event of [
+    { type: 'error', message: 'PROVIDER_FAILURE_SECRET' },
+    { type: 'turn.failed', error: { message: 'PROVIDER_FAILURE_SECRET' } },
+  ]) {
+    await withEngine([
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.started' },
+      event,
+    ], async engine => {
+      await assert.rejects(engine.run(), error => {
+        assert.equal(error.code, 'GOVERNED_CODEX_EXEC_EVENT_CATEGORY');
+        const projected = projectGovernedCodexExecFailure(error);
+        assert.deepEqual(projected.event, {
+          source: 'codex-exec-rejected-failure/v1', category: 'failure', eventType: event.type,
+          eventFields: event.type === 'error'
+            ? [{ name: 'message', type: 'string', size: 23 }, { name: 'type', type: 'string', size: 5 }]
+            : [{ name: 'error', type: 'object' }, { name: 'type', type: 'string', size: 11 }],
+        });
+        assert.deepEqual(normalizeGovernedCodexExecFailure(error, 'query').providerEngineDiagnostic, projected);
+        assert.doesNotMatch(JSON.stringify(projected), /PROVIDER_FAILURE_SECRET/);
+        return true;
+      });
+    });
+  }
+});
+
+test('governed exec classifies the observed Codex schema rejection without leaking its message', async () => {
+  const message = JSON.stringify({
+    type: 'error', status: 400,
+    error: {
+      type: 'invalid_request_error', code: 'invalid_json_schema', param: 'text.format.schema',
+      message: "Invalid schema for response_format 'codex_default': In context=('properties', 'citations'), 'uniqueItems' is not permitted.",
+    },
+  });
+  for (const event of [
+    { type: 'error', message },
+    { type: 'turn.failed', error: { message } },
+  ]) {
+    await withEngine([
+      { type: 'thread.started', thread_id: 'thread-1' },
+      { type: 'turn.started' },
+      event,
+    ], async engine => {
+      await assert.rejects(engine.run(), error => {
+        const projected = projectGovernedCodexExecFailure(error);
+        assert.deepEqual(projected.event.providerError, {
+          type: 'invalid_request_error', status: 400, code: 'invalid_json_schema',
+          param: 'text.format.schema', schemaKeyword: 'uniqueItems',
+        });
+        assert.doesNotMatch(JSON.stringify(projected), /uniqueItems not permitted/);
+        assert.deepEqual(normalizeGovernedCodexExecFailure(error, 'query').providerEngineDiagnostic, projected);
         return true;
       });
     });
