@@ -13,18 +13,73 @@ import { attestGovernedCodexSession, buildGovernedCodexInitialToolArgs, validate
 import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './governed-answer-failure.js';
 
 const GOVERNED_NATIVE_EVENT_LIMIT = 256;
+const GOVERNED_WRITER_RAW_RESPONSE_ITEM_LIMIT = 1024;
 const GOVERNED_SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
 const GOVERNED_SAFE_KIND = /^[A-Za-z0-9._:-]{1,64}$/;
-const GOVERNED_CODEX_NATIVE_CALLS = new Map([['exec', 'exec']]);
+const CODEX_REQUEST_TIMEOUT_DEFAULT = 600000;
+const CODEX_REQUEST_TIMEOUT_MIN = 1000;
+const CODEX_REQUEST_TIMEOUT_MAX = 3600000;
+const GOVERNED_CODEX_NATIVE_CALLS = new Map([['apply_patch', 'apply_patch'], ['exec', 'exec']]);
 const GOVERNED_PROBE_MCP_CALLS = new Map([
   ['mcp__probe__search', 'search'], ['mcp__probe__extract', 'extract'], ['mcp__probe__listFiles', 'listFiles'],
 ]);
+function governedNativeProfile(profile) { return Array.isArray(profile?.codexNativeTools); }
+function governedRawResponseItemLimit(profile) {
+  return profile?.version === 'probe.governed-codex-profile/v3' &&
+    profile?.profileId === 'luna-xhigh-isolated-writer-v1'
+    ? GOVERNED_WRITER_RAW_RESPONSE_ITEM_LIMIT : GOVERNED_NATIVE_EVENT_LIMIT;
+}
 
-function governedRawItemInvalid() { throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate'); }
+function emitGovernedRequestTimeout(agent, profile, session, method, timeoutMs) {
+  if (!profile || typeof agent?.events?.emit !== 'function') return;
+  const sessionId = typeof session?.id === 'string' && GOVERNED_SAFE_ID.test(session.id) ? session.id : null;
+  const boundary = method === 'initialize' ? 'acquire' : method === 'tools/call' ? 'query' : null;
+  if (!boundary) return;
+  const record = Object.freeze({
+    category: 'request_timeout', method, boundary, timeout_ms: timeoutMs,
+    profileId: profile.profileId, sessionId,
+  });
+  try { agent.events.emit('timeout.request', record); } catch { /* timeout rejection must remain authoritative */ }
+}
+
+function validateCodexRequestTimeout(value) {
+  return Number.isInteger(value) && value >= CODEX_REQUEST_TIMEOUT_MIN && value <= CODEX_REQUEST_TIMEOUT_MAX
+    ? value : CODEX_REQUEST_TIMEOUT_DEFAULT;
+}
+
+function validateGovernedEngineOverrides(options, profile) {
+  const invalid = (label) => { throw new TypeError(`Invalid governed Codex ${label}`); };
+  if (options.model !== undefined && options.model !== null && options.model !== profile.model) invalid('model');
+  for (const [key, expected] of [['sandbox', profile.sandbox], ['cwd', profile.cwd],
+    ['approvalPolicy', profile.approvalPolicy], ['approval-policy', profile.approvalPolicy],
+    ['reasoningEffort', profile.reasoningEffort], ['modelReasoningEffort', profile.reasoningEffort]]) {
+    if (Object.prototype.hasOwnProperty.call(options, key) && options[key] !== undefined && options[key] !== expected) invalid(key);
+  }
+  if (Object.prototype.hasOwnProperty.call(options, 'config') && options.config !== undefined) invalid('config');
+  if (Object.prototype.hasOwnProperty.call(options, 'env') && options.env !== undefined) invalid('env');
+  if (options.retry !== undefined && options.retry !== null) invalid('retry');
+  if (options.fallback !== undefined && options.fallback !== null) invalid('fallback');
+  if (options.sessionId !== undefined && profile.profileId === 'luna-xhigh-isolated-writer-v1') invalid('sessionId');
+
+  if (options.allowedTools === undefined) return;
+  const expectedTools = profile.probeTools ?? profile.probeMcpTools;
+  if (Array.isArray(options.allowedTools)) {
+    if (options.allowedTools.length !== expectedTools.length || options.allowedTools.some((name, index) => name !== expectedTools[index])) invalid('allowedTools');
+    return;
+  }
+  const parsed = options.allowedTools;
+  if (parsed === null || typeof parsed !== 'object' || parsed.mode !== 'whitelist' ||
+    !Array.isArray(parsed.allowed) || parsed.allowed.length !== expectedTools.length ||
+    parsed.allowed.some((name, index) => name !== expectedTools[index])) invalid('allowedTools');
+}
+
+function governedRawItemInvalid(predicate) {
+  throw governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null, null, null, null, predicate);
+}
 function governedLiveEnvelopeInvalid(subreason, correlationOperand = null) {
   throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', subreason, correlationOperand);
 }
-function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
+function governedExactObject(value, keys, invalid = () => governedRawItemInvalid('shape')) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) invalid();
   const proto = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) invalid();
@@ -33,7 +88,7 @@ function governedExactObject(value, keys, invalid = governedRawItemInvalid) {
   for (const key of keys) if (!Object.prototype.hasOwnProperty.call(Object.getOwnPropertyDescriptor(value, key), 'value')) invalid();
   return value;
 }
-function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedRawItemInvalid(); }
+function governedSafeId(value) { if (typeof value !== 'string' || !GOVERNED_SAFE_ID.test(value)) governedRawItemInvalid('id'); }
 function governedProbeMcpCallCount(evidence) {
   const invalid = () => { throw new TypeError('Invalid attester input'); };
   const snapshot = governedExactObject(evidence, ['admitted', 'closed', 'overflow'], invalid);
@@ -47,14 +102,14 @@ function governedPassthrough(value, message = false) {
   const keys = Object.keys(value ?? {}).sort().join(',');
   const legacy = keys === 'turn_id';
   const current = keys === (message ? 'content_item_kinds,create_time,turn_id' : 'create_time,turn_id');
-  if (!legacy && !current) governedRawItemInvalid();
+  if (!legacy && !current) governedRawItemInvalid('passthrough');
   governedSafeId(value.turn_id);
   if (current) {
     if (typeof value.create_time !== 'number' || !Number.isFinite(value.create_time) ||
-      value.create_time < 0 || value.create_time > Number.MAX_SAFE_INTEGER) governedRawItemInvalid();
+      value.create_time < 0 || value.create_time > Number.MAX_SAFE_INTEGER) governedRawItemInvalid('passthrough');
     if (message) {
-      if (!Array.isArray(value.content_item_kinds) || value.content_item_kinds.length > 16) governedRawItemInvalid();
-      for (const kind of value.content_item_kinds) if (typeof kind !== 'string' || !GOVERNED_SAFE_KIND.test(kind)) governedRawItemInvalid();
+      if (!Array.isArray(value.content_item_kinds) || value.content_item_kinds.length > 16) governedRawItemInvalid('passthrough');
+      for (const kind of value.content_item_kinds) if (typeof kind !== 'string' || !GOVERNED_SAFE_KIND.test(kind)) governedRawItemInvalid('passthrough');
     }
   }
 }
@@ -66,25 +121,34 @@ function validateGovernedRawMessage(item) {
       ? ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough']
       : ['type', 'role', 'content', 'internal_chat_message_metadata_passthrough'];
   governedExactObject(item, keys);
-  if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedRawItemInvalid();
+  if (item.type !== 'message' || !['developer', 'user', 'assistant'].includes(item.role)) governedRawItemInvalid('type');
   if (Object.prototype.hasOwnProperty.call(item, 'id')) governedSafeId(item.id);
-  if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedRawItemInvalid();
-  if (!Array.isArray(item.content) || item.content.length < 1 || item.content.length > 64) governedRawItemInvalid();
+  if (assistant && !['commentary', 'final_answer'].includes(item.phase)) governedRawItemInvalid('phase');
+  if (!Array.isArray(item.content)) governedRawItemInvalid('message_content_array');
+  if (item.content.length < 1) governedRawItemInvalid('message_content_empty');
+  if (item.content.length > 64) governedRawItemInvalid('message_content_limit');
   for (const part of item.content) {
     governedExactObject(part, ['type', 'text']);
     const allowed = assistant ? part.type === 'output_text' : part.type === 'input_text';
-    if (!allowed || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 131072) governedRawItemInvalid();
+    if (!allowed) governedRawItemInvalid('message_content_kind');
+    if (typeof part.text !== 'string') governedRawItemInvalid('message_content_text_type');
+    if (Buffer.byteLength(part.text, 'utf8') > 131072) governedRawItemInvalid('message_content_text_limit');
   }
   governedPassthrough(item.internal_chat_message_metadata_passthrough, true);
 }
 function validateGovernedRawReasoning(item) {
   governedExactObject(item, ['type', 'id', 'summary', 'encrypted_content', 'internal_chat_message_metadata_passthrough']);
-  if (item.type !== 'reasoning') governedRawItemInvalid(); governedSafeId(item.id);
-  if (!Array.isArray(item.summary) || item.summary.length !== 0 || typeof item.encrypted_content !== 'string' || Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedRawItemInvalid();
+  if (item.type !== 'reasoning') governedRawItemInvalid('type'); governedSafeId(item.id);
+  if (!Array.isArray(item.summary)) governedRawItemInvalid('reasoning_summary_array');
+  if (item.summary.length !== 0) governedRawItemInvalid('reasoning_summary_nonempty');
+  if (typeof item.encrypted_content !== 'string') governedRawItemInvalid('reasoning_encrypted_content_type');
+  if (Buffer.byteLength(item.encrypted_content, 'utf8') > 1048576) governedRawItemInvalid('reasoning_encrypted_content_limit');
   governedPassthrough(item.internal_chat_message_metadata_passthrough);
 }
 function createGovernedNativeCollector(profile) {
   let sessionEvent = null, requestId = null, threadId = null, nativeCallCount = 0;
+  const nativeToolCounts = new Map(profile.codexNativeTools?.map((name) => [name, 0]) ?? []);
+  const rawResponseItemLimit = governedRawResponseItemLimit(profile);
   let relevantEventCount = 0, totalCallCount = 0, rawResponseItemCount = 0, assistantMessageCount = 0, finalAnswerCount = 0;
   const rawIds = new Set(), callOrigins = new Map(), outputIds = new Set();
   function observe(event) {
@@ -96,7 +160,7 @@ function createGovernedNativeCollector(profile) {
       threadId = event.params?._meta?.threadId;
       return;
     }
-    if (profile.version !== 'probe.governed-codex-profile/v2' || type !== 'raw_response_item') return;
+    if (!governedNativeProfile(profile) || type !== 'raw_response_item') return;
     if (!sessionEvent) governedLiveEnvelopeInvalid('session_sequence');
     governedExactObject(event, ['jsonrpc', 'method', 'params'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     if (event.jsonrpc !== '2.0' || event.method !== 'codex/event') governedLiveEnvelopeInvalid('envelope_shape');
@@ -108,35 +172,42 @@ function createGovernedNativeCollector(profile) {
     const msg = governedExactObject(params.msg, ['type', 'item'], () => governedLiveEnvelopeInvalid('envelope_shape'));
     if (msg.type !== 'raw_response_item') governedLiveEnvelopeInvalid('envelope_shape');
     const item = msg.item;
-    if (++rawResponseItemCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
+    if (++rawResponseItemCount > rawResponseItemLimit) governedRawItemInvalid('event_limit');
     if (item?.type === 'message') {
       validateGovernedRawMessage(item);
       if (Object.prototype.hasOwnProperty.call(item, 'id')) {
-        if (rawIds.has(item.id)) governedRawItemInvalid(); rawIds.add(item.id);
+        if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); rawIds.add(item.id);
       }
       if (item.role === 'assistant') { assistantMessageCount++; if (item.phase === 'final_answer') finalAnswerCount++; }
       return;
     }
     if (item?.type === 'reasoning') {
       validateGovernedRawReasoning(item);
-      if (rawIds.has(item.id)) governedRawItemInvalid(); rawIds.add(item.id);
+      if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); rawIds.add(item.id);
       return;
     }
     if (item?.type === 'custom_tool_call') {
       governedExactObject(item, ['type', 'id', 'status', 'call_id', 'name', 'input', 'internal_chat_message_metadata_passthrough']);
       governedSafeId(item.id); governedSafeId(item.call_id);
-      if (rawIds.has(item.id) || callOrigins.has(item.call_id)) governedRawItemInvalid();
+      if (rawIds.has(item.id) || callOrigins.has(item.call_id)) governedRawItemInvalid('duplicate');
       const nativeName = GOVERNED_CODEX_NATIVE_CALLS.get(item.name);
       const probeMcpName = GOVERNED_PROBE_MCP_CALLS.get(item.name);
-      if ((nativeName !== undefined) === (probeMcpName !== undefined)) governedRawItemInvalid();
-      if (nativeName !== undefined && !profile.codexNativeTools.includes(nativeName)) governedRawItemInvalid();
-      if (probeMcpName !== undefined && !profile.probeMcpTools.includes(probeMcpName)) governedRawItemInvalid();
-      if (item.status !== 'completed' || typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedRawItemInvalid();
+      if ((nativeName !== undefined) === (probeMcpName !== undefined)) governedRawItemInvalid('tool_name_or_allow');
+      if (nativeName !== undefined && !profile.codexNativeTools.includes(nativeName)) governedRawItemInvalid('tool_name_or_allow');
+      if (probeMcpName !== undefined && !profile.probeMcpTools.includes(probeMcpName)) governedRawItemInvalid('tool_name_or_allow');
+      if (item.status !== 'completed') governedRawItemInvalid('status');
+      if (typeof item.input !== 'string' || Buffer.byteLength(item.input, 'utf8') > 131072) governedRawItemInvalid('input');
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT || ++totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
+      relevantEventCount++;
+      totalCallCount++;
+      if (totalCallCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('tool_call_limit');
+      if (relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('tool_event_limit');
       const origin = nativeName !== undefined ? 'codex-native' : 'probe-mcp';
       rawIds.add(item.id); callOrigins.set(item.call_id, origin);
-      if (origin === 'codex-native') nativeCallCount++;
+      if (origin === 'codex-native') {
+        nativeCallCount++;
+        nativeToolCounts.set(nativeName, (nativeToolCounts.get(nativeName) ?? 0) + 1);
+      }
       return;
     }
     if (item?.type === 'custom_tool_call_output') {
@@ -144,25 +215,34 @@ function createGovernedNativeCollector(profile) {
       governedExactObject(item, hasId
         ? ['type', 'id', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']
         : ['type', 'call_id', 'output', 'internal_chat_message_metadata_passthrough']);
-      if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedRawItemInvalid(); }
+      if (hasId) { governedSafeId(item.id); if (rawIds.has(item.id)) governedRawItemInvalid('duplicate'); }
       governedSafeId(item.call_id);
-      if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id) || !Array.isArray(item.output) || item.output.length > 64) governedRawItemInvalid();
+      if (!callOrigins.has(item.call_id) || outputIds.has(item.call_id)) governedRawItemInvalid('call_output_pairing');
+      if (!Array.isArray(item.output)) governedRawItemInvalid('tool_output_array');
+      if (item.output.length > 64) governedRawItemInvalid('tool_output_limit');
       for (const part of item.output) {
         governedExactObject(part, ['type', 'text']);
-        if (part.type !== 'input_text' || typeof part.text !== 'string' || Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid();
+        if (part.type !== 'input_text') governedRawItemInvalid('tool_output_kind');
+        if (typeof part.text !== 'string') governedRawItemInvalid('tool_output_text_type');
+        if (Buffer.byteLength(part.text, 'utf8') > 1048576) governedRawItemInvalid('tool_output_text_limit');
       }
       governedPassthrough(item.internal_chat_message_metadata_passthrough);
-      if (++relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid();
+      relevantEventCount++;
+      if (relevantEventCount > GOVERNED_NATIVE_EVENT_LIMIT) governedRawItemInvalid('tool_event_limit');
       if (hasId) rawIds.add(item.id);
       outputIds.add(item.call_id);
       return;
     }
-    governedRawItemInvalid();
+    governedRawItemInvalid('type');
   }
   function evidence() {
     if (!sessionEvent) governedLiveEnvelopeInvalid('session_sequence');
-    if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedRawItemInvalid();
-    const tools = nativeCallCount === 0 ? [] : [{ name: 'exec', status: 'completed', count: nativeCallCount }];
+    if (assistantMessageCount > 0 && finalAnswerCount !== 1) governedRawItemInvalid('final_answer_cardinality');
+    const tools = [];
+    for (const name of profile.codexNativeTools ?? []) {
+      const count = nativeToolCounts.get(name) ?? 0;
+      if (count > 0) tools.push({ name, status: 'completed', count });
+    }
     return { sessionEvent, capabilities: { nativeTools: { total: nativeCallCount, tools } } };
   }
   return { observe, evidence };
@@ -235,8 +315,11 @@ function externalBoundReceipt(internal, dispatch, invocationDigest, capabilityCo
  * Codex Engine using MCP Server with event streaming
  */
 export async function createCodexEngine(options = {}) {
-  const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools, model } = options;
+  const { agent, systemPrompt, customPrompt, debug, sessionId, allowedTools, model,
+    requestTimeout: configuredRequestTimeout } = options;
+  const requestTimeout = validateCodexRequestTimeout(configuredRequestTimeout);
   const governedProfile = options.governedCodexProfile === undefined ? null : validateGovernedCodexProfile(options.governedCodexProfile);
+  if (governedProfile) validateGovernedEngineOverrides(options, governedProfile);
 
   const session = new Session(
     sessionId || randomBytes(8).toString('hex'),
@@ -253,8 +336,8 @@ export async function createCodexEngine(options = {}) {
       port: 0,
       host: '127.0.0.1',
       debug: debug,
-      ...(governedProfile?.version === 'probe.governed-codex-profile/v2'
-        ? { governedProfileVersion: governedProfile.version } : {})
+      ...(governedNativeProfile(governedProfile)
+        ? { governedProfileVersion: 'probe.governed-codex-profile/v2' } : {})
     });
 
     const { host, port } = await mcpServer.start();
@@ -356,13 +439,14 @@ export async function createCodexEngine(options = {}) {
         params
       };
 
-      // Timeout after 10 minutes
+      // Timeout after the configured request duration (10 minutes standalone)
       const timer = setTimeout(() => {
         if (pendingRequests.has(id)) {
           pendingRequests.delete(id);
-          reject(new Error(`Request ${method} timed out after 10 minutes`));
+          emitGovernedRequestTimeout(agent, governedProfile, session, method, requestTimeout);
+          reject(new Error(`Request ${method} timed out after ${requestTimeout}ms`));
         }
-      }, 600000);
+      }, requestTimeout);
       pendingRequests.set(id, { resolve, reject, timer });
 
       codexProcess.stdin.write(JSON.stringify(request) + '\n');
@@ -454,6 +538,7 @@ export async function createCodexEngine(options = {}) {
 
         const reqId = requestId + 1;
         let fullResponse = '';
+        let rawFinalMessageCount = 0, rawFinalPartCount = 0, rawFinalBytes = 0;
         let gotSessionId = false;
         const collector = governedProfile ? createGovernedNativeCollector(governedProfile) : null;
         let evidenceFailure = null;
@@ -484,9 +569,22 @@ export async function createCodexEngine(options = {}) {
           if (msg.type === 'raw_response_item' && msg.item?.role === 'assistant') {
             const content = msg.item.content;
             if (Array.isArray(content)) {
-              for (const part of content) {
-                if (part.type === 'text' && part.text) {
-                  fullResponse += part.text;
+              if (governedProfile) {
+                if (msg.item.phase === 'final_answer') {
+                  rawFinalMessageCount++;
+                  for (const part of content) {
+                    if (part.type === 'output_text') {
+                      rawFinalPartCount++;
+                      if (typeof part.text === 'string') rawFinalBytes += Buffer.byteLength(part.text, 'utf8');
+                      if (part.text) fullResponse += part.text;
+                    }
+                  }
+                }
+              } else {
+                for (const part of content) {
+                  if (part.type === 'text' && part.text) {
+                    fullResponse += part.text;
+                  }
                 }
               }
             }
@@ -524,14 +622,14 @@ export async function createCodexEngine(options = {}) {
           }
           try {
             internal = attestGovernedCodexSession({ profile: governedProfile,
-              events: governedProfile.version === 'probe.governed-codex-profile/v2'
+              events: governedNativeProfile(governedProfile)
                 ? [collected.sessionEvent, collected.capabilities.nativeTools] : [collected.sessionEvent] });
           } catch (error) {
             throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session',
               'attestation');
           }
           try {
-            probeMcpCallCount = governedProfile.version === 'probe.governed-codex-profile/v2'
+            probeMcpCallCount = governedNativeProfile(governedProfile)
               ? governedProbeMcpCallCount(mcpServer?.getGovernedCallEvidence()) : 0;
           } catch (error) {
             throw normalizeGovernedAnswerFailure(error, 'native_event_grammar', 'live_envelope_session',
@@ -555,9 +653,24 @@ export async function createCodexEngine(options = {}) {
         }
 
         // Parse result
+        let resultHasText = false;
+        let resultUsableTextItemCount = 0, resultUsableTextBytes = 0, resultSelectedChunkCount = 0;
+        let resultUsableText = '';
+        let candidateBoundary = null;
         if (result && result.content && Array.isArray(result.content)) {
           for (const item of result.content) {
+            if (governedProfile && item.type === 'text' &&
+              (typeof item.text === 'string' || item.text)) {
+              const selectedText = String(item.text);
+              resultUsableTextItemCount++;
+              resultUsableTextBytes += Buffer.byteLength(selectedText, 'utf8');
+              if (item.text) {
+                resultSelectedChunkCount++;
+                resultUsableText += selectedText;
+              }
+            }
             if (item.type === 'text' && item.text) {
+              resultHasText = true;
               yield {
                 type: 'text',
                 content: item.text
@@ -568,14 +681,29 @@ export async function createCodexEngine(options = {}) {
         }
 
         // If we got a response from events but not from result, yield it
-        if (fullResponse && (!result.content || result.content.length === 0)) {
+        if (fullResponse && (governedProfile ? !resultHasText : (!result.content || result.content.length === 0))) {
           yield {
             type: 'text',
             content: fullResponse
           };
         }
 
-        if (governedProfile?.version === 'probe.governed-codex-profile/v2') {
+        if (governedProfile) {
+          const selectedOrigin = resultHasText ? 'result_content' : fullResponse ? 'raw_final' : 'none';
+          const selectedChunk = resultHasText ? resultUsableText : fullResponse;
+          candidateBoundary = Object.freeze({
+            selectedOrigin,
+            selectedChunkCount: resultHasText ? resultSelectedChunkCount : fullResponse ? 1 : 0,
+            selectedBytes: Buffer.byteLength(selectedChunk, 'utf8'),
+            resultTextItemCount: resultUsableTextItemCount,
+            resultTextBytes: resultUsableTextBytes,
+            rawFinalMessageCount,
+            rawFinalPartCount,
+            rawFinalBytes,
+          });
+        }
+
+        if (governedNativeProfile(governedProfile)) {
           yield { type: 'toolBatch', total: attestation.observed.nativeTools.total,
             tools: attestation.observed.nativeTools.tools.map((item) => ({ ...item })) };
         }
@@ -584,7 +712,7 @@ export async function createCodexEngine(options = {}) {
 
         yield {
           type: 'metadata',
-          data: governedProfile ? { attestation } : {
+          data: governedProfile ? { attestation, candidateBoundary } : {
             sessionId: session.id,
             conversationId: session.conversationId,
             messageCount: session.messageCount
@@ -603,10 +731,11 @@ export async function createCodexEngine(options = {}) {
         };
       } finally {
         if (opts.abortSignal && abortHandler) opts.abortSignal.removeEventListener('abort', abortHandler);
-        if (governedProfile) {
-          try { await cleanup(); }
+        if (governedProfile || queryError) {
+          try { await cleanup(queryError || undefined); }
           catch (cleanupError) {
-            if (!queryError) throw normalizeGovernedAnswerFailure(cleanupError, 'provider_engine', null, null,
+            // Preserve the original query failure when process cleanup also fails.
+            if (!queryError && governedProfile) throw normalizeGovernedAnswerFailure(cleanupError, 'provider_engine', null, null,
               null, null, null, 'close');
           }
         }

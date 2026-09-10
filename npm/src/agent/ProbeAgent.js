@@ -23,6 +23,10 @@ export const ENGINE_ACTIVITY_TIMEOUT_MIN = 5000;
  */
 export const ENGINE_ACTIVITY_TIMEOUT_MAX = 600000;
 
+const REQUEST_TIMEOUT_DEFAULT = 120000;
+const REQUEST_TIMEOUT_MIN = 1000;
+const REQUEST_TIMEOUT_MAX = 3600000;
+
 import { createProviderInstance, DEFAULT_MODELS } from '../utils/provider.js';
 import { streamText, generateText, tool, stepCountIs, jsonSchema, Output } from 'ai';
 import { createHash, randomUUID } from 'crypto';
@@ -103,10 +107,16 @@ import {
 } from './tasks/index.js';
 import { z } from 'zod';
 import { validateGovernedCodexProfile } from './engines/governed-codex-profile.js';
+import { normalizeGovernedCodexExecFailure, previewGovernedCodexExecDispatch, validateGovernedCodexExecAttestation } from './engines/governed-codex-exec.js';
 import { governedAnswerFailure, normalizeGovernedAnswerFailure } from './engines/governed-answer-failure.js';
 
 const GOVERNED_RESULT_IDENTITY = 'probe.governed-result-identity/v1';
 const GOVERNED_RESULT_DOMAIN = 'probe.governed-result-identity/data/v1';
+const GOVERNED_CODEX_EXEC_TRANSPORT = 'exec-jsonl-default-auth-v1';
+
+function isGovernedCodexNativeProfile(profile) {
+  return Array.isArray(profile?.codexNativeTools);
+}
 
 function normalizeGovernedJson(value) {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
@@ -127,6 +137,33 @@ function freezeGovernedTree(value) {
     Object.freeze(value);
   }
   return value;
+}
+
+const GOVERNED_CANDIDATE_ORIGINS = new Set(['result_content', 'raw_final', 'none']);
+const GOVERNED_CANDIDATE_BOUNDARY_FIELDS = [
+  'selectedChunkCount', 'selectedBytes', 'resultTextItemCount', 'resultTextBytes',
+  'rawFinalMessageCount', 'rawFinalPartCount', 'rawFinalBytes'
+];
+
+function governedCandidateUint(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function governedCandidateOwn(value, key) {
+  if (!value || typeof value !== 'object') return undefined;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+  } catch { return undefined; }
+}
+
+function projectGovernedCandidateBoundary(value) {
+  const selectedOriginValue = governedCandidateOwn(value, 'selectedOrigin');
+  const selectedOrigin = GOVERNED_CANDIDATE_ORIGINS.has(selectedOriginValue)
+    ? selectedOriginValue : 'none';
+  const projected = { selectedOrigin };
+  for (const field of GOVERNED_CANDIDATE_BOUNDARY_FIELDS) projected[field] = governedCandidateUint(governedCandidateOwn(value, field));
+  return Object.freeze(projected);
 }
 
 function identifyGovernedResult(value) {
@@ -353,6 +390,9 @@ export class ProbeAgent {
     this.searchDelegate = options.searchDelegate !== undefined ? !!options.searchDelegate : true;
     this.searchDelegateProvider = options.searchDelegateProvider || null;
     this.searchDelegateModel = options.searchDelegateModel || null;
+    this.governedCodexTransport = options.governedCodexTransport || 'mcp-server-v1';
+    this.governedCodexBin = options.codexBin ?? options.codexPath;
+    this.governedCodexSha256 = options.codexSha256;
     this.maxResponseTokens = options.maxResponseTokens || (() => {
       const val = parseInt(process.env.MAX_RESPONSE_TOKENS || '0', 10);
       if (isNaN(val) || val < 0 || val > 200000) {
@@ -384,6 +424,10 @@ export class ProbeAgent {
 
     if (options.governedCodexProfile !== undefined) {
       if (options.provider !== 'codex') throw new TypeError('governedCodexProfile requires provider codex'); const profile = validateGovernedCodexProfile(options.governedCodexProfile);
+      if (!['mcp-server-v1', GOVERNED_CODEX_EXEC_TRANSPORT].includes(this.governedCodexTransport)) throw new TypeError('Invalid governedCodexTransport');
+      if (this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT &&
+        (typeof this.governedCodexBin !== 'string' || !isAbsolute(this.governedCodexBin) ||
+          typeof this.governedCodexSha256 !== 'string')) throw new TypeError('exec-jsonl-default-auth-v1 requires codexBin and codexSha256');
       const probeTools = profile.probeTools ?? profile.probeMcpTools;
       if (options.disableTools || !Array.isArray(options.allowedTools) || options.allowedTools.length !== probeTools.length || options.allowedTools.some((tool, index) => tool !== probeTools[index])) throw new TypeError('allowedTools must exactly match governedCodexProfile Probe MCP tools');
       this.governedCodexProfile = profile;
@@ -498,19 +542,17 @@ export class ProbeAgent {
     // When set, every AI API call acquires a slot before calling the provider.
     this.concurrencyLimiter = options.concurrencyLimiter || null;
 
-    // Request timeout configuration (default 2 minutes)
-    // Validates env var to prevent NaN or unreasonable values
-    this.requestTimeout = options.requestTimeout ?? (() => {
-      if (process.env.REQUEST_TIMEOUT) {
-        const parsed = parseInt(process.env.REQUEST_TIMEOUT, 10);
-        // Validate: must be positive number between 1s and 1 hour
-        if (isNaN(parsed) || parsed < 1000 || parsed > 3600000) {
-          return 120000; // Default 2 minutes
-        }
-        return parsed;
-      }
-      return 120000;
-    })();
+    // Request timeout configuration (default 2 minutes for ordinary providers).
+    // Codex keeps its standalone 10-minute default unless this is explicitly configured.
+    const optionRequestTimeout = options.requestTimeout;
+    const validOptionRequestTimeout = Number.isInteger(optionRequestTimeout) &&
+      optionRequestTimeout >= REQUEST_TIMEOUT_MIN && optionRequestTimeout <= REQUEST_TIMEOUT_MAX;
+    const parsedRequestTimeout = parseInt(process.env.REQUEST_TIMEOUT, 10);
+    const validEnvRequestTimeout = !isNaN(parsedRequestTimeout) &&
+      parsedRequestTimeout >= REQUEST_TIMEOUT_MIN && parsedRequestTimeout <= REQUEST_TIMEOUT_MAX;
+    this._requestTimeoutExplicit = validOptionRequestTimeout || validEnvRequestTimeout;
+    this.requestTimeout = validOptionRequestTimeout ? optionRequestTimeout
+      : validEnvRequestTimeout ? parsedRequestTimeout : REQUEST_TIMEOUT_DEFAULT;
     if (this.debug) {
       console.log(`[DEBUG] Request timeout: ${this.requestTimeout}ms`);
     }
@@ -1014,7 +1056,7 @@ export class ProbeAgent {
       // Timeout settings for delegate subagents to inherit
       timeoutBehavior: this.timeoutBehavior,
       maxOperationTimeout: this.maxOperationTimeout,
-      requestTimeout: this.requestTimeout,
+      requestTimeout: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
       gracefulTimeoutBonusSteps: this.gracefulTimeoutBonusSteps,
       negotiatedTimeoutBudget: this.negotiatedTimeoutBudget,
       negotiatedTimeoutMaxRequests: this.negotiatedTimeoutMaxRequests,
@@ -2445,8 +2487,10 @@ export class ProbeAgent {
       return this.engine;
     }
 
+    const governedCodex = this.governedCodexProfile !== undefined;
+
     // Try Claude Code engine if requested
-    if (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true') {
+    if (!governedCodex && (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true')) {
       try {
         const { createEnhancedClaudeCLIEngine } = await import('./engines/enhanced-claude-code.js');
 
@@ -2477,8 +2521,18 @@ export class ProbeAgent {
     }
 
     // Try Codex CLI engine if requested
-    if (this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
+    if (governedCodex || this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true') {
       try {
+        if (governedCodex && this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT) {
+          const { createGovernedCodexExecEngine } = await import('./engines/governed-codex-exec.js');
+          const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
+          this.engine = await createGovernedCodexExecEngine({
+            agent: this, profile: this.governedCodexProfile,
+            codexPath: this.governedCodexBin, codexSha256: this.governedCodexSha256,
+            systemPrompt, timeoutMs: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
+          });
+          return this.engine;
+        }
         const { createCodexEngine } = await import('./engines/codex.js');
 
         // For Codex CLI, use a cleaner system prompt without XML formatting
@@ -2492,6 +2546,7 @@ export class ProbeAgent {
           debug: this.debug,
           allowedTools: this.allowedTools,  // Pass tool filtering configuration
           model: this.model,  // Pass model name (e.g., gpt-5.2, o3, etc.)
+          requestTimeout: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
           governedCodexProfile: this.governedCodexProfile
         });
         if (this.debug) {
@@ -2503,8 +2558,9 @@ export class ProbeAgent {
         return this.engine;
       } catch (error) {
         if (this.governedCodexProfile) {
-          throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-            null, null, 'acquire');
+          throw this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT
+            ? normalizeGovernedCodexExecFailure(error, 'acquire')
+            : normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null, null, null, 'acquire');
         }
         console.warn('[WARNING] Failed to load Codex CLI engine:', error.message);
         console.warn('[WARNING] Falling back to Vercel AI SDK');
@@ -3335,6 +3391,7 @@ ${extractGuidance2}
     }
     const { prompt } = this._prepareGovernedAnswerPrompt(message, options);
     const systemPrompt = await this._getCachedCodexNativeSystemPrompt();
+    if (this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT) return previewGovernedCodexExecDispatch(prompt, systemPrompt);
     const { previewGovernedCodexInitialDispatch } = await import('./engines/codex.js');
     return previewGovernedCodexInitialDispatch({ systemPrompt, prompt });
   }
@@ -3530,41 +3587,44 @@ Follow these instructions carefully:
     }
 
     let engine, answerFailure = null;
+    const normalizeProviderFailure = (error, boundary) => this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT
+      ? normalizeGovernedCodexExecFailure(error, boundary)
+      : normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null, null, null, boundary);
     try {
       try { engine = await this.getEngine(); }
       catch (error) {
-        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-          null, null, 'acquire');
+        throw normalizeProviderFailure(error, 'acquire');
       }
       if (!engine?.query) throw governedAnswerFailure('internal_contract');
       const candidateChunks = [];
       let runtimeAttestation;
+      let candidateBoundary;
       let attestationCount = 0;
       let nativeToolBatch;
       let nativeToolBatchCount = 0;
       const queryOptions = hasInvocationDigest
-        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest }
-        : { abortSignal: this._abortController.signal };
+        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest, schema }
+        : { abortSignal: this._abortController.signal, schema };
       try {
         for await (const chunk of engine.query(prompt, queryOptions)) {
           if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);
           else if (chunk.type === 'metadata' && chunk.data?.attestation) {
             runtimeAttestation = chunk.data.attestation;
+            if (chunk.data.candidateBoundary !== undefined) candidateBoundary = projectGovernedCandidateBoundary(chunk.data.candidateBoundary);
             attestationCount++;
           } else if (chunk.type === 'toolBatch') {
             nativeToolBatch = chunk;
             nativeToolBatchCount++;
           } else if (chunk.type === 'error') {
-            throw normalizeGovernedAnswerFailure(chunk.error, 'provider_engine', null, null, null,
-              null, null, 'query');
+            throw normalizeProviderFailure(chunk.error, 'query');
           }
         }
       } catch (error) {
-        throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-          null, null, 'query');
+        throw normalizeProviderFailure(error, 'query');
       }
       if (hasInvocationDigest) {
-        const expectedAttestation = this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2'
+        const execTransport = this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT;
+        const expectedAttestation = execTransport ? 'probe.governed-codex-exec-attestation/v1' : isGovernedCodexNativeProfile(this.governedCodexProfile)
           ? 'probe.governed-codex-attestation/v3' : 'probe.governed-codex-attestation/v2';
         if (attestationCount !== 1 || runtimeAttestation?.version !== expectedAttestation || runtimeAttestation?.executionContext?.source !== 'caller' || runtimeAttestation?.executionContext?.invocationDigest !== invocationDigest) {
           throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
@@ -3574,7 +3634,10 @@ Follow these instructions carefully:
         throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
           'invocation_attestation');
       }
-      if (this.governedCodexProfile?.version === 'probe.governed-codex-profile/v2') {
+      if (runtimeAttestation?.version === 'probe.governed-codex-exec-attestation/v1') {
+        try { validateGovernedCodexExecAttestation(runtimeAttestation); }
+        catch { throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null, 'invocation_attestation'); }
+      } else if (isGovernedCodexNativeProfile(this.governedCodexProfile)) {
         if (nativeToolBatchCount !== 1 || !Number.isSafeInteger(nativeToolBatch?.total) ||
           !Array.isArray(nativeToolBatch?.tools) || nativeToolBatch.total !== runtimeAttestation?.observed?.nativeTools?.total ||
           JSON.stringify(nativeToolBatch.tools) !== JSON.stringify(runtimeAttestation?.observed?.nativeTools?.tools)) {
@@ -3586,7 +3649,23 @@ Follow these instructions carefully:
         throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
           'native_capability_aggregate');
       }
-      const validation = validateJsonResponse(candidateChunks.join(''), {debug:this.debug,schema});
+      const candidateText = candidateChunks.join('');
+      if (runtimeAttestation?.version === 'probe.governed-codex-exec-attestation/v1') {
+        const candidateDigest = `sha256:${createHash('sha256').update(candidateText, 'utf8').digest('hex')}`;
+        if (runtimeAttestation.observed?.finalDigest !== candidateDigest ||
+            runtimeAttestation.observed?.finalBytes !== Buffer.byteLength(candidateText, 'utf8')) {
+          throw governedAnswerFailure('native_event_grammar', 'live_envelope_session', 'attestation', null,
+            'internal_contract');
+        }
+      }
+      const candidate = Object.freeze({
+        version: 'probe.governed-answer-candidate/v1',
+        text: candidateText,
+        boundary: candidateBoundary || projectGovernedCandidateBoundary(undefined),
+      });
+      try { await this.hooks.emit(HOOK_TYPES.MESSAGE_ASSISTANT, candidate); }
+      catch { /* Candidate observation is not part of parsing or authority. */ }
+      const validation = validateJsonResponse(candidateText, {debug:this.debug,schema});
       if (!validation.isValid) throw governedSchemaResultValidationFailure(validation);
       if (hasResultIdentity) {
         let identified;
@@ -3604,8 +3683,7 @@ Follow these instructions carefully:
       if (engine) {
         try { await engine.close(); }
         catch (error) {
-          if (!answerFailure) throw normalizeGovernedAnswerFailure(error, 'provider_engine', null, null, null,
-            null, null, 'close');
+          if (!answerFailure) throw normalizeProviderFailure(error, 'close');
         }
       }
     }
@@ -3780,8 +3858,9 @@ Follow these instructions carefully:
       const maxIterations = (options._maxIterationsOverride) ? baseMaxIterations : (options.schema ? baseMaxIterations + 4 : baseMaxIterations);
 
       // Check if we're using CLI-based engines which handle their own agentic loop
-      const isClaudeCode = this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true';
-      const isCodex = this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
+      const governedCodex = this.governedCodexProfile !== undefined;
+      const isClaudeCode = !governedCodex && (this.clientApiProvider === 'claude-code' || process.env.USE_CLAUDE_CODE === 'true');
+      const isCodex = governedCodex || this.clientApiProvider === 'codex' || process.env.USE_CODEX === 'true';
 
       if (isClaudeCode) {
         // For Claude Code, bypass the tool loop entirely - it handles its own internal dialogue
@@ -3862,28 +3941,52 @@ Follow these instructions carefully:
         }
 
         // Send the message directly to Codex and collect the response
-        let engine; try {
-          engine = await this.getEngine();
+        let engine;
+        let queryFailure = null;
+        const governedExecTransport = this.governedCodexProfile &&
+          this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT;
+        const normalizeCodexProviderFailure = (error, boundary) => governedExecTransport
+          ? normalizeGovernedCodexExecFailure(error, boundary) : error;
+        try {
+          try {
+            engine = await this.getEngine();
+          } catch (error) {
+            throw normalizeCodexProviderFailure(error, 'acquire');
+          }
           if (engine && engine.query) {
             let assistantResponseContent = '';
             let toolBatch = null;
+            let queryOptions = options;
+            if (this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT) {
+              const { schema: requestedSchema, ...withoutSchema } = options;
+              queryOptions = {
+                ...withoutSchema,
+                ...(typeof requestedSchema === 'string' && isJsonSchema(requestedSchema) ? { schema: requestedSchema } : {}),
+                abortSignal: this._abortController.signal,
+              };
+            }
 
             // Query Codex directly with the message and schema
-            for await (const chunk of engine.query(message, this.governedCodexProfile ? { ...options, abortSignal: this._abortController.signal } : options)) {
-              if (chunk.type === 'text' && chunk.content) {
-                assistantResponseContent += chunk.content;
-                if (options.onStream) {
-                  options.onStream(chunk.content);
+            try {
+              for await (const chunk of engine.query(message, this.governedCodexProfile ? queryOptions : options)) {
+                if (chunk.type === 'text' && chunk.content) {
+                  assistantResponseContent += chunk.content;
+                  if (options.onStream) {
+                    options.onStream(chunk.content);
+                  }
+                } else if (chunk.type === 'toolBatch' && chunk.tools) {
+                  // Store tool batch for processing after response
+                  toolBatch = chunk.tools;
+                  if (this.debug) {
+                    console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
+                  }
+                } else if (chunk.type === 'error') {
+                  throw normalizeCodexProviderFailure(chunk.error, 'query');
                 }
-              } else if (chunk.type === 'toolBatch' && chunk.tools) {
-                // Store tool batch for processing after response
-                toolBatch = chunk.tools;
-                if (this.debug) {
-                  console.log(`[DEBUG] Received batch of ${chunk.tools.length} tool events from Codex`);
-                }
-              } else if (chunk.type === 'error') {
-                throw chunk.error;
               }
+            } catch (error) {
+              queryFailure = normalizeCodexProviderFailure(error, 'query');
+              throw queryFailure;
             }
 
             // Emit tool events after response is complete (batch mode)
@@ -3921,7 +4024,19 @@ Follow these instructions carefully:
             console.error('[DEBUG] Codex error:', error);
           }
           throw error;
-        } finally { if (this.governedCodexProfile && engine) await engine.close(); }
+        } finally {
+          if (this.governedCodexProfile && engine) {
+            if (!governedExecTransport) {
+              await engine.close();
+            } else {
+              try {
+                await engine.close();
+              } catch (error) {
+                if (!queryFailure) throw normalizeCodexProviderFailure(error, 'close');
+              }
+            }
+          }
+        }
       }
 
       if (this.debug) {
@@ -5492,7 +5607,12 @@ Double-check your response based on the criteria above. If everything looks good
       return finalResult;
 
     } catch (error) {
-      console.error(`[ERROR] ProbeAgent.answer failed:`, error);
+      // Governed failures are already closed and are surfaced to the caller;
+      // logging the Error object here would re-expose provider-owned fields.
+      // Preserve the historical diagnostic for ordinary answer() calls.
+      if (!this.governedCodexProfile) {
+        console.error(`[ERROR] ProbeAgent.answer failed:`, error);
+      }
       
       // Clean up tool execution data
       clearToolExecutionData(this.sessionId);
@@ -5656,6 +5776,7 @@ Double-check your response based on the criteria above. If everything looks good
       cwd: this.cwd, // Preserve explicit working directory
       provider: this.clientApiProvider,
       model: this.clientApiModel,
+      requestTimeout: this._requestTimeoutExplicit ? this.requestTimeout : undefined,
       debug: this.debug,
       outline: this.outline,
       searchDelegate: this.searchDelegate,
@@ -5878,7 +5999,7 @@ Double-check your response based on the criteria above. If everything looks good
       this._abortController.abort();
     }
 
-    if (this.governedCodexProfile && this.engine?.close) await this.engine.close();
+    if (this.engine?.close) await this.engine.close();
 
     // Clean up MCP bridge
     if (this.mcpBridge) {

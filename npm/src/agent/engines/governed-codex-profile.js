@@ -4,16 +4,19 @@ import { isAbsolute, normalize } from 'node:path';
 
 const PROFILE_KEYS = ['version', 'profileId', 'engine', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy', 'cwd', 'probeTools', 'fallback', 'retries'];
 const PROFILE_V2_KEYS = ['version', 'profileId', 'engine', 'model', 'reasoningEffort', 'sandbox', 'approvalPolicy', 'cwd', 'probeMcpTools', 'codexNativeTools', 'fallback', 'retries'];
+const PROFILE_V3_KEYS = PROFILE_V2_KEYS;
 const PROFILE_VALUES = {
   version: 'probe.governed-codex-profile/v1', profileId: 'luna-xhigh-readonly-v1', engine: 'codex',
   model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never',
   fallback: false, retries: 0,
 };
 const PROFILE_V2_VALUES = { ...PROFILE_VALUES, version: 'probe.governed-codex-profile/v2', profileId: 'luna-xhigh-readonly-native-exec-v1' };
+const PROFILE_V3_VALUES = { ...PROFILE_V2_VALUES, version: 'probe.governed-codex-profile/v3', profileId: 'luna-xhigh-isolated-writer-v1', sandbox: 'workspace-write' };
 // This profile admits the pinned Codex `exec` capability inside the attested read-only sandbox.
 // It does not claim that commands supplied to `exec` are semantically safe.
 const PROBE_TOOLS = ['search', 'extract', 'listFiles'];
 const CODEX_NATIVE_TOOLS = ['exec'];
+const WRITER_CODEX_NATIVE_TOOLS = ['apply_patch', 'exec'];
 const ENABLED_TOOLS = ['mcp__probe__search', 'mcp__probe__extract', 'mcp__probe__listFiles'];
 const SESSION_MSG_KEYS = ['type', 'session_id', 'thread_id', 'model', 'model_provider_id', 'approval_policy',
   'approvals_reviewer', 'permission_profile', 'reasoning_effort', 'rollout_path', 'cwd'];
@@ -75,22 +78,26 @@ function requireValue(actual, expected, label) { if (!Object.is(actual, expected
 
 export function validateGovernedCodexProfile(input) {
   const version = input && Object.getOwnPropertyDescriptor(input, 'version')?.value;
-  const v2 = version === PROFILE_V2_VALUES.version, values = v2 ? PROFILE_V2_VALUES : PROFILE_VALUES;
-  const profile = exactObject(input, v2 ? PROFILE_V2_KEYS : PROFILE_KEYS, 'profile');
+  const v2 = version === PROFILE_V2_VALUES.version;
+  const v3 = version === PROFILE_V3_VALUES.version;
+  const native = v2 || v3;
+  const values = v3 ? PROFILE_V3_VALUES : v2 ? PROFILE_V2_VALUES : PROFILE_VALUES;
+  const nativeTools = v3 ? WRITER_CODEX_NATIVE_TOOLS : CODEX_NATIVE_TOOLS;
+  const profile = exactObject(input, native ? (v3 ? PROFILE_V3_KEYS : PROFILE_V2_KEYS) : PROFILE_KEYS, 'profile');
   for (const [key, value] of Object.entries(values)) requireValue(profile[key], value, `profile.${key}`);
-  const probeKey = v2 ? 'probeMcpTools' : 'probeTools';
+  const probeKey = native ? 'probeMcpTools' : 'probeTools';
   exactArray(profile[probeKey], PROBE_TOOLS.length, `profile.${probeKey}`);
   PROBE_TOOLS.forEach((tool, index) => requireValue(profile[probeKey][index], tool, `profile.${probeKey}[${index}]`));
-  if (v2) {
-    exactArray(profile.codexNativeTools, CODEX_NATIVE_TOOLS.length, 'profile.codexNativeTools');
-    CODEX_NATIVE_TOOLS.forEach((tool, index) => requireValue(profile.codexNativeTools[index], tool, `profile.codexNativeTools[${index}]`));
+  if (native) {
+    exactArray(profile.codexNativeTools, nativeTools.length, 'profile.codexNativeTools');
+    nativeTools.forEach((tool, index) => requireValue(profile.codexNativeTools[index], tool, `profile.codexNativeTools[${index}]`));
     if (profile.probeMcpTools.some((tool) => profile.codexNativeTools.includes(tool))) invalid('profile capability overlap');
   }
   return deepFreeze({
     version: values.version, profileId: values.profileId, engine: values.engine,
     model: values.model, reasoningEffort: values.reasoningEffort, sandbox: values.sandbox,
     approvalPolicy: values.approvalPolicy, cwd: canonicalCwd(profile.cwd),
-    ...(v2 ? { probeMcpTools: [...PROBE_TOOLS], codexNativeTools: [...CODEX_NATIVE_TOOLS] } : { probeTools: [...PROBE_TOOLS] }),
+    ...(native ? { probeMcpTools: [...PROBE_TOOLS], codexNativeTools: [...nativeTools] } : { probeTools: [...PROBE_TOOLS] }),
     fallback: false, retries: 0,
   });
 }
@@ -112,29 +119,64 @@ export function buildGovernedCodexInitialToolArgs(input) {
   if (typeof input.prompt !== 'string' || Buffer.byteLength(input.prompt, 'utf8') < 1 || Buffer.byteLength(input.prompt, 'utf8') > 131072) invalid('prompt');
   const mcp = validateMcp(input.mcp);
   const features = Object.fromEntries(FEATURE_NAMES.map((name) => [name, false]));
+  if (profile.version === PROFILE_V3_VALUES.version && profile.profileId === PROFILE_V3_VALUES.profileId) features.shell_tool = true;
   const tools = Object.fromEntries(ENABLED_TOOLS.map((name) => [name, { approval_mode: 'approve' }]));
   const server = { url: mcp.url, default_tools_approval_mode: 'prompt', enabled_tools: [...ENABLED_TOOLS], tools };
+  const writerSandbox = profile.sandbox === 'workspace-write' ? {
+    network_access: false, writable_roots: [], exclude_tmpdir_env_var: true, exclude_slash_tmp: true,
+  } : undefined;
   return deepFreeze({
     prompt: input.prompt, model: profile.model,
-    config: { model_reasoning_effort: profile.reasoningEffort, web_search: 'disabled', features, skills: { include_instructions: false }, mcp_servers: { [mcp.name]: server } },
+    config: { model_reasoning_effort: profile.reasoningEffort, web_search: 'disabled', features, skills: { include_instructions: false },
+      ...(writerSandbox ? { sandbox_workspace_write: writerSandbox } : {}), mcp_servers: { [mcp.name]: server } },
     cwd: profile.cwd, sandbox: profile.sandbox, 'approval-policy': profile.approvalPolicy,
   });
 }
 
-function validatePermission(input) {
+function validatePermission(input, profile) {
   const permission = exactObject(input, ['type', 'file_system', 'network'], 'permission_profile');
   requireValue(permission.type, 'managed', 'permission_profile.type');
   requireValue(permission.network, 'restricted', 'permission_profile.network');
   const fileSystem = exactObject(permission.file_system, ['type', 'entries'], 'file_system');
   requireValue(fileSystem.type, 'restricted', 'file_system.type');
-  exactArray(fileSystem.entries, 1, 'file_system.entries');
-  const entry = exactObject(fileSystem.entries[0], ['access', 'path'], 'file_system entry');
-  requireValue(entry.access, 'read', 'file_system entry access');
-  const path = exactObject(entry.path, ['type', 'value'], 'permission path');
-  requireValue(path.type, 'special', 'permission path type');
-  const value = exactObject(path.value, ['kind'], 'permission path value');
-  requireValue(value.kind, 'root', 'permission path kind');
-  return { type: 'managed', file_system: { type: 'restricted', entries: [{ access: 'read', path: { type: 'special', value: { kind: 'root' } } }] }, network: 'restricted' };
+  const writer = profile.sandbox === 'workspace-write';
+  if (!writer) {
+    exactArray(fileSystem.entries, 1, 'file_system.entries');
+    const entry = exactObject(fileSystem.entries[0], ['access', 'path'], 'file_system entry');
+    requireValue(entry.access, 'read', 'file_system entry access');
+    const path = exactObject(entry.path, ['type', 'value'], 'permission path');
+    requireValue(path.type, 'special', 'permission path type');
+    const value = exactObject(path.value, ['kind'], 'permission path value');
+    requireValue(value.kind, 'root', 'permission path kind');
+    return { type: 'managed', file_system: { type: 'restricted', entries: [{ access: 'read', path: { type: 'special', value: { kind: 'root' } } }] }, network: 'restricted' };
+  }
+  exactArray(fileSystem.entries, 5, 'file_system.entries');
+  const rootEntry = exactObject(fileSystem.entries[0], ['access', 'path'], 'file_system entry');
+  requireValue(rootEntry.access, 'read', 'file_system entry access');
+  const rootPath = exactObject(rootEntry.path, ['type', 'value'], 'permission path');
+  requireValue(rootPath.type, 'special', 'permission path type');
+  const rootValue = exactObject(rootPath.value, ['kind'], 'permission path value');
+  requireValue(rootValue.kind, 'root', 'permission path kind');
+  const cwdEntry = exactObject(fileSystem.entries[1], ['access', 'path'], 'file_system entry');
+  requireValue(cwdEntry.access, 'write', 'file_system entry access');
+  const cwdPath = exactObject(cwdEntry.path, ['type', 'path'], 'permission path');
+  requireValue(cwdPath.type, 'path', 'permission path type');
+  requireValue(cwdPath.path, profile.cwd, 'permission path cwd');
+  const protectedPaths = ['.git', '.agents', '.codex'];
+  const protectedEntries = protectedPaths.map((suffix, index) => {
+    const protectedEntry = exactObject(fileSystem.entries[index + 2], ['access', 'missing_path_behavior', 'path'], 'file_system entry');
+    requireValue(protectedEntry.access, 'read', 'file_system entry access');
+    requireValue(protectedEntry.missing_path_behavior, 'skip', 'file_system missing path behavior');
+    const protectedPath = exactObject(protectedEntry.path, ['type', 'path'], 'permission path');
+    requireValue(protectedPath.type, 'path', 'permission path type');
+    requireValue(protectedPath.path, `${profile.cwd}/${suffix}`, 'permission path cwd');
+    return { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${profile.cwd}/${suffix}` } };
+  });
+  return { type: 'managed', file_system: { type: 'restricted', entries: [
+    { access: 'read', path: { type: 'special', value: { kind: 'root' } } },
+    { access: 'write', path: { type: 'path', path: profile.cwd } },
+    ...protectedEntries,
+  ] }, network: 'restricted' };
 }
 
 function validateRollout(value) {
@@ -146,8 +188,8 @@ function validateRollout(value) {
 export function attestGovernedCodexSession(input) {
   exactObject(input, ['profile', 'events'], 'attester input');
   const profile = validateGovernedCodexProfile(input.profile);
-  const v2 = profile.version === PROFILE_V2_VALUES.version;
-  if (v2) {
+  const native = profile.version === PROFILE_V2_VALUES.version || profile.version === PROFILE_V3_VALUES.version;
+  if (native) {
     exactArray(input.events, 2, 'events');
   } else exactArray(input.events, 1, 'events');
   const event = exactObject(input.events[0], ['jsonrpc', 'method', 'params'], 'event');
@@ -155,27 +197,37 @@ export function attestGovernedCodexSession(input) {
   const params = exactObject(event.params, ['_meta', 'id', 'msg'], 'event.params'); requireValue(params.id, '', 'event.params.id');
   const meta = exactObject(params._meta, ['requestId', 'threadId'], 'event._meta'); requireValue(meta.requestId, 2, 'requestId');
   const hasServiceTier = Object.prototype.propertyIsEnumerable.call(params.msg, 'service_tier');
-  const msg = exactObject(params.msg, hasServiceTier ? [...SESSION_MSG_KEYS, 'service_tier'] : SESSION_MSG_KEYS, 'event.msg');
+  const hasSandbox = Object.prototype.propertyIsEnumerable.call(params.msg, 'sandbox');
+  const writer = profile.sandbox === 'workspace-write';
+  const sessionKeys = writer ? [...SESSION_MSG_KEYS, ...(hasServiceTier ? ['service_tier'] : []), ...(hasSandbox ? ['sandbox'] : [])]
+    : hasServiceTier ? [...SESSION_MSG_KEYS, 'service_tier'] : SESSION_MSG_KEYS;
+  const msg = exactObject(params.msg, sessionKeys, 'event.msg');
   if (hasServiceTier && !SESSION_SERVICE_TIERS.includes(msg.service_tier)) invalid('event.msg');
   for (const id of [meta.threadId, msg.session_id, msg.thread_id]) if (typeof id !== 'string' || !SAFE_ID.test(id)) invalid('session identity');
   if (meta.threadId !== msg.session_id || msg.session_id !== msg.thread_id) invalid('session identity');
   requireValue(msg.type, 'session_configured', 'msg.type'); requireValue(msg.model, profile.model, 'msg.model');
   requireValue(msg.model_provider_id, 'openai', 'msg.model_provider_id'); requireValue(msg.approval_policy, profile.approvalPolicy, 'msg.approval_policy');
   requireValue(msg.approvals_reviewer, 'user', 'msg.approvals_reviewer'); requireValue(msg.reasoning_effort, profile.reasoningEffort, 'msg.reasoning_effort');
+  if (writer && hasSandbox) requireValue(msg.sandbox, profile.sandbox, 'msg.sandbox');
   validateRollout(msg.rollout_path);
   if (canonicalCwd(msg.cwd) !== profile.cwd) invalid('msg.cwd');
-  const permission = validatePermission(msg.permission_profile);
+  const permission = validatePermission(msg.permission_profile, profile);
   const cwdDigest = digest(profile.cwd);
-  if (v2) {
+  if (native) {
     const nativeTools = exactObject(input.events[1], ['total', 'tools'], 'native tool evidence');
     if (!Number.isSafeInteger(nativeTools.total) || nativeTools.total < 0 || nativeTools.total > 256) invalid('native tool total');
-    exactArray(nativeTools.tools, nativeTools.total === 0 ? 0 : 1, 'native tool aggregates');
-    if (nativeTools.total > 0) {
-      const aggregate = exactObject(nativeTools.tools[0], ['name', 'status', 'count'], 'native tool aggregate');
-      if (!profile.codexNativeTools.includes(aggregate.name)) invalid('undeclared native tool evidence');
+    if (!Array.isArray(nativeTools.tools) || nativeTools.tools.length > profile.codexNativeTools.length) invalid('native tool aggregates');
+    const seen = new Set(); let aggregateTotal = 0;
+    for (const item of nativeTools.tools) {
+      const aggregate = exactObject(item, ['name', 'status', 'count'], 'native tool aggregate');
+      if (!profile.codexNativeTools.includes(aggregate.name) || seen.has(aggregate.name)) invalid('undeclared native tool evidence');
+      seen.add(aggregate.name);
       requireValue(aggregate.status, 'completed', 'native tool status');
-      if (!Number.isSafeInteger(aggregate.count) || aggregate.count !== nativeTools.total) invalid('native tool count');
+      if (!Number.isSafeInteger(aggregate.count) || aggregate.count < 1 || aggregate.count > 256) invalid('native tool count');
+      aggregateTotal += aggregate.count;
     }
+    if (aggregateTotal !== nativeTools.total || (nativeTools.total === 0 && nativeTools.tools.length !== 0) ||
+      (nativeTools.total > 0 && nativeTools.tools.length === 0)) invalid('native tool count');
     return deepFreeze({
       version: 'probe.governed-codex-attestation/v3', profileId: profile.profileId,
       requested: { profileDigest: digest(profile), cwdDigest, probeMcpToolsDigest: digest(profile.probeMcpTools),
@@ -184,7 +236,7 @@ export function attestGovernedCodexSession(input) {
         sandbox: profile.sandbox, approvalPolicy: profile.approvalPolicy },
       observed: { source: 'session_configured+raw_response_item', model: msg.model, modelProviderId: msg.model_provider_id,
         reasoningEffort: msg.reasoning_effort, approvalPolicy: msg.approval_policy, cwdDigest,
-        permissionProfileDigest: digest(permission), filesystem: 'restricted-read-root', network: permission.network,
+        permissionProfileDigest: digest(permission), filesystem: profile.sandbox === 'workspace-write' ? 'restricted-write-cwd' : 'restricted-read-root', network: permission.network,
         nativeTools: { total: nativeTools.total, tools: nativeTools.tools.map((item) => ({ ...item })) } },
       correlation: { requestId: 2, eventCount: nativeTools.total + 1 }, usage: { status: 'unavailable' },
     });

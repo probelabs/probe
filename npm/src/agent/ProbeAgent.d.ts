@@ -82,6 +82,12 @@ export interface ProbeAgentOptions {
   allowedTools?: string[] | null;
   /** Attested, fail-closed Codex runtime profile. Requires provider codex and an exact allowedTools match. */
   governedCodexProfile?: GovernedCodexProfile;
+  /** Transport for an attested governed Codex profile. The exec transport requires codexBin and codexSha256. */
+  governedCodexTransport?: 'mcp-server-v1' | 'exec-jsonl-default-auth-v1';
+  /** Absolute Codex executable used by exec-jsonl-default-auth-v1. */
+  codexBin?: string;
+  /** Caller-supplied SHA-256 (sha256:<64 hex> or bare 64 hex) for codexBin. */
+  codexSha256?: string;
   /** Convenience flag to disable all tools (equivalent to allowedTools: []). Takes precedence over allowedTools if set. */
   disableTools?: boolean;
   /** Retry configuration for handling transient API failures */
@@ -272,7 +278,9 @@ export interface GovernedResultIdentity {
 export type GovernedCodexProfile =
   { version: 'probe.governed-codex-profile/v1'; profileId: 'luna-xhigh-readonly-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeTools: ['search', 'extract', 'listFiles']; fallback: false; retries: 0; }
   /** Admits pinned-protocol `exec` inside the attested sandbox; does not claim commands are semantically safe. */
-  | { version: 'probe.governed-codex-profile/v2'; profileId: 'luna-xhigh-readonly-native-exec-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; fallback: false; retries: 0; };
+  | { version: 'probe.governed-codex-profile/v2'; profileId: 'luna-xhigh-readonly-native-exec-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; cwd: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; fallback: false; retries: 0; }
+  /** Admits observed native `apply_patch` and `exec` inside the configured workspace-write cwd; callers bind that cwd to an isolated worktree. */
+  | { version: 'probe.governed-codex-profile/v3'; profileId: 'luna-xhigh-isolated-writer-v1'; engine: 'codex'; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'workspace-write'; approvalPolicy: 'never'; cwd: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['apply_patch', 'exec']; fallback: false; retries: 0; };
 
 export interface GovernedCodexRuntimeAttestation {
   version: 'probe.governed-codex-attestation/v1';
@@ -285,7 +293,7 @@ export interface GovernedCodexRuntimeAttestation {
 
 export interface GovernedAnswerResult {
   data: unknown;
-  runtimeAttestation: GovernedCodexRuntimeAttestation | GovernedCodexRuntimeAttestationV3;
+  runtimeAttestation: GovernedCodexRuntimeAttestation | GovernedCodexRuntimeAttestationV3 | GovernedCodexExecAttestation;
 }
 
 export interface GovernedCodexRuntimeAttestationV2 {
@@ -301,24 +309,44 @@ export interface GovernedCodexRuntimeAttestationV2 {
 
 export interface GovernedInvocationAnswerResult {
   data: unknown;
-  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3 | GovernedCodexExecAttestation;
 }
 
 export interface GovernedIdentifiedAnswerResult {
   data: unknown;
-  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3;
+  runtimeAttestation: GovernedCodexRuntimeAttestationV2 | GovernedCodexRuntimeAttestationV3 | GovernedCodexExecAttestation;
   resultIdentity: GovernedResultIdentity;
 }
 
 export interface GovernedCodexRuntimeAttestationV3 {
   version: 'probe.governed-codex-attestation/v3';
-  profileId: 'luna-xhigh-readonly-native-exec-v1';
-  requested: { profileDigest: string; cwdDigest: string; probeMcpToolsDigest: string; codexNativeToolsDigest: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; };
-  observed: { source: 'session_configured+raw_response_item'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; nativeTools: { total: number; tools: GovernedCodexNativeToolAggregate[]; }; };
+  profileId: 'luna-xhigh-readonly-native-exec-v1' | 'luna-xhigh-isolated-writer-v1';
+  requested:
+    | { profileDigest: string; cwdDigest: string; probeMcpToolsDigest: string; codexNativeToolsDigest: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['exec']; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'read-only'; approvalPolicy: 'never'; }
+    | { profileDigest: string; cwdDigest: string; probeMcpToolsDigest: string; codexNativeToolsDigest: string; probeMcpTools: ['search', 'extract', 'listFiles']; codexNativeTools: ['apply_patch', 'exec']; model: 'gpt-5.6-luna'; reasoningEffort: 'xhigh'; sandbox: 'workspace-write'; approvalPolicy: 'never'; };
+  observed:
+    | { source: 'session_configured+raw_response_item'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-read-root'; network: 'restricted'; nativeTools: { total: number; tools: GovernedCodexNativeToolAggregate[]; }; }
+    | { source: 'session_configured+raw_response_item'; model: 'gpt-5.6-luna'; modelProviderId: 'openai'; reasoningEffort: 'xhigh'; approvalPolicy: 'never'; cwdDigest: string; permissionProfileDigest: string; filesystem: 'restricted-write-cwd'; network: 'restricted'; nativeTools: { total: number; tools: GovernedCodexNativeToolAggregate[]; }; };
   executionContext?: { source: 'caller'; invocationDigest: string; };
   dispatch?: { source: 'probe-host-tools-call'; tool: 'codex'; promptDigest: string; promptBytes: number; };
   evidence: { sessionEventCount: 1; nativeCallCount: number; probeMcpCallCount: number; };
   usage: { status: 'unavailable'; };
+}
+
+export interface GovernedCodexExecAttestation {
+  version: 'probe.governed-codex-exec-attestation/v1';
+  profileId: 'luna-xhigh-readonly-v1' | 'luna-xhigh-readonly-native-exec-v1' | 'luna-xhigh-isolated-writer-v1';
+  requested: Record<string, unknown>;
+  enforced: {
+    source: 'probe-host-codex-exec-argv/v1'; transport: 'exec-jsonl-default-auth-v1'; cliPath: string; cliSha256: `sha256:${string}`; cliVersion: string;
+    configDigest: `sha256:${string}`; launchDigest: `sha256:${string}`; cwdDigest: string; codexHome: 'omitted';
+    environmentPolicy: 'inherit-with-CODEX_HOME-omitted-v1'; ignoreUserConfig: true; ignoreRules: true; ephemeral: true; noShell: true; loopbackMcpDigest: `sha256:${string}`;
+  };
+  observed: { source: 'codex-exec-jsonl/v1'; threadDigest: string; streamDigest: string; terminal: 'turn.completed'; eventCount: number; completedItemCount: number; agentMessageCount: number; usedToolItems: Array<{ category: 'mcp_tool_call' | 'command_execution' | 'file_change'; name: string | null; status: 'completed'; count: number }>; probeMcpCallCount: number; finalDigest: string; finalBytes: number; processExitCode: 0; processSignal: null; };
+  executionContext?: { source: 'caller'; invocationDigest: string };
+  dispatch: { source: 'probe-host-exec'; tool: 'codex-exec'; promptDigest: string; promptBytes: number };
+  evidence: { eventCount: number; completedItemCount: number; agentMessageCount: number; probeMcpCallCount: number };
+  usage: { status: 'observed'; inputTokens: number; cachedInputTokens: number; outputTokens: number };
 }
 
 /**

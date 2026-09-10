@@ -12,13 +12,25 @@ import { governedAnswerFailure,
 
 const TOOLS = ['search', 'extract', 'listFiles'];
 const PROFILE_ID = 'luna-xhigh-readonly-native-exec-v1';
+const WRITER_PROFILE_ID = 'luna-xhigh-isolated-writer-v1';
 const schema = JSON.stringify({ type: 'object', required: ['ok'], additionalProperties: false,
   properties: { ok: { type: 'boolean' } } });
 const profile = (cwd) => ({ version: 'probe.governed-codex-profile/v2', profileId: PROFILE_ID, engine: 'codex',
   model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'read-only', approvalPolicy: 'never', cwd,
   probeMcpTools: [...TOOLS], codexNativeTools: ['exec'], fallback: false, retries: 0 });
+const writerProfile = (cwd) => ({ version: 'probe.governed-codex-profile/v3', profileId: WRITER_PROFILE_ID,
+  engine: 'codex', model: 'gpt-5.6-luna', reasoningEffort: 'xhigh', sandbox: 'workspace-write',
+  approvalPolicy: 'never', cwd, probeMcpTools: [...TOOLS], codexNativeTools: ['apply_patch', 'exec'],
+  fallback: false, retries: 0 });
 const permission = () => ({ type: 'managed', file_system: { type: 'restricted', entries: [
   { access: 'read', path: { type: 'special', value: { kind: 'root' } } }
+] }, network: 'restricted' });
+const writerPermission = (cwd) => ({ type: 'managed', file_system: { type: 'restricted', entries: [
+  { access: 'read', path: { type: 'special', value: { kind: 'root' } } },
+  { access: 'write', path: { type: 'path', path: cwd } },
+  { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.git` } },
+  { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.agents` } },
+  { access: 'read', missing_path_behavior: 'skip', path: { type: 'path', path: `${cwd}/.codex` } }
 ] }, network: 'restricted' });
 const session = (cwd, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '', msg: {
   type: 'session_configured', session_id: 'session-safe', thread_id: 'session-safe', model: 'gpt-5.6-luna',
@@ -32,7 +44,7 @@ const native = (index = 0, patch = {}) => ({ jsonrpc: '2.0', method: 'codex/even
 }, id: '2' } });
 function assertFailure(result, stage, boundary = null, subreason = null, correlationOperand = null,
   attestationPredicate = null, schemaSubreason = null, schemaKeyword = null,
-  providerEngineFailureBoundary = undefined) {
+  providerEngineFailureBoundary = undefined, rawItemPredicate = null) {
   assert.equal(result.result, undefined);
   assert.equal(result.error?.name, 'GovernedAnswerFailure');
   assert.equal(result.error?.message, '');
@@ -43,9 +55,14 @@ function assertFailure(result, stage, boundary = null, subreason = null, correla
       assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), true);
       assert.equal(result.error?.nativeEventFailureSubreason, subreason);
     } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), false);
+    if (boundary === 'raw_item_predicate') {
+      assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureRawItemPredicate'), true);
+      assert.equal(result.error?.nativeEventFailureRawItemPredicate, rawItemPredicate);
+    } else assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureRawItemPredicate'), false);
   } else {
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureBoundary'), false);
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureSubreason'), false);
+    assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureRawItemPredicate'), false);
   }
   if (stage === 'native_event_grammar' && boundary === 'live_envelope_session' && subreason === 'correlation') {
     assert.equal(Object.hasOwn(result.error ?? {}, 'nativeEventFailureCorrelationOperand'), true);
@@ -87,6 +104,7 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     const args = buildGovernedCodexInitialToolArgs({ profile: normalized, prompt: 'bounded',
       mcp: { name: 'probe_0123456789abcdef', url: 'http://127.0.0.1:12345/mcp' } });
     const server = args.config.mcp_servers.probe_0123456789abcdef;
+    assert.equal(args.config.features.shell_tool, false);
     assert.deepEqual(server.enabled_tools, ['mcp__probe__search', 'mcp__probe__extract', 'mcp__probe__listFiles']);
     assert.equal(JSON.stringify(server).includes('exec'), false);
     const aggregate = { total: 1, tools: [{ name: 'exec', status: 'completed', count: 1 }] };
@@ -132,7 +150,7 @@ test('Phase A profile attests only a bounded disjoint native capability aggregat
     const redundantMsgTypeGuard = collectorSource.indexOf("if (msg.type !== 'raw_response_item')");
     assert.ok(typeExtraction >= 0 && typeExtraction < rawTypeFilter && rawTypeFilter < msgValidation &&
       msgValidation < redundantMsgTypeGuard);
-    assert.equal((collectorSource.match(/if \(profile\.version !== 'probe\.governed-codex-profile\/v2' \|\| type !== 'raw_response_item'\) return;/g) ?? []).length, 1);
+    assert.equal((collectorSource.match(/if \(!governedNativeProfile\(profile\) \|\| type !== 'raw_response_item'\) return;/g) ?? []).length, 1);
     assert.equal((collectorSource.match(/msg\.type !== 'raw_response_item'/g) ?? []).length, 1);
     const routingStart = source.indexOf('// Handle notifications (codex/event)');
     const routingEnd = source.indexOf('\n    } catch (e)', routingStart);
@@ -196,6 +214,7 @@ import { createInterface } from 'node:readline';
 writeFileSync(process.env.PROBE_NATIVE_PID_FILE, String(process.pid));
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 const permission = ${permission.toString()};
+const writerPermission = ${writerPermission.toString()};
 const session = ${session.toString()};
 const native = ${native.toString()};
 const passthrough = { turn_id: 'raw-secret-turn' };
@@ -207,6 +226,7 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const args = request.params.arguments, cwd = args.cwd, prompt = args.prompt;
   writeFileSync(process.env.PROBE_NATIVE_ARGS_FILE, JSON.stringify(args));
   const configured = (session)(cwd);
+  if (args.sandbox === 'workspace-write') configured.params.msg.permission_profile = writerPermission(cwd);
   const foreignSession = (foreignRequestId = 99) => {
     const event = (session)(cwd);
     event.params._meta = { requestId: foreignRequestId, threadId: 'SECRET_FOREIGN_THREAD' };
@@ -263,9 +283,14 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[LIVE-RESPONSE-ID-BOOLEAN]')) liveEnvelope(event => { event.params.id = true; });
   if (prompt.includes('[LIVE-RESPONSE-ID-ARRAY]')) liveEnvelope(event => { event.params.id = []; });
   if (prompt.includes('[LIVE-RESPONSE-ID-OBJECT]')) liveEnvelope(event => { event.params.id = {}; });
-  const message = (id, role, phase, metadata = currentMessagePassthrough) => ({ type: 'message', id, role,
-    content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text: 'SECRET_MESSAGE_BODY' }],
+  const message = (id, role, phase, metadata = currentMessagePassthrough, text = 'SECRET_MESSAGE_BODY') => ({ type: 'message', id, role,
+    content: [{ type: role === 'assistant' ? 'output_text' : 'input_text', text }],
     ...(role === 'assistant' ? { phase } : {}), internal_chat_message_metadata_passthrough: metadata });
+  if (prompt.includes('[FINAL-OUTPUT-TEXT]') || prompt.includes('[RESULT-AUTHORITATIVE]') || prompt.includes('[MALFORMED-FINAL]')) {
+    raw(message('final-commentary', 'assistant', 'commentary', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }, 'COMMENTARY_SENTINEL_MUST_NOT_BE_PARSED'));
+    raw(message('final-answer', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] },
+      prompt.includes('[MALFORMED-FINAL]') ? 'not-json' : '{"ok":true}'));
+  }
   if (prompt.includes('[ATTEMPT7]')) {
     raw(message('developer-safe', 'developer'));
     raw(message('user-safe', 'user'));
@@ -369,6 +394,30 @@ createInterface({ input: process.stdin }).on('line', async line => {
   if (prompt.includes('[DOUBLE-FINAL]')) { raw(message('final-one', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] })); raw(message('final-two', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] })); }
   if (prompt.includes('[PHASE-UNKNOWN]')) raw(message('phase-safe', 'assistant', 'future_phase', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
   if (prompt.includes('[OVERFLOW-MESSAGES]')) for (let index = 0; index < 257; index++) raw(message('message-' + index, 'user'));
+  if (prompt.includes('[MESSAGES-256]')) {
+    for (let index = 0; index < 255; index++) raw(message('message-' + index, 'user'));
+    raw(message('readonly-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  }
+  if (prompt.includes('[WRITER-RAW-1024]')) {
+    for (let index = 0; index < 1023; index++) raw(message('writer-message-' + index, 'user'));
+    raw(message('writer-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  }
+  if (prompt.includes('[WRITER-RAW-1025]')) {
+    for (let index = 0; index < 1024; index++) raw(message('writer-message-' + index, 'user'));
+    raw(message('writer-final', 'assistant', 'final_answer', { ...currentMessagePassthrough, content_item_kinds: ['output_text'] }));
+  }
+  const reasoningItem = patch => raw({ type: 'reasoning', id: 'reasoning-invalid', summary: [], encrypted_content: 'opaque',
+    internal_chat_message_metadata_passthrough: passthrough, ...patch });
+  if (prompt.includes('[CONTENT-NONARRAY]')) { const item = message('content-array', 'user'); item.content = {}; raw(item); }
+  if (prompt.includes('[CONTENT-EMPTY]')) { const item = message('content-empty', 'user'); item.content = []; raw(item); }
+  if (prompt.includes('[CONTENT-OVERFLOW]')) { const item = message('content-limit', 'user'); item.content = Array(65).fill({ type: 'input_text', text: 'x' }); raw(item); }
+  if (prompt.includes('[CONTENT-KIND]')) { const item = message('content-kind', 'user'); item.content[0].type = 'output_text'; raw(item); }
+  if (prompt.includes('[CONTENT-TEXT-TYPE]')) { const item = message('content-text-type', 'user'); item.content[0].text = 7; raw(item); }
+  if (prompt.includes('[CONTENT-TEXT-LIMIT]')) { const item = message('content-text-limit', 'user'); item.content[0].text = 'x'.repeat(131073); raw(item); }
+  if (prompt.includes('[REASONING-SUMMARY-ARRAY]')) reasoningItem({ summary: {} });
+  if (prompt.includes('[REASONING-SUMMARY-NONEMPTY]')) reasoningItem({ summary: ['not-empty'] });
+  if (prompt.includes('[REASONING-ENCRYPTED-TYPE]')) reasoningItem({ encrypted_content: 7 });
+  if (prompt.includes('[REASONING-ENCRYPTED-LIMIT]')) reasoningItem({ encrypted_content: 'x'.repeat(1048577) });
   if (prompt.includes('[NONTOOL]')) {
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'content is not retained' }], internal_chat_message_metadata_passthrough: passthrough } } } });
     send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: { type: 'reasoning', id: 'reasoning-safe', summary: [], encrypted_content: 'opaque', internal_chat_message_metadata_passthrough: passthrough } } } });
@@ -409,9 +458,47 @@ createInterface({ input: process.stdin }).on('line', async line => {
   } else if (prompt.includes('[UNKNOWN-MCP]')) emitCall(0, { name: 'mcp__probe__bash' });
   else if (prompt.includes('[UNDECLARED]')) emitCall(0, { name: 'bash' });
   else if (prompt.includes('[MALFORMED]')) { const event = (native)(0); delete event.params.msg.item.status; send(event); }
+  else if (prompt.includes('[BAD-STATUS]')) emitCall(0, { status: 'in_progress' });
+  else if (prompt.includes('[BAD-INPUT]')) emitCall(0, { input: 7 });
+  else if (prompt.includes('[BAD-PASSTHROUGH]')) emitCall(0, {
+    internal_chat_message_metadata_passthrough: { turn_id: 'raw-secret-turn', extra: 'SECRET_EXTRA' }
+  });
+  else if (prompt.includes('[BAD-CONTENT]')) {
+    emitCall(0);
+    send({ jsonrpc: '2.0', method: 'codex/event', params: { _meta: { requestId: 2, threadId: 'session-safe' }, id: '2',
+      msg: { type: 'raw_response_item', item: { type: 'custom_tool_call_output', call_id: 'raw-secret-call-0',
+        output: [{ type: 'input_text', text: 7 }], internal_chat_message_metadata_passthrough: passthrough } } } });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-NONARRAY]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: {}, internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-OVERFLOW]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: Array(65).fill({ type: 'input_text', text: 'x' }), internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-KIND]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'output_text', text: 'x' }], internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-TEXT-TYPE]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'input_text', text: 7 }], internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[TOOL-OUTPUT-TEXT-LIMIT]')) {
+    emitCall(0); raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-0', output: [{ type: 'input_text', text: 'x'.repeat(1048577) }], internal_chat_message_metadata_passthrough: passthrough });
+  }
+  else if (prompt.includes('[BAD-PAIR]')) send({ jsonrpc: '2.0', method: 'codex/event', params: {
+    _meta: { requestId: 2, threadId: 'session-safe' }, id: '2', msg: { type: 'raw_response_item', item: {
+      type: 'custom_tool_call_output', call_id: 'unknown-call', output: [], internal_chat_message_metadata_passthrough: passthrough
+    } }
+  } });
   else if (prompt.includes('[UNKNOWN]')) emitCall(0, { type: 'future_tool_call' });
   else if (prompt.includes('[DUPLICATE]')) { emitCall(0); emitCall(0); }
   else if (prompt.includes('[CROSS]')) { const event = (native)(0); event.params._meta.threadId = 'other-session'; send(event); }
+  else if (prompt.includes('[WRITER-TOOL-256]')) for (let index = 0; index < 256; index++) emitCall(index);
+  else if (prompt.includes('[WRITER-TOOL-257]')) for (let index = 0; index < 257; index++) emitCall(index);
+  else if (prompt.includes('[WRITER-TOOL-EVENT-257]')) {
+    for (let index = 0; index < 129; index++) emitCall(index);
+    for (let index = 0; index < 128; index++) raw({ type: 'custom_tool_call_output', call_id: 'raw-secret-call-' + index,
+      output: [], internal_chat_message_metadata_passthrough: passthrough });
+  }
   else if (prompt.includes('[OVERFLOW]')) for (let index = 0; index < 257; index++) emitCall(index);
   if (prompt.includes('[AMBIGUOUS]')) { const event = (native)(0); delete event.params.msg.item.status; send(event); send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
   if (prompt.includes('[PROVIDER-ERROR]')) { send({ jsonrpc: '2.0', id: request.id, error: { message: 'SECRET_PROVIDER_ERROR' } }); return; }
@@ -424,7 +511,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
     : prompt.includes('[SCHEMA-ARRAY-TWO]') ? '{"ok":[1,2]}'
     : prompt.includes('[BADSCHEMA]') || prompt.includes('[SCHEMA-ENUM]') ? '{"ok":"wrong"}'
     : prompt.includes('[NONCANONICAL]') ? '{"ok":1e309}' : '{"ok":true}';
-  send({ jsonrpc: '2.0', id: request.id, result: { content: [{ type: 'text', text }] } });
+  const resultContent = prompt.includes('[FINAL-OUTPUT-TEXT]') || prompt.includes('[MALFORMED-FINAL]') || prompt.includes('[EMPTY-CANDIDATE]')
+    ? [] : prompt.includes('[RESULT-AUTHORITATIVE]')
+      ? [{ type: 'text', text: '{"ok":false}' }] : prompt.includes('[MULTI-RESULT]')
+        ? [{ type: 'text', text: '{"ok":' }, { type: 'text', text: 'true}' }] : prompt.includes('[MIXED-RESULT]')
+          ? [{ type: 'text', text: '' }, { type: 'text', text: '{"ok":true}' }] : prompt.includes('[EMPTY-RESULT-TEXT]')
+          ? [{ type: 'text', text: '' }] : [{ type: 'text', text }];
+  send({ jsonrpc: '2.0', id: request.id, result: { content: resultContent } });
 });
 `;
   const executable = join(bin, 'codex'), priorPath = process.env.PATH;
@@ -432,13 +525,13 @@ createInterface({ input: process.stdin }).on('line', async line => {
   const priorProjection = process.env.PROBE_NATIVE_PROJECTION_FILE;
   await writeFile(executable, fake); await chmod(executable, 0o755); process.env.PATH = `${bin}:${priorPath}`;
   let runIndex = 0;
-  async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }) {
+  async function run(marker, options = { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, governedProfile = profile(root), hooks = undefined) {
     const index = runIndex++, pidFile = join(root, `pid-${index}`), argsFile = join(root, `args-${index}`);
     const projectionFile = join(root, `projection-${index}`);
     process.env.PROBE_NATIVE_PID_FILE = pidFile; process.env.PROBE_NATIVE_ARGS_FILE = argsFile;
     process.env.PROBE_NATIVE_PROJECTION_FILE = projectionFile;
     const agent = new ProbeAgent({ provider: 'codex', path: root, cwd: root, allowedTools: [...TOOLS],
-      governedCodexProfile: profile(root), searchDelegate: false, disableMermaidValidation: true });
+      governedCodexProfile: governedProfile, searchDelegate: false, disableMermaidValidation: true, ...(hooks ? { hooks } : {}) });
     const events = []; agent.events.on('toolCall', (event) => events.push(event));
     let result, error;
     try { result = await agent.answerGoverned(marker, options); }
@@ -540,8 +633,134 @@ createInterface({ input: process.stdin }).on('line', async line => {
     const attempt8Serialized = JSON.stringify({ result: attempt8.result, events: attempt8.events });
     for (const secret of ['SECRET_', 'raw-secret', 'attempt8-', 'create_time', 'content_item_kinds'])
       assert.equal(attempt8Serialized.includes(secret), false);
+    const finalCandidates = [];
+    const finalOutputText = await run('[FINAL-OUTPUT-TEXT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => {
+          finalCandidates.push(candidate);
+          assert.equal(Object.isFrozen(candidate), true);
+          assert.equal(Object.isFrozen(candidate.boundary), true);
+          try { candidate.text = 'MUTATED'; } catch {}
+          try { candidate.boundary.selectedOrigin = 'none'; } catch {}
+          throw new Error('candidate hook failure is observational');
+        }
+      });
+    assert.ifError(finalOutputText.error);
+    assert.deepEqual(finalOutputText.result.data, { ok: true });
+    assert.equal(finalOutputText.result.runtimeAttestation.version, 'probe.governed-codex-attestation/v3');
+    assert.equal(JSON.stringify(finalOutputText.result).includes('COMMENTARY_SENTINEL_MUST_NOT_BE_PARSED'), false);
+    assert.equal(finalCandidates.length, 1);
+    assert.equal(finalCandidates[0].version, 'probe.governed-answer-candidate/v1');
+    assert.equal(finalCandidates[0].text, '{"ok":true}');
+    assert.deepEqual(finalCandidates[0].boundary, {
+      selectedOrigin: 'raw_final', selectedChunkCount: 1, selectedBytes: Buffer.byteLength('{"ok":true}'),
+      resultTextItemCount: 0, resultTextBytes: 0, rawFinalMessageCount: 1, rawFinalPartCount: 1,
+      rawFinalBytes: Buffer.byteLength('{"ok":true}')
+    });
+
+    const resultCandidates = [];
+    const resultAuthoritative = await run('[RESULT-AUTHORITATIVE]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => resultCandidates.push(candidate)
+      });
+    assert.ifError(resultAuthoritative.error);
+    assert.deepEqual(resultAuthoritative.result.data, { ok: false });
+    assert.deepEqual(resultCandidates[0].boundary, {
+      selectedOrigin: 'result_content', selectedChunkCount: 1, selectedBytes: Buffer.byteLength('{"ok":false}'),
+      resultTextItemCount: 1, resultTextBytes: Buffer.byteLength('{"ok":false}'), rawFinalMessageCount: 1,
+      rawFinalPartCount: 1, rawFinalBytes: Buffer.byteLength('{"ok":true}')
+    });
+
+    const multiCandidates = [];
+    const multiResult = await run('[MULTI-RESULT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => multiCandidates.push(candidate)
+      });
+    assert.ifError(multiResult.error);
+    assert.deepEqual(multiResult.result.data, { ok: true });
+    assert.deepEqual(multiCandidates[0].boundary, {
+      selectedOrigin: 'result_content', selectedChunkCount: 2, selectedBytes: Buffer.byteLength('{"ok":true}'),
+      resultTextItemCount: 2, resultTextBytes: Buffer.byteLength('{"ok":true}'), rawFinalMessageCount: 0,
+      rawFinalPartCount: 0, rawFinalBytes: 0
+    });
+
+    const malformedCandidates = [];
+    const malformed = await run('[MALFORMED-FINAL]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => malformedCandidates.push(candidate)
+      });
+    assertFailure(malformed, 'schema_result_validation', null, null, null, null, 'response_json');
+    assert.equal(malformedCandidates[0].text, 'not-json');
+    assert.equal(malformedCandidates[0].boundary.selectedOrigin, 'raw_final');
+
+    const emptyCandidates = [];
+    const empty = await run('[EMPTY-CANDIDATE]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => emptyCandidates.push(candidate)
+      });
+    assertFailure(empty, 'schema_result_validation', null, null, null, null, 'response_json');
+    assert.deepEqual(emptyCandidates[0], {
+      version: 'probe.governed-answer-candidate/v1', text: '',
+      boundary: {
+        selectedOrigin: 'none', selectedChunkCount: 0, selectedBytes: 0,
+        resultTextItemCount: 0, resultTextBytes: 0, rawFinalMessageCount: 0,
+        rawFinalPartCount: 0, rawFinalBytes: 0
+      }
+    });
+
+    const emptyResultTextCandidates = [];
+    const emptyResultText = await run('[EMPTY-RESULT-TEXT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => emptyResultTextCandidates.push(candidate)
+      });
+    assertFailure(emptyResultText, 'schema_result_validation', null, null, null, null, 'response_json');
+    assert.deepEqual(emptyResultTextCandidates[0], {
+      version: 'probe.governed-answer-candidate/v1', text: '',
+      boundary: {
+        selectedOrigin: 'none', selectedChunkCount: 0, selectedBytes: 0,
+        resultTextItemCount: 1, resultTextBytes: 0, rawFinalMessageCount: 0,
+        rawFinalPartCount: 0, rawFinalBytes: 0
+      }
+    });
+
+    const mixedResultCandidates = [];
+    const mixedResult = await run('[MIXED-RESULT]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, profile(root), {
+        'message:assistant': candidate => mixedResultCandidates.push(candidate)
+      });
+    assert.ifError(mixedResult.error);
+    assert.deepEqual(mixedResult.result.data, { ok: true });
+    assert.deepEqual(mixedResultCandidates[0].boundary, {
+      selectedOrigin: 'result_content', selectedChunkCount: 1, selectedBytes: Buffer.byteLength('{"ok":true}'),
+      resultTextItemCount: 2, resultTextBytes: Buffer.byteLength('{"ok":true}'), rawFinalMessageCount: 0,
+      rawFinalPartCount: 0, rawFinalBytes: 0
+    });
     const bounds = await run('[BOUNDS]'); assert.ifError(bounds.error);
     assert.deepEqual(bounds.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+    const readonlyRaw256 = await run('[MESSAGES-256]'); assert.ifError(readonlyRaw256.error);
+    assert.deepEqual(readonlyRaw256.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+
+    const writerRaw1024 = await run('[WRITER-RAW-1024]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assert.ifError(writerRaw1024.error);
+    assert.deepEqual(writerRaw1024.result.runtimeAttestation.observed.nativeTools, { total: 0, tools: [] });
+    const writerRaw1025 = await run('[WRITER-RAW-1025]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assertFailure(writerRaw1025, 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'event_limit');
+    const writerTool256 = await run('[WRITER-TOOL-256]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assert.ifError(writerTool256.error);
+    assert.deepEqual(writerTool256.result.runtimeAttestation.observed.nativeTools,
+      { total: 256, tools: [{ name: 'exec', status: 'completed', count: 256 }] });
+    const writerTool257 = await run('[WRITER-TOOL-257]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assertFailure(writerTool257, 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'tool_call_limit');
+    const writerToolEvents257 = await run('[WRITER-TOOL-EVENT-257]',
+      { schema, invocationDigest: `sha256:${'0'.repeat(64)}` }, writerProfile(root));
+    assertFailure(writerToolEvents257, 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'tool_event_limit');
 
     for (const marker of ['[SERVICE-TIER-CURRENT]', '[SERVICE-TIER-DEFAULT]', '[SERVICE-TIER-PRIORITY]',
       '[SERVICE-TIER-FLEX]']) {
@@ -550,8 +769,14 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assert.equal(JSON.stringify(compatible.result).includes('service_tier'), false);
     }
 
-    for (const marker of ['[UNKNOWN-MCP]', '[UNDECLARED]', '[MALFORMED]', '[UNKNOWN]', '[DUPLICATE]', '[OVERFLOW]']) {
-      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar', 'raw_item_predicate');
+    for (const [marker, predicate] of [
+      ['[UNKNOWN-MCP]', 'tool_name_or_allow'], ['[UNDECLARED]', 'tool_name_or_allow'],
+      ['[MALFORMED]', 'shape'], ['[BAD-STATUS]', 'status'], ['[BAD-INPUT]', 'input'],
+      ['[BAD-PASSTHROUGH]', 'passthrough'], ['[BAD-CONTENT]', 'tool_output_text_type'], ['[BAD-PAIR]', 'call_output_pairing'],
+      ['[UNKNOWN]', 'type'], ['[DUPLICATE]', 'duplicate'], ['[OVERFLOW]', 'event_limit'],
+    ]) {
+      const rejected = await run(marker); assertFailure(rejected, 'native_event_grammar', 'raw_item_predicate',
+        null, null, null, null, null, undefined, predicate);
       assert.deepEqual(rejected.events, []);
     }
 
@@ -589,14 +814,38 @@ createInterface({ input: process.stdin }).on('line', async line => {
       assertFailure(await run('[SESSION-OPTIONAL-' + optional + ']'), 'native_event_grammar',
         'live_envelope_session', 'attestation', null, 'session_shape');
 
-    for (const marker of ['[DELTA-CREATE-NEGATIVE]', '[DELTA-CREATE-NONFINITE]', '[DELTA-CREATE-UNSAFE]',
-      '[DELTA-KINDS-OVERFLOW]', '[DELTA-KINDS-WRONG]', '[DELTA-KIND-UNSAFE]', '[DELTA-KIND-OVERSIZED]',
-      '[DELTA-PARTIAL]', '[DELTA-EXTRA]', '[DELTA-ID-UNSAFE]', '[DELTA-ID-OVERSIZED]', '[DELTA-DUP-ID]',
-      '[DELTA-OUTPUT-DUP-ID]', '[COMMENTARY-ONLY]', '[DOUBLE-FINAL]', '[PHASE-UNKNOWN]', '[OVERFLOW-MESSAGES]'])
-      assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate');
+    for (const [marker, predicate] of [
+      ['[DELTA-CREATE-NEGATIVE]', 'passthrough'], ['[DELTA-CREATE-NONFINITE]', 'passthrough'],
+      ['[DELTA-CREATE-UNSAFE]', 'passthrough'], ['[DELTA-KINDS-OVERFLOW]', 'passthrough'],
+      ['[DELTA-KINDS-WRONG]', 'passthrough'], ['[DELTA-KIND-UNSAFE]', 'passthrough'],
+      ['[DELTA-KIND-OVERSIZED]', 'passthrough'], ['[DELTA-PARTIAL]', 'passthrough'],
+      ['[DELTA-EXTRA]', 'passthrough'], ['[DELTA-ID-UNSAFE]', 'id'],
+      ['[DELTA-ID-OVERSIZED]', 'id'], ['[DELTA-DUP-ID]', 'duplicate'],
+      ['[DELTA-OUTPUT-DUP-ID]', 'duplicate'], ['[COMMENTARY-ONLY]', 'final_answer_cardinality'],
+      ['[DOUBLE-FINAL]', 'final_answer_cardinality'], ['[PHASE-UNKNOWN]', 'phase'],
+      ['[OVERFLOW-MESSAGES]', 'event_limit'],
+    ])
+      assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate',
+        null, null, null, null, null, undefined, predicate);
+
+    for (const [marker, predicate] of [
+      ['[CONTENT-NONARRAY]', 'message_content_array'], ['[CONTENT-EMPTY]', 'message_content_empty'],
+      ['[CONTENT-OVERFLOW]', 'message_content_limit'], ['[CONTENT-KIND]', 'message_content_kind'],
+      ['[CONTENT-TEXT-TYPE]', 'message_content_text_type'], ['[CONTENT-TEXT-LIMIT]', 'message_content_text_limit'],
+      ['[REASONING-SUMMARY-ARRAY]', 'reasoning_summary_array'],
+      ['[REASONING-SUMMARY-NONEMPTY]', 'reasoning_summary_nonempty'],
+      ['[REASONING-ENCRYPTED-TYPE]', 'reasoning_encrypted_content_type'],
+      ['[REASONING-ENCRYPTED-LIMIT]', 'reasoning_encrypted_content_limit'],
+      ['[TOOL-OUTPUT-NONARRAY]', 'tool_output_array'], ['[TOOL-OUTPUT-OVERFLOW]', 'tool_output_limit'],
+      ['[TOOL-OUTPUT-KIND]', 'tool_output_kind'], ['[TOOL-OUTPUT-TEXT-TYPE]', 'tool_output_text_type'],
+      ['[TOOL-OUTPUT-TEXT-LIMIT]', 'tool_output_text_limit'],
+    ])
+      assertFailure(await run(marker), 'native_event_grammar', 'raw_item_predicate',
+        null, null, null, null, null, undefined, predicate);
 
     assertFailure(await run('[PROVIDER-ERROR]'), 'provider_engine', null, null, null, null, null, null, 'query');
-    assertFailure(await run('[AMBIGUOUS]'), 'native_event_grammar', 'raw_item_predicate');
+    assertFailure(await run('[AMBIGUOUS]'), 'native_event_grammar', 'raw_item_predicate',
+      null, null, null, null, null, undefined, 'shape');
     assert.equal(governedAnswerFailure('native_event_grammar').nativeEventFailureBoundary, null);
     assert.equal(governedAnswerFailure('native_event_grammar', ['raw_item_predicate', 'live_envelope_session'])
       .nativeEventFailureBoundary, null);
@@ -605,6 +854,35 @@ createInterface({ input: process.stdin }).on('line', async line => {
     assert.equal(governedAnswerFailure('native_event_grammar', 'future_boundary').nativeEventFailureBoundary, null);
     assert.equal(JSON.stringify(governedAnswerFailure('native_event_grammar', 'SECRET_raw_item_predicate'))
       .includes('SECRET_'), false);
+    const rawItemPredicates = ['shape', 'type', 'id', 'duplicate', 'phase', 'content', 'passthrough',
+      'tool_name_or_allow', 'status', 'input', 'call_output_pairing', 'event_limit', 'tool_event_limit', 'tool_call_limit',
+      'message_content_array', 'message_content_empty', 'message_content_limit', 'message_content_kind',
+      'message_content_text_type', 'message_content_text_limit', 'reasoning_summary_array',
+      'reasoning_summary_nonempty', 'reasoning_encrypted_content_type', 'reasoning_encrypted_content_limit',
+      'tool_output_array', 'tool_output_limit', 'tool_output_kind', 'tool_output_text_type',
+      'tool_output_text_limit',
+      'final_answer_cardinality'];
+    for (const predicate of rawItemPredicates) {
+      const failure = governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null,
+        null, null, null, predicate);
+      assert.equal(failure.nativeEventFailureRawItemPredicate, predicate);
+      assert.deepEqual(Object.keys(failure), ['answerFailureStage', 'nativeEventFailureBoundary',
+        'nativeEventFailureRawItemPredicate']);
+      assert.equal(Object.getOwnPropertyDescriptor(failure, 'nativeEventFailureRawItemPredicate').enumerable, true);
+      assert.equal(Object.getOwnPropertyDescriptor(failure, 'nativeEventFailureRawItemPredicate').writable, false);
+      assert.equal(Object.isFrozen(failure), true);
+    }
+    for (const invalid of [undefined, null, ['shape'], { predicate: 'shape' }, 'SECRET_shape', '']) {
+      const failure = governedAnswerFailure('native_event_grammar', 'raw_item_predicate', null, null, null,
+        null, null, null, invalid);
+      assert.equal(Object.hasOwn(failure, 'nativeEventFailureRawItemPredicate'), true);
+      assert.equal(failure.nativeEventFailureRawItemPredicate, null);
+      assert.equal(JSON.stringify(failure).includes('SECRET_'), false);
+    }
+    assert.equal(Object.hasOwn(governedAnswerFailure('provider_engine', null, null, null, null, null, null,
+      null, 'shape'), 'nativeEventFailureRawItemPredicate'), false);
+    assert.equal(Object.hasOwn(governedAnswerFailure('native_event_grammar', 'live_envelope_session', null, null,
+      null, null, null, null, 'shape'), 'nativeEventFailureRawItemPredicate'), false);
     for (const invalid of [['session_sequence', 'envelope_shape'], 'session_sequence|envelope_shape',
       'future_subreason', 'SECRET_session_sequence']) {
       const failure = governedAnswerFailure('native_event_grammar', 'live_envelope_session', invalid);
