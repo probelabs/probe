@@ -325,7 +325,8 @@ fn format_and_print_color_results(
             "java" => "java",
             "rb" => "ruby",
             "php" => "php",
-            "sh" => "bash",
+            "sh" | "bash" => "bash",
+            "qml" => "javascript",
             "md" => "markdown",
             "json" => "json",
             "yaml" | "yml" => "yaml",
@@ -1954,7 +1955,7 @@ fn get_comment_prefix(extension: &str) -> &'static str {
     match extension {
         // C-style comments
         "rs" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "java" | "js" | "jsx" | "ts"
-        | "tsx" | "cs" | "swift" | "go" | "php" => "//",
+        | "tsx" | "cs" | "swift" | "go" | "php" | "qml" => "//",
 
         // Python-style comments
         "py" | "rb" | "sh" | "bash" | "pl" | "r" | "yaml" | "yml" => "#",
@@ -2705,6 +2706,10 @@ mod tests {
         assert_eq!(get_comment_prefix("py"), "#");
         assert_eq!(get_comment_prefix("rb"), "#");
         assert_eq!(get_comment_prefix("sh"), "#");
+        assert_eq!(get_comment_prefix("bash"), "#");
+
+        // Test QML (JS-style comments)
+        assert_eq!(get_comment_prefix("qml"), "//");
 
         // Test default
         assert_eq!(get_comment_prefix("unknown"), "//");

@@ -470,6 +470,10 @@ cargo install --path .
 | Swift | `.swift` |
 | C# | `.cs` |
 | Markdown | `.md` |
+| HTML | `.html`, `.htm` |
+| YAML | `.yaml`, `.yml` |
+| Bash | `.sh`, `.bash` |
+| QML | `.qml` |
 
 ---
 

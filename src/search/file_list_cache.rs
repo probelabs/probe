@@ -509,6 +509,8 @@ fn get_language_extensions(language: &str) -> Vec<String> {
         "csharp" => vec![".cs".to_string()],
         "markdown" => vec![".md".to_string(), ".markdown".to_string()],
         "yaml" => vec![".yaml".to_string(), ".yml".to_string()],
+        "bash" | "sh" => vec![".sh".to_string(), ".bash".to_string()],
+        "qml" => vec![".qml".to_string()],
         _ => vec![], // Return empty vector for unknown languages
     }
 }

@@ -21,6 +21,8 @@ Probe provides language-aware code search and extraction for a wide range of pro
 | C# | `.cs` | ✅ | ✅ |
 | Markdown | `.md`, `.markdown` | ✅ | ✅ |
 | YAML | `.yaml`, `.yml` | ✅ | ✅ |
+| Bash | `.sh`, `.bash` | ✅ | ✅ |
+| QML | `.qml` | ✅ | ✅ |
 
 ## Language Detection
 
@@ -145,6 +147,25 @@ Go also implements special handling for nested struct types.
 - **Document Structure**: Handles multi-document YAML streams
 - **Anchor and Alias Support**: Properly handles YAML anchors and aliases
 - **Test Detection**: Identifies test-related configuration keys and values
+
+### Bash
+
+- **Function Extraction**: Extracts function definitions (`foo() { ... }` and `function foo { ... }` styles)
+- **Control Block Extraction**: Extracts `if`/`case`/`for`/`while` blocks as structured units
+- **Variable Declarations**: Extracts variable assignments and `local`/`readonly`/`export`/`declare` statements
+- **Heredoc Handling**: Properly handles heredoc bodies
+- **Comment Extraction**: Extracts `#` comments and associates them with following code
+- **Test Detection**: Identifies `test_*` function naming conventions and Bats-style `@test` blocks
+
+### QML
+
+- **Object Extraction**: Extracts QML object definitions (`Rectangle { ... }`) including nested objects
+- **Property Bindings**: Extracts property bindings and signal handlers (`onClicked: { ... }`)
+- **Property Declarations**: Extracts `property` declarations with types and modifiers
+- **Signal Declarations**: Extracts custom `signal` declarations
+- **JavaScript Functions**: Extracts embedded JavaScript `function` declarations
+- **Import Statements**: Extracts `import` statements (module, directory, and alias forms)
+- **Test Detection**: Identifies QtTest `TestCase` objects and `test_*` functions
 
 ## Test Detection
 

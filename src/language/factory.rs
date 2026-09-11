@@ -1,3 +1,4 @@
+use probe_code::language::bash::BashLanguage;
 use probe_code::language::c::CLanguage;
 use probe_code::language::cpp::CppLanguage;
 use probe_code::language::csharp::CSharpLanguage;
@@ -9,6 +10,7 @@ use probe_code::language::language_trait::LanguageImpl;
 use probe_code::language::markdown::MarkdownLanguage;
 use probe_code::language::php::PhpLanguage;
 use probe_code::language::python::PythonLanguage;
+use probe_code::language::qml::QmlLanguage;
 use probe_code::language::ruby::RubyLanguage;
 use probe_code::language::rust::RustLanguage;
 use probe_code::language::swift::SwiftLanguage;
@@ -34,6 +36,8 @@ pub fn get_language_impl(extension: &str) -> Option<Box<dyn LanguageImpl>> {
         "html" | "htm" => Some(Box::new(HtmlLanguage::new())),
         "md" | "markdown" => Some(Box::new(MarkdownLanguage::new())),
         "yaml" | "yml" => Some(Box::new(YamlLanguage::new())),
+        "sh" | "bash" => Some(Box::new(BashLanguage::new())),
+        "qml" => Some(Box::new(QmlLanguage::new())),
         _ => None,
     }
 }

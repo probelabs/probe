@@ -774,6 +774,48 @@ fn test_csharp_language_implementation() {
     );
 }
 
+#[test]
+fn test_bash_language_implementation() {
+    // Get the Bash language implementation through the factory
+    let bash_impl = get_language_impl("sh");
+
+    // Verify that we can get a Bash language implementation for both extensions
+    assert!(
+        bash_impl.is_some(),
+        "Should be able to get Bash language implementation for 'sh'"
+    );
+    assert!(
+        get_language_impl("bash").is_some(),
+        "Should be able to get Bash language implementation for 'bash'"
+    );
+
+    // Verify the tree-sitter language parses a simple script
+    let language = bash_impl.unwrap().get_tree_sitter_language();
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&language).unwrap();
+    let tree = parser.parse("hello() {\n    echo hi\n}\n", None);
+    assert!(tree.is_some(), "Bash parser should parse a function");
+}
+
+#[test]
+fn test_qml_language_implementation() {
+    // Get the QML language implementation through the factory
+    let qml_impl = get_language_impl("qml");
+
+    // Verify that we can get a QML language implementation
+    assert!(
+        qml_impl.is_some(),
+        "Should be able to get QML language implementation"
+    );
+
+    // Verify the tree-sitter language parses a simple QML document
+    let language = qml_impl.unwrap().get_tree_sitter_language();
+    let mut parser = tree_sitter::Parser::new();
+    parser.set_language(&language).unwrap();
+    let tree = parser.parse("import QtQuick 2.15\nItem {\n    width: 10\n}\n", None);
+    assert!(tree.is_some(), "QML parser should parse an object");
+}
+
 // Helper function to print the AST structure
 fn print_ast_structure(node: tree_sitter::Node, depth: usize) {
     let indent = " ".repeat(depth * 2);

@@ -169,7 +169,9 @@ pub enum Commands {
             "php",
             "swift",
             "csharp", "cs",
-            "yaml", "yml"
+            "yaml", "yml",
+            "bash", "sh",
+            "qml"
         ])]
         language: Option<String>,
 
@@ -350,7 +352,9 @@ pub enum Commands {
             "php",
             "swift",
             "csharp", "cs",
-            "yaml", "yml"
+            "yaml", "yml",
+            "bash", "sh",
+            "qml"
         ])]
         language: Option<String>,
 
