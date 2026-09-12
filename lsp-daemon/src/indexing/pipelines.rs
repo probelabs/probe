@@ -105,9 +105,20 @@ impl PipelineConfig {
                     features,
                 )
             }
+            Language::Bash => {
+                let mut features = IndexingFeatures::default();
+                features.set_language_feature("extract_functions".to_string(), true);
+                features.set_language_feature("extract_variables".to_string(), true);
+                (vec!["sh".to_string(), "bash".to_string()], features)
+            }
+            Language::Qml => {
+                let mut features = IndexingFeatures::default();
+                features.set_language_feature("extract_bindings".to_string(), true);
+                features.set_language_feature("extract_signals".to_string(), true);
+                (vec!["qml".to_string()], features)
+            }
             _ => (vec![], IndexingFeatures::minimal()),
         };
-
         Self {
             language,
             features,

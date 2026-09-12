@@ -295,6 +295,36 @@ impl LspRegistry {
             },
         });
 
+        // Bash (bash-language-server; install via `npm i -g bash-language-server`)
+        self.register(LspServerConfig {
+            language: Language::Bash,
+            command: "bash-language-server".to_string(),
+            args: vec!["start".to_string()],
+            initialization_options: None,
+            root_markers: vec![".git".to_string()],
+            initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: true,
+                implementations: false,
+            },
+        });
+
+        // QML (qmlls ships with the Qt SDK / Qt Creator)
+        self.register(LspServerConfig {
+            language: Language::Qml,
+            command: "qmlls".to_string(),
+            args: vec![],
+            initialization_options: None,
+            root_markers: vec!["qmldir".to_string(), "*.qmlproject".to_string()],
+            initialization_timeout_secs: 30,
+            capabilities: LspServerCapabilities {
+                call_hierarchy: false,
+                references: false,
+                implementations: false,
+            },
+        });
+
         // Kotlin
         self.register(LspServerConfig {
             language: Language::Kotlin,
@@ -510,6 +540,8 @@ impl LspRegistry {
                         "clojure" => Language::Clojure,
                         "lua" => Language::Lua,
                         "zig" => Language::Zig,
+                        "bash" => Language::Bash,
+                        "qml" => Language::Qml,
                         _ => continue,
                     };
 

@@ -697,6 +697,8 @@ impl AstSymbolExtractor {
             crate::language_detector::Language::Java => Ok(tree_sitter_java::LANGUAGE.into()),
             crate::language_detector::Language::C => Ok(tree_sitter_c::LANGUAGE.into()),
             crate::language_detector::Language::Cpp => Ok(tree_sitter_cpp::LANGUAGE.into()),
+            crate::language_detector::Language::Bash => Ok(tree_sitter_bash::LANGUAGE.into()),
+            crate::language_detector::Language::Qml => Ok(tree_sitter_qmljs::LANGUAGE.into()),
             _ => Err(anyhow::anyhow!("Unsupported language: {:?}", language)),
         }
     }
@@ -834,6 +836,21 @@ impl AstSymbolExtractor {
                 "field_declaration" => (SymbolKind::Variable, true),
                 _ => (SymbolKind::Function, false),
             },
+            crate::language_detector::Language::Bash => match node_kind {
+                "function_definition" => (SymbolKind::Function, true),
+                "variable_assignment" | "declaration_command" => (SymbolKind::Variable, true),
+                _ => (SymbolKind::Function, false),
+            },
+            crate::language_detector::Language::Qml => match node_kind {
+                "ui_object_definition"
+                | "ui_object_definition_binding"
+                | "ui_inline_component" => (SymbolKind::Class, true),
+                "ui_property" | "ui_binding" => (SymbolKind::Variable, true),
+                "ui_signal" => (SymbolKind::Method, true),
+                // Embedded JavaScript functions inside QML
+                "function_declaration" | "method_definition" => (SymbolKind::Function, true),
+                _ => (SymbolKind::Function, false),
+            },
             _ => {
                 // For other languages, try some common patterns
                 match node_kind {
@@ -918,12 +935,21 @@ impl AstSymbolExtractor {
 
     /// Extract symbol name from a tree-sitter node
     fn extract_symbol_name(&self, node: tree_sitter::Node, content: &[u8]) -> Option<String> {
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if let Ok(text) = name_node.utf8_text(content) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+
         let mut cursor = node.walk();
 
         // Look for identifier nodes in the children
         for child in node.children(&mut cursor) {
             match child.kind() {
-                "identifier" | "type_identifier" | "field_identifier" => {
+                "identifier" | "type_identifier" | "field_identifier" | "constant" => {
                     let name = child.utf8_text(content).unwrap_or("");
                     if !name.is_empty() {
                         return Some(name.to_string());

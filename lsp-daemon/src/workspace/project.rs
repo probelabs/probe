@@ -556,6 +556,8 @@ where
                         "kt" => Some("kotlin"),
                         "cs" => Some("csharp"),
                         "scala" => Some("scala"),
+                        "sh" | "bash" => Some("bash"),
+                        "qml" => Some("qml"),
                         _ => None,
                     };
 

@@ -1401,6 +1401,8 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
         Language::Java,
         Language::C,
         Language::Cpp,
+        Language::Bash,
+        Language::Qml,
     ] {
         let lang_str = format!("{language:?}").to_uppercase();
         let mut config = LanguageIndexConfig::default();
@@ -1498,6 +1500,14 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
                         features.set_language_feature("extract_namespaces".to_string(), true);
                         features.set_language_feature("extract_classes".to_string(), true);
                     }
+                    Language::Bash => {
+                        features.set_language_feature("extract_functions".to_string(), true);
+                        features.set_language_feature("extract_variables".to_string(), true);
+                    }
+                    Language::Qml => {
+                        features.set_language_feature("extract_bindings".to_string(), true);
+                        features.set_language_feature("extract_signals".to_string(), true);
+                    }
                     _ => {}
                 }
 
@@ -1540,6 +1550,8 @@ fn default_extensions_for_language(language: Language) -> Vec<String> {
             "hpp".to_string(),
             "hxx".to_string(),
         ],
+        Language::Bash => vec!["sh".to_string(), "bash".to_string()],
+        Language::Qml => vec!["qml".to_string()],
         _ => vec![],
     }
 }
@@ -1557,6 +1569,8 @@ impl FromStr for Language {
             "java" => Ok(Language::Java),
             "c" => Ok(Language::C),
             "cpp" | "c++" => Ok(Language::Cpp),
+            "bash" | "sh" => Ok(Language::Bash),
+            "qml" => Ok(Language::Qml),
             _ => Err(anyhow!("Unknown language: {}", s)),
         }
     }

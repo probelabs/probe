@@ -27,6 +27,8 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "php" => Some("php"),
         "swift" => Some("swift"),
         "cs" => Some("csharp"),
+        "sh" | "bash" => Some("bash"),
+        "qml" => Some("qml"),
         _ => None,
     }
 }
@@ -101,6 +103,12 @@ impl SymbolUIDGenerator {
         rules.insert("c".to_string(), LanguageRules::c());
         rules.insert("cpp".to_string(), LanguageRules::cpp());
         rules.insert("c++".to_string(), LanguageRules::cpp());
+
+        // Bash
+        rules.insert("bash".to_string(), LanguageRules::bash());
+
+        // QML
+        rules.insert("qml".to_string(), LanguageRules::qml());
 
         rules
     }

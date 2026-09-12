@@ -256,6 +256,9 @@ impl WorkspaceResolver {
             Language::Clojure => vec!["project.clj", "deps.edn"],
             Language::Lua => vec![".luarc.json"],
             Language::Zig => vec!["build.zig"],
+            // Bash has no package manifest; anchor on VCS root only
+            Language::Bash => vec![".git"],
+            Language::Qml => vec!["qmldir", "*.qmlproject"],
             Language::Unknown => vec![".git", "README.md"],
         }
     }

@@ -5758,6 +5758,8 @@ impl LspManager {
             "swift" => Ok(Language::Swift),
             "kotlin" | "kt" => Ok(Language::Kotlin),
             "scala" => Ok(Language::Scala),
+            "bash" | "sh" => Ok(Language::Bash),
+            "qml" => Ok(Language::Qml),
             _ => Err(anyhow::anyhow!("Unsupported language: {}", lang_str)),
         }
     }

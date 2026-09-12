@@ -67,6 +67,8 @@ impl RelationshipParserPool {
             "java" => Some(tree_sitter_java::LANGUAGE),
             "c" => Some(tree_sitter_c::LANGUAGE),
             "cpp" | "c++" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
+            "bash" | "sh" => Some(tree_sitter_bash::LANGUAGE),
+            "qml" => Some(tree_sitter_qmljs::LANGUAGE),
             _ => None,
         };
 

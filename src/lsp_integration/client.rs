@@ -919,6 +919,8 @@ impl LspClient {
                         "clojure" | "clj" => Some(Language::Clojure),
                         "lua" => Some(Language::Lua),
                         "zig" => Some(Language::Zig),
+                        "bash" | "sh" => Some(Language::Bash),
+                        "qml" => Some(Language::Qml),
                         _ => None,
                     }
                 })

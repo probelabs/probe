@@ -243,6 +243,8 @@ impl Default for WorkspaceConfig {
                 "java".to_string(),
                 "c".to_string(),
                 "cpp".to_string(),
+                "bash".to_string(),
+                "qml".to_string(),
             ],
             git_integration: true,
             incremental_indexing: true,

@@ -149,6 +149,7 @@ impl Default for DetectionConfig {
             "bash",
             "zsh",
             "fish",
+            "qml",
             "lua",
             "vim",
             "sql",
@@ -386,7 +387,7 @@ impl FileChangeDetector {
                 "rs", "js", "jsx", "ts", "tsx", "py", "go", "c", "h", "cpp", "cc", "cxx", "hpp",
                 "hxx", "java", "rb", "php", "swift", "cs", "kt", "scala", "clj", "ex", "exs",
                 "erl", "hrl", "hs", "lhs", "ml", "mli", "fs", "fsx", "fsi", "dart", "jl", "r", "R",
-                "m", "mm", "pl", "pm", "sh", "bash", "zsh", "fish", "lua", "vim", "sql",
+                "m", "mm", "pl", "pm", "sh", "bash", "zsh", "fish", "qml", "lua", "vim", "sql",
             ];
 
             if supported_languages.contains(&extension) {

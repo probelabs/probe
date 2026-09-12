@@ -7217,6 +7217,18 @@ impl LspDaemon {
                     .ok()?;
                 Some(())
             }
+            "sh" | "bash" => {
+                parser
+                    .set_language(&tree_sitter_bash::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
+            "qml" => {
+                parser
+                    .set_language(&tree_sitter_qmljs::LANGUAGE.into())
+                    .ok()?;
+                Some(())
+            }
             _ => None,
         }?;
 

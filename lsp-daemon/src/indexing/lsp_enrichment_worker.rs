@@ -2621,6 +2621,8 @@ impl LspEnrichmentWorkerPool {
             "clj" | "cljs" => Language::Clojure,
             "lua" => Language::Lua,
             "zig" => Language::Zig,
+            "sh" | "bash" => Language::Bash,
+            "qml" => Language::Qml,
             _ => Language::Unknown,
         };
 

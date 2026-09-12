@@ -230,6 +230,8 @@ class LspDaemonClient:
 | Ruby | solargraph | ✅ Configured |
 | PHP | intelephense | ✅ Configured |
 | Swift | sourcekit-lsp | ✅ Configured |
+| Bash | bash-language-server | ⚠️ Configured; install required (`npm i -g bash-language-server`) |
+| QML | qmlls | ⚠️ Configured; install required (ships with Qt SDK) |
 | Kotlin | kotlin-language-server | ✅ Configured |
 | Scala | metals | ✅ Configured |
 | Haskell | haskell-language-server | ✅ Configured |
