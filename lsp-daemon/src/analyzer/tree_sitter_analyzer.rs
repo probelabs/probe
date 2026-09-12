@@ -631,6 +631,17 @@ impl TreeSitterAnalyzer {
         node: tree_sitter::Node,
         content: &[u8],
     ) -> Result<String, AnalysisError> {
+        // Prefer the grammar's explicit name field (e.g. QML ui_property /
+        // ui_binding / function_declaration, bash function_definition)
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if let Ok(text) = name_node.utf8_text(content) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() && !self.is_keyword_or_invalid(trimmed) {
+                    return Ok(trimmed.to_string());
+                }
+            }
+        }
+
         // Look for identifier child nodes with more comprehensive patterns
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -646,6 +657,7 @@ impl TreeSitterAnalyzer {
                     | "class_name"
                     | "module_name"
                     | "parameter_name"
+                    | "constant"
             ) {
                 let start_byte = child.start_byte();
                 let end_byte = child.end_byte();
@@ -657,13 +669,16 @@ impl TreeSitterAnalyzer {
                                 message: format!("Invalid UTF-8 in symbol name: {}", e),
                             }
                         })?;
-                    return Ok(name.to_string());
+                    if !self.is_keyword_or_invalid(name) {
+                        return Ok(name.to_string());
+                    }
                 }
             }
 
             // Recursively search in nested nodes for complex patterns
             if let Ok(nested_name) = self.extract_symbol_name(child, content) {
                 if !nested_name.is_empty()
+                    && !self.is_keyword_or_invalid(&nested_name)
                     && nested_name.chars().all(|c| c.is_alphanumeric() || c == '_')
                 {
                     return Ok(nested_name);
@@ -723,6 +738,63 @@ impl TreeSitterAnalyzer {
         }
 
         Ok(String::new())
+    }
+
+    /// Check if text is a keyword or invalid identifier (ported from the
+    /// Crystal PR; QML/bash nodes otherwise yield keywords like "function"
+    /// or "property" as symbol names)
+    fn is_keyword_or_invalid(&self, text: &str) -> bool {
+        matches!(
+            text,
+            "function"
+                | "fn"
+                | "def"
+                | "class"
+                | "struct"
+                | "enum"
+                | "trait"
+                | "interface"
+                | "impl"
+                | "mod"
+                | "module"
+                | "namespace"
+                | "package"
+                | "import"
+                | "export"
+                | "const"
+                | "let"
+                | "var"
+                | "static"
+                | "async"
+                | "await"
+                | "return"
+                | "if"
+                | "else"
+                | "for"
+                | "while"
+                | "match"
+                | "switch"
+                | "case"
+                | "default"
+                | "break"
+                | "continue"
+                | "pub"
+                | "private"
+                | "protected"
+                | "public"
+                | "override"
+                | "virtual"
+                | "abstract"
+                // QML declaration keywords
+                | "property"
+                | "signal"
+                | "readonly"
+                | "required"
+                // Bash declaration keywords
+                | "local"
+                | "declare"
+                | "typeset"
+        ) || text.is_empty()
     }
 
     /// Extract function signature from AST node

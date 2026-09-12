@@ -268,6 +268,10 @@ fn build_file_list(
             "*_test.rb",
             "test_*.rb",
             "*_spec.rb",
+            "test_*.sh",
+            "*_test.sh",
+            "*.bats",
+            "tst_*.qml",
             "*Test.php",
             "test_*.php",
             "**/tests/**",
@@ -345,6 +349,13 @@ fn build_file_list(
             continue;
         }
 
+        if !allow_tests && is_test_path(path, entry.path()) {
+            if debug_mode {
+                println!("DEBUG: Skipping test file: {:?}", entry.path());
+            }
+            continue;
+        }
+
         files.push(entry.path().to_path_buf());
     }
 
@@ -376,6 +387,60 @@ fn build_file_list(
         files,
         created_at: Instant::now(),
     })
+}
+
+/// Check if a path looks like a test file relative to the search root.
+///
+/// Needed because glob-based test exclusions do not fire when the search root
+/// itself is a test directory (e.g. searching a `tests/` or `spec/` directory
+/// directly).
+fn is_test_path(search_root: &Path, file_path: &Path) -> bool {
+    if search_root.is_dir()
+        && search_root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_test_dir_name)
+    {
+        return true;
+    }
+
+    let path_to_check = file_path
+        .strip_prefix(search_root)
+        .ok()
+        .filter(|relative| !relative.as_os_str().is_empty())
+        .unwrap_or(file_path);
+
+    let has_test_dir = path_to_check.components().any(|component| {
+        let name = component.as_os_str().to_string_lossy();
+        is_test_dir_name(&name)
+    });
+
+    if has_test_dir {
+        return true;
+    }
+
+    let Some(file_name) = path_to_check.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    file_name.starts_with("test_")
+        || file_name.contains("_test.")
+        || file_name.contains("_spec.")
+        || file_name.contains(".test.")
+        || file_name.contains(".spec.")
+        || file_name.ends_with("Test.java")
+        || file_name.ends_with("Test.php")
+        // Bash: Bats test files
+        || file_name.ends_with(".bats")
+        // QML: Qt Test convention
+        || (file_name.starts_with("tst_") && file_name.ends_with(".qml"))
+}
+
+fn is_test_dir_name(name: &str) -> bool {
+    matches!(
+        name,
+        "test" | "tests" | "__test__" | "__tests__" | "spec" | "specs"
+    )
 }
 
 /// Find files whose names match query words

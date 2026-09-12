@@ -155,7 +155,9 @@ Go also implements special handling for nested struct types.
 - **Variable Declarations**: Extracts variable assignments and `local`/`readonly`/`export`/`declare` statements
 - **Heredoc Handling**: Properly handles heredoc bodies
 - **Comment Extraction**: Extracts `#` comments and associates them with following code
-- **Test Detection**: Identifies `test_*` function naming conventions and Bats-style `@test` blocks
+- **Test Detection**: Identifies `test_*` function naming conventions and Bats-style `@test` blocks; `test_*.sh`, `*_test.sh`, and `*.bats` files are treated as test files
+- **Structural Queries**: Supported by the `query` command via ast-grep's bundled Bash grammar
+- **LSP / Indexing**: Tree-sitter indexing in the LSP daemon; optional enrichment via [bash-language-server](https://github.com/bash-lsp/bash-language-server) when installed (`npm i -g bash-language-server`)
 
 ### QML
 
@@ -165,7 +167,9 @@ Go also implements special handling for nested struct types.
 - **Signal Declarations**: Extracts custom `signal` declarations
 - **JavaScript Functions**: Extracts embedded JavaScript `function` declarations
 - **Import Statements**: Extracts `import` statements (module, directory, and alias forms)
-- **Test Detection**: Identifies QtTest `TestCase` objects and `test_*` functions
+- **Test Detection**: Identifies QtTest `TestCase` objects and `test_*` functions; `tst_*.qml` files (Qt Test convention) are treated as test files
+- **Structural Queries**: Supported by the `query` command via the bundled tree-sitter-qmljs grammar (object-definition patterns; standalone property/signal patterns are not supported by the grammar)
+- **LSP / Indexing**: Tree-sitter indexing in the LSP daemon; optional enrichment via `qmlls` when a Qt SDK is installed
 
 ## Test Detection
 

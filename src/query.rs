@@ -654,9 +654,12 @@ Item {
         )
         .unwrap();
 
+        // NOTE: tree-sitter-qmljs only forms standalone ast-grep pattern nodes
+        // for object definitions; property/signal/JS-statement patterns do not
+        // parse as single pattern nodes, so query with object patterns.
         let options = QueryOptions {
             path: temp_dir.path(),
-            pattern: "function increment() {\n  $$$\n}",
+            pattern: "Item {\n  $$$\n}",
             language: Some("qml"),
             ignore: &[],
             allow_tests: true,
