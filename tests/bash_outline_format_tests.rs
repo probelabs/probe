@@ -250,3 +250,43 @@ test_build() {
 
     Ok(())
 }
+
+#[test]
+fn test_bash_search_json_symbol_signature() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let test_file = temp_dir.path().join("signature_check.sh");
+
+    let content = r#"#!/usr/bin/env bash
+
+install_rules() {
+  local shim_dir
+  shim_dir=$(mktemp -d)
+  rm -rf "$shim_dir"
+}
+"#;
+
+    fs::write(&test_file, content)?;
+
+    let ctx = TestContext::new();
+    let output = ctx.run_probe(&[
+        "search",
+        "mktemp",
+        test_file.to_str().unwrap(),
+        "--format",
+        "json",
+    ])?;
+
+    // Search JSON must carry the Bash symbol signature, not null
+    assert!(
+        output.contains("\"symbol_signature\":"),
+        "Bash search JSON should include symbol_signature - output: {}",
+        output
+    );
+    assert!(
+        !output.contains("\"symbol_signature\": null"),
+        "Bash search JSON symbol_signature should not be null - output: {}",
+        output
+    );
+
+    Ok(())
+}

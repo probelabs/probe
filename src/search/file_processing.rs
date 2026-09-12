@@ -407,7 +407,22 @@ fn determine_fallback_node_type(line: &str, extension: Option<&str>) -> String {
         return "function".to_string();
     }
 
-    if (trimmed.contains("class ") || trimmed.contains("interface "))
+    // For languages with a real AST implementation, the generic
+    // "class "/"interface " substring heuristic only applies when the keyword
+    // stands alone — not glued inside identifiers or dotted paths like
+    // `org.gnome.desktop.interface` in shell one-liners. Unsupported
+    // languages keep the legacy substring behavior for text search.
+    let class_like =
+        if extension.is_some_and(|ext| {
+            crate::language::factory::get_language_impl(ext).is_some()
+        }) {
+            contains_standalone_keyword(trimmed, "class")
+                || contains_standalone_keyword(trimmed, "interface")
+        } else {
+            trimmed.contains("class ") || trimmed.contains("interface ")
+        };
+
+    if class_like
         || (trimmed.contains("struct ")
             && extension
                 .is_some_and(|ext| ext == "rs" || ext == "go" || ext == "c" || ext == "cpp"))
@@ -1252,6 +1267,14 @@ pub fn process_file_with_results(
 
         let file_id = params.path.to_string_lossy().to_string();
 
+        // The parsed tree is cached, so re-fetching it here is a cache hit.
+        // It lets us derive symbol signatures for AST-derived blocks.
+        let signature_tree = if language_supported {
+            crate::language::get_or_parse_tree_pooled(&cache_key, &content, extension).ok()
+        } else {
+            None
+        };
+
         // Measure block extraction time with sub-steps
         let block_extraction_start = Instant::now();
 
@@ -1520,7 +1543,17 @@ pub fn process_file_with_results(
                             block.node_type.clone()
                         },
                         code: full_code,
-                        symbol_signature: None,
+                        // Derive the symbol signature from the AST block's byte
+                        // range (None for blocks/languages without signatures)
+                        symbol_signature: extract_symbol_signature(
+                            true,
+                            signature_tree.as_ref(),
+                            extension,
+                            content.as_bytes(),
+                            block.start_byte,
+                            block.end_byte,
+                            debug_mode,
+                        ),
                         matched_by_filename: None,
                         rank: None,
                         score: None,
@@ -1957,4 +1990,87 @@ fn find_symbol_signature_upward(
         println!("DEBUG: No symbol signature found in any parent node");
     }
     None
+}
+
+/// Returns true when `keyword` occurs in `line` as a standalone word:
+/// followed by whitespace or end-of-line, and preceded by the start of the
+/// line or a character that cannot be part of an identifier or dotted path.
+/// This prevents dotted names such as `org.gnome.desktop.interface` from
+/// being mistaken for a class/interface declaration.
+fn contains_standalone_keyword(line: &str, keyword: &str) -> bool {
+    let bytes = line.as_bytes();
+    let kw_len = keyword.len();
+    let mut offset = 0;
+
+    while let Some(pos) = line[offset..].find(keyword) {
+        let idx = offset + pos;
+        let after_ok = idx + kw_len == bytes.len() || bytes[idx + kw_len].is_ascii_whitespace();
+        let before_ok = idx == 0 || {
+            let c = bytes[idx - 1] as char;
+            !(c.is_alphanumeric() || c == '_' || c == '.' || c == '$' || c == '-')
+        };
+        if before_ok && after_ok {
+            return true;
+        }
+        offset = idx + kw_len;
+    }
+
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_contains_standalone_keyword() {
+        assert!(contains_standalone_keyword("class Foo {", "class"));
+        assert!(contains_standalone_keyword("public class Foo {", "class"));
+        assert!(contains_standalone_keyword(
+            "export default interface Bar {",
+            "interface"
+        ));
+        assert!(contains_standalone_keyword("interface", "interface"));
+
+        // Glued to identifiers or dotted paths must not match
+        assert!(!contains_standalone_keyword(
+            "gsettings set org.gnome.desktop.interface clock-show-weekday true",
+            "interface"
+        ));
+        assert!(!contains_standalone_keyword("myclass = 1", "class"));
+        assert!(!contains_standalone_keyword(
+            "$HOME/.config/classes.list",
+            "class"
+        ));
+    }
+
+    #[test]
+    fn test_fallback_node_type_dotted_interface_name_is_not_class() {
+        // Bash one-liner containing a dotted `org.gnome.desktop.interface`
+        // path must not be classified as a "class" block now that Bash has a
+        // real AST implementation.
+        let line = r#"gsettings set org.gnome.desktop.interface gtk-enable-primary-paste true"#;
+        assert_eq!(
+            determine_fallback_node_type(line, Some("sh")),
+            "code",
+            "gsettings one-liner should not be classified as class"
+        );
+        assert_eq!(determine_fallback_node_type(line, Some("bash")), "code");
+
+        // Real declarations in supported languages keep working
+        assert_eq!(
+            determine_fallback_node_type("public class Widget {", Some("java")),
+            "class"
+        );
+        assert_eq!(
+            determine_fallback_node_type("export interface Config {", Some("ts")),
+            "class"
+        );
+
+        // Unsupported languages keep the legacy substring behavior
+        assert_eq!(
+            determine_fallback_node_type("something interface thing", Some("xyz")),
+            "class"
+        );
+    }
 }

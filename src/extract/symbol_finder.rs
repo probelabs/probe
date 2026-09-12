@@ -74,8 +74,14 @@ fn find_all_symbol_nodes<'a>(
 
         // Try to extract the name of this node
         let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == "identifier"
+        for (child_index, child) in node.children(&mut cursor).enumerate() {
+            // Some grammars expose the symbol's name through the "name" field
+            // using a language-specific node kind (e.g. Bash's `word` inside
+            // function_definition), so honor the field in addition to the
+            // well-known identifier node kinds.
+            let is_name_field = node.field_name_for_child(child_index as u32) == Some("name");
+            if is_name_field
+                || child.kind() == "identifier"
                 || child.kind() == "field_identifier"
                 || child.kind() == "type_identifier"
                 || child.kind() == "property_identifier"
@@ -659,6 +665,61 @@ mod tests {
         assert_eq!(search_result.node_type, "file");
         assert_eq!(search_result.code, content);
         assert_eq!(search_result.lines, (1, 7)); // 7 lines in the content
+
+        // Clean up
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_find_symbol_in_bash_file() {
+        // Bash function_definition exposes its name as a `word` node in the
+        // "name" field (not as an `identifier`), which previously caused the
+        // AST symbol lookup to miss and fall back to a one-line text search.
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join("test_symbol_bash.sh");
+
+        let content = r#"#!/usr/bin/env bash
+
+install_ufw_docker_rules() {
+  local shim_dir status
+  shim_dir=$(mktemp -d)
+  rm -rf "$shim_dir"
+}
+
+cleanup() {
+  echo "done"
+}
+"#;
+
+        let mut file = fs::File::create(&test_file).unwrap();
+        write!(file, "{content}").unwrap();
+
+        // The #symbol lookup must return the full function_definition block,
+        // not just the signature line via the text-search fallback.
+        let result = find_symbol_in_file(&test_file, "install_ufw_docker_rules", content, true, 0);
+        assert!(
+            result.is_ok(),
+            "Should find bash function via AST: {:?}",
+            result.err()
+        );
+        let search_result = result.unwrap();
+        assert_eq!(search_result.node_type, "function_definition");
+        assert_eq!(search_result.lines, (3, 7));
+        assert!(search_result.code.contains("install_ufw_docker_rules() {"));
+        assert!(
+            search_result.code.contains("shim_dir=$(mktemp -d)"),
+            "should include the full function body, got: {}",
+            search_result.code
+        );
+        assert_eq!(
+            search_result.symbol_signature.as_deref(),
+            Some("install_ufw_docker_rules")
+        );
+
+        // Second function resolves independently
+        let result = find_symbol_in_file(&test_file, "cleanup", content, true, 0).unwrap();
+        assert_eq!(result.node_type, "function_definition");
+        assert!(result.code.contains("echo \"done\""));
 
         // Clean up
         let _ = fs::remove_file(&test_file);

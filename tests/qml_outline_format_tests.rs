@@ -271,3 +271,40 @@ TestCase {
 
     Ok(())
 }
+
+#[test]
+fn test_qml_search_json_symbol_signature() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let test_file = temp_dir.path().join("SignatureCheck.qml");
+
+    let content = r#"import QtQuick 2.15
+
+Item {
+    id: root
+
+    function reloadRequirements() {
+        root.refreshModel()
+    }
+}
+"#;
+
+    fs::write(&test_file, content)?;
+
+    let ctx = TestContext::new();
+    let output = ctx.run_probe(&[
+        "search",
+        "refreshModel",
+        test_file.to_str().unwrap(),
+        "--format",
+        "json",
+    ])?;
+
+    // Search JSON must carry the QML symbol signature, not null
+    assert!(
+        output.contains("\"symbol_signature\": \"function reloadRequirements() { ... }\""),
+        "QML search JSON should include a non-null symbol_signature - output: {}",
+        output
+    );
+
+    Ok(())
+}
