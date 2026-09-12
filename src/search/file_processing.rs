@@ -1119,11 +1119,12 @@ pub fn process_file_with_results(
     let file_io_duration = file_io_start.elapsed();
     timings.file_io = Some(file_io_duration);
 
-    let extension = params
-        .path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .unwrap_or("");
+    // Extensionless shell scripts resolve to the synthetic "sh" extension via
+    // first-line shebang sniffing; everything else is byte-identical to before.
+    let extension = crate::language::factory::effective_extension(
+        params.path,
+        content.lines().next(),
+    );
 
     // Get debug mode setting
     let debug_mode = std::env::var("PROBE_DEBUG").unwrap_or_default() == "1";

@@ -624,7 +624,11 @@ pub fn get_file_list_by_language(
                     let ext_str = format!(".{ext_lossy}");
                     extensions.iter().any(|e| e == &ext_str)
                 } else {
-                    false
+                    // Extensionless shell scripts still match a bash language
+                    // filter via first-line shebang sniffing.
+                    matches!(language.unwrap().to_lowercase().as_str(), "bash" | "sh")
+                        && crate::language::factory::shebang_extension_for_path(file)
+                            .is_some()
                 }
             })
             .cloned()

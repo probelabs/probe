@@ -43,7 +43,7 @@ pub fn extract_symbols(path: &Path, allow_tests: bool) -> Result<FileSymbols> {
     let content =
         std::fs::read_to_string(path).context(format!("Failed to read file: {path:?}"))?;
 
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    let extension = crate::language::factory::effective_extension(path, content.lines().next());
 
     let language_impl = get_language_impl(extension)
         .ok_or_else(|| anyhow::anyhow!("Unsupported file extension: {}", extension))?;

@@ -194,7 +194,22 @@ impl SearchFilters {
                     return false;
                 }
             } else {
-                return false; // No extension, but language filter specified
+                // Extensionless candidates: sniff a bash-family shebang so
+                // `-l bash` still matches extensionless shell scripts.
+                match crate::language::factory::shebang_extension_for_path(path) {
+                    Some(ext) => {
+                        let matches_lang = self.languages.iter().any(|lang| {
+                            match get_extensions_for_language(lang) {
+                                Some(extensions) => extensions.contains(ext),
+                                None => false,
+                            }
+                        });
+                        if !matches_lang {
+                            return false;
+                        }
+                    }
+                    None => return false, // No extension, no shell shebang
+                }
             }
         }
 

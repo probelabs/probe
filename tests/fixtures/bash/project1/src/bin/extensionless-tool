@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Extensionless bash fixture: exercises shebang-based language detection.
+
+tool_greet() {
+  echo "hello from tool"
+}
+
+tool_dispatch() {
+  local cmd="$1"
+  case "$cmd" in
+    greet) tool_greet ;;
+    *) echo "unknown command" ;;
+  esac
+}

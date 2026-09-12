@@ -348,8 +348,10 @@ pub fn find_all_symbols_in_file(
         );
     }
 
-    // Get the file extension to determine the language
-    let extension = path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+    // Get the effective file extension to determine the language
+    // (extensionless shell scripts resolve via first-line shebang sniffing)
+    let extension =
+        crate::language::factory::effective_extension(path, content.lines().next());
 
     // Get the language implementation for this extension
     let language_impl = match crate::language::factory::get_language_impl(extension) {

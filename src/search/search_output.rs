@@ -957,8 +957,12 @@ pub fn collect_parent_context_for_line(
 ) -> Vec<crate::models::ParentContext> {
     let mut contexts = Vec::new();
 
-    // Get file extension and language implementation
-    let extension = file_extension(std::path::Path::new(file_path));
+    // Get file extension and language implementation (extensionless shell
+    // scripts resolve via first-line shebang sniffing)
+    let extension = crate::language::factory::effective_extension(
+        std::path::Path::new(file_path),
+        source.lines().next(),
+    );
     let language_impl = match get_language_impl(extension) {
         Some(lang) => lang,
         None => return contexts, // Return empty if can't get language

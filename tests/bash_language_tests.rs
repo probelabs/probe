@@ -244,3 +244,102 @@ fn test_bash_language_alias_filter() {
     assert!(filters.matches_file(Path::new("src/lib/utils.sh")));
     assert!(!filters.matches_file(Path::new("src/lib/utils.py")));
 }
+
+fn extensionless_tool() -> PathBuf {
+    fixture_root().join("src/bin/extensionless-tool")
+}
+
+#[test]
+fn test_extensionless_bash_symbols_via_shebang() {
+    let symbols =
+        extract_symbols(&extensionless_tool(), false).expect("shebang should select Bash grammar");
+
+    let names: Vec<_> = symbols
+        .symbols
+        .iter()
+        .map(|symbol| symbol.name.as_str())
+        .collect();
+
+    assert!(names.contains(&"tool_greet"), "symbols: {names:?}");
+    assert!(names.contains(&"tool_dispatch"), "symbols: {names:?}");
+}
+
+#[test]
+fn test_extensionless_bash_extract_by_symbol_name() {
+    let results = process_file_for_extraction(
+        &extensionless_tool(),
+        None,
+        None,
+        Some("tool_greet"),
+        true,
+        0,
+        None,
+        false,
+        false,
+    )
+    .expect("extract should work on extensionless bash via shebang");
+
+    assert!(results.code.contains("tool_greet()"));
+    assert!(
+        !results.code.contains("tool_dispatch()"),
+        "should extract only the tool_greet block"
+    );
+}
+
+#[test]
+fn test_extensionless_bash_search_with_language_filter() {
+    let root = fixture_root();
+    let query = "tool_dispatch".to_string();
+    let options = search_options(&root, &query, Some("bash"), false);
+
+    let results = perform_probe(&options).expect("search -l bash should see extensionless scripts");
+    assert!(
+        results
+            .results
+            .iter()
+            .any(|result| result.file.ends_with("src/bin/extensionless-tool")),
+        "results: {:?}",
+        results
+            .results
+            .iter()
+            .map(|result| &result.file)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_extensionless_non_shebang_file_unaffected() {
+    // A text file without a shebang must not be treated as bash.
+    let plain = fixture_root().join("src/bin/plain-data");
+    assert!(
+        extract_symbols(&plain, false).is_err(),
+        "non-shebang extensionless file must stay unsupported"
+    );
+
+    // Nor should it pass a bash language filter (it contains a decoy
+    // `tool_greet` mention that must never surface in bash-filtered search).
+    let root = fixture_root();
+    let query = "tool_greet".to_string();
+    let options = search_options(&root, &query, Some("bash"), false);
+    let results = perform_probe(&options).expect("filtered search should run");
+    assert!(
+        !results
+            .results
+            .iter()
+            .any(|result| result.file.ends_with("src/bin/plain-data")),
+        "results: {:?}",
+        results
+            .results
+            .iter()
+            .map(|result| &result.file)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_language_filter_matches_extensionless_bash() {
+    let mut filters = SearchFilters::new();
+    filters.add_filter("lang", vec!["bash".to_string()]);
+    assert!(filters.matches_file(&extensionless_tool()));
+    assert!(!filters.matches_file(&fixture_root().join("src/bin/plain-data")));
+}
