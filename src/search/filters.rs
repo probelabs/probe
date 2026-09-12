@@ -473,6 +473,7 @@ fn normalize_language_name(lang: &str) -> String {
         "py" => "python".to_string(),
         "rb" => "ruby".to_string(),
         "cs" => "csharp".to_string(),
+        "sh" => "bash".to_string(),
         "cpp" | "cc" | "cxx" => "cpp".to_string(),
         "h" | "hpp" | "hxx" => "c".to_string(),
         other => other.to_string(),
@@ -535,6 +536,13 @@ fn get_extensions_for_type(file_type: &str) -> Option<HashSet<String>> {
         }
         "scala" => {
             extensions.insert("scala".to_string());
+        }
+        "bash" | "sh" => {
+            extensions.insert("sh".to_string());
+            extensions.insert("bash".to_string());
+        }
+        "qml" => {
+            extensions.insert("qml".to_string());
         }
         "html" => {
             extensions.insert("html".to_string());

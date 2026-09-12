@@ -322,7 +322,7 @@ export class ACPToolManager {
             },
             language: {
               type: 'string',
-              description: 'Programming language to search in (rust, javascript, python, go, etc.)'
+              description: 'Programming language to search in (rust, javascript, python, go, bash, qml, etc.)'
             },
             max_results: {
               type: 'number',

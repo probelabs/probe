@@ -82,6 +82,9 @@ fn is_container_node(kind: &str) -> bool {
             | "module_declaration"
             | "enum_declaration"
             | "enum_item"
+            | "ui_object_definition"
+            | "ui_object_definition_binding"
+            | "ui_inline_component"
             | "declaration_list"
             | "class_body"
             | "block"
@@ -169,6 +172,7 @@ fn collect_children_symbols(
                 | "object_type"
                 | "interface_body"
                 | "statement_block"
+                | "ui_object_initializer"
         ) {
             return collect_symbols(&child, source, lang, allow_tests, depth);
         }
@@ -266,6 +270,16 @@ fn normalize_kind(kind: &str) -> String {
         "declare_statement" => "declare",
         "constructor_declaration" => "constructor",
         "field_declaration" => "field",
+        // Bash
+        "variable_assignment" | "declaration_command" => "variable",
+        // QML (tree-sitter-qmljs)
+        "ui_object_definition" | "ui_object_definition_binding" => "class",
+        "ui_inline_component" => "component",
+        "ui_property" => "property",
+        "ui_binding" => "binding",
+        "ui_signal" => "signal",
+        "ui_import" => "import",
+        "ui_pragma" => "pragma",
         other => other,
     }
     .to_string()

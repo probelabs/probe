@@ -862,6 +862,7 @@ async fn main() -> Result<()> {
                     "cc" | "cxx" | "hpp" | "hxx" => "cpp",
                     "rb" => "ruby",
                     "cs" => "csharp",
+                    "sh" => "bash",
                     _ => lang, // Return the original language if no alias is found
                 }
             }),

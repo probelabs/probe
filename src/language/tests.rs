@@ -3,6 +3,7 @@ use probe_code::language::parser::parse_file_for_code_blocks;
 use tree_sitter::Language;
 
 // Import tree-sitter language crates
+extern crate tree_sitter_bash;
 extern crate tree_sitter_c;
 extern crate tree_sitter_c_sharp;
 extern crate tree_sitter_cpp;
@@ -11,6 +12,7 @@ extern crate tree_sitter_java;
 extern crate tree_sitter_javascript;
 extern crate tree_sitter_php;
 extern crate tree_sitter_python;
+extern crate tree_sitter_qmljs;
 extern crate tree_sitter_ruby;
 extern crate tree_sitter_rust;
 extern crate tree_sitter_swift;
@@ -31,6 +33,8 @@ fn get_language(extension: &str) -> Option<Language> {
         "rb" => Some(tree_sitter_ruby::LANGUAGE.into()),
         "swift" => Some(tree_sitter_swift::LANGUAGE.into()),
         "cs" => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        "sh" | "bash" => Some(tree_sitter_bash::LANGUAGE.into()),
+        "qml" => Some(tree_sitter_qmljs::LANGUAGE.into()),
         // It seems tree_sitter_php::LANGUAGE doesn't exist, so we'll return None for PHP
         "php" => None,
         _ => None,
@@ -55,6 +59,8 @@ fn test_get_language() {
     assert!(get_language("rb").is_some()); // Ruby
     assert!(get_language("swift").is_some()); // Swift
     assert!(get_language("cs").is_some()); // C#
+    assert!(get_language("sh").is_some()); // Bash
+    assert!(get_language("qml").is_some()); // QML
     assert!(get_language("php").is_none()); // PHP (not supported in current tree-sitter version)
 
     // Test unsupported language

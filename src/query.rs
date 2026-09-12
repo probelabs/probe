@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
-use ast_grep_core::AstGrep;
+use ast_grep_core::language::TSLanguage;
+use ast_grep_core::{AstGrep, Language};
 use ast_grep_language::SupportLang;
 use colored::*;
 use ignore::WalkBuilder;
@@ -32,21 +33,43 @@ pub struct QueryOptions<'a> {
     pub no_gitignore: bool,
 }
 
-/// Convert a language string to the corresponding SupportLang
-fn get_language(lang: &str) -> Option<SupportLang> {
+/// Languages supported by the `query` command.
+///
+/// Most languages come from ast-grep's bundled `SupportLang`; QML is wired in
+/// through our own tree-sitter-qmljs grammar because ast-grep has no QML
+/// support (Bash *is* bundled in ast-grep, so it uses the builtin).
+#[derive(Clone)]
+enum ProbeQueryLang {
+    Builtin(SupportLang),
+    Qml,
+}
+
+impl Language for ProbeQueryLang {
+    fn get_ts_language(&self) -> TSLanguage {
+        match self {
+            ProbeQueryLang::Builtin(lang) => lang.get_ts_language(),
+            ProbeQueryLang::Qml => tree_sitter_qmljs::LANGUAGE.into(),
+        }
+    }
+}
+
+/// Convert a language string to the corresponding query language
+fn get_language(lang: &str) -> Option<ProbeQueryLang> {
     match lang.to_lowercase().as_str() {
-        "rust" => Some(SupportLang::Rust),
-        "javascript" => Some(SupportLang::JavaScript),
-        "typescript" => Some(SupportLang::TypeScript),
-        "python" => Some(SupportLang::Python),
-        "go" => Some(SupportLang::Go),
-        "c" => Some(SupportLang::C),
-        "cpp" => Some(SupportLang::Cpp),
-        "java" => Some(SupportLang::Java),
-        "ruby" => Some(SupportLang::Ruby),
-        "php" => Some(SupportLang::Php),
-        "swift" => Some(SupportLang::Swift),
-        "csharp" => Some(SupportLang::CSharp),
+        "rust" => Some(ProbeQueryLang::Builtin(SupportLang::Rust)),
+        "javascript" => Some(ProbeQueryLang::Builtin(SupportLang::JavaScript)),
+        "typescript" => Some(ProbeQueryLang::Builtin(SupportLang::TypeScript)),
+        "python" => Some(ProbeQueryLang::Builtin(SupportLang::Python)),
+        "go" => Some(ProbeQueryLang::Builtin(SupportLang::Go)),
+        "c" => Some(ProbeQueryLang::Builtin(SupportLang::C)),
+        "cpp" => Some(ProbeQueryLang::Builtin(SupportLang::Cpp)),
+        "java" => Some(ProbeQueryLang::Builtin(SupportLang::Java)),
+        "ruby" => Some(ProbeQueryLang::Builtin(SupportLang::Ruby)),
+        "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
+        "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
+        "csharp" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
+        "bash" | "sh" => Some(ProbeQueryLang::Builtin(SupportLang::Bash)),
+        "qml" => Some(ProbeQueryLang::Qml),
         _ => None,
     }
 }
@@ -66,6 +89,8 @@ fn get_file_extension(lang: &str) -> Vec<&str> {
         "php" => vec![".php"],
         "swift" => vec![".swift"],
         "csharp" => vec![".cs"],
+        "bash" | "sh" => vec![".sh", ".bash"],
+        "qml" => vec![".qml"],
         _ => vec![],
     }
 }
@@ -127,18 +152,22 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
     } else {
         // If language is not specified, try to infer from file extension
         let inferred_lang = match file_ext {
-            "rs" => Some(SupportLang::Rust),
-            "js" | "jsx" | "mjs" => Some(SupportLang::JavaScript),
-            "ts" | "tsx" => Some(SupportLang::TypeScript),
-            "py" => Some(SupportLang::Python),
-            "go" => Some(SupportLang::Go),
-            "c" | "h" => Some(SupportLang::C),
-            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => Some(SupportLang::Cpp),
-            "java" => Some(SupportLang::Java),
-            "rb" => Some(SupportLang::Ruby),
-            "php" => Some(SupportLang::Php),
-            "swift" => Some(SupportLang::Swift),
-            "cs" => Some(SupportLang::CSharp),
+            "rs" => Some(ProbeQueryLang::Builtin(SupportLang::Rust)),
+            "js" | "jsx" | "mjs" => Some(ProbeQueryLang::Builtin(SupportLang::JavaScript)),
+            "ts" | "tsx" => Some(ProbeQueryLang::Builtin(SupportLang::TypeScript)),
+            "py" => Some(ProbeQueryLang::Builtin(SupportLang::Python)),
+            "go" => Some(ProbeQueryLang::Builtin(SupportLang::Go)),
+            "c" | "h" => Some(ProbeQueryLang::Builtin(SupportLang::C)),
+            "cpp" | "hpp" | "cc" | "hh" | "cxx" | "hxx" => {
+                Some(ProbeQueryLang::Builtin(SupportLang::Cpp))
+            }
+            "java" => Some(ProbeQueryLang::Builtin(SupportLang::Java)),
+            "rb" => Some(ProbeQueryLang::Builtin(SupportLang::Ruby)),
+            "php" => Some(ProbeQueryLang::Builtin(SupportLang::Php)),
+            "swift" => Some(ProbeQueryLang::Builtin(SupportLang::Swift)),
+            "cs" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
+            "sh" | "bash" => Some(ProbeQueryLang::Builtin(SupportLang::Bash)),
+            "qml" => Some(ProbeQueryLang::Qml),
             _ => None, // Unsupported extension
         };
 
@@ -567,4 +596,125 @@ pub fn handle_query(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_bash_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("counter.sh");
+        fs::write(
+            &file,
+            r#"#!/usr/bin/env bash
+
+increment() {
+  echo "$((count + 1))"
+}
+"#,
+        )
+        .unwrap();
+
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "increment() {\n  $$$\n}",
+            language: Some("bash"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+        };
+
+        let matches = perform_query(&options).expect("Bash query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("increment()"));
+    }
+
+    #[test]
+    fn test_qml_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("Counter.qml");
+        fs::write(
+            &file,
+            r#"import QtQuick 2.15
+
+Item {
+    property int count: 0
+
+    function increment() {
+        count += 1
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "function increment() {\n  $$$\n}",
+            language: Some("qml"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+        };
+
+        let matches = perform_query(&options).expect("QML query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("function increment"));
+    }
+
+    #[test]
+    fn test_bash_qml_query_auto_detect() {
+        let temp_dir = TempDir::new().unwrap();
+        let sh_file = temp_dir.path().join("tool.sh");
+        fs::write(&sh_file, "#!/bin/sh\n\nbuild_all() {\n  make all\n}\n").unwrap();
+        let qml_file = temp_dir.path().join("Panel.qml");
+        fs::write(
+            &qml_file,
+            "import QtQuick 2.15\n\nRectangle {\n    color: \"red\"\n}\n",
+        )
+        .unwrap();
+
+        let sh_options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "build_all() {\n  $$$\n}",
+            language: None,
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+        };
+        let matches = perform_query(&sh_options).expect("Bash auto-detect query should run");
+        assert!(
+            matches.iter().any(|m| m.file_path == sh_file),
+            "matches: {:?}",
+            matches.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+        );
+
+        let qml_options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "Rectangle {\n  $$$\n}",
+            language: None,
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+        };
+        let matches = perform_query(&qml_options).expect("QML auto-detect query should run");
+        assert!(
+            matches.iter().any(|m| m.file_path == qml_file),
+            "matches: {:?}",
+            matches.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+        );
+    }
 }

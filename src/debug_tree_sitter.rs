@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use colored::Colorize;
 use std::path::Path;
-use tree_sitter::{Language as TSLanguage, Node, Parser as TSParser};
+use tree_sitter::{Node, Parser as TSParser};
 
 use probe_code::language::factory::get_language_impl;
 
@@ -79,7 +79,7 @@ fn main() -> Result<()> {
         "{}",
         format!(
             "Language: {} (extension: {})",
-            get_language_name(&language),
+            get_language_name(extension),
             extension
         )
         .cyan()
@@ -137,20 +137,22 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn get_language_name(language: &TSLanguage) -> &str {
-    let version = language.version();
-    match version {
-        _ if format!("{language:?}").contains("rust") => "Rust",
-        _ if format!("{language:?}").contains("javascript") => "JavaScript",
-        _ if format!("{language:?}").contains("typescript") => "TypeScript",
-        _ if format!("{language:?}").contains("python") => "Python",
-        _ if format!("{language:?}").contains("go") => "Go",
-        _ if format!("{language:?}").contains("java") => "Java",
-        _ if format!("{language:?}").contains("c") => "C/C++",
-        _ if format!("{language:?}").contains("ruby") => "Ruby",
-        _ if format!("{language:?}").contains("php") => "PHP",
-        _ if format!("{language:?}").contains("swift") => "Swift",
-        _ if format!("{language:?}").contains("csharp") => "C#",
+fn get_language_name(extension: &str) -> &str {
+    match extension {
+        "rs" => "Rust",
+        "js" | "jsx" => "JavaScript",
+        "ts" | "tsx" => "TypeScript",
+        "py" => "Python",
+        "go" => "Go",
+        "java" => "Java",
+        "c" | "h" => "C",
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => "C++",
+        "rb" => "Ruby",
+        "php" => "PHP",
+        "swift" => "Swift",
+        "cs" => "C#",
+        "sh" | "bash" => "Bash",
+        "qml" => "QML",
         _ => "Unknown",
     }
 }
@@ -230,6 +232,21 @@ fn extract_symbol_info(
         // Java (method_declaration handled above)
         "constructor_declaration" => ("constructor", vec!["identifier"]),
         "field_declaration" => ("field", vec!["identifier"]),
+
+        // Bash (tree-sitter-bash)
+        "function_definition" => ("function", vec!["word", "identifier"]),
+        "variable_assignment" => ("variable", vec!["variable_name", "identifier"]),
+        "declaration_command" => ("declaration", vec!["variable_name", "identifier"]),
+
+        // QML (tree-sitter-qmljs)
+        "ui_object_definition" | "ui_object_definition_binding" => {
+            ("object", vec!["identifier", "nested_identifier", "type_identifier"])
+        }
+        "ui_inline_component" => ("component", vec!["identifier"]),
+        "ui_property" => ("property", vec!["identifier"]),
+        "ui_signal" => ("signal", vec!["identifier"]),
+        "ui_binding" => ("binding", vec!["identifier", "nested_identifier"]),
+        "ui_import" => ("import", vec!["identifier", "nested_identifier"]),
 
         _ => return None,
     };
@@ -498,5 +515,68 @@ const arrow = (x, y) => x + y;
         assert!(symbols
             .iter()
             .any(|s| s.name == "getValue" && s.symbol_kind == "method"));
+    }
+
+    #[test]
+    fn test_bash_symbol_detection() {
+        let bash_code = r#"#!/usr/bin/env bash
+
+GLOBAL_FLAG=1
+
+greet() {
+  echo "hello"
+}
+"#;
+
+        let language_impl = get_language_impl("sh").unwrap();
+        let language = language_impl.get_tree_sitter_language();
+        let mut parser = TSParser::new();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(bash_code, None).unwrap();
+
+        let symbols = find_all_symbols(tree.root_node(), bash_code.as_bytes(), false);
+
+        assert!(!symbols.is_empty());
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "greet" && s.symbol_kind == "function"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "GLOBAL_FLAG" && s.symbol_kind == "variable"));
+    }
+
+    #[test]
+    fn test_qml_symbol_detection() {
+        let qml_code = r#"import QtQuick 2.15
+
+Item {
+    id: root
+    property int count: 0
+    signal incremented(int newCount)
+
+    function increment() {
+        count += 1
+    }
+}
+"#;
+
+        let language_impl = get_language_impl("qml").unwrap();
+        let language = language_impl.get_tree_sitter_language();
+        let mut parser = TSParser::new();
+        parser.set_language(&language).unwrap();
+        let tree = parser.parse(qml_code, None).unwrap();
+
+        let symbols = find_all_symbols(tree.root_node(), qml_code.as_bytes(), false);
+
+        assert!(!symbols.is_empty());
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "Item" && s.symbol_kind == "object"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "count" && s.symbol_kind == "property"));
+        assert!(symbols
+            .iter()
+            .any(|s| s.name == "increment" && s.symbol_kind == "function"));
     }
 }
