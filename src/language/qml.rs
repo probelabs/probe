@@ -31,7 +31,13 @@ impl QmlLanguage {
     fn truncate_signature(&self, text: &str, max_len: usize) -> String {
         let trimmed = text.trim();
         if trimmed.len() > max_len {
-            format!("{}...", &trimmed[..max_len - 3])
+            // Slice on a char boundary so multi-byte UTF-8 cannot panic the
+            // truncation.
+            let mut end = max_len - 3;
+            while !trimmed.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &trimmed[..end])
         } else {
             trimmed.to_string()
         }
