@@ -3602,9 +3602,11 @@ Follow these instructions carefully:
       let attestationCount = 0;
       let nativeToolBatch;
       let nativeToolBatchCount = 0;
-      const queryOptions = hasInvocationDigest
-        ? { abortSignal: this._abortController.signal, invocationDigest: invocationDigest, schema }
-        : { abortSignal: this._abortController.signal, schema };
+      const queryOptions = {
+        abortSignal: this._abortController.signal,
+        ...(hasInvocationDigest ? { invocationDigest } : {}),
+        ...(this.governedCodexTransport === GOVERNED_CODEX_EXEC_TRANSPORT ? {} : { schema }),
+      };
       try {
         for await (const chunk of engine.query(prompt, queryOptions)) {
           if (chunk.type === 'text' && chunk.content) candidateChunks.push(chunk.content);

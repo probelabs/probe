@@ -881,12 +881,11 @@ test('ProbeAgent selects exec transport only for the explicit governed selector'
     assert.equal(result.runtimeAttestation.version, 'probe.governed-codex-exec-attestation/v1');
     assert.deepEqual(preview, result.runtimeAttestation.dispatch);
     const observed = JSON.parse(readFileSync(fixtureRoot.observed, 'utf8'));
-    const schemaFlag = observed.args.indexOf('--output-schema');
-    assert.equal(schemaFlag >= 0, true);
-    assert.equal(observed.args.at(-2), observed.schemaPath);
+    assert.equal(observed.args.includes('--output-schema'), false);
+    assert.equal(observed.schemaPath, null);
+    assert.equal(observed.schemaText, null);
     assert.equal(observed.args.at(-1).startsWith('return ok'), true);
-    assert.equal(observed.schemaText, schema);
-    assert.equal(observed.schemaMode, 0o600);
+    assert.equal(observed.args.at(-1).includes(JSON.stringify(JSON.parse(schema), null, 2)), true);
     assert.notDeepEqual(
       previewGovernedCodexExecDispatch('same user prompt', 'system one'),
       previewGovernedCodexExecDispatch('same user prompt', 'system two'),
@@ -943,6 +942,34 @@ test('ProbeAgent ordinary answer forwards only serialized JSON schemas to exec',
   } finally {
     rmSync(schemaFixture.root, { recursive: true, force: true });
     rmSync(builtinFixture.root, { recursive: true, force: true });
+  }
+});
+
+test('ProbeAgent preserves host candidate validation for governed exec answers', async () => {
+  const schema = '{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}';
+  const fixtureEvents = validEvents();
+  fixtureEvents[3] = { ...fixtureEvents[3], item: { ...fixtureEvents[3].item, text: '{}' } };
+  const fixtureRoot = fixture(fixtureEvents);
+  try {
+    const governed = new ProbeAgent({
+      provider: 'codex', path: fixtureRoot.root, cwd: fixtureRoot.root,
+      allowedTools: ['search', 'extract', 'listFiles'], governedCodexProfile: profile(fixtureRoot.root),
+      governedCodexTransport: 'exec-jsonl-default-auth-v1', codexBin: fixtureRoot.script,
+      codexSha256: `sha256:${createHash('sha256').update(readFileSync(fixtureRoot.script)).digest('hex')}`,
+      disableMermaidValidation: true,
+    });
+    await assert.rejects(
+      governed.answerGoverned('return ok', { schema }),
+      error => {
+        assert.equal(error.name, 'GovernedAnswerFailure');
+        assert.equal(error.answerFailureStage, 'schema_result_validation');
+        assert.equal(error.schemaResultValidationSubreason, 'schema_mismatch');
+        assert.equal(error.schemaResultValidationKeyword, 'required');
+        return true;
+      },
+    );
+  } finally {
+    rmSync(fixtureRoot.root, { recursive: true, force: true });
   }
 });
 
