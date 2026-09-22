@@ -123,7 +123,7 @@ pub fn process_file_for_extraction(
 
         let code_blocks_result = parse_file_for_code_blocks(
             &content,
-            file_extension(path),
+            file_extension(path, &content),
             &needed_lines,
             allow_tests,
             None,
@@ -300,7 +300,7 @@ pub fn process_file_for_extraction(
 
         match parse_file_for_code_blocks(
             &content,
-            file_extension(path),
+            file_extension(path, &content),
             &needed_lines,
             allow_tests,
             None,
@@ -523,7 +523,7 @@ pub fn process_file_for_extraction(
         // Parse AST for all specified lines
         let code_blocks_result = parse_file_for_code_blocks(
             &content,
-            file_extension(path),
+            file_extension(path, &content),
             lines_set,
             allow_tests,
             None,
@@ -745,7 +745,7 @@ fn extract_symbol_signature_for_extract(
     let debug_mode = std::env::var("DEBUG").unwrap_or_default() == "1";
 
     // Get file extension
-    let extension = file_extension(path);
+    let extension = file_extension(path, content);
 
     // Get language implementation
     let language_impl = get_language_impl(extension)?;
@@ -950,7 +950,8 @@ pub fn extract_all_symbols_from_file(path: &Path, allow_tests: bool) -> Result<V
     Ok(results)
 }
 
-/// Helper to get file extension as a &str
-fn file_extension(path: &Path) -> &str {
-    path.extension().and_then(|ext| ext.to_str()).unwrap_or("")
+/// Helper to get the effective file extension as a &str. Extensionless files
+/// fall back to a bash-family shebang sniff of the first content line.
+fn file_extension<'a>(path: &'a Path, content: &str) -> &'a str {
+    probe_code::language::factory::effective_extension(path, content.lines().next())
 }

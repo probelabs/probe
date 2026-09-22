@@ -762,3 +762,21 @@ fn test_quoted_strings() {
         )
     );
 }
+
+#[test]
+fn test_language_field_hints_bash_qml() {
+    // lang: field hints for bash/qml should parse as field terms, matching the
+    // pattern established for other languages (e.g. lang:crystal in the Crystal PR).
+    for query in ["lang:bash", "lang:sh", "lang:qml"] {
+        match parse_query_test(query).unwrap() {
+            Expr::Term {
+                keywords, field, ..
+            } => {
+                let expected = query.strip_prefix("lang:").unwrap();
+                assert_eq!(field, Some("lang".to_string()), "query: {query}");
+                assert_eq!(keywords, vec![expected.to_string()], "query: {query}");
+            }
+            other => panic!("expected lang field term for {query}, got {other:?}"),
+        }
+    }
+}

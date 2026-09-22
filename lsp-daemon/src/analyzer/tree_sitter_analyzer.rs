@@ -31,6 +31,8 @@ fn extension_to_language_name(extension: &str) -> Option<&'static str> {
         "php" => Some("php"),
         "swift" => Some("swift"),
         "cs" => Some("csharp"),
+        "sh" | "bash" => Some("bash"),
+        "qml" => Some("qml"),
         "sol" => Some("solidity"),
         "cr" => Some("crystal"),
         "hs" | "lhs" => Some("haskell"),
@@ -101,6 +103,8 @@ impl ParserPool {
             "java" => Some(tree_sitter_java::LANGUAGE),
             "c" => Some(tree_sitter_c::LANGUAGE),
             "cpp" | "c++" | "cxx" => Some(tree_sitter_cpp::LANGUAGE),
+            "bash" | "sh" => Some(tree_sitter_bash::LANGUAGE),
+            "qml" => Some(tree_sitter_qmljs::LANGUAGE),
             "solidity" | "sol" => Some(tree_sitter_solidity::LANGUAGE),
             "crystal" | "cr" => Some(tree_sitter_crystal::LANGUAGE),
             "haskell" | "hs" | "lhs" => Some(tree_sitter_haskell::LANGUAGE),
@@ -452,6 +456,8 @@ impl TreeSitterAnalyzer {
             "go" => self.map_go_node_to_symbol(node_kind),
             "java" => self.map_java_node_to_symbol(node_kind),
             "c" | "cpp" | "c++" => self.map_c_node_to_symbol(node_kind),
+            "bash" | "sh" => self.map_bash_node_to_symbol(node_kind),
+            "qml" => self.map_qml_node_to_symbol(node_kind),
             "crystal" | "cr" => self.map_crystal_node_to_symbol(node_kind),
             "haskell" | "hs" | "lhs" => self.map_haskell_node_to_symbol(node_kind),
             "ruby" | "rb" => self.map_ruby_node_to_symbol(node_kind),
@@ -582,6 +588,32 @@ impl TreeSitterAnalyzer {
         }
     }
 
+    /// Map Bash node kinds to symbol kinds
+    fn map_bash_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "function_definition" => Some(SymbolKind::Function),
+            "variable_assignment" => Some(SymbolKind::Variable),
+            // local/readonly/export/declare/typeset statements
+            "declaration_command" => Some(SymbolKind::Variable),
+            _ => None,
+        }
+    }
+
+    /// Map QML node kinds to symbol kinds (tree-sitter-qmljs grammar)
+    fn map_qml_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
+        match node_kind {
+            "ui_object_definition" | "ui_object_definition_binding" => Some(SymbolKind::Class),
+            "ui_inline_component" => Some(SymbolKind::Class),
+            "ui_property" => Some(SymbolKind::Field),
+            "ui_binding" => Some(SymbolKind::Field),
+            "ui_signal" => Some(SymbolKind::Method),
+            "ui_import" => Some(SymbolKind::Import),
+            // Embedded JavaScript inside QML files
+            "function_declaration" | "method_definition" => Some(SymbolKind::Function),
+            _ => None,
+        }
+    }
+
     /// Map Crystal node kinds to symbol kinds
     fn map_crystal_node_to_symbol(&self, node_kind: &str) -> Option<SymbolKind> {
         match node_kind {
@@ -650,6 +682,17 @@ impl TreeSitterAnalyzer {
         node: tree_sitter::Node,
         content: &[u8],
     ) -> Result<String, AnalysisError> {
+        // Prefer the grammar's explicit name field (e.g. QML ui_property /
+        // ui_binding / function_declaration, bash function_definition)
+        if let Some(name_node) = node.child_by_field_name("name") {
+            if let Ok(text) = name_node.utf8_text(content) {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() && !self.is_keyword_or_invalid(trimmed) {
+                    return Ok(trimmed.to_string());
+                }
+            }
+        }
+
         // Look for identifier child nodes with more comprehensive patterns
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
@@ -811,6 +854,15 @@ impl TreeSitterAnalyzer {
                 | "type"
                 | "where"
                 | "instance"
+                // QML declaration keywords
+                | "property"
+                | "signal"
+                | "readonly"
+                | "required"
+                // Bash declaration keywords
+                | "local"
+                | "declare"
+                | "typeset"
         ) || text.is_empty()
     }
 
@@ -916,6 +968,25 @@ impl TreeSitterAnalyzer {
                     | "union_specifier"
                     | "function_definition"
                     | "compound_statement"
+            ),
+            "bash" | "sh" => matches!(
+                node_kind,
+                "function_definition"
+                    | "if_statement"
+                    | "case_statement"
+                    | "for_statement"
+                    | "while_statement"
+                    | "subshell"
+                    | "compound_statement"
+            ),
+            "qml" => matches!(
+                node_kind,
+                "ui_object_definition"
+                    | "ui_object_definition_binding"
+                    | "ui_inline_component"
+                    | "function_declaration"
+                    | "method_definition"
+                    | "statement_block"
             ),
             "crystal" | "cr" => matches!(
                 node_kind,
@@ -1095,6 +1166,8 @@ impl CodeAnalyzer for TreeSitterAnalyzer {
             "java".to_string(),
             "c".to_string(),
             "cpp".to_string(),
+            "bash".to_string(),
+            "qml".to_string(),
             "crystal".to_string(),
             "haskell".to_string(),
         ]
@@ -1535,6 +1608,124 @@ active user = True
         let signature_with_semicolon = "fn test_function(a: i32); // comment";
         let cleaned = analyzer.clean_function_signature(signature_with_semicolon);
         assert_eq!(cleaned, "fn test_function(a: i32)");
+    }
+
+    #[test]
+    fn test_bash_qml_parser_pool_and_node_mapping() {
+        let analyzer = create_test_analyzer();
+        let mut pool = ParserPool::new();
+
+        assert!(
+            pool.get_parser("bash").is_some(),
+            "Bash parser should be available by language name"
+        );
+        assert!(
+            pool.get_parser("sh").is_some(),
+            "Bash parser should be available by extension alias"
+        );
+        assert!(
+            pool.get_parser("qml").is_some(),
+            "QML parser should be available"
+        );
+
+        assert_eq!(
+            analyzer.map_bash_node_to_symbol("function_definition"),
+            Some(SymbolKind::Function)
+        );
+        assert_eq!(
+            analyzer.map_bash_node_to_symbol("variable_assignment"),
+            Some(SymbolKind::Variable)
+        );
+        assert_eq!(analyzer.map_bash_node_to_symbol("command"), None);
+
+        assert_eq!(
+            analyzer.map_qml_node_to_symbol("ui_object_definition"),
+            Some(SymbolKind::Class)
+        );
+        assert_eq!(
+            analyzer.map_qml_node_to_symbol("ui_property"),
+            Some(SymbolKind::Field)
+        );
+        assert_eq!(
+            analyzer.map_qml_node_to_symbol("function_declaration"),
+            Some(SymbolKind::Function)
+        );
+        assert_eq!(analyzer.map_qml_node_to_symbol("unknown_node"), None);
+
+        assert!(analyzer.creates_scope("function_definition", "bash"));
+        assert!(analyzer.creates_scope("ui_object_definition", "qml"));
+    }
+
+    #[tokio::test]
+    async fn test_bash_qml_symbol_extraction_uses_parser_pool() {
+        let analyzer = create_test_analyzer();
+
+        let bash_code = r#"
+#!/usr/bin/env bash
+GLOBAL_FLAG=1
+
+greet() {
+  echo "hello"
+}
+"#;
+        let bash_context = create_test_context();
+        let result = analyzer
+            .analyze_file(bash_code, Path::new("sample.sh"), "bash", &bash_context)
+            .await
+            .expect("Bash analysis should use the parser pool");
+
+        let symbols = result
+            .symbols
+            .iter()
+            .map(|symbol| format!("{}:{:?}", symbol.name, symbol.kind))
+            .collect::<Vec<_>>();
+
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "greet" && symbol.kind == SymbolKind::Function),
+            "expected greet function in symbols: {symbols:?}"
+        );
+
+        let qml_code = r#"
+import QtQuick 2.15
+
+Item {
+    id: root
+    property int count: 0
+
+    function increment() {
+        count += 1
+    }
+}
+"#;
+        let qml_context = create_test_context();
+        let result = analyzer
+            .analyze_file(qml_code, Path::new("sample.qml"), "qml", &qml_context)
+            .await
+            .expect("QML analysis should use the parser pool");
+
+        let symbols = result
+            .symbols
+            .iter()
+            .map(|symbol| format!("{}:{:?}", symbol.name, symbol.kind))
+            .collect::<Vec<_>>();
+
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.kind == SymbolKind::Class),
+            "expected a ui object symbol in symbols: {symbols:?}"
+        );
+        assert!(
+            result
+                .symbols
+                .iter()
+                .any(|symbol| symbol.name == "increment" && symbol.kind == SymbolKind::Function),
+            "expected increment function in symbols: {symbols:?}"
+        );
     }
 
     #[test]

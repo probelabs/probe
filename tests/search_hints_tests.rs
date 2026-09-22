@@ -228,6 +228,14 @@ fn test_language_aliases() {
     assert_eq!(filters.languages, vec!["python"]);
 
     filters = SearchFilters::new();
+    filters.add_filter("lang", vec!["sh".to_string()]);
+    assert_eq!(filters.languages, vec!["bash"]);
+
+    filters = SearchFilters::new();
+    filters.add_filter("lang", vec!["qml".to_string()]);
+    assert_eq!(filters.languages, vec!["qml"]);
+
+    filters = SearchFilters::new();
     filters.add_filter("lang", vec!["cr".to_string()]);
     assert_eq!(filters.languages, vec!["crystal"]);
 }

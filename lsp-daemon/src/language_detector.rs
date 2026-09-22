@@ -29,6 +29,8 @@ pub enum Language {
     Clojure,
     Lua,
     Zig,
+    Bash,
+    Qml,
     Unknown,
 }
 
@@ -56,6 +58,8 @@ impl Language {
             Language::Clojure => "clojure",
             Language::Lua => "lua",
             Language::Zig => "zig",
+            Language::Bash => "bash",
+            Language::Qml => "qml",
             Language::Unknown => "unknown",
         }
     }
@@ -85,6 +89,8 @@ impl Language {
             "clojure" => Some(Language::Clojure),
             "lua" => Some(Language::Lua),
             "zig" => Some(Language::Zig),
+            "bash" | "sh" => Some(Language::Bash),
+            "qml" => Some(Language::Qml),
             "unknown" => Some(Language::Unknown),
             _ => None,
         }
@@ -185,6 +191,13 @@ impl LanguageDetector {
         // Zig
         extension_map.insert("zig".to_string(), Language::Zig);
 
+        // Bash / shell scripts
+        extension_map.insert("sh".to_string(), Language::Bash);
+        extension_map.insert("bash".to_string(), Language::Bash);
+
+        // QML
+        extension_map.insert("qml".to_string(), Language::Qml);
+
         let shebang_patterns = vec![
             (Regex::new(r"^#!/.*\bpython").unwrap(), Language::Python),
             (Regex::new(r"^#!/.*\bruby").unwrap(), Language::Ruby),
@@ -192,6 +205,7 @@ impl LanguageDetector {
             (Regex::new(r"^#!/.*\bphp").unwrap(), Language::Php),
             (Regex::new(r"^#!/.*\blua").unwrap(), Language::Lua),
             (Regex::new(r"^#!/.*\belixir").unwrap(), Language::Elixir),
+            (Regex::new(r"^#!/.*\b(?:ba|z)?sh\b").unwrap(), Language::Bash),
         ];
 
         Self {

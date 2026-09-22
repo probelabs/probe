@@ -125,6 +125,25 @@ pub fn is_test_file(path: &Path) -> bool {
             return true;
         }
 
+        // Bash: test_*.sh / *_test.sh scripts and Bats *.bats files
+        if (file_name.starts_with("test_") || file_name.contains("_test."))
+            && (file_name.ends_with(".sh") || file_name.ends_with(".bash"))
+            || file_name.ends_with(".bats")
+        {
+            if _debug_mode {
+                println!("DEBUG: Test file detected (Bash pattern): {file_name}");
+            }
+            return true;
+        }
+
+        // QML: Qt Test convention tst_*.qml
+        if file_name.starts_with("tst_") && file_name.ends_with(".qml") {
+            if _debug_mode {
+                println!("DEBUG: Test file detected (QML pattern): {file_name}");
+            }
+            return true;
+        }
+
         // Solidity/Foundry: *.t.sol, *Test.sol, Test*.sol
         if file_name.ends_with(".t.sol")
             || file_name.ends_with("Test.sol")

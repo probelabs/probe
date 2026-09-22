@@ -697,6 +697,8 @@ impl AstSymbolExtractor {
             crate::language_detector::Language::Java => Ok(tree_sitter_java::LANGUAGE.into()),
             crate::language_detector::Language::C => Ok(tree_sitter_c::LANGUAGE.into()),
             crate::language_detector::Language::Cpp => Ok(tree_sitter_cpp::LANGUAGE.into()),
+            crate::language_detector::Language::Bash => Ok(tree_sitter_bash::LANGUAGE.into()),
+            crate::language_detector::Language::Qml => Ok(tree_sitter_qmljs::LANGUAGE.into()),
             crate::language_detector::Language::Solidity => {
                 Ok(tree_sitter_solidity::LANGUAGE.into())
             }
@@ -837,6 +839,21 @@ impl AstSymbolExtractor {
                 "class_declaration" => (SymbolKind::Class, true),
                 "interface_declaration" => (SymbolKind::Interface, true),
                 "field_declaration" => (SymbolKind::Variable, true),
+                _ => (SymbolKind::Function, false),
+            },
+            crate::language_detector::Language::Bash => match node_kind {
+                "function_definition" => (SymbolKind::Function, true),
+                "variable_assignment" | "declaration_command" => (SymbolKind::Variable, true),
+                _ => (SymbolKind::Function, false),
+            },
+            crate::language_detector::Language::Qml => match node_kind {
+                "ui_object_definition"
+                | "ui_object_definition_binding"
+                | "ui_inline_component" => (SymbolKind::Class, true),
+                "ui_property" | "ui_binding" => (SymbolKind::Variable, true),
+                "ui_signal" => (SymbolKind::Method, true),
+                // Embedded JavaScript functions inside QML
+                "function_declaration" | "method_definition" => (SymbolKind::Function, true),
                 _ => (SymbolKind::Function, false),
             },
             crate::language_detector::Language::Solidity => match node_kind {

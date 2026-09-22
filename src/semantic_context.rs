@@ -99,6 +99,8 @@ pub fn language_name_for_path(path: &Path) -> Option<&'static str> {
         "sol" => Some("solidity"),
         "cr" => Some("crystal"),
         "hs" | "lhs" => Some("haskell"),
+        "sh" | "bash" => Some("bash"),
+        "qml" => Some("qml"),
         "cs" => Some("csharp"),
         "html" | "htm" => Some("html"),
         "md" | "markdown" => Some("markdown"),

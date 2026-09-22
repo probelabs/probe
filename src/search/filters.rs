@@ -194,7 +194,22 @@ impl SearchFilters {
                     return false;
                 }
             } else {
-                return false; // No extension, but language filter specified
+                // Extensionless candidates: sniff a bash-family shebang so
+                // `-l bash` still matches extensionless shell scripts.
+                match crate::language::factory::shebang_extension_for_path(path) {
+                    Some(ext) => {
+                        let matches_lang = self.languages.iter().any(|lang| {
+                            match get_extensions_for_language(lang) {
+                                Some(extensions) => extensions.contains(ext),
+                                None => false,
+                            }
+                        });
+                        if !matches_lang {
+                            return false;
+                        }
+                    }
+                    None => return false, // No extension, no shell shebang
+                }
             }
         }
 
@@ -473,6 +488,7 @@ fn normalize_language_name(lang: &str) -> String {
         "py" => "python".to_string(),
         "rb" => "ruby".to_string(),
         "cs" => "csharp".to_string(),
+        "sh" => "bash".to_string(),
         "sol" => "solidity".to_string(),
         "cr" => "crystal".to_string(),
         "hs" | "lhs" => "haskell".to_string(),
@@ -548,6 +564,13 @@ fn get_extensions_for_type(file_type: &str) -> Option<HashSet<String>> {
         }
         "scala" => {
             extensions.insert("scala".to_string());
+        }
+        "bash" | "sh" => {
+            extensions.insert("sh".to_string());
+            extensions.insert("bash".to_string());
+        }
+        "qml" => {
+            extensions.insert("qml".to_string());
         }
         "html" => {
             extensions.insert("html".to_string());

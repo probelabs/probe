@@ -45,11 +45,18 @@ pub struct QueryOptions<'a> {
     pub text_extensions: &'a [String],
 }
 
+/// Languages supported by the `query` command.
+///
+/// Most languages come from ast-grep's bundled `SupportLang`; Solidity,
+/// Crystal, and QML are wired in through our own tree-sitter grammars because
+/// ast-grep has no support for them (Bash *is* bundled in ast-grep, so it
+/// uses the builtin).
 #[derive(Clone, Copy)]
 enum ProbeQueryLang {
     Builtin(SupportLang),
     Solidity,
     Crystal,
+    Qml,
 }
 
 impl Language for ProbeQueryLang {
@@ -58,11 +65,12 @@ impl Language for ProbeQueryLang {
             ProbeQueryLang::Builtin(lang) => lang.get_ts_language(),
             ProbeQueryLang::Solidity => tree_sitter_solidity::LANGUAGE.into(),
             ProbeQueryLang::Crystal => tree_sitter_crystal::LANGUAGE.into(),
+            ProbeQueryLang::Qml => tree_sitter_qmljs::LANGUAGE.into(),
         }
     }
 }
 
-/// Convert a language string to the corresponding SupportLang
+/// Convert a language string to the corresponding query language
 fn get_language(lang: &str) -> Option<ProbeQueryLang> {
     match lang.to_lowercase().as_str() {
         "rust" => Some(ProbeQueryLang::Builtin(SupportLang::Rust)),
@@ -80,6 +88,8 @@ fn get_language(lang: &str) -> Option<ProbeQueryLang> {
         "solidity" | "sol" => Some(ProbeQueryLang::Solidity),
         "crystal" | "cr" => Some(ProbeQueryLang::Crystal),
         "csharp" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
+        "bash" | "sh" => Some(ProbeQueryLang::Builtin(SupportLang::Bash)),
+        "qml" => Some(ProbeQueryLang::Qml),
         _ => None,
     }
 }
@@ -102,6 +112,8 @@ fn get_file_extension(lang: &str) -> Vec<&str> {
         "solidity" | "sol" => vec![".sol"],
         "crystal" | "cr" => vec![".cr"],
         "csharp" => vec![".cs"],
+        "bash" | "sh" => vec![".sh", ".bash"],
+        "qml" => vec![".qml"],
         _ => vec![],
     }
 }
@@ -188,6 +200,8 @@ fn query_file(file_path: &Path, options: &QueryOptions) -> Result<Vec<AstMatch>>
             "sol" => Some(ProbeQueryLang::Solidity),
             "cr" => Some(ProbeQueryLang::Crystal),
             "cs" => Some(ProbeQueryLang::Builtin(SupportLang::CSharp)),
+            "sh" | "bash" => Some(ProbeQueryLang::Builtin(SupportLang::Bash)),
+            "qml" => Some(ProbeQueryLang::Qml),
             _ => None, // Unsupported extension
         };
 
@@ -979,6 +993,139 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_bash_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("counter.sh");
+        fs::write(
+            &file,
+            r#"#!/usr/bin/env bash
+
+increment() {
+  echo "$((count + 1))"
+}
+"#,
+        )
+        .unwrap();
+
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "increment() {\n  $$$\n}",
+            language: Some("bash"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
+        };
+
+        let matches = perform_query(&options).expect("Bash query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("increment()"));
+    }
+
+    #[test]
+    fn test_qml_query_support() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("Counter.qml");
+        fs::write(
+            &file,
+            r#"import QtQuick 2.15
+
+Item {
+    property int count: 0
+
+    function increment() {
+        count += 1
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        // NOTE: tree-sitter-qmljs only forms standalone ast-grep pattern nodes
+        // for object definitions; property/signal/JS-statement patterns do not
+        // parse as single pattern nodes, so query with object patterns.
+        let options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "Item {\n  $$$\n}",
+            language: Some("qml"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
+        };
+
+        let matches = perform_query(&options).expect("QML query should run");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].file_path, file);
+        assert!(matches[0].matched_text.contains("function increment"));
+    }
+
+    #[test]
+    fn test_bash_qml_query_auto_detect() {
+        let temp_dir = TempDir::new().unwrap();
+        let sh_file = temp_dir.path().join("tool.sh");
+        fs::write(&sh_file, "#!/bin/sh\n\nbuild_all() {\n  make all\n}\n").unwrap();
+        let qml_file = temp_dir.path().join("Panel.qml");
+        fs::write(
+            &qml_file,
+            "import QtQuick 2.15\n\nRectangle {\n    color: \"red\"\n}\n",
+        )
+        .unwrap();
+
+        // NOTE: since #581, `.sh` is a standard text extension, so querying
+        // shell scripts without an explicit `--language` falls back to plain
+        // text matching; ast-grep Bash requires `language: Some("bash")`.
+        let sh_options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "build_all() {\n  $$$\n}",
+            language: Some("bash"),
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
+        };
+        let matches = perform_query(&sh_options).expect("Bash query should run");
+        assert!(
+            matches.iter().any(|m| m.file_path == sh_file),
+            "matches: {:?}",
+            matches.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+        );
+
+        let qml_options = QueryOptions {
+            path: temp_dir.path(),
+            pattern: "Rectangle {\n  $$$\n}",
+            language: None,
+            ignore: &[],
+            allow_tests: true,
+            max_results: Some(10),
+            format: "json",
+            no_gitignore: true,
+            with_context: false,
+            strict: false,
+            text_extensions: &[],
+        };
+        let matches = perform_query(&qml_options).expect("QML auto-detect query should run");
+        assert!(
+            matches.iter().any(|m| m.file_path == qml_file),
+            "matches: {:?}",
+            matches.iter().map(|m| &m.file_path).collect::<Vec<_>>()
+        );
+    }
 
     #[test]
     fn test_solidity_query_support() {

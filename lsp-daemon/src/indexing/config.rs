@@ -1401,6 +1401,8 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
         Language::Java,
         Language::C,
         Language::Cpp,
+        Language::Bash,
+        Language::Qml,
         Language::Solidity,
         Language::Crystal,
         Language::Haskell,
@@ -1501,6 +1503,14 @@ fn load_language_configs_from_env() -> Result<HashMap<Language, LanguageIndexCon
                         features.set_language_feature("extract_namespaces".to_string(), true);
                         features.set_language_feature("extract_classes".to_string(), true);
                     }
+                    Language::Bash => {
+                        features.set_language_feature("extract_functions".to_string(), true);
+                        features.set_language_feature("extract_variables".to_string(), true);
+                    }
+                    Language::Qml => {
+                        features.set_language_feature("extract_bindings".to_string(), true);
+                        features.set_language_feature("extract_signals".to_string(), true);
+                    }
                     Language::Solidity => {
                         features.set_language_feature("extract_contracts".to_string(), true);
                         features.set_language_feature("extract_events".to_string(), true);
@@ -1557,6 +1567,8 @@ fn default_extensions_for_language(language: Language) -> Vec<String> {
             "hpp".to_string(),
             "hxx".to_string(),
         ],
+        Language::Bash => vec!["sh".to_string(), "bash".to_string()],
+        Language::Qml => vec!["qml".to_string()],
         Language::Solidity => vec!["sol".to_string()],
         Language::Crystal => vec!["cr".to_string()],
         Language::Haskell => vec!["hs".to_string(), "lhs".to_string()],
@@ -1577,6 +1589,8 @@ impl FromStr for Language {
             "java" => Ok(Language::Java),
             "c" => Ok(Language::C),
             "cpp" | "c++" => Ok(Language::Cpp),
+            "bash" | "sh" => Ok(Language::Bash),
+            "qml" => Ok(Language::Qml),
             "solidity" | "sol" => Ok(Language::Solidity),
             "crystal" | "cr" => Ok(Language::Crystal),
             "haskell" | "hs" | "lhs" => Ok(Language::Haskell),

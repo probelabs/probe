@@ -13,6 +13,7 @@ pub mod test_detection;
 pub mod tree_cache;
 
 // Language implementations
+pub mod bash;
 pub mod c;
 pub mod cpp;
 pub mod csharp;
@@ -24,6 +25,7 @@ pub mod javascript;
 pub mod markdown;
 pub mod php;
 pub mod python;
+pub mod qml;
 pub mod ruby;
 pub mod rust;
 pub mod solidity;

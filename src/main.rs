@@ -892,6 +892,7 @@ async fn main() -> Result<()> {
                     "cc" | "cxx" | "hpp" | "hxx" => "cpp",
                     "rb" => "ruby",
                     "cs" => "csharp",
+                    "sh" => "bash",
                     "sol" => "solidity",
                     "cr" => "crystal",
                     "hs" | "lhs" => "haskell",

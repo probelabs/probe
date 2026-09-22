@@ -274,6 +274,14 @@ pub fn merge_ranked_blocks(
                         current_block.matched_lines = merged_matched_lines;
                         current_block.matched_keywords = merged_matched_keywords;
 
+                        // Adopt a symbol signature from the merged-in block when
+                        // the current block has none (e.g. its byte range spanned
+                        // multiple top-level AST nodes and could not be resolved)
+                        if current_block.symbol_signature.is_none() {
+                            current_block.symbol_signature =
+                                next_block.symbol_signature.clone();
+                        }
+
                         // Mark this block as processed
                         processed_indices.insert(j);
                         merged_indices.push(j);
